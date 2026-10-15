@@ -12,18 +12,34 @@
 // tail is the head it last saw; after the write it checks that the tail is its own entry. Any mismatch throws
 // StoreFencedError and the handle refuses every later append, so a holder that was paused past its expiry cannot
 // write after its successor.
+//
+// Verify on acquire: each time the handle takes the lease it verifies every entry appended since the head it last
+// verified, which on its first acquire is the whole file. A broken chain throws StoreCorruptError and the handle
+// refuses every later append, so a restarted gateway does not extend a chain a stray writer has damaged.
+//
+// Paths: the data dir, `audit.jsonl` and `audit.lock` must not be symbolic links, and the data dir must belong to
+// the current user, so a planted link cannot redirect the chain or its chmod to another file.
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { constants, openSync, readFileSync } from "node:fs";
 import * as nodeFs from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { canonicalize } from "../jcs/index.ts";
-import { type Entry, type EntryKind, entryHash, entryProblem, GENESIS, isEntryKind, parseLines } from "./chain.ts";
+import {
+  type Entry,
+  type EntryKind,
+  entryHash,
+  entryProblem,
+  GENESIS,
+  isEntryKind,
+  parseLines,
+  verifyChain,
+} from "./chain.ts";
 
 export type StoreFs = Pick<
   typeof nodeFs,
-  "chmod" | "link" | "mkdir" | "open" | "readFile" | "rename" | "unlink" | "writeFile"
+  "chmod" | "link" | "lstat" | "mkdir" | "open" | "readFile" | "rename" | "unlink" | "writeFile"
 >;
 
 export interface StoreOptions {
@@ -50,9 +66,14 @@ export class StoreFencedError extends Error {
   override name = "StoreFencedError";
 }
 
-/** The file holds a line that is not a valid entry, so the store will not read or extend it. */
+/** The file holds a line that is not a valid entry, or the chain is broken, so the store will not extend it. */
 export class StoreCorruptError extends Error {
   override name = "StoreCorruptError";
+}
+
+/** A store path is a symbolic link, or the data dir is not a directory owned by the current user. */
+export class StoreUnsafeError extends Error {
+  override name = "StoreUnsafeError";
 }
 
 interface Lease {
@@ -71,20 +92,75 @@ const LOG = "audit.jsonl";
 const LOCK = "audit.lock";
 const DEFAULT_LEASE_MS = 30_000;
 const POLL_MS = 2;
+// O_NOFOLLOW makes open() fail on a symbolic link; Windows has no such flag, and there the lstat checks in
+// openStore are the only guard.
+const NOFOLLOW = (constants as Partial<typeof constants>).O_NOFOLLOW ?? 0;
+const READ = constants.O_RDONLY | NOFOLLOW;
+const APPEND = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | NOFOLLOW;
 
 /** Reads the chain in `dir` as `parseLines` items, for verifyChain, without opening a store. */
 export function readChain(dir: string): unknown[] {
-  return parseLines(readFileSync(join(dir, LOG), "utf8"));
+  const file = join(dir, LOG);
+  return parseLines(readFileSync(noFollowSync(() => openSync(file, READ), file), "utf8"));
 }
 
 export async function openStore(dir: string, opts: StoreOptions = {}): Promise<Store> {
   const fs = opts.fs ?? nodeFs;
+  await checkDir(fs, dir, true);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await checkDir(fs, dir, false);
   await fs.chmod(dir, 0o700);
+  const lock = await fs.lstat(join(dir, LOCK)).catch(missing);
+  if (lock?.isSymbolicLink() === true) throw new StoreUnsafeError(`${join(dir, LOCK)} is a symbolic link`);
   const file = join(dir, LOG);
-  await (await fs.open(file, "a", 0o600)).close();
-  await fs.chmod(file, 0o600);
+  const handle = await noFollow(fs.open(file, APPEND, 0o600), file);
+  try {
+    await handle.chmod(0o600);
+  } finally {
+    await handle.close();
+  }
   return new FileStore(dir, fs, opts);
+}
+
+/** Refuses a data dir that is a symbolic link, not a directory, or owned by another user (not checked on Windows). */
+async function checkDir(fs: StoreFs, dir: string, mayBeMissing: boolean): Promise<void> {
+  const info = mayBeMissing ? await fs.lstat(dir).catch(missing) : await fs.lstat(dir);
+  if (info === null) return;
+  if (info.isSymbolicLink()) throw new StoreUnsafeError(`the data dir ${dir} is a symbolic link`);
+  if (!info.isDirectory()) throw new StoreUnsafeError(`the data dir ${dir} is not a directory`);
+  const uid = process.platform === "win32" ? undefined : process.getuid?.();
+  if (uid !== undefined && info.uid !== uid) {
+    throw new StoreUnsafeError(`the data dir ${dir} is owned by uid ${String(info.uid)}, not the current user`);
+  }
+}
+
+function missing(error: unknown): null {
+  if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+  throw error;
+}
+
+/** O_NOFOLLOW reports a symbolic link as ELOOP (EMLINK on FreeBSD); both become StoreUnsafeError. */
+function isLinkError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ELOOP" || code === "EMLINK";
+}
+
+async function noFollow<T>(open: Promise<T>, path: string): Promise<T> {
+  try {
+    return await open;
+  } catch (error) {
+    if (isLinkError(error)) throw new StoreUnsafeError(`${path} is a symbolic link`);
+    throw error;
+  }
+}
+
+function noFollowSync<T>(open: () => T, path: string): T {
+  try {
+    return open();
+  } catch (error) {
+    if (isLinkError(error)) throw new StoreUnsafeError(`${path} is a symbolic link`);
+    throw error;
+  }
 }
 
 class FileStore implements Store {
@@ -99,7 +175,9 @@ class FileStore implements Store {
   #pending = 0;
   #closed = false;
   #fenced: string | null = null;
+  #broken: string | null = null;
   #lease: Lease | null = null;
+  /** The head this handle last verified or wrote; on first acquire, genesis, so the whole file is verified. */
   #tail: Tail = { size: 0, hash: GENESIS, seq: -1 };
 
   constructor(dir: string, fs: StoreFs, opts: StoreOptions) {
@@ -140,6 +218,7 @@ class FileStore implements Store {
   }
 
   async #appendOne(kind: EntryKind, body: unknown): Promise<Entry> {
+    if (this.#broken !== null) throw new StoreCorruptError(`handle refused after: ${this.#broken}`);
     if (this.#fenced !== null) throw new StoreFencedError(`handle refused after: ${this.#fenced}`);
     if (this.#lease === null) await this.#acquire();
     else if (this.#lease.expires_at - this.#clock() < this.#leaseMs / 2) await this.#renew();
@@ -161,7 +240,7 @@ class FileStore implements Store {
 
   /** One write plus fdatasync. On failure the file is cut back to `size`, the handle is fenced, and the error rethrown. */
   async #write(line: Buffer, size: number): Promise<void> {
-    const handle = await this.#fs.open(this.#file, "a", 0o600);
+    const handle = await noFollow(this.#fs.open(this.#file, APPEND, 0o600), this.#file);
     try {
       const { bytesWritten } = await handle.write(line);
       if (bytesWritten !== line.length) throw new Error(`short write: ${String(bytesWritten)} of ${String(line.length)}`);
@@ -197,7 +276,7 @@ class FileStore implements Store {
       const confirmed = await this.#readLease();
       if (confirmed === null || confirmed === "invalid" || confirmed.token !== lease.token) continue;
       this.#lease = lease;
-      this.#tail = await this.#readTail();
+      this.#tail = await this.#verifySince(this.#tail);
       return;
     }
   }
@@ -235,6 +314,34 @@ class FileStore implements Store {
     if (current.expires_at <= this.#clock()) this.#refuse("the lease expired");
   }
 
+  /** Verifies the entries appended after `from` and returns the new head; a broken chain refuses the handle. */
+  async #verifySince(from: Tail): Promise<Tail> {
+    const handle = await noFollow(this.#fs.open(this.#file, READ), this.#file);
+    try {
+      const { size } = await handle.stat();
+      if (size < from.size) this.#corrupt(`the chain is shorter than this handle last saw it`);
+      const buf = Buffer.alloc(size - from.size);
+      let read = 0;
+      while (read < buf.length) {
+        const { bytesRead } = await handle.read(buf, read, buf.length - read, from.size + read);
+        if (bytesRead === 0) break;
+        read += bytesRead;
+      }
+      const items = parseLines(buf.subarray(0, read).toString("utf8"));
+      const result = verifyChain(items, from);
+      if (!result.ok) this.#corrupt(`the chain is broken at seq ${String(result.brokenSeq)}: ${result.reason}`);
+      const last = items.at(-1) as Entry | undefined;
+      return last === undefined ? from : { size: from.size + read, hash: last.hash, seq: last.seq };
+    } finally {
+      await handle.close();
+    }
+  }
+
+  #corrupt(reason: string): never {
+    this.#broken = reason;
+    throw new StoreCorruptError(reason);
+  }
+
   #refuse(reason: string): never {
     this.#fenced = reason;
     this.#lease = null;
@@ -255,9 +362,10 @@ class FileStore implements Store {
   async #readLease(): Promise<Lease | null | "invalid"> {
     let text: string;
     try {
-      text = await this.#fs.readFile(this.#lock, "utf8");
+      text = await this.#fs.readFile(this.#lock, { encoding: "utf8", flag: READ });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      if (isLinkError(error)) throw new StoreUnsafeError(`${this.#lock} is a symbolic link`);
       throw error;
     }
     try {
@@ -271,7 +379,7 @@ class FileStore implements Store {
 
   /** The last line of the file, which must be a valid entry; reads backwards so cost does not grow with the chain. */
   async #readTail(): Promise<Tail> {
-    const handle = await this.#fs.open(this.#file, "r");
+    const handle = await noFollow(this.#fs.open(this.#file, READ), this.#file);
     try {
       const { size } = await handle.stat();
       if (size === 0) return { size, hash: GENESIS, seq: -1 };

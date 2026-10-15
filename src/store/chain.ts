@@ -70,10 +70,18 @@ function parseLine(line: string): unknown {
   return line;
 }
 
-/** Checks each item from `parseLines` in order and names the first entry (by expected seq) that breaks the chain. */
-export function verifyChain(entries: readonly unknown[]): ChainResult {
-  let prev = GENESIS;
-  for (const [seq, item] of entries.entries()) {
+/**
+ * Checks each item from `parseLines` in order and names the first entry (by expected seq) that breaks the chain.
+ * `from` continues a chain already verified up to the entry with that seq and hash; omitted, the items start at
+ * genesis. Only the file is checked: dropping whole entries from its end leaves a valid, shorter chain (ADR-0007).
+ */
+export function verifyChain(
+  entries: readonly unknown[],
+  from: { readonly seq: number; readonly hash: string } = { seq: -1, hash: GENESIS },
+): ChainResult {
+  let prev = from.hash;
+  for (const [index, item] of entries.entries()) {
+    const seq = from.seq + 1 + index;
     const reason = entryProblem(item) ?? linkProblem(item as Entry, seq, prev);
     if (reason !== null) return { ok: false, brokenSeq: seq, reason };
     prev = (item as Entry).hash;

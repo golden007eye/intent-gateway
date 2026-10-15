@@ -4,11 +4,12 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { ENTRY_KINDS, openStore, parseLines, readChain, verifyChain } from "./index.ts";
 
 const T0 = Date.UTC(2026, 9, 15, 12, 0, 0);
+vi.setConfig({ testTimeout: 20_000 }); // the store writes with fdatasync, which a busy disk can stall for seconds
 let dir: string;
 let lines: string[];
 
@@ -115,6 +116,17 @@ describe("verifyChain", () => {
     spaced[1] = (spaced[1] as string).replace('"seq":1', '"seq": 1');
     expect(check(joined(spaced))).toMatchObject({ ok: false, brokenSeq: 1 });
     expect(check(`${joined(lines.slice(0, 2))}\n${joined(lines.slice(2))}`)).toMatchObject({ ok: false, brokenSeq: 2 });
+  });
+
+  it("accepts a chain whose last whole entries were dropped: only external evidence shows it (ADR-0007)", () => {
+    expect(check(joined(lines.slice(0, 3)))).toEqual({ ok: true });
+    expect(check("")).toEqual({ ok: true });
+  });
+
+  it("continues from a verified head and counts seq from it", () => {
+    const head = JSON.parse(lines[1] as string) as { seq: number; hash: string };
+    expect(verifyChain(parseLines(joined(lines.slice(2))), head)).toEqual({ ok: true });
+    expect(verifyChain(parseLines(joined(lines.slice(3))), head)).toMatchObject({ ok: false, brokenSeq: 2 });
   });
 
   it("names entries that are well hashed but malformed", () => {
