@@ -11,6 +11,7 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Gateway** | `intent-gateway` | The self-hosted Docker container a developer runs. It talks to the agent over MCP and to Intent Cloud for offers and carts. |
 | **Intent Cloud** | — | The hosted service behind the gateway: product discovery, merchants, offers and carts. Reached only through its public API host. |
 | **Gateway policy** | `policy.yaml` | The developer's YAML rules for what may leave the gateway and how much may be spent. It can only narrow Intent Cloud's rules, never loosen them. |
+| **Cloud baseline** | `CLOUD_BASELINE` | The rules Intent Cloud enforces, held by the gateway as the loosest policy it will run: passkey approval, at most 3 items, US delivery, the excluded categories. Every policy is checked against it. |
 | **Policy library** | `intent policy add` (planned) | The public, signed collection of shared gateway policies, reviewed by PR. |
 | **Shopping session** | session key | A short-lived key for one anonymous run of searches and carts. The gateway sends no identifier that links it to other sessions. Not an account. |
 | **Disclosure log** | — | The gateway's local hash chain of every field it sent to Intent Cloud, appended before each send. |
