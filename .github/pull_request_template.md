@@ -7,6 +7,6 @@
 <!-- commands run and their result; CI covers the rest -->
 
 ## Checks
-- [ ] Public-safe: no internal names, hosts or people (the `public-safety` check agrees)
+- [ ] Public-safe: no internal names, hosts or people 
 - [ ] Invariants in CLAUDE.md untouched, or each touched one has a failing-if-broken test
 - [ ] New terms added to GLOSSARY.md

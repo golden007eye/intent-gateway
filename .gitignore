@@ -22,3 +22,5 @@ coverage/
 # OS / editor
 .DS_Store
 *.swp
+*.local.md
+.codegraph/

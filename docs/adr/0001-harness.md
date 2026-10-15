@@ -10,8 +10,8 @@ AI coding agents write most of this code and one maintainer reviews it. The repo
 
 - Agent instructions (`CLAUDE.md`, `AGENTS.md`), the glossary and these decision records are committed, and written so they can be published unchanged.
 - Context about non-public systems lives in a gitignored overlay (`CLAUDE.local.md`, `.claude/settings.local.json`).
-- A `public-safety` check fails CI when a tracked file contains a term from a private list. The list is supplied as a CI secret and a local file, so the check never publishes what it guards.
-- `.claude/settings.json` denies agents the actions that are the maintainer's alone: merging and approving PRs, pushing to `main`, changing repository settings or visibility, and reading secrets.
+- A `public-safety` check (added with the toolchain) fails CI when a tracked file contains a term from a private list. The list is supplied as a CI secret and a local file, so the check never publishes what it guards.
+- `.claude/settings.json` denies agents the actions that are the maintainer's alone: approving PRs (and merging them, once the bootstrap PRs are in), pushing to `main`, changing repository settings or visibility, and reading secrets.
 
 ## Consequences
 
