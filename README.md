@@ -5,8 +5,8 @@
 
 **intent-gateway** is a self-hosted Docker gateway that gives AI agents real shopping under a privacy policy the developer controls. It is the open-source developer channel of [intent](https://intentai.shop), which finds products and prepares carts that a person approves with a passkey before paying on the merchant's own checkout.
 
-<!-- Docs: switch to https://docs.intentai.shop once the docs site is live; add https://intentai.shop/developers once that page is published. -->
-[Docs](docs/index.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+<!-- Docs: switch to https://docs.intentai.shop once the docs site is live. -->
+[Developers](https://intentai.shop/developers) · [Docs](docs/index.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
 [![licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
 [![ci](https://github.com/golden007eye/intent-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/golden007eye/intent-gateway/actions/workflows/ci.yml)
