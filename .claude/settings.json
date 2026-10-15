@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(gh pr review:*)",
+      "Bash(gh pr edit --base:*)",
+      "Bash(gh repo edit:*)",
+      "Bash(gh repo delete:*)",
+      "Bash(gh repo rename:*)",
+      "Bash(gh repo archive:*)",
+      "Bash(gh secret:*)",
+      "Bash(gh variable:*)",
+      "Bash(gh api -X PUT:*)",
+      "Bash(gh api -X PATCH:*)",
+      "Bash(gh api -X DELETE:*)",
+      "Bash(gh api --method PUT:*)",
+      "Bash(gh api --method PATCH:*)",
+      "Bash(gh api --method DELETE:*)",
+      "Bash(gh api repos/golden007eye/intent-gateway/rulesets:*)",
+      "Bash(gh api -X POST repos/golden007eye/intent-gateway/rulesets:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push origin HEAD:main:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push origin --force:*)",
+      "Bash(git push origin -f:*)",
+      "Bash(git push origin --delete:*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(~/.config/intent-gateway/**)"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+# Local overlay (copy to CLAUDE.local.md; never commit)
+
+Private context for agents working on this repo. `CLAUDE.local.md` is gitignored because it names systems that are not public. Keep each section to pointers, not copies.
+
+## Where the design lives
+<!-- links to the decision register and design spec for the gateway -->
+
+## Intent Cloud internals
+<!-- the service behind the public API host, its contract file, environments -->
+
+## Memory and tooling
+<!-- agent memory bank name, local credential files agents must not read -->
