@@ -8,7 +8,7 @@ A gateway policy may come from the developer or from the shared policy library. 
 
 ## Decision
 
-- **Schema v1 is strict.** `version: 1` is required. Unknown keys, duplicate keys and YAML merge keys (`<<:`) are rejected. Aliases are bounded, so an alias bomb fails. Files over 64 KiB are rejected. `approval` accepts only the exact value `passkey`. Numbers must be finite and non-negative, so `.inf` and `-1` fail.
+- **Schema v1 is strict.** `version: 1` is required. Unknown keys, duplicate keys and YAML merge keys (`<<:`) are rejected. Aliases are bounded, so an alias bomb fails. Files over 64 KiB are rejected. `approval` accepts only the exact value `passkey`. Spend limits must be positive whole USD amounts and `quantity.max` a whole number from 1 to 3, so `.inf`, `-1` and `0` fail (a zero limit could be read as "no limit").
 - **`CLOUD_BASELINE` is the ceiling.** The gateway holds the rules Intent Cloud enforces as one constant, `CLOUD_BASELINE`: approval required, the maximum quantity, the excluded product categories. `loadPolicy` compares every field with the baseline and rejects anything looser with `POLICY_LOOSENS`. A policy cannot allow an excluded category, raise a limit or turn approval off.
 - **`meet` combines policies.** `meet(a, b)` returns the narrowest policy that satisfies both: the lower of each limit, the union of each block list, the intersection of each allow list, and each `share` field at the less revealing value. `intent policy add` applies a library policy as `meet(current, library)`. A property test checks that the result is never looser than either input or the baseline.
 - Each policy carries its own test cases, which `intent policy test` runs.
