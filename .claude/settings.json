@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(gh pr review*)",
+      "Bash(gh pr edit *--base*)",
+      "Bash(gh repo edit*)",
+      "Bash(gh repo delete*)",
+      "Bash(gh repo rename*)",
+      "Bash(gh repo archive*)",
+      "Bash(gh secret*)",
+      "Bash(gh variable*)",
+      "Bash(gh api *-X*)",
+      "Bash(gh api *--method*)",
+      "Bash(gh api * -f *)",
+      "Bash(gh api * -F *)",
+      "Bash(gh api *--field*)",
+      "Bash(gh api *--raw-field*)",
+      "Bash(gh api *--input*)",
+      "Bash(gh api graphql*)",
+      "Bash(gh api *rulesets*)",
+      "Bash(git push)",
+      "Bash(git push * main*)",
+      "Bash(git push *:main*)",
+      "Bash(git push *:refs/heads/main*)",
+      "Bash(git push *+*)",
+      "Bash(git push *--force*)",
+      "Bash(git push * -f*)",
+      "Bash(git push *--mirror*)",
+      "Bash(git push *--delete*)",
+      "Bash(git push * -d *)",
+      "Bash(git -C * push*)",
+      "Bash(cat *.env*)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./.secrets/**)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.config/intent-gateway/**)"
+    ]
+  }
+}
