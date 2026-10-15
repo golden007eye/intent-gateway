@@ -8,4 +8,5 @@ export {
   StoreFencedError,
   type StoreFs,
   type StoreOptions,
+  StoreUnsafeError,
 } from "./store.ts";

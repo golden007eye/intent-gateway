@@ -1,11 +1,15 @@
 // The append side: permissions, the fenced lease, and write failures. Attack cases for invariant 2 (log before
 // send): a paused holder, a writer that ignores the lease, and failed or partial writes must all reject the append,
 // because a rejected append is what stops the disclosure module's send.
-import { appendFileSync, readFileSync } from "node:fs";
+//
+// fsync latency on a busy disk can reach seconds, so this file runs with a 20 s timeout, and tests that do not
+// exercise durability use `fast`, an fs whose datasync is a no-op. The 2×100 test and the write-failure tests keep
+// the real datasync.
+import { appendFileSync, constants, readFileSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalize, JcsError, sha256Hex } from "../jcs/index.ts";
 import {
   type Entry,
@@ -15,8 +19,11 @@ import {
   StoreCorruptError,
   StoreFencedError,
   type StoreFs,
+  StoreUnsafeError,
   verifyChain,
 } from "./index.ts";
+
+vi.setConfig({ testTimeout: 20_000 });
 
 const T0 = Date.UTC(2026, 9, 15, 12, 0, 0);
 const LEASE = 30_000;
@@ -39,6 +46,15 @@ const exists = (path: string) =>
   );
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 const errno = (code: string) => Object.assign(new Error(code), { code });
+const isRead = (flags: unknown) => flags === (constants.O_RDONLY | ((constants as Partial<typeof constants>).O_NOFOLLOW ?? 0));
+const isAppend = (flags: unknown) => typeof flags === "number" && (flags & constants.O_APPEND) !== 0;
+
+/** The real fs with a no-op datasync, for tests that do not exercise durability. */
+const fast: StoreFs = {
+  ...fsp,
+  open: (async (...args: Parameters<typeof fsp.open>) =>
+    Object.assign(await fsp.open(...args), { datasync: () => Promise.resolve() })),
+};
 
 /** A gate a test opens by hand; `reached` resolves when the code under test arrives at it. */
 function gate() {
@@ -55,10 +71,10 @@ function pauseAtRead(nth: number) {
   const g = gate();
   let reads = 0;
   const fs: StoreFs = {
-    ...fsp,
+    ...fast,
     open: (async (...args: Parameters<typeof fsp.open>) => {
-      if (args[0] === logPath() && args[1] === "r" && ++reads === nth) await g.wait();
-      return fsp.open(...args);
+      if (args[0] === logPath() && isRead(args[1]) && ++reads === nth) await g.wait();
+      return fast.open(...args);
     }),
   };
   return { fs, gate: g };
@@ -70,14 +86,14 @@ function patchedAppends(patch: (handle: fsp.FileHandle) => void): StoreFs {
     ...fsp,
     open: (async (...args: Parameters<typeof fsp.open>) => {
       const handle = await fsp.open(...args);
-      if (args[1] === "a" && args[0] === logPath()) patch(handle);
+      if (isAppend(args[1]) && args[0] === logPath()) patch(handle);
       return handle;
     }),
   };
 }
 
 async function filled(n: number) {
-  const store = await openStore(dir, { clock });
+  const store = await openStore(dir, { clock, fs: fast });
   for (let i = 0; i < n; i++) await store.append("session", { i });
   return store;
 }
@@ -92,7 +108,7 @@ describe("openStore", () => {
   });
 
   it("appends linked entries and reads them back", async () => {
-    const store = await openStore(dir, { clock });
+    const store = await openStore(dir, { clock, fs: fast });
     const a = await store.append("session", { s: 1 });
     now += 5;
     const b = await store.append("approval", { ok: true });
@@ -105,13 +121,13 @@ describe("openStore", () => {
 
   it("continues an existing chain when reopened", async () => {
     await (await filled(2)).close();
-    const store = await openStore(dir, { clock });
+    const store = await openStore(dir, { clock, fs: fast });
     expect(await store.append("keys", {})).toMatchObject({ seq: 2, prev: store.entries()[1]?.hash });
     expect(verifyChain(readChain(dir))).toEqual({ ok: true });
   });
 
   it("refuses unknown kinds, non-JSON bodies and appends after close without touching the file", async () => {
-    const store = await openStore(dir, { clock });
+    const store = await openStore(dir, { clock, fs: fast });
     await expect(store.append("note" as EntryKind, {})).rejects.toThrow(TypeError);
     await expect(store.append("block", { price: 1.5 })).rejects.toThrow(JcsError);
     await store.close();
@@ -121,9 +137,9 @@ describe("openStore", () => {
   });
 
   it("reads a tail entry larger than one read chunk", async () => {
-    const store = await openStore(dir, { clock });
+    const store = await openStore(dir, { clock, fs: fast });
     await store.append("receipt", { big: "x".repeat(150_000) });
-    const reopened = await openStore(dir, { clock });
+    const reopened = await openStore(dir, { clock, fs: fast });
     expect(await reopened.append("receipt", {})).toMatchObject({ seq: 1 });
     expect(verifyChain(readChain(dir))).toEqual({ ok: true });
   });
@@ -172,7 +188,7 @@ describe("lease", () => {
     await fsp.writeFile(lockPath(), JSON.stringify(stale));
     const renames: string[][] = [];
     const fs: StoreFs = {
-      ...fsp,
+      ...fast,
       rename: async (from, to) => {
         renames.push([String(from), String(to)]);
         return fsp.rename(from, to);
@@ -187,14 +203,14 @@ describe("lease", () => {
   it("treats an unreadable lock file as expired", async () => {
     await fsp.mkdir(dir, { recursive: true });
     await fsp.writeFile(lockPath(), "{not json");
-    const store = await openStore(dir, { clock });
+    const store = await openStore(dir, { clock, fs: fast });
     expect(await store.append("session", {})).toMatchObject({ seq: 0 });
   });
 
   it("waits for a live lease and takes it over once the clock passes its expiry", async () => {
     await fsp.mkdir(dir, { recursive: true });
     await fsp.writeFile(lockPath(), JSON.stringify({ token: "live", holder: "x:1", expires_at: T0 + 1000 }));
-    const store = await openStore(dir, { clock });
+    const store = await openStore(dir, { clock, fs: fast });
     let done = false;
     const run = store.append("session", {}).then((e) => ((done = true), e));
     await tick();
@@ -207,7 +223,7 @@ describe("lease", () => {
   it("waits when another writer creates the lock between its read and its link", async () => {
     let raced = false;
     const fs: StoreFs = {
-      ...fsp,
+      ...fast,
       link: async (from, to) => {
         if (!raced) {
           raced = true;
@@ -228,7 +244,7 @@ describe("lease", () => {
     await fsp.writeFile(lockPath(), JSON.stringify({ token: "old", holder: "x:1", expires_at: T0 - 1 }));
     let raced = false;
     const fs: StoreFs = {
-      ...fsp,
+      ...fast,
       rename: async (from, to) => {
         await fsp.rename(from, to);
         if (!raced) {
@@ -244,7 +260,7 @@ describe("lease", () => {
   it("renews its lease during a long run of appends", async () => {
     let renews = 0;
     const fs: StoreFs = {
-      ...fsp,
+      ...fast,
       rename: async (from, to) => {
         renews++;
         return fsp.rename(from, to);
@@ -258,9 +274,9 @@ describe("lease", () => {
   });
 
   it("surfaces lock errors other than a missing file", async () => {
-    const fs: StoreFs = { ...fsp, readFile: () => Promise.reject(errno("EACCES")) };
+    const fs: StoreFs = { ...fast, readFile: () => Promise.reject(errno("EACCES")) };
     await expect((await openStore(dir, { clock, fs })).append("session", {})).rejects.toThrow("EACCES");
-    const fs2: StoreFs = { ...fsp, link: () => Promise.reject(errno("EPERM")) };
+    const fs2: StoreFs = { ...fast, link: () => Promise.reject(errno("EPERM")) };
     await expect((await openStore(dir, { clock, fs: fs2 })).append("session", {})).rejects.toThrow("EPERM");
   });
 });
@@ -277,7 +293,7 @@ describe("paused holder (attack)", () => {
       await paused.gate.reached;
 
       now = T0 + LEASE + 1;
-      const b = await openStore(dir, { clock });
+      const b = await openStore(dir, { clock, fs: fast });
       const bEntry = await b.append("disclosure", { from: "b" });
 
       paused.gate.open();
@@ -374,9 +390,142 @@ describe("write failures (attack: log before send)", () => {
     await expect(store.append("disclosure", {})).rejects.toThrow("ENOSPC");
     expect(() => store.entries()).toThrow(StoreCorruptError);
     expect(verifyChain(readChain(dir))).toMatchObject({ ok: false, brokenSeq: 2 });
-    const next = await openStore(dir, { clock });
+    const next = await openStore(dir, { clock, fs: fast });
     await expect(next.append("disclosure", {})).rejects.toThrow(StoreCorruptError);
     expect(await exists(lockPath())).toBe(false);
+  });
+});
+
+describe("verify on acquire (attack: a broken chain is not extended)", () => {
+  const firstLine = () => `${logText().split("\n")[0] as string}\n`;
+
+  it("refuses a restarted handle when a stray writer appended a well-formed duplicate of entry 0", async () => {
+    await (await filled(2)).close();
+    appendFileSync(logPath(), firstLine());
+    const text = logText();
+    expect(verifyChain(readChain(dir))).toMatchObject({ ok: false, brokenSeq: 2 });
+
+    const restarted = await openStore(dir, { clock, fs: fast });
+    await expect(restarted.append("disclosure", {})).rejects.toThrow(
+      new StoreCorruptError("the chain is broken at seq 2: seq is 0, expected 2"),
+    );
+    await expect(restarted.append("disclosure", {})).rejects.toThrow(StoreCorruptError);
+    expect(logText()).toBe(text);
+    expect(await exists(lockPath())).toBe(false);
+  });
+
+  it("refuses a restarted handle when an early entry was rewritten and re-hashed", async () => {
+    await (await filled(3)).close();
+    const lines = logText().split("\n");
+    const entry = JSON.parse(lines[0] as string) as Entry;
+    const fields = { body: { forged: true }, kind: entry.kind, prev: entry.prev, seq: entry.seq, ts: entry.ts };
+    lines[0] = canonicalize({ ...fields, hash: sha256Hex(canonicalize(fields)) });
+    await fsp.writeFile(logPath(), lines.join("\n"));
+    const restarted = await openStore(dir, { clock, fs: fast });
+    await expect(restarted.append("disclosure", {})).rejects.toThrow("the chain is broken at seq 1");
+  });
+
+  it("refuses a running handle when a stray line landed between its turns", async () => {
+    const store = await filled(2);
+    appendFileSync(logPath(), firstLine());
+    await expect(store.append("disclosure", {})).rejects.toThrow("the chain is broken at seq 2");
+    await expect(store.append("disclosure", {})).rejects.toThrow(StoreCorruptError);
+  });
+
+  it("refuses a running handle when the file is shorter than it last saw", async () => {
+    const store = await filled(2);
+    await fsp.writeFile(logPath(), firstLine());
+    await expect(store.append("disclosure", {})).rejects.toThrow("the chain is shorter than this handle last saw it");
+  });
+
+  it("accepts entries another writer appended between its turns", async () => {
+    const a = await filled(1);
+    const b = await openStore(dir, { clock, fs: fast });
+    await b.append("disclosure", { from: "b" });
+    expect(await a.append("disclosure", { from: "a" })).toMatchObject({ seq: 2 });
+    expect(verifyChain(readChain(dir))).toEqual({ ok: true });
+  });
+});
+
+describe("paths (attack: a planted symbolic link or a foreign data dir)", () => {
+  const linkError = /is a symbolic link/;
+
+  it("refuses a data dir that is a symbolic link, without changing its target", async () => {
+    const target = `${dir}-target`;
+    await fsp.mkdir(target);
+    await fsp.chmod(target, 0o755);
+    await fsp.symlink(target, dir);
+    await expect(openStore(dir)).rejects.toThrow(new StoreUnsafeError(`the data dir ${dir} is a symbolic link`));
+    expect((await fsp.stat(target)).mode & 0o777).toBe(0o755);
+    expect(await fsp.readdir(target)).toEqual([]);
+  });
+
+  it("refuses a data dir that is not a directory", async () => {
+    await fsp.writeFile(dir, "");
+    await expect(openStore(dir)).rejects.toThrow(new StoreUnsafeError(`the data dir ${dir} is not a directory`));
+  });
+
+  it("refuses audit.jsonl as a symbolic link, without touching the file it points to", async () => {
+    await fsp.mkdir(dir, { mode: 0o700 });
+    const victim = `${dir}-victim.txt`;
+    await fsp.writeFile(victim, "");
+    await fsp.chmod(victim, 0o644);
+    await fsp.symlink(victim, logPath());
+    await expect(openStore(dir)).rejects.toThrow(linkError);
+    expect((await fsp.stat(victim)).mode & 0o777).toBe(0o644);
+    expect(() => readChain(dir)).toThrow(StoreUnsafeError);
+  });
+
+  it("refuses audit.lock as a symbolic link at open", async () => {
+    await fsp.mkdir(dir, { mode: 0o700 });
+    await fsp.symlink(`${dir}-elsewhere`, lockPath());
+    await expect(openStore(dir)).rejects.toThrow(new StoreUnsafeError(`${lockPath()} is a symbolic link`));
+  });
+
+  it("refuses links planted after open: the lock before an append, the log before the next turn", async () => {
+    const store = await openStore(dir, { clock, fs: fast });
+    const leaseFile = `${dir}-lease.json`;
+    await fsp.writeFile(leaseFile, JSON.stringify({ token: "t", holder: "x:1", expires_at: T0 - 1 }));
+    await fsp.symlink(leaseFile, lockPath());
+    await expect(store.append("disclosure", {})).rejects.toThrow(linkError);
+    await fsp.unlink(lockPath());
+
+    const other = await openStore(dir, { clock, fs: fast });
+    const victim = `${dir}-victim.txt`;
+    await fsp.writeFile(victim, "");
+    await fsp.rename(logPath(), `${logPath()}.old`);
+    await fsp.symlink(victim, logPath());
+    await expect(other.append("disclosure", {})).rejects.toThrow(linkError);
+    expect(await fsp.readFile(victim, "utf8")).toBe("");
+  });
+
+  it("refuses a data dir owned by another user before changing its mode", async () => {
+    await fsp.mkdir(dir);
+    await fsp.chmod(dir, 0o755);
+    const chmods: string[] = [];
+    const fs: StoreFs = {
+      ...fast,
+      lstat: (async (path: string) => {
+        const info = await fsp.lstat(path);
+        return path === dir ? Object.assign(info, { uid: info.uid + 1 }) : info;
+      }) as typeof fsp.lstat,
+      chmod: async (path, mode) => {
+        chmods.push(String(path));
+        return fsp.chmod(path, mode);
+      },
+    };
+    await expect(openStore(dir, { fs })).rejects.toThrow(/is owned by uid \d+, not the current user/);
+    expect(chmods).toEqual([]);
+    expect((await fsp.stat(dir)).mode & 0o777).toBe(0o755);
+  });
+
+  it("surfaces lstat and open errors other than a missing file or a link", async () => {
+    const fs: StoreFs = { ...fast, lstat: (() => Promise.reject(errno("EACCES"))) as typeof fsp.lstat };
+    await expect(openStore(dir, { fs })).rejects.toThrow("EACCES");
+    const fs2: StoreFs = { ...fast, open: () => Promise.reject(errno("EMFILE")) };
+    await expect(openStore(dir, { fs: fs2 })).rejects.toThrow("EMFILE");
+    await fsp.rm(dir, { recursive: true });
+    expect(() => readChain(dir)).toThrow("ENOENT");
   });
 });
 
