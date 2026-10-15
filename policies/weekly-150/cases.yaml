@@ -1,0 +1,19 @@
+- name: under the weekly limit is sent
+  now: "2026-10-15T12:00:00Z"
+  history:
+    - {at: "2026-10-12T09:00:00Z", total_usd: 100}
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 50, quantity: 1}}
+  expect: {send: true}
+- name: over the weekly limit is refused
+  now: "2026-10-15T12:00:00Z"
+  history:
+    - {at: "2026-10-12T09:00:00Z", total_usd: 100}
+    - {at: "2026-10-09T13:00:00Z", total_usd: 30}
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 25, quantity: 1}}
+  expect: {send: false, blocked: [spend.per_week_usd]}
+- name: purchases older than 7 days do not count
+  now: "2026-10-15T12:00:00Z"
+  history:
+    - {at: "2026-10-08T11:00:00Z", total_usd: 140}
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 100, quantity: 1}}
+  expect: {send: true}

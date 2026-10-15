@@ -1,0 +1,5 @@
+# per-order-60 · a gateway policy can only narrow Intent Cloud's rules
+version: 1
+approval: passkey   # required; the only legal value
+spend:
+  per_order_usd: 60

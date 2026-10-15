@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "policies": {
+    "block-dropship": {
+      "sha256": "e18bb9bbc5756c9783e7d23ae2b695c48eef05961a0338887df66d1a08e354c2"
+    },
+    "daily-40": {
+      "sha256": "b695830382cbf71a21ce7d30a92f7e1feecdbb8fbfe4bb7ad050730a35eb33c7"
+    },
+    "gifts-under-30": {
+      "sha256": "377e3b4ac66a02693f22b01262302249c2a6abc72547405c4e65e323088e9093"
+    },
+    "no-electronics": {
+      "sha256": "fd91624cae937bd5a6b7af0b7f07e15cd187adbc1663c04931dd81553e246bec"
+    },
+    "no-history": {
+      "sha256": "e3e1e6bf678c6839bfcfe91fe86103be8a532b8772bf39557ddb10fb4a1f97c5"
+    },
+    "one-item": {
+      "sha256": "e01c441d46813c4671ee2ddfbfe2feffd7b9ab1115bcec786c968af3b0cab3b9"
+    },
+    "per-order-60": {
+      "sha256": "36037413e6b25d95115ff8b24b8a138092d3b3dd9004336b40be57ae784cc44a"
+    },
+    "strict-default": {
+      "sha256": "ccee6f2c07592f7e91b6172be12d084fbb3f398a472ea0825717cdce89337469"
+    },
+    "weekly-150": {
+      "sha256": "70a1acdf04b920388ef3b48402f8dd930e7ccdfe50d1fce0a2f86a22137d433b"
+    },
+    "zip-only": {
+      "sha256": "d926ee596289f3314b4d3d4b1e1145e66f7a5773be7ebf8b1130bcbcdc9ea725"
+    }
+  }
+}

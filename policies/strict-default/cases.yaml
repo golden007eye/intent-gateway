@@ -1,0 +1,15 @@
+- name: a small cart is sent
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 20, quantity: 1}}
+  expect: {send: true}
+- name: a search with a ZIP is refused
+  outbound: {kind: search, category: home, ship_to_zip: "94110"}
+  expect: {send: false, blocked: [share.ship_to]}
+- name: a search without a ZIP is sent
+  outbound: {kind: search, category: home, must_haves: [blue]}
+  expect: {send: true}
+- name: two items over the order limit are refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 30, quantity: 2}}
+  expect: {send: false, blocked: [quantity.max, spend.per_order_usd]}
+- name: an excluded category is refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: alcohol, price_usd: 20, quantity: 1}}
+  expect: {send: false, blocked: [categories.block]}
