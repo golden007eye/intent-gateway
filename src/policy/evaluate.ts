@@ -1,6 +1,6 @@
 // Decides whether one outbound request may leave the gateway under a policy. The input types are the policy's
 // own small view of a request; the gateway maps the contract's request and offer types onto them.
-import { CLOUD_BASELINE, categoryBlocked, meet, merchantMatches, type Policy } from "./policy.ts";
+import { CLOUD_BASELINE, categoryBlocked, meet, merchantMatches, normalizeMerchant, type Policy } from "./policy.ts";
 
 /** A search the agent asks the gateway to send to Intent Cloud. */
 export interface SearchRequest {
@@ -51,11 +51,33 @@ const DAY_MS = 24 * HOUR_MS;
 const WEEK_MS = 7 * DAY_MS;
 const US_ZIP = /^\d{5}$/;
 
-// Money is compared in whole cents so that sums of prices like 0.1 + 0.2 do not trip a cap.
-const cents = (usd: number): number => Math.round(usd * 100);
+// Money is compared in whole cents, rounded up, so that 3 × $20.004 counts as $60.02 and not $60. The total is
+// first rounded to a millionth of a dollar so float noise (0.07 × 100 = 7.000000000000001) does not add a cent.
+const cents = (usd: number): number => Math.ceil(Math.round(usd * 1e6) / 1e4);
 
 function spentWithin(history: readonly Purchase[], now: number, windowMs: number): number {
   return history.filter((p) => p.at > now - windowMs).reduce((sum, p) => sum + cents(p.total_usd), 0);
+}
+
+/** Bad history would turn the daily and weekly caps off, so any malformed entry refuses the request. */
+function checkHistory(history: readonly Purchase[], out: Blocked[]): void {
+  if (!Array.isArray(history)) {
+    out.push({ path: "purchase_history", rule: "history_invalid", reason: "the purchase history is not a list" });
+    return;
+  }
+  history.forEach((p: unknown, i) => {
+    const entry = typeof p === "object" && p !== null ? (p as Partial<Record<keyof Purchase, unknown>>) : {};
+    const { at, total_usd: total } = entry;
+    const valid =
+      typeof at === "number" && Number.isFinite(at) && typeof total === "number" && Number.isFinite(total) && total >= 0;
+    if (!valid) {
+      out.push({
+        path: `purchase_history[${String(i)}]`,
+        rule: "history_invalid",
+        reason: "a purchase needs a finite time and a finite total ≥ 0",
+      });
+    }
+  });
 }
 
 function checkSearch(p: Policy, s: SearchRequest, out: Blocked[]): void {
@@ -75,11 +97,15 @@ function checkSearch(p: Policy, s: SearchRequest, out: Blocked[]): void {
 }
 
 function checkCart(p: Policy, o: Offer, history: readonly Purchase[], now: number, out: Blocked[]): void {
-  if (merchantMatches(o.merchant, p.merchants.block)) {
-    out.push({ path: "offer.merchant", rule: "merchants.block", reason: `merchant "${o.merchant}" is blocked` });
-  }
-  if (p.merchants.allow !== undefined && !merchantMatches(o.merchant, p.merchants.allow)) {
-    out.push({ path: "offer.merchant", rule: "merchants.allow", reason: `merchant "${o.merchant}" is not allowed` });
+  if (normalizeMerchant(o.merchant) === undefined) {
+    out.push({ path: "offer.merchant", rule: "offer.merchant", reason: `merchant "${o.merchant}" is not a hostname` });
+  } else {
+    if (merchantMatches(o.merchant, p.merchants.block)) {
+      out.push({ path: "offer.merchant", rule: "merchants.block", reason: `merchant "${o.merchant}" is blocked` });
+    }
+    if (p.merchants.allow !== undefined && !merchantMatches(o.merchant, p.merchants.allow)) {
+      out.push({ path: "offer.merchant", rule: "merchants.allow", reason: `merchant "${o.merchant}" is not allowed` });
+    }
   }
   if (categoryBlocked(o.category, p.categories.block)) {
     out.push({ path: "offer.category", rule: "categories.block", reason: `category "${o.category}" is blocked` });
@@ -91,7 +117,7 @@ function checkCart(p: Policy, o: Offer, history: readonly Purchase[], now: numbe
     out.push({ path: "offer.price_usd", rule: "offer.price_usd", reason: "price must be a finite amount ≥ 0" });
     return;
   }
-  const total = cents(o.price_usd) * (Number.isSafeInteger(o.quantity) && o.quantity > 0 ? o.quantity : 1);
+  const total = cents(o.price_usd * (Number.isSafeInteger(o.quantity) && o.quantity > 0 ? o.quantity : 1));
   const caps = [
     ["per_order_usd", 0, "per order"],
     ["per_day_usd", DAY_MS, "per day"],
@@ -109,7 +135,8 @@ function checkCart(p: Policy, o: Offer, history: readonly Purchase[], now: numbe
 
 /**
  * Applies the policy, met with Intent Cloud's baseline, to one outbound request. `history` holds earlier
- * purchases for the daily (24 h) and weekly (7 × 24 h) limits, counted back from `now`.
+ * purchases for the daily (24 h) and weekly (7 × 24 h) limits, counted back from `now`; a malformed entry
+ * refuses the request (`history_invalid`) rather than being skipped.
  */
 export function evaluate(
   policy: Policy,
@@ -119,7 +146,10 @@ export function evaluate(
 ): Decision {
   const effective = meet(policy, CLOUD_BASELINE);
   const blocked: Blocked[] = [];
+  checkHistory(history, blocked);
+  // A bad history already refuses the request; the caps then run on none rather than on the bad entries.
+  const purchases = blocked.length === 0 ? history : [];
   if (outbound.kind === "search") checkSearch(effective, outbound, blocked);
-  else checkCart(effective, outbound.offer, history, now, blocked);
+  else checkCart(effective, outbound.offer, purchases, now, blocked);
   return { send: blocked.length === 0, blocked };
 }
