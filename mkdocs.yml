@@ -1,0 +1,73 @@
+# Docs for docs.intentai.shop, built with Material for MkDocs (requirements-docs.txt).
+#   python -m venv .venv && .venv/bin/pip install -r requirements-docs.txt && .venv/bin/mkdocs serve
+site_name: Docs
+site_url: https://docs.intentai.shop/
+site_description: Documentation for intent-gateway, the self-hosted gateway that gives AI agents real shopping under a policy the developer controls.
+repo_url: https://github.com/golden007eye/intent-gateway
+repo_name: intent-gateway
+edit_uri: edit/main/docs/
+copyright: intent-gateway is licensed under Apache-2.0.
+strict: true
+
+theme:
+  name: material
+  custom_dir: overrides
+  language: en
+  logo: assets/intent-logo-light.svg
+  favicon: assets/favicon.svg
+  # Fonts are self-hosted (docs/assets/fonts, SIL OFL), so the docs make no request to a font CDN.
+  font: false
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Use light theme
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Use dark theme
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Follow system theme
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.footer
+    - search.highlight
+
+extra:
+  # The header logo links back to the main site, not to the docs home.
+  homepage: https://intentai.shop
+  generator: false
+
+extra_css:
+  - stylesheets/intent.css
+  - stylesheets/code.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+
+nav:
+  - Overview: index.md
+  - Quickstart: quickstart.md
+  - Gateway policy: policy.md
+  - Policy library: policy-library.md
+  - Verify: verify.md
+  - Security: security.md
+  - Decisions:
+      - "ADR-0001: Public-safe harness": adr/0001-harness.md
+      - "ADR-0002: TypeScript": adr/0002-typescript.md

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{#- Browser tab: "<page> · intent-gateway docs" instead of the short header label. -#}
+{% block htmltitle %}
+  {% if page.meta and page.meta.title %}
+    <title>{{ page.meta.title }} · intent-gateway docs</title>
+  {% elif page.title and not page.is_homepage %}
+    <title>{{ page.title | striptags }} · intent-gateway docs</title>
+  {% else %}
+    <title>intent-gateway docs</title>
+  {% endif %}
+{% endblock %}

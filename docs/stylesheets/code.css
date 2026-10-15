@@ -1,0 +1,74 @@
+/* Code tokens from brand v1.3 §3.2, mapped to the Pygments classes that pymdownx.highlight emits.
+   Panels: Porcelain 2 (light) / Ink 2 (dark). Every token is at least 4.5:1 on its page and panel.
+   Number amber and removal red are functional colours: inside code only, never as accents.
+   Colour never carries meaning alone: diffs keep their + / - signs. */
+
+[data-md-color-scheme="default"] {
+  --intent-code-bg: #EEEAE0;
+  --intent-code-text: #0B0C0C;
+  --intent-code-keyword: #28483F;
+  --intent-code-function: #1F3A33;
+  --intent-code-string: #3D6650;
+  --intent-code-number: #6B4F2A;
+  --intent-code-comment: #5E6763;
+  --intent-code-prompt: #28483F;
+  --intent-code-added: #2F5D45;
+  --intent-code-removed: #8A3B2E;
+}
+
+[data-md-color-scheme="slate"] {
+  --intent-code-bg: #141716;
+  --intent-code-text: #F6F3EC;
+  --intent-code-keyword: #AFC9B5;
+  --intent-code-function: #E4EEE6;
+  --intent-code-string: #C9DCCD;
+  --intent-code-number: #D9C29A;
+  --intent-code-comment: #8D9692;
+  --intent-code-prompt: #AFC9B5;
+  --intent-code-added: #9CCBA9;
+  --intent-code-removed: #E5A796;
+}
+
+[data-md-color-scheme] {
+  --md-code-bg-color: var(--intent-code-bg);
+  --md-code-fg-color: var(--intent-code-text);
+  --md-code-hl-keyword-color: var(--intent-code-keyword);
+  --md-code-hl-function-color: var(--intent-code-function);
+  --md-code-hl-string-color: var(--intent-code-string);
+  --md-code-hl-number-color: var(--intent-code-number);
+  --md-code-hl-comment-color: var(--intent-code-comment);
+  --md-code-hl-name-color: var(--intent-code-text);
+  --md-code-hl-constant-color: var(--intent-code-function);
+  --md-code-hl-special-color: var(--intent-code-string);
+  --md-code-hl-variable-color: var(--intent-code-text);
+  --md-code-hl-operator-color: var(--intent-code-text);
+  --md-code-hl-punctuation-color: var(--intent-code-text);
+  --md-code-hl-generic-color: var(--intent-code-text);
+}
+
+/* DM Mono, ligatures off; 14/22 in blocks, 0.875em inline. */
+.md-typeset code, .md-typeset pre, .md-typeset kbd { font-variant-ligatures: none; }
+.md-typeset pre > code { font-size: 14px; line-height: 22px; border-radius: 12px; padding: 16px 20px; }
+.md-typeset :not(pre) > code { font-size: .875em; border-radius: 6px; }
+
+/* Text */
+.highlight code, .highlight .n, .highlight .p, .highlight .o, .highlight .ow, .highlight .w,
+.highlight .na, .highlight .nv, .highlight .vc, .highlight .vg, .highlight .vi, .highlight .go { color: var(--intent-code-text); }
+/* Keyword (YAML and JSON keys arrive as .nt) */
+.highlight .k, .highlight .kc, .highlight .kd, .highlight .kn, .highlight .kp, .highlight .kr, .highlight .kt,
+.highlight .nt, .highlight .nd, .highlight .ni, .highlight .nl, .highlight .gh, .highlight .gu { color: var(--intent-code-keyword); }
+/* Function */
+.highlight .nf, .highlight .fm, .highlight .nc, .highlight .nn, .highlight .ne,
+.highlight .nb, .highlight .bp, .highlight .no { color: var(--intent-code-function); font-weight: 500; }
+/* String */
+.highlight .s, .highlight .s1, .highlight .s2, .highlight .sa, .highlight .sb, .highlight .sc, .highlight .dl,
+.highlight .se, .highlight .sh, .highlight .si, .highlight .sr, .highlight .ss, .highlight .sx, .highlight .cpf { color: var(--intent-code-string); }
+/* Number */
+.highlight .m, .highlight .mb, .highlight .mf, .highlight .mh, .highlight .mi, .highlight .mo, .highlight .il { color: var(--intent-code-number); }
+/* Comment: DM Mono italic, comments only */
+.highlight .c, .highlight .c1, .highlight .ch, .highlight .cm, .highlight .cs, .highlight .cp, .highlight .sd { color: var(--intent-code-comment); font-style: italic; }
+/* Prompt: the $ is not copied with the command */
+.highlight .gp { color: var(--intent-code-prompt); user-select: none; }
+/* Diff and errors */
+.highlight .gi { color: var(--intent-code-added); background-color: transparent; }
+.highlight .gd, .highlight .gr, .highlight .gt, .highlight .err { color: var(--intent-code-removed); background-color: transparent; }

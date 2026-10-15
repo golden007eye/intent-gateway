@@ -1,0 +1,93 @@
+/* intent brand v1.2 + developer addendum v1.3 on Material for MkDocs.
+   Pages: Porcelain (light) / Ink (dark), following the system setting through Material's palette toggle.
+   Accent: Forest in light, Sage in dark. Sage on Porcelain stays decorative, never text. */
+
+@font-face { font-family: "DM Sans"; src: url("../assets/fonts/DMSans-Variable.ttf") format("truetype"); font-weight: 100 1000; font-style: normal; font-display: swap; }
+@font-face { font-family: "DM Mono"; src: url("../assets/fonts/DMMono-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "DM Mono"; src: url("../assets/fonts/DMMono-Medium.ttf") format("truetype"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "DM Mono"; src: url("../assets/fonts/DMMono-Italic.ttf") format("truetype"); font-weight: 400; font-style: italic; font-display: swap; }
+
+:root {
+  --intent-ink: #0B0C0C;
+  --intent-porcelain: #F6F3EC;
+  --intent-sage: #AFC9B5;
+  --intent-forest: #28483F;
+  --intent-porcelain-2: #EEEAE0;
+  --intent-ink-2: #141716;
+  /* Material builds --md-text-font-family / --md-code-font-family from these, with its own fallbacks. */
+  --md-text-font: "DM Sans";
+  --md-code-font: "DM Mono";
+}
+
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: var(--intent-porcelain);
+  --md-default-fg-color: rgba(11, 12, 12, .87);
+  --md-default-fg-color--light: #5E6763;
+  --md-default-fg-color--lighter: #8D9692;
+  --md-default-fg-color--lightest: #D9D4C7;
+  --md-typeset-color: var(--intent-ink);
+  --md-primary-fg-color: var(--intent-porcelain);
+  --md-primary-fg-color--light: var(--intent-porcelain-2);
+  --md-primary-fg-color--dark: var(--intent-porcelain-2);
+  --md-primary-bg-color: var(--intent-ink);
+  --md-primary-bg-color--light: #5E6763;
+  --md-accent-fg-color: var(--intent-forest);
+  --md-accent-fg-color--transparent: rgba(40, 72, 63, .1);
+  --md-typeset-a-color: var(--intent-forest);
+  --md-footer-bg-color: var(--intent-porcelain-2);
+  --md-footer-bg-color--dark: var(--intent-porcelain-2);
+  --md-footer-fg-color: var(--intent-ink);
+  --md-footer-fg-color--light: #5E6763;
+  --md-footer-fg-color--lighter: #5E6763;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: var(--intent-ink);
+  --md-default-bg-color--light: var(--intent-ink-2);
+  --md-default-fg-color: rgba(246, 243, 236, .87);
+  --md-default-fg-color--light: #8D9692;
+  --md-default-fg-color--lighter: #5E6763;
+  --md-default-fg-color--lightest: #2A2F2D;
+  --md-typeset-color: var(--intent-porcelain);
+  --md-primary-fg-color: var(--intent-ink);
+  --md-primary-fg-color--light: var(--intent-ink-2);
+  --md-primary-fg-color--dark: var(--intent-ink-2);
+  --md-primary-bg-color: var(--intent-porcelain);
+  --md-primary-bg-color--light: #8D9692;
+  --md-accent-fg-color: var(--intent-sage);
+  --md-accent-fg-color--transparent: rgba(175, 201, 181, .12);
+  --md-typeset-a-color: var(--intent-sage);
+  --md-footer-bg-color: var(--intent-ink-2);
+  --md-footer-bg-color--dark: var(--intent-ink-2);
+  --md-footer-fg-color: var(--intent-porcelain);
+  --md-footer-fg-color--light: #8D9692;
+  --md-footer-fg-color--lighter: #8D9692;
+}
+
+body { font-optical-sizing: auto; }
+
+/* Header: the v1.2 logo (switched by scheme) + "Docs" in DM Sans 500, on the page colour. */
+.md-header { box-shadow: 0 1px 0 var(--md-default-fg-color--lightest); }
+.md-header__button.md-logo { padding: .2rem .4rem; }
+.md-header__button.md-logo img.intent-logo { height: 2.2rem; width: auto; }
+[data-md-color-scheme="default"] .md-header__button.md-logo img.intent-logo--dark,
+[data-md-color-scheme="slate"] .md-header__button.md-logo img.intent-logo--light { display: none; }
+.md-header__title { font-weight: 500; margin-left: .2rem; }
+.md-search__input { background-color: var(--md-code-bg-color); color: var(--md-typeset-color); }
+.md-search__input::placeholder, .md-search__icon { color: var(--md-default-fg-color--light); }
+.md-tabs { background-color: var(--md-default-bg-color); }
+
+/* v1.2 text styles, sentence case, left aligned. */
+.md-typeset h1 { font-weight: 600; letter-spacing: -.025em; color: var(--md-typeset-color); }
+.md-typeset h2 { font-weight: 500; letter-spacing: -.02em; }
+.md-typeset h3 { font-weight: 600; }
+.md-typeset h1, .md-typeset h2 { text-wrap: balance; }
+.md-typeset table:not([class]) { font-variant-numeric: tabular-nums; }
+
+/* "Planned" admonition: states what does not exist yet. Forest / Sage, never amber or red. */
+.md-typeset .admonition.planned, .md-typeset details.planned { border-color: var(--md-accent-fg-color); }
+.md-typeset .planned > .admonition-title, .md-typeset .planned > summary { background-color: var(--md-accent-fg-color--transparent); }
+.md-typeset .planned > .admonition-title::before, .md-typeset .planned > summary::before {
+  background-color: var(--md-accent-fg-color);
+  -webkit-mask-image: var(--md-admonition-icon--info); mask-image: var(--md-admonition-icon--info);
+}
