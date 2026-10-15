@@ -2,6 +2,8 @@
 
 intent is pre-alpha and built in the open. Issues, ideas and pull requests are welcome. Much of the code is written with AI coding agents, and so can yours: [CLAUDE.md](CLAUDE.md) (also read through [AGENTS.md](AGENTS.md)) holds the rules every contributor and agent follows.
 
+Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report conduct problems to support@intentai.shop; report security issues as described in [SECURITY.md](SECURITY.md).
+
 ## Set up
 
 1. Install Node 24 (see `.node-version`) and pnpm (`corepack enable`).
