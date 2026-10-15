@@ -18,6 +18,7 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Disclosure log** | — | The gateway's local hash chain of every field it sent to Intent Cloud, appended before each send. |
 | **Disclosure receipt** | — | Intent Cloud's signed statement of what it received, matched against the disclosure log. |
 | **Local audit trail** | — | The same local hash chain read as a whole: disclosure log entries plus each signed Approval the gateway verified. |
+| **Fenced lease** | `audit.lock` | The expiring lock a writer of the local hash chain holds while it appends. Before each write the writer checks it still holds the lease and that the chain's tail has not moved; if either fails, that writer is refused for good. Liveness comes only from the expiry, never from a process id. |
 | **Approval** | — | A buyer's passkey signature over one purchase snapshot, returned signed by Intent Cloud, verified by the gateway and appended to the local audit trail. One per purchase. |
 | **Approver pin** | `approver_pin` | The passkey credential the gateway trusts for Approvals: the first one it verified, or one accepted later with `intent approver accept` at a terminal. Any other credential is flagged (ADR-0011). |
 | **Key statement** | — | Intent Cloud's statement, signed by an offline root key pinned per host, listing its current and next receipt and approval keys. Valid 90 to 180 days (ADR-0006). |
