@@ -16,7 +16,6 @@
       "Bash(gh api *--field*)",
       "Bash(gh api *--raw-field*)",
       "Bash(gh api *--input*)",
-      "Bash(gh api graphql*)",
       "Bash(gh api *rulesets*)",
       "Bash(git push)",
       "Bash(git push * main*)",
