@@ -15,13 +15,14 @@ A change that touches an invariant carries a test that fails if the invariant br
 ## Project conventions
 
 - TypeScript strict, ESM only, pnpm (ADR-0002).
-- One module = one folder under `src/` with an `index.ts` that is its only public interface; other modules import only that file. Why: modules stay separable and agents cannot tangle them.
+- One module = one folder under `src/` with an `index.ts` that is its only public interface; other modules import only that file (`pnpm boundaries` enforces it). Why: modules stay separable and agents cannot tangle them.
 - Each outside system (Intent Cloud, the merchant checkout) sits behind one adapter in our own terms, with a fake used by tests. Why: tests run offline and a provider changes in one place.
-- Runtime dependencies must carry a licence compatible with Apache-2.0, because the gateway ships under Apache-2.0.
+- Runtime dependencies must carry a licence compatible with Apache-2.0 (`pnpm licence-check`), because the gateway ships under Apache-2.0.
 
 ## Keeping the repo public-safe
 
 - Committed files mention only public names: the gateway, Intent Cloud, its public API host, the confirm page. Internal service names, hosts, repos and people belong in `CLAUDE.local.md`. Why: the history is published as-is at launch.
+- `pnpm public-safety` (also a pre-commit hook and a CI job) fails on any tracked file containing a term from the private list: CI secret `PRIVATE_TERMS`, locally `~/.config/intent-gateway/private-terms`. When it fails, move the content to `CLAUDE.local.md`; the fix is never to edit the check or the list.
 
 ## Shared background
 
@@ -33,4 +34,6 @@ A change that touches an invariant carries a test that fails if the invariant br
 
 1. Work follows plan → execute → review → verify; review is a separate pass from writing.
 2. Every change lands by pull request on a branch. The `main-protection` ruleset on GitHub (PR required, squash-only, signed commits) is the real control; `.claude/settings.json` only stops agents from trying. The maintainer approves and merges.
-3. Before opening a PR, fill in the PR template, including the public-safe box. Done = template complete and CI green.
+3. Before opening a PR, run `pnpm check` and fill in the PR template, including the public-safe box. Done = `pnpm check` passes, template complete, CI green.
+
+Tooling gotchas: dependency-cruiser refuses odd-numbered Node releases, so run `pnpm boundaries` under Node 24 (`.node-version`). Run `pre-commit install` once per clone.

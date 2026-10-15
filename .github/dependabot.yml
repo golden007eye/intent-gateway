@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      actions: {patterns: ["*"]}
+  - package-ecosystem: npm
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      js-dev: {dependency-type: development}
+    ignore:
+      # typescript-eslint 8.x supports TypeScript <6.1 only (peer range).
+      - dependency-name: typescript
+        versions: [">=6.1.0"]
