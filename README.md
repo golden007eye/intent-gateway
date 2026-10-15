@@ -20,11 +20,11 @@ None of these commands works yet. They show the intended shape of a first run.
 
 ```console
 # 1 · run the gateway next to your agent (planned image)
-$ docker run -d -p 8787:8787 -v intent-data:/data \
+$ docker run -d -p 127.0.0.1:8787:8787 -v intent-data:/data \
     ghcr.io/golden007eye/intent-gateway:0.1
 
 # 2 · connect Claude Code over MCP (planned endpoint)
-$ claude mcp add intent --transport http http://localhost:8787/mcp
+$ claude mcp add intent --transport http http://127.0.0.1:8787/mcp
 
 # 3 · ask your agent for something
 > "Find a 1 L stainless water bottle under $40"
