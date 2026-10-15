@@ -19,3 +19,4 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Approval** | — | A buyer's passkey signature over one purchase snapshot, returned signed by Intent Cloud, verified by the gateway and appended to the local audit trail. One per purchase. |
 | **Hand-off** | `continue_url` | The step where the buyer leaves our confirm page for the merchant's checkout and pays there. The gateway never sees the buyer's name, address or payment. |
 | **Verify command** | `intent verify` (planned) | Checks the local hash chain, matches receipts to the log, and checks the image signature and SBOM. |
+| **Self-check** | `label: "self-check"` | A provenance or signature check of the gateway's own npm package or image, run by the installed gateway code itself. A tampered install could tamper with it too, so it always names the outside checks (`npm audit signatures`, `cosign verify`) that settle the question. |
