@@ -71,3 +71,12 @@ nav:
   - Decisions:
       - "ADR-0001: Public-safe harness": adr/0001-harness.md
       - "ADR-0002: TypeScript": adr/0002-typescript.md
+      - "ADR-0003: Merge on green": adr/0003-merge-on-green.md
+      - "ADR-0004: Public from pre-alpha": adr/0004-public-pre-alpha.md
+      - "ADR-0005: npx first, Docker for teams": adr/0005-packaging-npx-docker.md
+      - "ADR-0006: Session keys, receipts, key statement": adr/0006-session-keys-receipts.md
+      - "ADR-0007: Local store": adr/0007-local-store-jsonl.md
+      - "ADR-0008: Public contract copy": adr/0008-public-contract-copy.md
+      - "ADR-0009: Policy v1, narrow only": adr/0009-policy-v1-narrow-only.md
+      - "ADR-0010: Release supply chain": adr/0010-release-supply-chain.md
+      - "ADR-0011: Approver pin": adr/0011-approver-pin.md
