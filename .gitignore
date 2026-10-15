@@ -1,0 +1,24 @@
+# Private overlay: never committed (see CLAUDE.local.md.example)
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+# Agent plans, specs and session state (may name private systems)
+.omc/
+
+# Secrets and local env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.secrets/
+
+# Node
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+*.swp
