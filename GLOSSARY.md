@@ -19,6 +19,7 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Approval** | — | A buyer's passkey signature over one purchase snapshot, returned signed by Intent Cloud, verified by the gateway and appended to the local audit trail. One per purchase. |
 | **Approver pin** | `approver_pin` | The passkey credential the gateway trusts for Approvals: the first one it verified, or one accepted later with `intent approver accept` at a terminal. Any other credential is flagged (ADR-0011). |
 | **Key statement** | — | Intent Cloud's statement, signed by an offline root key pinned per host, listing its current and next receipt and approval keys. Valid 90 to 180 days (ADR-0006). |
+| **Buyer identity** | `findIdentity` | Anything that identifies or pays as the buyer: name, postal address, card number, email, phone. The gateway refuses to send it; a ZIP code alone is not buyer identity. |
 | **Hand-off** | `continue_url` | The step where the buyer leaves our confirm page for the merchant's checkout and pays there. The gateway never sees the buyer's name, address or payment. |
 | **Verify command** | `intent verify` (planned) | Checks the local hash chain, matches receipts to the log, and checks the image signature and SBOM. |
 | **Canonical JSON** | `jcs` | RFC 8785 JSON restricted to safe integers (no fractions, no NaN, no lone surrogates): the exact bytes the gateway hashes and verifies signatures over. |
