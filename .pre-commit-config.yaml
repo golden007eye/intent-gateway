@@ -1,0 +1,24 @@
+# Local hooks only: they use the repo's own toolchain. Install once:  pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (staged changes)
+        entry: gitleaks git --pre-commit --staged --redact --no-banner
+        language: system
+        pass_filenames: false
+      - id: public-safety
+        name: public-safety (private terms)
+        entry: node scripts/public-safety.ts
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: eslint
+        name: eslint
+        entry: pnpm exec eslint --no-warn-ignored
+        language: system
+        types_or: [ts, javascript]
+      - id: no-large-files
+        name: no files over 1 MB
+        entry: sh -c 'for f in "$@"; do [ "$(wc -c < "$f")" -le 1048576 ] || { echo "$f is over 1 MB"; exit 1; }; done' --
+        language: system
