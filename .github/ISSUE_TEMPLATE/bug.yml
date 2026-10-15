@@ -1,0 +1,12 @@
+name: Bug
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    attributes: {label: What happened, description: "Include the command you ran and its output."}
+    validations: {required: true}
+  - type: textarea
+    attributes: {label: What you expected}
+    validations: {required: true}
+  - type: input
+    attributes: {label: Version or commit}

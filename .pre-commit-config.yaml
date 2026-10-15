@@ -9,7 +9,7 @@ repos:
         pass_filenames: false
       - id: public-safety
         name: public-safety (private terms)
-        entry: node scripts/public-safety.ts
+        entry: node scripts/public-safety.ts --optional
         language: system
         pass_filenames: false
         always_run: true

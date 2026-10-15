@@ -3,7 +3,8 @@
 // Hits are reported by term number and never by term, so a public CI log never prints what it guards.
 //
 //   node scripts/public-safety.ts            scan the index (what the next commit will contain)
-//   node scripts/public-safety.ts --history  scan every blob reachable from any ref (what going public publishes)
+//   node scripts/public-safety.ts --history  scan every blob reachable from any ref (the public history)
+//   --optional                                skip with a notice when no term list exists (contributors have none)
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -108,7 +109,12 @@ function historyBlobs(): Blob[] {
 
 function main(): void {
   const history = process.argv.includes("--history");
-  const terms = loadTerms(process.env, join(homedir(), ".config", "intent-gateway", "private-terms"));
+  const localFile = join(homedir(), ".config", "intent-gateway", "private-terms");
+  if (process.argv.includes("--optional") && process.env.PRIVATE_TERMS === undefined && !existsSync(localFile)) {
+    console.log("public-safety: skipped, no private term list here (maintainers only; CI runs it on main)");
+    return;
+  }
+  const terms = loadTerms(process.env, localFile);
   const blobs = history ? historyBlobs() : indexBlobs();
   const contents = parseBatch(git(["cat-file", "--batch"], blobs.map((b) => b.sha).join("\n") + "\n"));
   const hits = blobs.flatMap((blob) => {

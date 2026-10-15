@@ -8,6 +8,8 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule: {interval: weekly}
+    # Matches pnpm-workspace.yaml minimumReleaseAge: a younger version fails `pnpm install`.
+    cooldown: {default-days: 7}
     groups:
       js-dev: {dependency-type: development}
     ignore:
