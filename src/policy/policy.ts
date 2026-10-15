@@ -1,5 +1,6 @@
 // Gateway policy v1: the strict schema, Intent Cloud's baseline, and `meet`. A policy can only narrow the
 // baseline (invariant 1), so every value that could loosen it is refused at load time with POLICY_LOOSENS.
+import { domainToASCII } from "node:url";
 import { z } from "zod";
 import { DOCUMENT, PolicyError, joinPath, parseStrictYaml } from "./parse.ts";
 
@@ -48,26 +49,53 @@ export const EXCLUDED_CATEGORIES: readonly string[] = Object.freeze([
   "digital-downloads",
 ]);
 
+// NFKC folds full-width and compatibility forms; format characters (zero-width spaces, bidi marks) are dropped
+// so `Ａlcohol` and `alcohol\u200b` read as `alcohol`.
+function cleanCategory(category: string): string {
+  return category.normalize("NFKC").toLowerCase().replace(/\p{Cf}/gu, "").replace(/\s+/g, " ").trim();
+}
+
+const hyphenate = (part: string): string => part.trim().replace(/[\s_]+/g, "-");
+
+/** The category as a path: `/` and `>` separate levels, spaces and underscores become `-`. */
 export function normalizeCategory(category: string): string {
-  return category
-    .split("/")
-    .map((part) => part.trim().toLowerCase().replace(/[\s_]+/g, "-"))
-    .join("/");
+  return cleanCategory(category).split(/[/>]/).map(hyphenate).join("/");
 }
 
-export function normalizeMerchant(merchant: string): string {
-  return merchant.trim().toLowerCase().replace(/\.$/, "");
-}
-
-/** True when `category` or any parent of it (`a/b` is under `a`) is in `blocked`. */
+/** True when `category`, any parent of it (`a/b` is under `a`), or any part of it split on `&`, `>`, `/` or `,`
+ * (`Alcohol & Spirits` has the part `alcohol`) is in `blocked`. */
 export function categoryBlocked(category: string, blocked: readonly string[]): boolean {
-  const parts = normalizeCategory(category).split("/");
-  return parts.some((_, i) => blocked.includes(parts.slice(0, i + 1).join("/")));
+  const levels = normalizeCategory(category).split("/");
+  if (levels.some((_, i) => blocked.includes(levels.slice(0, i + 1).join("/")))) return true;
+  return cleanCategory(category)
+    .split(/[&>/,]/)
+    .map(hyphenate)
+    .some((part) => part !== "" && blocked.includes(part));
 }
 
-/** True when `merchant` is one of `list` or a subdomain of one. */
+const LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
+// Characters that make a merchant a URL or host:port rather than a bare hostname. `domainToASCII` would
+// silently cut a path (`evil.com/x` becomes `evil.com`), so they are refused before it runs.
+const NOT_HOSTNAME = /[\s:/\\?#@[\]%*]/u;
+
+/**
+ * The merchant as a bare ASCII hostname: NFKC, lowercase, IDN to punycode (`bücher.de` is `xn--bcher-kva.de`,
+ * `evil。com` is `evil.com`), one trailing dot dropped. Undefined for anything else: a scheme, port, path,
+ * empty label or empty name.
+ */
+export function normalizeMerchant(merchant: string): string | undefined {
+  const folded = merchant.normalize("NFKC").toLowerCase().trim();
+  if (NOT_HOSTNAME.test(folded)) return undefined;
+  const ascii = domainToASCII(folded);
+  const host = ascii.endsWith(".") ? ascii.slice(0, -1) : ascii;
+  if (host === "" || host.length > 253) return undefined;
+  return host.split(".").every((label) => LABEL.test(label)) ? host : undefined;
+}
+
+/** True when `merchant` is one of `list` or a subdomain of one. A merchant that is not a hostname matches none. */
 export function merchantMatches(merchant: string, list: readonly string[]): boolean {
   const m = normalizeMerchant(merchant);
+  if (m === undefined) return false;
   return list.some((entry) => m === entry || m.endsWith(`.${entry}`));
 }
 
@@ -151,6 +179,14 @@ function toPolicyError(issue: z.core.$ZodIssue): PolicyError {
   return new PolicyError("POLICY_INVALID", path === "" ? DOCUMENT : path, issue.message);
 }
 
+function hostnameAt(merchant: string, path: string): string {
+  const host = normalizeMerchant(merchant);
+  if (host === undefined) {
+    throw new PolicyError("POLICY_INVALID", path, "a merchant must be a bare hostname (no scheme, port, path or empty label)");
+  }
+  return host;
+}
+
 /** Reads a policy.yaml. Throws PolicyError: POLICY_LOOSENS for anything that could loosen the baseline,
  * POLICY_INVALID for other malformed input. */
 export function loadPolicy(text: string): Policy {
@@ -160,15 +196,22 @@ export function loadPolicy(text: string): Policy {
     throw errors.find((e) => e.code === "POLICY_LOOSENS") ?? errors[0] ?? new PolicyError("POLICY_INVALID", DOCUMENT, "invalid");
   }
   const d = parsed.data;
-  const block = (d.merchants?.block ?? []).map(normalizeMerchant);
-  const allow = d.merchants?.allow?.map(normalizeMerchant);
+  const block = (d.merchants?.block ?? []).map((m, i) => hostnameAt(m, `merchants.block[${String(i)}]`));
+  const allow = d.merchants?.allow?.map((m, i) => hostnameAt(m, `merchants.allow[${String(i)}]`));
+  const categories = (d.categories?.block ?? []).map((c, i) => {
+    const normalized = normalizeCategory(c);
+    if (normalized.split("/").includes("")) {
+      throw new PolicyError("POLICY_INVALID", `categories.block[${String(i)}]`, "a category level is empty");
+    }
+    return normalized;
+  });
   return freezePolicy({
     ship_to: d.share?.ship_to ?? CLOUD_BASELINE.share.ship_to,
     spend: d.spend ?? {},
     max: d.quantity?.max ?? CLOUD_BASELINE.quantity.max,
     allow,
     block,
-    categories: (d.categories?.block ?? []).map(normalizeCategory),
+    categories,
   });
 }
 

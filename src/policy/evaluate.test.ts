@@ -3,6 +3,7 @@ import { evaluate, loadPolicy, type Offer, type Outbound, type Purchase } from "
 
 const NOW = Date.parse("2026-10-15T12:00:00Z");
 const DAY = 86_400_000;
+const ZWSP = String.fromCodePoint(0x200b);
 const policy = (body: string) => loadPolicy(`version: 1\napproval: passkey\n${body}`);
 const cart = (offer: Partial<Offer> = {}): Outbound => ({
   kind: "cart",
@@ -116,5 +117,161 @@ describe("evaluate: searches", () => {
     expect(rules(policy(""), search({ category: "alcohol" }))).toEqual(["categories.block"]);
     expect(rules(policy(""), search({ history: [{ item: "lamp" }] }))).toEqual(["share.history"]);
     expect(rules(policy(""), search({ history: [] }))).toEqual([]);
+  });
+});
+
+describe("evaluate: bad purchase history fails closed", () => {
+  const p = policy("spend: {per_day_usd: 40}\n");
+  const bad: [string, unknown][] = [
+    ["a NaN total", { at: NOW, total_usd: Number.NaN }],
+    ["an infinite total", { at: NOW, total_usd: Number.POSITIVE_INFINITY }],
+    ["a negative total", { at: NOW, total_usd: -1000 }],
+    ["a total as text", { at: NOW, total_usd: "39" }],
+    ["a missing total", { at: NOW }],
+    ["a NaN time", { at: Number.NaN, total_usd: 1 }],
+    ["an infinite time", { at: Number.NEGATIVE_INFINITY, total_usd: 1 }],
+    ["a time as text", { at: "2026-10-15", total_usd: 1 }],
+    ["null", null],
+    ["a number", 5],
+  ];
+
+  it.each(bad)("refuses a cart when one entry has %s", (_label, entry) => {
+    const history = [entry, { at: NOW, total_usd: 39 }] as unknown as Purchase[];
+    const d = evaluate(p, cart({ price_usd: 30 }), history, NOW);
+    expect(d.send).toBe(false);
+    expect(d.blocked).toContainEqual({
+      path: "purchase_history[0]",
+      rule: "history_invalid",
+      reason: "a purchase needs a finite time and a finite total ≥ 0",
+    });
+  });
+
+  it("refuses the review's NaN-then-39 case, which used to send", () => {
+    const history = [
+      { at: NOW, total_usd: Number.NaN },
+      { at: NOW, total_usd: 39 },
+    ];
+    expect(rules(p, cart({ price_usd: 30 }), history)).toContain("history_invalid");
+  });
+
+  it("refuses a negative total even with no cap it could offset", () => {
+    expect(rules(policy(""), cart(), [{ at: NOW, total_usd: -1 }])).toEqual(["history_invalid"]);
+  });
+
+  it("refuses a search too, and a history that is not a list", () => {
+    const search: Outbound = { kind: "search", category: "home" };
+    expect(rules(p, search, [{ at: Number.NaN, total_usd: 1 }])).toEqual(["history_invalid"]);
+    expect(evaluate(p, cart(), {} as unknown as Purchase[], NOW).blocked).toEqual([
+      { path: "purchase_history", rule: "history_invalid", reason: "the purchase history is not a list" },
+    ]);
+  });
+
+  it("accepts a zero total and an old purchase", () => {
+    expect(rules(p, cart(), [{ at: 0, total_usd: 0 }])).toEqual([]);
+  });
+});
+
+describe("evaluate: order totals in cents rounded up", () => {
+  it("counts 3 × $20.004 as over a $60 per-order cap", () => {
+    expect(rules(policy("spend: {per_order_usd: 60}\n"), cart({ price_usd: 20.004, quantity: 3 }))).toEqual([
+      "spend.per_order_usd",
+    ]);
+  });
+
+  it("rounds a history total up too", () => {
+    const p = policy("spend: {per_day_usd: 40}\n");
+    expect(rules(p, cart({ price_usd: 20 }), [{ at: NOW, total_usd: 20.001 }])).toEqual(["spend.per_day_usd"]);
+  });
+
+  it("does not add a cent for float noise", () => {
+    const p = policy("spend: {per_order_usd: 1}\n");
+    expect(rules(p, cart({ price_usd: 0.07 }))).toEqual([]);
+    expect(rules(p, cart({ price_usd: 0.33, quantity: 3 }))).toEqual([]);
+    expect(rules(p, cart({ price_usd: 1 }))).toEqual([]);
+    expect(rules(policy("spend: {per_order_usd: 60}\n"), cart({ price_usd: 20, quantity: 3 }))).toEqual([]);
+  });
+});
+
+describe("evaluate: merchant names are normalized", () => {
+  const p = policy("merchants: {block: [evil.com, bücher.de]}\n");
+  const blockedForms = [
+    "evil.com",
+    "EVIL.com",
+    "evil.com.",
+    "evil。com",
+    "ｅｖｉｌ.com",
+    "shop.evil.com",
+    "xn--bcher-kva.de",
+    "bücher.de",
+    "BÜCHER.de",
+    "evil.com\u200b",
+  ];
+  const malformed = [
+    "evil.com..",
+    "evil.com:443",
+    "https://evil.com",
+    "evil.com/x",
+    "",
+    ".",
+    "a..evil.com",
+    "evil com",
+    "*.evil.com",
+    "-evil.com",
+  ];
+
+  it.each(blockedForms)("blocks %s as a blocked merchant", (merchant) => {
+    expect(rules(p, cart({ merchant }))).toEqual(["merchants.block"]);
+  });
+
+  it.each(malformed)("refuses %j, which is not a bare hostname", (merchant) => {
+    const d = evaluate(p, cart({ merchant }), [], NOW);
+    expect(d.send).toBe(false);
+    expect(d.blocked).toEqual([
+      { path: "offer.merchant", rule: "offer.merchant", reason: `merchant "${merchant}" is not a hostname` },
+    ]);
+  });
+
+  it("refuses an un-normalisable merchant with no merchant rules at all", () => {
+    expect(rules(policy(""), cart({ merchant: "evil.com:443" }))).toEqual(["offer.merchant"]);
+  });
+
+  it("matches an allow-list on the normalized form", () => {
+    const allow = policy("merchants: {allow: [bücher.de]}\n");
+    expect(allow.merchants.allow).toEqual(["xn--bcher-kva.de"]);
+    expect(rules(allow, cart({ merchant: "xn--bcher-kva.de" }))).toEqual([]);
+    expect(rules(allow, cart({ merchant: "Shop.Bücher.de." }))).toEqual([]);
+    expect(rules(allow, cart({ merchant: "evil.com" }))).toEqual(["merchants.allow"]);
+    expect(rules(allow, cart({ merchant: "evil.com.." }))).toEqual(["offer.merchant"]);
+  });
+});
+
+describe("evaluate: the excluded-category check normalizes categories", () => {
+  const excludedForms = [
+    "Alcohol & Spirits",
+    "Ａlcohol",
+    `alcohol${ZWSP}`,
+    `alco${ZWSP}hol`,
+    "alcohol>beer",
+    "Beer, Alcohol",
+    "Food / Alcohol",
+    "  ALCOHOL  ",
+    "Gift   Cards",
+    "gift_cards",
+  ];
+
+  it.each(excludedForms)("blocks %j", (category) => {
+    expect(rules(policy(""), cart({ category }))).toEqual(["categories.block"]);
+  });
+
+  it("does not block a part that only contains an excluded word", () => {
+    expect(rules(policy(""), cart({ category: "alcohol-free drinks" }))).toEqual([]);
+    expect(rules(policy(""), cart({ category: "Home & Garden" }))).toEqual([]);
+  });
+
+  it("matches a policy's own subcategory written with > or full-width letters", () => {
+    const p = policy("categories: {block: [Electronics / Phones]}\n");
+    expect(p.categories.block).toContain("electronics/phones");
+    expect(rules(p, cart({ category: "ＥＬＥＣＴＲＯＮＩＣＳ>phones>cases" }))).toEqual(["categories.block"]);
+    expect(rules(p, cart({ category: "electronics/laptops" }))).toEqual([]);
   });
 });
