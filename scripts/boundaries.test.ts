@@ -1,5 +1,6 @@
-// Proves the module rules bite: each rule in .dependency-cruiser.cjs and the network rules in eslint.config.js
-// reject a deliberate violation under test/fixtures/, and the coverage floors fail a file below 95%.
+// Proves the module rules bite: each rule in .dependency-cruiser.cjs and the network rules in eslint.config.js reject
+// a deliberate violation under test/fixtures/ (one fixture per known network bypass), and the coverage floors fail a
+// file below 95%.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +21,7 @@ describe("dependency-cruiser rules", () => {
     const options = await extractDepcruiseOptions(join(repo, ".dependency-cruiser.cjs"));
     const tsConfigFile = join(fixture, "tsconfig.json");
     const result = await cruise(
-      ["src"],
+      ["src", "scripts"],
       { ...options, baseDir: fixture, tsConfig: { fileName: tsConfigFile } },
       {},
       { tsConfig: extractTSConfig(tsConfigFile) },
@@ -34,12 +35,24 @@ describe("dependency-cruiser rules", () => {
     ["only-disclosure-reaches-cloud", "src/gateway/index.ts", "src/cloud/index.ts"],
     ["fake-only-in-tests", "src/gateway/uses-fake.ts", "src/cloud-fake/index.ts"],
     ["panel-offline", "src/panel/index.ts", "src/library/index.ts"],
+    // Finding 12: panel -> relay -> disclosure -> cloud is caught, not only a direct import.
+    ["panel-offline", "src/panel/transitive.ts", "src/disclosure/index.ts"],
+    ["panel-offline", "src/panel/transitive.ts", "src/cloud/index.ts"],
+    ["network-only-in-network-modules", "src/gateway/uses-https.ts", "https"],
+    ["network-only-in-network-modules", "src/gateway/uses-tls.ts", "tls"],
+    ["network-only-in-network-modules", "src/gateway/uses-http2.ts", "http2"],
+    ["network-only-in-network-modules", "src/gateway/uses-dgram.ts", "dgram"],
+    ["network-only-in-network-modules", "src/gateway/uses-worker.ts", "worker_threads"],
+    ["network-only-in-network-modules", "src/gateway/uses-dynamic-import.ts", "https"],
+    ["no-process-escape-in-src", "src/gateway/uses-child-process.ts", "child_process"],
+    ["no-process-escape-in-src", "src/gateway/uses-create-require.ts", "module"],
+    ["no-process-escape-in-src", "src/cloud/spawns.ts", "child_process"],
   ])("%s rejects %s -> %s", (rule, from, to) => {
     expect(violations).toContainEqual({ rule, from, to });
   });
 
-  it("flags nothing else: disclosure may reach cloud, and a test may load the fake", () => {
-    expect(violations).toHaveLength(4);
+  it("flags nothing else: disclosure reaches cloud, a test loads the fake, network modules and scripts/ connect", () => {
+    expect(violations).toHaveLength(15);
   });
 });
 
@@ -48,24 +61,61 @@ describe("eslint network rules", () => {
 
   beforeAll(async () => {
     const eslint = new ESLint({ cwd: fixture, overrideConfigFile: join(repo, "eslint.config.js") });
-    results = await eslint.lintFiles(["src/**/*.ts"]);
+    results = await eslint.lintFiles(["src/**/*.ts", "scripts/**/*.ts"]);
   }, 60_000);
 
-  const ruleHits = (file: string, ruleId: string) =>
-    results.filter((r) => r.filePath === join(fixture, file)).flatMap((r) => r.messages.filter((m) => m.ruleId === ruleId));
+  const networkRules = new Set([
+    "no-restricted-globals",
+    "no-restricted-properties",
+    "no-restricted-syntax",
+    "no-restricted-imports",
+    "no-eval",
+    "no-new-func",
+  ]);
+  const ruleHits = (file: string) =>
+    results
+      .filter((r) => r.filePath === join(fixture, file))
+      .flatMap((r) => r.messages.filter((m) => m.ruleId !== null && networkRules.has(m.ruleId)).map((m) => m.ruleId));
 
   it("parses every fixture file", () => {
     expect(results.flatMap((r) => r.messages.filter((m) => m.fatal === true))).toEqual([]);
   });
 
-  it("rejects fetch outside library, supplychain and cloud-fake", () => {
-    expect(ruleHits("src/gateway/uses-fetch.ts", "no-restricted-globals")).toHaveLength(1);
-    expect(ruleHits("src/library/index.ts", "no-restricted-globals")).toEqual([]);
+  it.each([
+    ["src/gateway/uses-fetch.ts", "no-restricted-globals"],
+    ["src/gateway/uses-https.ts", "no-restricted-imports"],
+    ["src/gateway/uses-tls.ts", "no-restricted-imports"],
+    ["src/gateway/uses-http2.ts", "no-restricted-imports"],
+    ["src/gateway/uses-dgram.ts", "no-restricted-imports"],
+    ["src/gateway/uses-worker.ts", "no-restricted-imports"],
+    ["src/gateway/uses-child-process.ts", "no-restricted-imports"],
+    ["src/cloud/spawns.ts", "no-restricted-imports"],
+    ["src/gateway/uses-dynamic-import.ts", "no-restricted-syntax"],
+    ["src/gateway/uses-computed-import.ts", "no-restricted-syntax"],
+    ["src/gateway/uses-create-require.ts", "no-restricted-imports"],
+    ["src/gateway/uses-create-require.ts", "no-restricted-syntax"],
+    ["src/gateway/uses-builtin-module.ts", "no-restricted-properties"],
+    ["src/gateway/uses-global-index.ts", "no-restricted-syntax"],
+    ["src/gateway/uses-global-alias.ts", "no-restricted-globals"],
+    ["src/gateway/uses-self.ts", "no-restricted-globals"],
+    ["src/gateway/uses-reflect.ts", "no-restricted-syntax"],
+    ["src/gateway/uses-websocket.ts", "no-restricted-globals"],
+    ["src/gateway/uses-eventsource.ts", "no-restricted-globals"],
+    ["src/gateway/uses-eval.ts", "no-eval"],
+    ["src/gateway/uses-eval.ts", "no-new-func"],
+  ])("rejects %s with %s", (file, ruleId) => {
+    expect(ruleHits(file)).toContain(ruleId);
   });
 
-  it("rejects node:https outside cloud, mcp, panel and cloud-fake", () => {
-    expect(ruleHits("src/gateway/uses-https.ts", "no-restricted-imports")).toHaveLength(1);
-    expect(ruleHits("src/cloud/index.ts", "no-restricted-imports")).toEqual([]);
+  it.each([
+    "src/library/index.ts", // fetch
+    "src/cloud/index.ts", // node:https
+    "src/cloud/sockets.ts", // node:tls and a literal import("node:https")
+    "src/mcp/index.ts", // node:net
+    "src/cloud-fake/index.ts", // node:http and fetch
+    "scripts/runs.ts", // node:child_process
+  ])("allows %s", (file) => {
+    expect(ruleHits(file)).toEqual([]);
   });
 });
 
