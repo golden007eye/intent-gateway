@@ -59,10 +59,14 @@ jobs:
           grep " gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz$" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
           tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
           ./gitleaks git --no-banner --redact --exit-code 1 .
-      # Scans every blob in history, because going public publishes the history. Fails when the secret is
-      # absent (a fork PR has no secrets): the maintainer re-runs it from a branch. Once outside contributors
-      # can push, move the secret behind a protected environment.
+      # Scans every blob in history, because the history is public. Fork and Dependabot PRs cannot read the
+      # secret, so they skip with a notice; the push to main after merge scans the merged history.
+      # Everywhere else a missing secret fails the job.
       - name: public-safety (no private terms anywhere in history)
+        if: ${{ !(github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]')) }}
         run: node scripts/public-safety.ts --history
         env:
           PRIVATE_TERMS: ${{ secrets.PRIVATE_TERMS }}
+      - name: public-safety skipped (secret not available to this PR)
+        if: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]') }}
+        run: echo "::notice::public-safety runs on main after merge; fork and Dependabot PRs cannot read the term list"
