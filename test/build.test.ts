@@ -13,7 +13,12 @@ describe("pnpm build", () => {
 
     expect(execFileSync("node", [join(repo, "dist/main.js"), "--version"], { encoding: "utf8" })).toBe(`${pkg.version}\n`);
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
-    expect(JSON.parse(readFileSync(join(repo, "dist/build-info.json"), "utf8"))).toEqual({ version: pkg.version, buildCommit: head });
+    // A checkout with local edits (a developer's) builds as dirty; CI builds a clean checkout and records HEAD.
+    const dirty = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: repo, encoding: "utf8" }) !== "";
+    if (process.env.CI !== undefined) expect(dirty).toBe(false);
+    expect(JSON.parse(readFileSync(join(repo, "dist/build-info.json"), "utf8"))).toEqual(
+      dirty ? { version: pkg.version, buildCommit: null, dirty: true } : { version: pkg.version, buildCommit: head, dirty: false },
+    );
   });
 
   it("points both bin names at dist/main.js", () => {

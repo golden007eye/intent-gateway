@@ -59,6 +59,30 @@ describe("data dir", () => {
     expect(load({ INTENT_POLICY: "p.yaml" }).policyPath).toBe("/work/p.yaml");
   });
 
+  // Attack: a quoted `~` would otherwise become `$CWD/~/gw`, a data dir the developer never chose.
+  it.each([
+    ["INTENT_DATA_DIR", "~/gw"],
+    ["INTENT_DATA_DIR", "~"],
+    ["INTENT_DATA_DIR", "~dev/gw"],
+    ["INTENT_POLICY", "~/policy.yaml"],
+  ])("refuses %s=%j with a leading ~", (name, value) => {
+    expect(() => load({ [name]: value })).toThrow(new RegExp(`${name} starts with ~`));
+  });
+
+  it("refuses --trust-keys with a leading ~", () => {
+    expect(() => load({}, LINUX, ["--trust-keys=~/root.jwk"])).toThrow(/--trust-keys starts with ~/);
+  });
+
+  it("keeps a ~ that is not leading", () => {
+    expect(load({ INTENT_DATA_DIR: "/srv/a~b" }).dataDir).toBe("/srv/a~b");
+  });
+
+  it("refuses a relative LOCALAPPDATA on Windows", () => {
+    const win: LoadOptions = { platform: "win32", homedir: "C:\\Users\\dev", cwd: "C:\\work" };
+    expect(() => load({ LOCALAPPDATA: "AppData\\Local" }, win)).toThrow(/LOCALAPPDATA is not an absolute path/);
+    expect(load({ LOCALAPPDATA: "AppData\\Local", INTENT_DATA_DIR: "D:\\gw" }, win).dataDir).toBe("D:\\gw");
+  });
+
   it("uses the real platform when none is injected", () => {
     expect(loadConfig({ INTENT_DATA_DIR: "/abs" }, TRUST).dataDir).toMatch(/abs$/);
   });
@@ -91,6 +115,8 @@ describe("environment validation", () => {
     ["INTENT_CLOUD_URL", "not a url", /INTENT_CLOUD_URL is not a URL/],
     ["INTENT_CLOUD_URL", "http://cloud.example", /INTENT_CLOUD_URL must use https/],
     ["INTENT_CLOUD_URL", "ftp://cloud.example", /INTENT_CLOUD_URL must use https/],
+    ["INTENT_CLOUD_URL", "http://localhost:4000", /INTENT_CLOUD_URL must use https/],
+    ["INTENT_CLOUD_URL", "http://127.0.0.2:4000", /INTENT_CLOUD_URL must use https/],
     ["INTENT_CLOUD_URL", "https://cloud.example/v1", /INTENT_CLOUD_URL must be an origin/],
     ["INTENT_CLOUD_URL", "https://cloud.example/?a=1", /INTENT_CLOUD_URL must be an origin/],
     ["INTENT_CLOUD_URL", "https://user:pw@cloud.example", /INTENT_CLOUD_URL must be an origin/],
@@ -119,15 +145,62 @@ describe("HTTP transport", () => {
     expect(load({}).http).toEqual({ host: "127.0.0.1", port: 8787, token: null });
   });
 
-  it.each(["0.0.0.0", "::", "192.168.1.10", "gateway.example", "::ffff:127.0.0.1"])(
-    "rejects non-loopback host %s without a token, naming the variable",
-    (host) => {
-      expect(() => load({ INTENT_HTTP_HOST: host })).toThrow(/INTENT_HTTP_TOKEN is required/);
-    },
-  );
+  // `localhost` is a name the system resolves (hosts file, DNS search), so it can bind off-loopback: it needs a
+  // token, as do other loopback spellings, which are treated as off-loopback.
+  it.each([
+    "0.0.0.0",
+    "::",
+    "192.168.1.10",
+    "gateway.example",
+    "::ffff:127.0.0.1",
+    "localhost",
+    "LOCALHOST",
+    "127.8.9.10",
+    "0:0:0:0:0:0:0:1",
+  ])("rejects non-loopback host %s without a token, naming the variable", (host) => {
+    expect(() => load({ INTENT_HTTP_HOST: host })).toThrow(/INTENT_HTTP_TOKEN is required/);
+  });
 
-  it.each(["127.0.0.1", "127.8.9.10", "localhost", "LOCALHOST", "::1"])("allows loopback host %s without a token", (host) => {
+  it.each(["127.0.0.1", "::1"])("allows loopback host %s without a token", (host) => {
     expect(load({ INTENT_HTTP_HOST: host }).http.token).toBeNull();
+  });
+
+  it.each([
+    "localhost",
+    "fe80::1",
+    "2001:db8::8a2e:370:7334",
+    "::ffff:192.0.2.1",
+    "gw-1.internal.example",
+    "1:2:3:4:5:6:7:8",
+    "1:2:3:4:5:6:7::",
+    "::",
+    "::1.2.3.4",
+  ])("accepts host %s with a token", (host) => {
+    expect(load({ INTENT_HTTP_HOST: host, INTENT_HTTP_TOKEN: token }).http.host).toBe(host);
+  });
+
+  it.each([
+    ":::::",
+    "1:2:3:4:5:6:7:8:9",
+    "::1::",
+    "12345::",
+    "::g",
+    "fe80::1%eth0",
+    "[::1]",
+    "999.1.1.1",
+    "1.2.3",
+    "-a.example",
+    "a..b",
+    "a_b",
+    "1:2:3:4:5:6:7",
+    "1::2:3:4:5:6:7:8",
+    "1.2.3.4::",
+    "::1.2.3.4:5",
+    "1:::2",
+  ])("rejects the malformed host %j", (host) => {
+    expect(() => load({ INTENT_HTTP_HOST: host, INTENT_HTTP_TOKEN: token })).toThrow(
+      /INTENT_HTTP_HOST must be an IP address or host name/,
+    );
   });
 
   it("accepts a non-loopback host with a token", () => {
@@ -206,16 +279,38 @@ describe("cloud trust", () => {
   });
 });
 
-describe("PINNED_HOSTS holds only root public keys", () => {
-  it("every entry is { rootKeys: [{ kid: cloud-root-1, public jwk }] }", () => {
-    for (const pin of Object.values(PINNED_HOSTS)) {
-      expect(Object.keys(pin)).toEqual(["rootKeys"]);
-      for (const key of pin.rootKeys) {
-        expect(Object.keys(key).sort()).toEqual(["jwk", "kid"]);
-        expect(key.kid).toBe("cloud-root-1");
-        for (const secret of ["d", "p", "q", "dp", "dq", "qi", "k"]) expect(key.jwk).not.toHaveProperty(secret);
-      }
+/** Why a pin is not `{ rootKeys: [{ kid: cloud-root-1, public jwk }] }`, or [] when it is. */
+function pinProblems(pin: unknown): string[] {
+  const problems: string[] = [];
+  const p = pin as { rootKeys?: unknown };
+  if (Object.keys(p).join() !== "rootKeys" || !Array.isArray(p.rootKeys)) return ["not { rootKeys: [...] }"];
+  for (const key of p.rootKeys as { kid?: unknown; jwk?: Record<string, unknown> }[]) {
+    if (Object.keys(key).sort().join() !== "jwk,kid") problems.push("key has fields other than kid and jwk");
+    if (key.kid !== "cloud-root-1") problems.push(`kid ${String(key.kid)}`);
+    for (const secret of ["d", "p", "q", "dp", "dq", "qi", "k"]) {
+      if (key.jwk !== undefined && Object.hasOwn(key.jwk, secret)) problems.push(`private field ${secret}`);
     }
+  }
+  return problems;
+}
+
+describe("PINNED_HOSTS holds only root public keys", () => {
+  it("the shape check catches a private key or an extra field (attack cases)", () => {
+    const pub = { kty: "OKP", crv: "Ed25519", x: "AAAA" };
+    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: pub }] })).toEqual([]);
+    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: { ...pub, d: "secret" } }] })).toEqual(["private field d"]);
+    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: { kty: "oct", k: "secret" } }] })).toEqual(["private field k"]);
+    expect(pinProblems({ rootKeys: [{ kid: "signing-1", jwk: pub }] })).toEqual(["kid signing-1"]);
+    expect(pinProblems({ rootKeys: [], confirmOrigin: "x" })).toEqual(["not { rootKeys: [...] }"]);
+    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: pub, origin: "x" }] })).toEqual([
+      "key has fields other than kid and jwk",
+    ]);
+  });
+
+  it("every entry is { rootKeys: [{ kid: cloud-root-1, public jwk }] }", () => {
+    // Non-vacuous: there is a pin to check, even while its root key list is still empty.
+    expect(Object.keys(PINNED_HOSTS).length).toBeGreaterThan(0);
+    for (const [host, pin] of Object.entries(PINNED_HOSTS)) expect(pinProblems(pin), host).toEqual([]);
   });
 });
 
@@ -255,12 +350,61 @@ describe("no confirm origin or rp_id in src/config", () => {
   });
 
   it("no source file in src/config holds one", () => {
-    const dir = import.meta.dirname;
-    const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter(
-      (f) => f.endsWith(".ts") && join(dir, f) !== import.meta.filename,
-    );
-    expect(files).toContain("index.ts");
-    for (const f of files) expect(forbiddenTokens(readFileSync(join(dir, f), "utf8")), f).toEqual([]);
+    const files = configSources();
+    for (const [f, source] of files) expect(forbiddenTokens(source), f).toEqual([]);
+  });
+});
+
+/** The non-test .ts files of src/config, by relative path. */
+function configSources(): Map<string, string> {
+  const dir = import.meta.dirname;
+  const files = readdirSync(dir, { recursive: true, encoding: "utf8" }).filter(
+    (f) => f.endsWith(".ts") && !f.endsWith(".test.ts"),
+  );
+  return new Map(files.map((f) => [f, readFileSync(join(dir, f), "utf8")]));
+}
+
+// Hosts come from PINNED_HOSTS (with root keys) or from the developer's own INTENT_CLOUD_URL and --trust-keys. A
+// URL or host literal anywhere else in this module would be a host trusted without a pin.
+const FILE_NAME = /\.(?:json|ya?ml|lock|ts|js)$/;
+const HOST_LIKE = /^(?:[a-z0-9-]+\.)+[a-z0-9-]+\.?$/i;
+
+function hostLiterals(source: string): string[] {
+  const file = ts.createSourceFile("x.ts", source, ts.ScriptTarget.Latest, true);
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateLiteralToken(node)) {
+      const text = node.text;
+      const words = text.split(/[\s"'`()[\]{},;<>]+/).map((w) => w.replace(/[.:]+$/, ""));
+      if (text.includes("://") || words.some((w) => HOST_LIKE.test(w) && !FILE_NAME.test(w))) found.push(text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+describe("no URL or host literal in src/config except the pinned hosts", () => {
+  const pinned = Object.keys(PINNED_HOSTS);
+  const allowed = new Set([...pinned, ...pinned.map((h) => `https://${h}`), "127.0.0.1"]);
+
+  it("the scanner catches each kind of URL or host literal (attack cases)", () => {
+    expect(hostLiterals(`const a = "https://cloud.example";`)).toEqual(["https://cloud.example"]);
+    expect(hostLiterals(`const b = "api.cloud.example";`)).toEqual(["api.cloud.example"]);
+    expect(hostLiterals("const c = `wss://${h}/x`;")).toEqual(["wss://"]);
+    expect(hostLiterals(`const d = { "cloud.example": 1 };`)).toEqual(["cloud.example"]);
+    expect(hostLiterals(`const e = "connect to gw.example now";`)).toEqual(["connect to gw.example now"]);
+    expect(hostLiterals(`const f = "10.0.0.1";`)).toEqual(["10.0.0.1"]);
+    expect(hostLiterals(`const g = "policy.yaml"; const h = "build-info.json"; // see https://x.example`)).toEqual([]);
+  });
+
+  it("src/config holds only the pinned host literals", () => {
+    const files = configSources();
+    // Non-vacuous: the module's files were read, and the scan sees the pinned host where it is declared.
+    expect([...files.keys()].sort()).toEqual(["build.ts", "index.ts"]);
+    const found = [...files.values()].flatMap(hostLiterals);
+    for (const host of pinned) expect(found).toContain(host);
+    expect(found.filter((literal) => !allowed.has(literal))).toEqual([]);
   });
 });
 
@@ -281,24 +425,38 @@ describe("BUILD", () => {
 
   it("from source: the package version and no build commit", () => {
     const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
-    expect(BUILD).toEqual({ version: pkg.version, buildCommit: null });
+    expect(BUILD).toEqual({ version: pkg.version, buildCommit: null, dirty: false });
   });
 
   it("reads build-info.json written by scripts/build-info.ts", () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
-    expect(readBuild(tree(JSON.stringify({ version: "1.2.3", buildCommit: commit })))).toEqual({
+    expect(readBuild(tree(JSON.stringify({ version: "1.2.3", buildCommit: commit, dirty: false })))).toEqual({
       version: "1.2.3",
       buildCommit: commit,
+      dirty: false,
+    });
+  });
+
+  it("reads a dirty build as no build commit", () => {
+    expect(readBuild(tree(JSON.stringify({ version: "1.2.3", buildCommit: null, dirty: true })))).toEqual({
+      version: "1.2.3",
+      buildCommit: null,
+      dirty: true,
     });
   });
 
   it("falls back to package.json when build-info.json is absent", () => {
-    expect(readBuild(tree())).toEqual({ version: "1.2.3", buildCommit: null });
+    expect(readBuild(tree())).toEqual({ version: "1.2.3", buildCommit: null, dirty: false });
   });
 
   it.each([
-    [JSON.stringify({ version: "1.2.3", buildCommit: "abc" }), /no full git commit hash/],
-    [JSON.stringify({ buildCommit: "0".repeat(40) }), /no version/],
+    [JSON.stringify({ version: "1.2.3", buildCommit: "abc", dirty: false }), /no full git commit hash/],
+    [JSON.stringify({ version: "1.2.3", buildCommit: null, dirty: false }), /no full git commit hash/],
+    [JSON.stringify({ buildCommit: "0".repeat(40), dirty: false }), /no version/],
+    // Attack: a dirty build that still names a commit would let bundled policies claim that commit.
+    [JSON.stringify({ version: "1.2.3", buildCommit: "0".repeat(40), dirty: true }), /records a commit for a dirty build/],
+    [JSON.stringify({ version: "1.2.3", buildCommit: "0".repeat(40) }), /does not say whether the build tree was dirty/],
+    [JSON.stringify({ version: "1.2.3", buildCommit: "0".repeat(40), dirty: "no" }), /does not say whether/],
   ])("rejects a malformed build-info.json: %s", (text, message) => {
     expect(() => readBuild(tree(text))).toThrow(message);
   });

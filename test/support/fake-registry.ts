@@ -39,11 +39,14 @@ function header(name: string, size: number, type = "0"): Buffer {
 }
 const pad = (b: Buffer): Buffer => Buffer.concat([b, Buffer.alloc((512 - (b.length % 512)) % 512)]);
 
-/** An npm-style tarball: every path under `package/`; paths over 100 bytes use a pax header, as npm does. */
-export function makeTarGz(files: Record<string, string | Buffer>): Buffer {
+/**
+ * An npm-style tarball: every path under `top` (default `package/`); paths over 100 bytes use a pax header, as
+ * npm does. Pass `top: ""` to write the paths exactly as given (attack cases).
+ */
+export function makeTarGz(files: Record<string, string | Buffer>, top = "package/"): Buffer {
   const blocks: Buffer[] = [];
   for (const [path, content] of Object.entries(files)) {
-    const full = `package/${path}`;
+    const full = `${top}${path}`;
     const data = Buffer.isBuffer(content) ? content : Buffer.from(content, "utf8");
     if (Buffer.byteLength(full) > 100) {
       const record = ` path=${full}\n`;
