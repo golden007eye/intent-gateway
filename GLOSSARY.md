@@ -16,6 +16,7 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Disclosure log** | — | The gateway's local hash chain of every field it sent to Intent Cloud, appended before each send. |
 | **Disclosure receipt** | — | Intent Cloud's signed statement of what it received, matched against the disclosure log. |
 | **Local audit trail** | — | The same local hash chain read as a whole: disclosure log entries plus each signed Approval the gateway verified. |
+| **Fenced lease** | `audit.lock` | The expiring lock a writer of the local hash chain holds while it appends. Before each write the writer checks it still holds the lease and that the chain's tail has not moved; if either fails, that writer is refused for good. Liveness comes only from the expiry, never from a process id. |
 | **Approval** | — | A buyer's passkey signature over one purchase snapshot, returned signed by Intent Cloud, verified by the gateway and appended to the local audit trail. One per purchase. |
 | **Buyer identity** | `findIdentity` | Anything that identifies or pays as the buyer: name, postal address, card number, email, phone. The gateway refuses to send it; a ZIP code alone is not buyer identity. |
 | **Hand-off** | `continue_url` | The step where the buyer leaves our confirm page for the merchant's checkout and pays there. The gateway never sees the buyer's name, address or payment. |
