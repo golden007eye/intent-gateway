@@ -21,3 +21,4 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Key statement** | — | Intent Cloud's statement, signed by an offline root key pinned per host, listing its current and next receipt and approval keys. Valid 90 to 180 days (ADR-0006). |
 | **Hand-off** | `continue_url` | The step where the buyer leaves our confirm page for the merchant's checkout and pays there. The gateway never sees the buyer's name, address or payment. |
 | **Verify command** | `intent verify` (planned) | Checks the local hash chain, matches receipts to the log, and checks the image signature and SBOM. |
+| **Canonical JSON** | `jcs` | RFC 8785 JSON restricted to safe integers (no fractions, no NaN, no lone surrogates): the exact bytes the gateway hashes and verifies signatures over. |
