@@ -155,3 +155,46 @@ describe("loadPolicy: accepted policies", () => {
     expect(CLOUD_BASELINE.quantity.max).toBe(3);
   });
 });
+
+describe("loadPolicy: merchant and category names", () => {
+  const merchants = (list: string, key = "block") => `${base}merchants:\n  ${key}: ${list}\n`;
+
+  it("stores merchants as lowercase ASCII hostnames without a trailing dot", () => {
+    const p = loadPolicy(merchants('["EVIL.com.", "bücher.de", "evil。com", "ｓｈｏｐ.example"]'));
+    expect(p.merchants.block).toEqual(["evil.com", "shop.example", "xn--bcher-kva.de"]);
+  });
+
+  it.each([
+    "evil.com..",
+    "evil.com:443",
+    "https://evil.com",
+    "evil.com/path",
+    "a..b.example",
+    ".",
+    ".evil.com",
+    "*.evil.com",
+    "user@evil.com",
+    "evil com",
+    String.fromCodePoint(0x200b),
+    "-evil.com",
+    "evil_shop.com",
+  ])("refuses the merchant %j in block and in allow", (name) => {
+    for (const key of ["block", "allow"]) {
+      const error = refusal(merchants(JSON.stringify([name]), key));
+      expect(error.code).toBe("POLICY_INVALID");
+      expect(error.path).toBe(`merchants.${key}[0]`);
+    }
+  });
+
+  it("names the offending entry by its index", () => {
+    expect(refusal(merchants('[ok.example, "evil.com:443"]')).path).toBe("merchants.block[1]");
+  });
+
+  it("refuses a category that is empty after normalization or has an empty level", () => {
+    for (const name of ['"\\u200b"', '"electronics//phones"', '"electronics/"']) {
+      const error = refusal(`${base}categories:\n  block: [${name}]\n`);
+      expect(error.code).toBe("POLICY_INVALID");
+      expect(error.path).toBe("categories.block[0]");
+    }
+  });
+});
