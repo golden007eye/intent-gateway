@@ -21,3 +21,5 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Hand-off** | `continue_url` | The step where the buyer leaves our confirm page for the merchant's checkout and pays there. The gateway never sees the buyer's name, address or payment. |
 | **Verify command** | `intent verify` (planned) | Checks the local hash chain, matches receipts to the log, and checks the image signature and SBOM. |
 | **Canonical JSON** | `jcs` | RFC 8785 JSON restricted to safe integers (no fractions, no NaN, no lone surrogates): the exact bytes the gateway hashes and verifies signatures over. |
+| **Data directory** | `Config.dataDir` | Where the gateway keeps its state: `INTENT_DATA_DIR`, else `/data` in the image, else the platform's per-user data folder. Resolved only by `src/config`. |
+| **Root key pin** | `PINNED_HOSTS` | The root public key (kid `cloud-root-1`) the gateway trusts for one Intent Cloud host. It holds only that key; everything else trusted comes from the statement the key signs. `--trust-keys` replaces it for an unpinned host. |
