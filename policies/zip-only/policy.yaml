@@ -1,0 +1,5 @@
+# zip-only · a gateway policy can only narrow Intent Cloud's rules
+version: 1
+approval: passkey   # required; the only legal value
+share:
+  ship_to: postcode_only

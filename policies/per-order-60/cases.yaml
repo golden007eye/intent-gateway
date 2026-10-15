@@ -1,0 +1,9 @@
+- name: a $60 order is sent
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 60, quantity: 1}}
+  expect: {send: true}
+- name: a $60.01 order is refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 60.01, quantity: 1}}
+  expect: {send: false, blocked: [spend.per_order_usd]}
+- name: three items at $25 are refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 25, quantity: 3}}
+  expect: {send: false, blocked: [spend.per_order_usd]}

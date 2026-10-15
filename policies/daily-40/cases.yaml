@@ -1,0 +1,18 @@
+- name: under the daily limit is sent
+  now: "2026-10-15T12:00:00Z"
+  history:
+    - {at: "2026-10-15T08:00:00Z", total_usd: 15}
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 25, quantity: 1}}
+  expect: {send: true}
+- name: over the daily limit is refused
+  now: "2026-10-15T12:00:00Z"
+  history:
+    - {at: "2026-10-15T08:00:00Z", total_usd: 15}
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 25.01, quantity: 1}}
+  expect: {send: false, blocked: [spend.per_day_usd]}
+- name: purchases older than 24 hours do not count
+  now: "2026-10-15T12:00:00Z"
+  history:
+    - {at: "2026-10-14T11:00:00Z", total_usd: 40}
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 40, quantity: 1}}
+  expect: {send: true}

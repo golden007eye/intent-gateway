@@ -1,0 +1,12 @@
+- name: a $29.99 gift is sent
+  outbound: {kind: cart, offer: {merchant: shop.example, category: toys, price_usd: 29.99, quantity: 1}}
+  expect: {send: true}
+- name: a $35 gift is refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: toys, price_usd: 35, quantity: 1}}
+  expect: {send: false, blocked: [spend.per_order_usd]}
+- name: two gifts are refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: toys, price_usd: 10, quantity: 2}}
+  expect: {send: false, blocked: [quantity.max]}
+- name: a gift card stays excluded
+  outbound: {kind: cart, offer: {merchant: shop.example, category: gift cards, price_usd: 25, quantity: 1}}
+  expect: {send: false, blocked: [categories.block]}

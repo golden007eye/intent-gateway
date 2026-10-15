@@ -1,0 +1,5 @@
+# daily-40 · a gateway policy can only narrow Intent Cloud's rules
+version: 1
+approval: passkey   # required; the only legal value
+spend:
+  per_day_usd: 40
