@@ -1,0 +1,20 @@
+# ADR-0006: Session keys, receipts and the key statement
+
+Status: accepted · 2026-10-15
+
+## Context
+
+The gateway signs every request to Intent Cloud, and the disclosure log is only worth something if Intent Cloud's acknowledgement of what it received can be checked against it (invariants 2 and 5). A shopping session must not be linkable to other sessions, so the gateway cannot hold a long-lived account key. Intent Cloud's signing keys rotate, so the gateway needs a way to learn the current keys that does not depend on trusting the network. Some responses never come from Intent Cloud's code at all: a dropped connection, or an error page made by the network in front of it. Nothing can sign what Intent Cloud's code never saw.
+
+## Decision
+
+- **Self-certifying session keys.** Each shopping session gets a fresh Ed25519 key pair, kept in memory only. Its keyid is `gw-` followed by the base64url of the raw 32-byte public key, so the key needs no registration and proves itself. Requests are signed with HTTP Message Signatures (RFC 9421) over `@method`, `@path` and `content-digest`, with `created`, a nonce of at least 16 bytes, the keyid, `alg="ed25519"` and the tag `intent-gateway-v1`. Intent Cloud accepts a 60-second window plus 5 seconds of clock skew and refuses a replayed nonce.
+- **Receipts are signed at Intent Cloud's public edge.** The edge computes the `Content-Digest` of the bytes it received and signs a receipt over that digest, the request's keyid, nonce and `created`, the response status and the time received. Every response the edge produces carries one, including the 4xx and 429 responses it generates itself. A receipt means "received at Intent Cloud's public edge" and nothing more.
+- **Unacknowledged and discarded.** A send is *unacknowledged* only when there was no HTTP response, or a non-2xx response without the `Intent-Contract-Version` header. `intent verify` reports these as "sent, not acknowledged" and does not fail. A 2xx response without a valid receipt is *discarded*: the gateway logs a `discarded` entry, does not return its content, and `intent verify` fails. Any response that carries `Intent-Contract-Version` without a valid receipt, and any invalid or mismatched receipt, also fails verify.
+- **A root-signed key statement.** Each public API host has a long-lived offline root key, kid `cloud-root-1`, whose public key is pinned in the gateway per host. The root signs a statement listing the current and the next receipt and approval keys (kids `cloud-receipt-<yyyymm>` and `cloud-approval-<yyyymm>`), the confirm page origin and the passkey relying-party id, with `issued_at` and `expires_at`. Receipt and approval keys rotate monthly; listing the next key lets a rotation happen without a new statement or a gateway release.
+- **Statement lifetime is 90 to 180 days.** `expires_at` is at least 90 and at most 180 days after `issued_at`. The gateway fails closed only after `expires_at`. A scheduled CI job verifies the published statement against the pin and goes red when fewer than 14 days remain.
+- **A second offline copy of the root key exists.** It is held by a second person in the role of backup key holder, separate from the maintainer who signs statements. Who holds it is recorded privately, not in this repository.
+
+## Consequences
+
+Sessions cannot be linked by their keys, and Intent Cloud can check a request's signature without any account. Every acknowledged send has a signed receipt the developer can check offline against the disclosure log. Network failures are reported honestly instead of breaking verify, while a 2xx without a receipt is treated as an attack. Error pages made in front of the edge carry no receipt, by design. Signing a statement is a manual ceremony with the offline root, so it must happen at least every 180 days; the expiry warning and the backup copy guard against a missed signing or a lost key. Receipt and statement formats are defined by test vectors shared with Intent Cloud, not by shared code (ADR-0002).
