@@ -1,6 +1,7 @@
 // `intent policy add`: fetch a library policy, check it is the one the library published, and apply it as
 // meet(current, library), so adding a policy can only narrow the gateway (invariant 1, ADR-0009).
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { stringify } from "yaml";
 import { BUILD } from "../config/index.ts";
@@ -9,16 +10,24 @@ import { loadPolicy, meet, type Policy } from "../policy/index.ts";
 
 export const LIBRARY_REPO = "golden007eye/intent-gateway";
 export const GITHUB_API = "https://api.github.com";
+/** The cap on any one GitHub response body; the index and a policy file are a few KiB. */
+export const MAX_GITHUB_BODY_BYTES = 1024 * 1024;
 const BUNDLED_ROOT = new URL("../../policies/", import.meta.url);
 const NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const FULL_SHA = /^[0-9a-f]{40}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
 
-/** What `policy.lock` records: which library policy was applied, from which commit, with which file hash. */
+/**
+ * What `policy.lock` records: which library policy was applied, from which commit, the sha256 of the library's
+ * policy.yaml (`sha256`), and the sha256 of the policy.yaml addPolicy wrote, which is meet(current, library)
+ * (`policy_sha256`). A lock whose `policy_sha256` does not match the policy file does not describe it.
+ */
 export interface Lock {
   name: string;
   commit: string;
   sha256: string;
   source: "bundled" | "github";
+  policy_sha256: string;
 }
 
 export interface AddOptions {
@@ -43,9 +52,11 @@ export type LibraryErrorCode =
   | "COMMIT_UNSIGNED"
   | "COMMIT_NOT_ON_MAIN"
   | "GITHUB_RATE_LIMITED"
-  | "GITHUB_ERROR";
+  | "GITHUB_ERROR"
+  | "LOCK_INVALID"
+  | "LOCK_STALE";
 
-/** A refused `policy add`. `code` names the reason; nothing was written. */
+/** A refused `policy add` (nothing was written), or a `policy.lock` that readLock cannot vouch for. */
 export class LibraryError extends Error {
   override readonly name = "LibraryError";
   readonly code: LibraryErrorCode;
@@ -66,12 +77,86 @@ export async function addPolicy(name: string, opts: AddOptions): Promise<Lock> {
   const library = loadPolicy(fetched.text);
   const current = await readCurrent(opts.policyPath);
   const result = current === undefined ? library : meet(current, library);
-  const lock: Lock = { name, commit: fetched.commit, sha256: fetched.sha256, source: fetched.source };
+  const yaml = policyYaml(result);
+  const lock: Lock = {
+    name,
+    commit: fetched.commit,
+    sha256: fetched.sha256,
+    source: fetched.source,
+    policy_sha256: sha256Hex(new TextEncoder().encode(yaml)),
+  };
 
-  await mkdir(dirname(opts.policyPath), { recursive: true, mode: 0o700 });
-  await writePrivate(opts.policyPath, policyYaml(result));
-  await writePrivate(join(dirname(opts.policyPath), "policy.lock"), canonicalize(lock));
+  const dir = dirname(opts.policyPath);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  // Both files go to fresh temp files, fsynced, before either is renamed into place. The lock is renamed first:
+  // a crash between the two renames leaves the new lock beside the old policy, and because the lock names the
+  // hash of the policy it belongs to, readLock reports it stale instead of vouching for the wrong file.
+  const temps: string[] = [];
+  try {
+    temps.push(await writeTemp(lockPath(opts.policyPath), canonicalize(lock)));
+    temps.push(await writeTemp(opts.policyPath, yaml));
+    const [lockTmp, policyTmp] = temps as [string, string];
+    await rename(lockTmp, lockPath(opts.policyPath));
+    temps.shift();
+    await rename(policyTmp, opts.policyPath);
+    temps.shift();
+  } finally {
+    await Promise.all(temps.map((tmp) => unlink(tmp).catch(() => undefined)));
+  }
+  await syncDir(dir);
   return lock;
+}
+
+const lockPath = (policyPath: string): string => join(dirname(policyPath), "policy.lock");
+
+/**
+ * Reads the `policy.lock` beside `policyPath`; undefined when there is none. Throws LibraryError `LOCK_STALE`
+ * when the lock does not describe the policy file there (a `policy add` stopped between its two renames, or
+ * policy.yaml was edited since), and `LOCK_INVALID` when it is not a lock addPolicy writes.
+ */
+export async function readLock(policyPath: string): Promise<Lock | undefined> {
+  const text = await readOptional(lockPath(policyPath));
+  if (text === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(text));
+  } catch {
+    throw new LibraryError("LOCK_INVALID", "policy.lock is not JSON");
+  }
+  if (!isLock(parsed)) throw new LibraryError("LOCK_INVALID", "policy.lock is not a lock written by intent policy add");
+  const policy = (await readOptional(policyPath)) ?? new Uint8Array();
+  if (sha256Hex(policy) !== parsed.policy_sha256) {
+    throw new LibraryError(
+      "LOCK_STALE",
+      "policy.lock does not describe policy.yaml (the last policy add did not finish, or policy.yaml was edited since); run intent policy add again",
+    );
+  }
+  return parsed;
+}
+
+function isLock(value: unknown): value is Lock {
+  if (typeof value !== "object" || value === null) return false;
+  const l = value as Record<string, unknown>;
+  return (
+    Object.keys(l).sort().join() === "commit,name,policy_sha256,sha256,source" &&
+    typeof l.name === "string" &&
+    typeof l.commit === "string" &&
+    FULL_SHA.test(l.commit) &&
+    typeof l.sha256 === "string" &&
+    SHA256.test(l.sha256) &&
+    typeof l.policy_sha256 === "string" &&
+    SHA256.test(l.policy_sha256) &&
+    (l.source === "bundled" || l.source === "github")
+  );
+}
+
+async function readOptional(path: string): Promise<Uint8Array | undefined> {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 interface Fetched {
@@ -84,10 +169,11 @@ interface Fetched {
 async function readBundled(name: string, opts: AddOptions): Promise<Fetched> {
   const commit = opts.buildCommit === undefined ? BUILD.buildCommit : opts.buildCommit;
   if (commit === null) {
-    throw new LibraryError(
-      "NO_BUILD_COMMIT",
-      "this gateway runs from source, so its bundled policies have no build commit to record; use --commit <sha>",
-    );
+    const why =
+      opts.buildCommit === undefined && BUILD.dirty
+        ? "this gateway was built from a tree with uncommitted changes"
+        : "this gateway runs from source";
+    throw new LibraryError("NO_BUILD_COMMIT", `${why}, so its bundled policies have no build commit to record; use --commit <sha>`);
   }
   const root = opts.bundledRoot ?? BUNDLED_ROOT;
   const expected = indexHash(name, await readFile(new URL("index.json", root), "utf8"), "the bundled index");
@@ -98,11 +184,12 @@ async function readBundled(name: string, opts: AddOptions): Promise<Fetched> {
 async function readGithub(name: string, commit: string, opts: AddOptions): Promise<Fetched> {
   if (!FULL_SHA.test(commit)) throw new LibraryError("BAD_COMMIT", `--commit needs a full 40-character commit hash, got ${JSON.stringify(commit)}`);
   const get = opts.fetch ?? fetch;
-  const api = async (path: string, accept = "application/vnd.github+json"): Promise<Response> => {
+  const api = async (path: string, accept = "application/vnd.github+json"): Promise<Uint8Array> => {
     const response = await get(`${GITHUB_API}/repos/${LIBRARY_REPO}/${path}`, {
       headers: { accept, "x-github-api-version": "2022-11-28" },
     });
-    if (response.ok) return response;
+    if (response.ok) return capped(response, path);
+    await response.body?.cancel().catch(() => undefined);
     if ((response.status === 403 || response.status === 429) && response.headers.get("x-ratelimit-remaining") === "0") {
       const reset = Number(response.headers.get("x-ratelimit-reset"));
       const when = Number.isFinite(reset) && reset > 0 ? ` until ${new Date(reset * 1000).toISOString()}` : "";
@@ -111,25 +198,58 @@ async function readGithub(name: string, commit: string, opts: AddOptions): Promi
     if (response.status === 429) throw new LibraryError("GITHUB_RATE_LIMITED", "GitHub is rate-limiting requests; try again later");
     throw new LibraryError("GITHUB_ERROR", `GitHub answered ${String(response.status)} for ${path}`);
   };
+  const json = async (path: string): Promise<unknown> => {
+    const body = await api(path);
+    try {
+      return JSON.parse(new TextDecoder().decode(body));
+    } catch {
+      throw new LibraryError("GITHUB_ERROR", `GitHub's answer for ${path} is not JSON`);
+    }
+  };
 
-  const info = (await (await api(`commits/${commit}`)).json()) as {
+  const info = (await json(`commits/${commit}`)) as {
     sha?: unknown;
     commit?: { verification?: { verified?: unknown } };
-  };
-  if (info.sha !== commit) throw new LibraryError("BAD_COMMIT", `GitHub returned a different commit for ${commit}`);
+  } | null;
+  if (info?.sha !== commit) throw new LibraryError("BAD_COMMIT", `GitHub returned a different commit for ${commit}`);
   if (info.commit?.verification?.verified !== true) {
     throw new LibraryError("COMMIT_UNSIGNED", `commit ${commit} does not carry a signature GitHub verified`);
   }
-  const compare = (await (await api(`compare/main...${commit}`)).json()) as { status?: unknown };
-  if (compare.status !== "behind" && compare.status !== "identical") {
-    throw new LibraryError("COMMIT_NOT_ON_MAIN", `commit ${commit} is not on main (compare status ${JSON.stringify(compare.status)})`);
+  // The full ref name: a bare `main` could resolve to a tag or another ref named main before the branch.
+  const compare = (await json(`compare/refs/heads/main...${commit}`)) as { status?: unknown } | null;
+  if (compare?.status !== "behind" && compare?.status !== "identical") {
+    throw new LibraryError("COMMIT_NOT_ON_MAIN", `commit ${commit} is not on main (compare status ${JSON.stringify(compare?.status)})`);
   }
-  const raw = async (path: string): Promise<Uint8Array> =>
-    new Uint8Array(await (await api(`contents/${path}?ref=${commit}`, "application/vnd.github.raw+json")).arrayBuffer());
+  const raw = (path: string): Promise<Uint8Array> => api(`contents/${path}?ref=${commit}`, "application/vnd.github.raw+json");
   const index = new TextDecoder("utf-8", { fatal: true }).decode(await raw("policies/index.json"));
   const expected = indexHash(name, index, `the index at ${commit}`);
   const bytes = await raw(`policies/${name}/policy.yaml`);
   return { ...checked(name, bytes, expected, `commit ${commit}`), commit, source: "github" };
+}
+
+/** Reads a GitHub response body, refusing one larger than MAX_GITHUB_BODY_BYTES. */
+async function capped(response: Response, path: string): Promise<Uint8Array> {
+  const tooLarge = (): LibraryError =>
+    new LibraryError("GITHUB_ERROR", `GitHub's answer for ${path} is larger than ${String(MAX_GITHUB_BODY_BYTES)} bytes`);
+  if (Number(response.headers.get("content-length") ?? 0) > MAX_GITHUB_BODY_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
+  if (response.body === null) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_GITHUB_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  return new Uint8Array(Buffer.concat(chunks));
 }
 
 function indexHash(name: string, text: string, where: string): string {
@@ -145,7 +265,7 @@ function indexHash(name: string, text: string, where: string): string {
   }
   const entry = Object.hasOwn(policies, name) ? (policies as Record<string, { sha256?: unknown }>)[name] : undefined;
   if (entry === undefined) throw new LibraryError("UNKNOWN_POLICY", `${name} is not in ${where}`);
-  if (typeof entry.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(entry.sha256)) {
+  if (typeof entry.sha256 !== "string" || !SHA256.test(entry.sha256)) {
     throw new LibraryError("INDEX_INVALID", `${where} has no sha256 for ${name}`);
   }
   return entry.sha256;
@@ -160,14 +280,8 @@ function checked(name: string, bytes: Uint8Array, expected: string, where: strin
 }
 
 async function readCurrent(path: string): Promise<Policy | undefined> {
-  let text: string;
-  try {
-    text = await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  return loadPolicy(text);
+  const bytes = await readOptional(path);
+  return bytes === undefined ? undefined : loadPolicy(new TextDecoder().decode(bytes));
 }
 
 /** The policy as a v1 policy.yaml. Reloading it gives the same policy, which addPolicy checks before writing. */
@@ -177,8 +291,32 @@ function policyYaml(policy: Policy): string {
   return text;
 }
 
-async function writePrivate(path: string, text: string): Promise<void> {
-  const tmp = `${path}.tmp-${String(process.pid)}`;
-  await writeFile(tmp, text, { mode: 0o600 });
-  await rename(tmp, path);
+/**
+ * Writes `text` to a new file beside `path` and fsyncs it. The name has a random suffix and is opened with `wx`,
+ * so a file or symlink planted at a predictable name is never followed or overwritten.
+ */
+async function writeTemp(path: string, text: string): Promise<string> {
+  const tmp = `${path}.tmp-${randomBytes(12).toString("hex")}`;
+  const handle = await open(tmp, "wx", 0o600);
+  try {
+    await handle.writeFile(text);
+    await handle.sync();
+  } catch (error) {
+    await handle.close();
+    await unlink(tmp).catch(() => undefined);
+    throw error;
+  }
+  await handle.close();
+  return tmp;
+}
+
+/** Makes the renames durable. Windows cannot open a directory to fsync it, so there the renames stand alone. */
+async function syncDir(dir: string): Promise<void> {
+  if (process.platform === "win32") return;
+  const handle = await open(dir, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }

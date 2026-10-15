@@ -54,8 +54,10 @@ export function readTarGz(tgz: Buffer): Map<string, Buffer> {
     longName = undefined;
     if (type !== "0" && type !== "\0") continue;
 
-    const parts = path.split("/").slice(1);
-    if (path.startsWith("/") || parts.length === 0 || parts.some((p) => p === ".." || p === "")) {
+    // npm packs every file under `package/`. Any other top directory, and any `.`, `..` or empty component
+    // (which covers a leading or doubled slash), is refused rather than normalized.
+    const [top, ...parts] = path.split("/");
+    if (top !== "package" || parts.length === 0 || parts.some((p) => p === "." || p === ".." || p === "")) {
       throw new CheckFailure("tarball-integrity-mismatch", `unsafe path in tarball: ${path}`);
     }
     files.set(parts.join("/"), data);

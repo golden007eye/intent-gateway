@@ -98,20 +98,33 @@ export function loadConfig(
 
   const dataDir =
     intent.INTENT_DATA_DIR !== undefined
-      ? path.resolve(cwd, intent.INTENT_DATA_DIR)
+      ? path.resolve(cwd, userPath("INTENT_DATA_DIR", intent.INTENT_DATA_DIR))
       : runtime === "container"
         ? "/data"
         : defaultDataDir(platform, path, env, home);
   const policyPath =
-    intent.INTENT_POLICY !== undefined ? path.resolve(cwd, intent.INTENT_POLICY) : path.join(dataDir, "policy.yaml");
+    intent.INTENT_POLICY !== undefined
+      ? path.resolve(cwd, userPath("INTENT_POLICY", intent.INTENT_POLICY))
+      : path.join(dataDir, "policy.yaml");
 
   const trustKeys = readTrustKeys(argv);
   const cloud = cloudConfig(
     intent.INTENT_CLOUD_URL ?? DEFAULT_CLOUD_URL,
-    trustKeys === undefined ? undefined : path.resolve(cwd, trustKeys),
+    trustKeys === undefined ? undefined : path.resolve(cwd, userPath("--trust-keys", trustKeys)),
   );
 
   return { runtime, dataDir, policyPath, cloud, http: httpConfig(intent) };
+}
+
+/**
+ * A path the user gave. A leading `~` is refused: the shell did not expand it (it was quoted, or set in a file),
+ * and resolving it would make a folder literally named `~` under the working directory.
+ */
+function userPath(name: string, value: string): string {
+  if (value.startsWith("~")) {
+    throw new ConfigError(`${name} starts with ~, which is not expanded here; give the full path, got ${JSON.stringify(value)}`);
+  }
+  return value;
 }
 
 function defaultDataDir(
@@ -126,6 +139,9 @@ function defaultDataDir(
   if (platform === "darwin") return path.join(home, "Library", "Application Support", "intent-gateway");
   if (platform === "win32") {
     const local = env.LOCALAPPDATA;
+    if (local !== undefined && local !== "" && !path.isAbsolute(local)) {
+      throw new ConfigError(`LOCALAPPDATA is not an absolute path (${JSON.stringify(local)}); fix it or set INTENT_DATA_DIR`);
+    }
     const base = local !== undefined && local !== "" ? local : path.join(home, "AppData", "Local");
     return path.join(base, "intent-gateway");
   }
@@ -203,15 +219,33 @@ function httpConfig(intent: Readonly<Record<string, string>>): Config["http"] {
 }
 
 const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
-const IPV6 = /^[0-9a-f:.]+$/i;
+const IPV6_CHARS = /^[0-9a-f:.]+$/i;
 const HOST_NAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
 
-function isBindHost(host: string): boolean {
-  return IPV4.test(host) || (host.includes(":") && IPV6.test(host)) || HOST_NAME.test(host);
+/** An IPv6 literal (RFC 4291 text form, no brackets, no zone): eight hex groups, or fewer around one `::`. */
+function isIpv6(host: string): boolean {
+  if (!host.includes(":") || !IPV6_CHARS.test(host)) return false;
+  const halves = host.split("::");
+  if (halves.length > 2) return false;
+  const groups = halves.map((half) => (half === "" ? [] : half.split(":")));
+  // A dotted IPv4 address may stand for the last two groups, so only at the very end of the text.
+  const tail = IPV4.test(groups.at(-1)?.at(-1) ?? "") ? 2 : 0;
+  if (tail === 2) groups.at(-1)?.pop();
+  const all = groups.flat();
+  if (!all.every((g) => /^[0-9a-f]{1,4}$/i.test(g))) return false;
+  const count = all.length + tail;
+  return halves.length === 2 ? count <= 7 : count === 8;
 }
 
+function isBindHost(host: string): boolean {
+  // Digits and dots only is an IPv4 address or nothing: 999.1.1.1 is not a host name.
+  return IPV4.test(host) || isIpv6(host) || (HOST_NAME.test(host) && !/^[0-9.]+$/.test(host));
+}
+
+/**
+ * Only the literals 127.0.0.1 and ::1 count as loopback. A name such as `localhost` is resolved by the system and
+ * can point elsewhere; any other spelling is treated as off-loopback, which only means a token is needed.
+ */
 function isLoopback(host: string): boolean {
-  const lower = host.toLowerCase();
-  // Conservative: an unusual spelling of loopback is treated as off-loopback, which only means a token is needed.
-  return lower === "localhost" || lower === "::1" || (IPV4.test(lower) && lower.startsWith("127."));
+  return host === "127.0.0.1" || host === "::1";
 }

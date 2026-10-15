@@ -1,24 +1,27 @@
 // Writes dist/build-info.json after `tsc`, so the built gateway knows which commit it was built from.
-// A bundled library policy records this commit, so a build outside a git checkout fails instead of guessing.
+// A bundled library policy records this commit, so a build outside a git checkout fails instead of guessing, and
+// a build from a tree with uncommitted changes records no commit (`buildCommit: null, dirty: true`): its bundled
+// policies may differ from that commit, so the gateway then refuses to apply them.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export interface BuildInfo {
-  version: string;
-  buildCommit: string;
-}
+export type BuildInfo = { version: string; buildCommit: string; dirty: false } | { version: string; buildCommit: null; dirty: true };
 
-export function buildInfo(version: string, buildCommit: string): BuildInfo {
+/** The build info for `buildCommit`, or for a dirty tree when `dirty` is true (the commit is then not recorded). */
+export function buildInfo(version: string, buildCommit: string, dirty = false): BuildInfo {
   if (!/^[0-9a-f]{40}$/.test(buildCommit)) throw new Error(`build commit is not a full git commit hash: ${JSON.stringify(buildCommit)}`);
   if (version === "") throw new Error("version is empty");
-  return { version, buildCommit };
+  return dirty ? { version, buildCommit: null, dirty: true } : { version, buildCommit, dirty: false };
 }
 
 export function writeBuildInfo(repo: string, outDir: string): BuildInfo {
-  const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8", stdio: "pipe" }).trim();
+  const git = (...args: string[]): string => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: "pipe" });
+  const commit = git("rev-parse", "HEAD").trim();
+  // Untracked files count: a new file under policies/ is bundled even though git does not track it.
+  const dirty = git("status", "--porcelain", "--untracked-files=all") !== "";
   const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { version: string };
-  const info = buildInfo(pkg.version, commit);
+  const info = buildInfo(pkg.version, commit, dirty);
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, "build-info.json"), `${JSON.stringify(info, null, 2)}\n`);
   return info;
@@ -27,5 +30,5 @@ export function writeBuildInfo(repo: string, outDir: string): BuildInfo {
 if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === import.meta.filename) {
   const repo = join(import.meta.dirname, "..");
   const info = writeBuildInfo(repo, join(repo, "dist"));
-  console.log(`build-info: ${info.version} at ${info.buildCommit}`);
+  console.log(info.dirty ? `build-info: ${info.version} from a dirty tree (no commit recorded)` : `build-info: ${info.version} at ${info.buildCommit}`);
 }

@@ -3,7 +3,7 @@
 // referrers of the digest (the referrers API, or the `sha256-<hex>` referrers tag where the registry lacks it).
 import { createHash } from "node:crypto";
 import { loadVerifier, releaseIdentity, verifyAttestation, isRecord, GITHUB_OIDC_ISSUER } from "./attestation.ts";
-import { getBytes, getJson, parseJson } from "./http.ts";
+import { getBytes, getJson, MAX_LARGE_BODY_BYTES, parseJson } from "./http.ts";
 import { CheckFailure, toFailure, type Failure, type SelfCheckOptions, type SelfCheckResult } from "./result.ts";
 
 export interface ImageOptions extends SelfCheckOptions {
@@ -62,7 +62,7 @@ async function check(ref: string, opts: ImageOptions): Promise<Failure[]> {
   if (!isRecord(token) || typeof token.token !== "string") throw new CheckFailure("registry-error", "registry gave no pull token");
   const auth = { authorization: `Bearer ${token.token}` };
   const get = (path: string, accept: string): Promise<Buffer> =>
-    getBytes(doFetch, `${REGISTRY}/v2/${REPO_PATH}/${path}`, { headers: { ...auth, accept } });
+    getBytes(doFetch, `${REGISTRY}/v2/${REPO_PATH}/${path}`, { headers: { ...auth, accept } }, MAX_LARGE_BODY_BYTES);
 
   const referrers = await listReferrers(get, hex);
   const verifier = await loadVerifier(opts.trustedRoot);

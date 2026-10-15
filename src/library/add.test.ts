@@ -1,14 +1,18 @@
 // `intent policy add` (AC-P3): each refusal writes nothing; a success writes meet(current, library) and a
 // policy.lock that names the commit. GitHub is a mocked fetch, so the tests run offline.
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { canonicalize } from "../jcs/index.ts";
 import { PolicyError, loadPolicy, meet } from "../policy/index.ts";
-import { addPolicy, LibraryError, LIBRARY_REPO, type AddOptions } from "./index.ts";
+import { addPolicy, LibraryError, LIBRARY_REPO, MAX_GITHUB_BODY_BYTES, readLock, type AddOptions } from "./index.ts";
+
+// Each add fsyncs three times (two temp files and the directory); on a busy disk that alone can pass the
+// default 5 s timeout, which is latency, not a hang.
+vi.setConfig({ testTimeout: 30_000 });
 
 const POLICIES = new URL("../../policies/", import.meta.url);
 const read = (path: string): string => readFileSync(new URL(path, POLICIES), "utf8");
@@ -57,7 +61,7 @@ function github(repo: Repo = {}): { fetch: typeof fetch; urls: string[] } {
     if (path === `commits/${SHA}`) {
       return Promise.resolve(Response.json({ sha: SHA, commit: { verification: { verified: repo.verified ?? true } } }));
     }
-    if (path === `compare/main...${SHA}`) return Promise.resolve(Response.json({ status: repo.status ?? "behind" }));
+    if (path === `compare/refs/heads/main...${SHA}`) return Promise.resolve(Response.json({ status: repo.status ?? "behind" }));
     const contents = /^contents\/(.+)\?ref=([0-9a-f]{40})$/.exec(path);
     const file = contents?.[2] === SHA ? files[contents[1] ?? ""] : undefined;
     return Promise.resolve(file === undefined ? new Response("not found", { status: 404 }) : new Response(file));
@@ -98,8 +102,17 @@ describe("addPolicy: bundled source", () => {
     const { policyPath, lockPath } = workdir();
     const lock = await addPolicy("no-history", { policyPath, buildCommit: BUILD_SHA });
     const text = read("no-history/policy.yaml");
-    expect(lock).toEqual({ name: "no-history", commit: BUILD_SHA, sha256: sha256(text), source: "bundled" });
+    expect(lock).toEqual({
+      name: "no-history",
+      commit: BUILD_SHA,
+      sha256: sha256(text),
+      source: "bundled",
+      policy_sha256: sha256(readFileSync(policyPath, "utf8")),
+    });
     expect(readFileSync(lockPath, "utf8")).toBe(canonicalize(lock));
+    expect(await readLock(policyPath)).toEqual(lock);
+    // Only the two files: no temp file is left beside them.
+    expect(readdirSync(dirname(policyPath)).sort()).toEqual(["policy.lock", "policy.yaml"]);
     expect(loadPolicy(readFileSync(policyPath, "utf8"))).toEqual(loadPolicy(text));
     expect(statSync(lockPath).mode & 0o777).toBe(0o600);
     expect(statSync(policyPath).mode & 0o777).toBe(0o600);
@@ -203,7 +216,14 @@ describe("addPolicy: result is meet(current, library)", () => {
     const lock = await addPolicy("per-order-60", { policyPath, commit: SHA, fetch: gh.fetch });
 
     const library = read("per-order-60/policy.yaml");
-    expect(lock).toEqual({ name: "per-order-60", commit: SHA, sha256: sha256(library), source: "github" });
+    expect(lock).toEqual({
+      name: "per-order-60",
+      commit: SHA,
+      sha256: sha256(library),
+      source: "github",
+      policy_sha256: sha256(readFileSync(policyPath, "utf8")),
+    });
+    expect(lock.policy_sha256).not.toBe(lock.sha256);
     expect(JSON.parse(readFileSync(lockPath, "utf8"))).toEqual(lock);
     expect(readFileSync(lockPath, "utf8")).toBe(canonicalize(lock));
 
@@ -231,5 +251,97 @@ describe("addPolicy: result is meet(current, library)", () => {
     const result = loadPolicy(readFileSync(policyPath, "utf8"));
     expect(result).toEqual(current);
     expect(meet(result, current)).toEqual(result);
+  });
+});
+
+describe("addPolicy: GitHub reads", () => {
+  it("checks the commit against the full ref refs/heads/main", async () => {
+    const gh = github();
+    await addPolicy("no-history", { policyPath: workdir().policyPath, commit: SHA, fetch: gh.fetch });
+    expect(gh.urls).toContain(`https://api.github.com/repos/${LIBRARY_REPO}/compare/refs/heads/main...${SHA}`);
+    expect(gh.urls.some((u) => u.includes("compare/main..."))).toBe(false);
+  });
+
+  // Attack: a hostile or broken answer must not be buffered without bound.
+  it("refuses a body over the cap, declared or streamed, and writes nothing", async () => {
+    const big = "x".repeat(MAX_GITHUB_BODY_BYTES + 1);
+    const chunk = new TextEncoder().encode(big.slice(0, 64 * 1024));
+    const declared = new Response("{}", { headers: { "content-length": String(MAX_GITHUB_BODY_BYTES + 1) } });
+    const endless = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(chunk);
+        },
+      }),
+    );
+    for (const response of [declared, endless, new Response(big)]) {
+      const { policyPath, lockPath } = workdir();
+      const responses = { [`contents/policies/index.json?ref=${SHA}`]: response };
+      const error = await refusal(addPolicy("no-history", { policyPath, commit: SHA, ...github({ responses }) }));
+      expect(error.code).toBe("GITHUB_ERROR");
+      expect(error.message).toMatch(/larger than 1048576 bytes/);
+      expect(existsSync(policyPath) || existsSync(lockPath)).toBe(false);
+    }
+  });
+
+  it("refuses an API answer that is not JSON, or empty", async () => {
+    for (const body of ["not json", null]) {
+      const responses = { [`commits/${SHA}`]: new Response(body) };
+      const error = await refusal(addPolicy("no-history", { policyPath: workdir().policyPath, commit: SHA, ...github({ responses }) }));
+      expect(error.code).toBe("GITHUB_ERROR");
+    }
+  });
+});
+
+describe("addPolicy: writing", () => {
+  it("does not follow a symlink planted at the old predictable temp name", async () => {
+    const { dir, policyPath, lockPath } = workdir();
+    mkdirSync(dirname(policyPath));
+    const victim = join(dir, "victim.txt");
+    writeFileSync(victim, "keep\n");
+    symlinkSync(victim, `${policyPath}.tmp-${String(process.pid)}`);
+    symlinkSync(victim, `${lockPath}.tmp-${String(process.pid)}`);
+    await addPolicy("no-history", { policyPath, buildCommit: BUILD_SHA });
+    expect(readFileSync(victim, "utf8")).toBe("keep\n");
+    expect(await readLock(policyPath)).toBeDefined();
+  });
+});
+
+describe("readLock", () => {
+  it("is undefined when no policy was added", async () => {
+    expect(await readLock(workdir().policyPath)).toBeUndefined();
+  });
+
+  it("reports a lock that no longer describes policy.yaml as stale", async () => {
+    const { policyPath } = workdir();
+    await addPolicy("no-history", { policyPath, buildCommit: BUILD_SHA });
+    writeFileSync(policyPath, "version: 1\napproval: passkey\nquantity: { max: 1 }\n");
+    expect((await refusal(readLock(policyPath))).code).toBe("LOCK_STALE");
+    // A new add writes a lock that describes the file again.
+    await addPolicy("no-history", { policyPath, buildCommit: BUILD_SHA });
+    expect((await readLock(policyPath))?.policy_sha256).toBe(sha256(readFileSync(policyPath, "utf8")));
+  });
+
+  it("reports a lock without its policy.yaml as stale", async () => {
+    const { policyPath, lockPath } = workdir();
+    await addPolicy("no-history", { policyPath, buildCommit: BUILD_SHA });
+    const other = workdir();
+    mkdirSync(dirname(other.lockPath));
+    writeFileSync(other.lockPath, readFileSync(lockPath));
+    expect((await refusal(readLock(other.policyPath))).code).toBe("LOCK_STALE");
+  });
+
+  const z = "0".repeat(64);
+  it.each([
+    ["not JSON", "{"],
+    ["null", "null"],
+    ["an old lock without policy_sha256", JSON.stringify({ name: "a", commit: SHA, sha256: z, source: "bundled" })],
+    ["an unknown source", JSON.stringify({ name: "a", commit: SHA, sha256: z, source: "web", policy_sha256: z })],
+    ["a short commit", JSON.stringify({ name: "a", commit: "abc", sha256: z, source: "github", policy_sha256: z })],
+  ])("refuses %s as LOCK_INVALID", async (_label, text) => {
+    const { policyPath, lockPath } = workdir();
+    mkdirSync(dirname(lockPath));
+    writeFileSync(lockPath, text);
+    expect((await refusal(readLock(policyPath))).code).toBe("LOCK_INVALID");
   });
 });

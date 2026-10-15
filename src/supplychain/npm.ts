@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { loadVerifier, releaseIdentity, verifyAttestation, isRecord, errorText } from "./attestation.ts";
-import { getBytes, getJson } from "./http.ts";
+import { getBytes, getJson, MAX_LARGE_BODY_BYTES } from "./http.ts";
 import { CheckFailure, toFailure, type Failure, type SelfCheckOptions, type SelfCheckResult } from "./result.ts";
 import { readTarGz } from "./tar.ts";
 
@@ -47,7 +47,7 @@ async function check(pkgDir: string, name: string, version: string, opts: NpmOpt
   if (expectedSan === undefined) throw new CheckFailure("package-unreadable", `not a release version: ${version}`);
   const escapedName = name.replace("/", "%2f");
 
-  const packument = await getJson(doFetch, `${registry}/${escapedName}`);
+  const packument = await getJson(doFetch, `${registry}/${escapedName}`, undefined, MAX_LARGE_BODY_BYTES);
   const dist = isRecord(packument) && isRecord(packument.versions) ? packument.versions[version] : undefined;
   if (!isRecord(dist) || !isRecord(dist.dist)) throw new CheckFailure("registry-error", `registry lists no ${name}@${version}`);
   const { integrity, tarball } = dist.dist;
@@ -76,7 +76,7 @@ async function check(pkgDir: string, name: string, version: string, opts: NpmOpt
     );
   }
 
-  const tgz = await getBytes(doFetch, tarball);
+  const tgz = await getBytes(doFetch, tarball, undefined, MAX_LARGE_BODY_BYTES);
   if (!createHash("sha512").update(tgz).digest().equals(sha512)) {
     throw new CheckFailure("tarball-integrity-mismatch", `${tarball} does not match dist.integrity`);
   }
