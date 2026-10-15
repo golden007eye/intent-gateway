@@ -14,5 +14,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["scripts", "src", "*.ts"]
+  "include": ["scripts", "src", "test", "*.ts"],
+  "exclude": ["test/fixtures"]
 }

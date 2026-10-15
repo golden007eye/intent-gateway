@@ -23,6 +23,31 @@ module.exports = {
       from: { path: "^src/" },
       to: { path: "^scripts/" },
     },
+    {
+      name: "only-disclosure-reaches-cloud",
+      comment: "Every send goes through the disclosure log (invariant 2), so only src/disclosure/ may use the cloud adapter.",
+      severity: "error",
+      from: { pathNot: "^src/(disclosure|cloud)/" },
+      to: { path: "^src/cloud/" },
+    },
+    {
+      name: "fake-only-in-tests",
+      comment: "The fake Intent Cloud holds test keys; only tests may load it.",
+      severity: "error",
+      from: { pathNot: ["\\.test\\.ts$", "^test/", "^src/cloud-fake/"] },
+      to: { path: "^src/cloud-fake/" },
+    },
+    {
+      name: "panel-offline",
+      comment: "The panel is a read-only local page; it reaches no network module.",
+      severity: "error",
+      from: { path: "^src/panel/" },
+      to: { path: "^src/(cloud|cloud-fake|disclosure|library|supplychain)/" },
+    },
   ],
-  options: { doNotFollow: { path: "node_modules" }, tsConfig: { fileName: "tsconfig.json" } },
+  options: {
+    doNotFollow: { path: "node_modules" },
+    exclude: { path: "^test/fixtures/" },
+    tsConfig: { fileName: "tsconfig.json" },
+  },
 };
