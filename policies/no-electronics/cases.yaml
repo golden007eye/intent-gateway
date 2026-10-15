@@ -1,0 +1,12 @@
+- name: a home cart is sent
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 20, quantity: 1}}
+  expect: {send: true}
+- name: an electronics cart is refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: electronics, price_usd: 20, quantity: 1}}
+  expect: {send: false, blocked: [categories.block]}
+- name: an electronics subcategory is refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: electronics/headphones, price_usd: 20, quantity: 1}}
+  expect: {send: false, blocked: [categories.block]}
+- name: an electronics search is refused
+  outbound: {kind: search, category: Electronics}
+  expect: {send: false, blocked: [categories.block]}

@@ -1,0 +1,14 @@
+# strict-default · a gateway policy can only narrow Intent Cloud's rules
+version: 1
+approval: passkey   # required; the only legal value
+share:
+  ship_to: none
+  history: false
+spend:
+  per_order_usd: 50
+  per_day_usd: 75
+  per_week_usd: 150
+quantity:
+  max: 1
+merchants:
+  block: [dropship.example]

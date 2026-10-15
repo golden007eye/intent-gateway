@@ -1,0 +1,5 @@
+# no-electronics · a gateway policy can only narrow Intent Cloud's rules
+version: 1
+approval: passkey   # required; the only legal value
+categories:
+  block: [electronics]

@@ -1,0 +1,9 @@
+- name: a 5-digit ZIP is sent
+  outbound: {kind: search, category: home, ship_to_zip: "94110"}
+  expect: {send: true}
+- name: a ZIP+4 is refused
+  outbound: {kind: search, category: home, ship_to_zip: "94110-1234"}
+  expect: {send: false, blocked: [share.ship_to]}
+- name: a street address is refused
+  outbound: {kind: search, category: home, ship_to_zip: "1 Main St 94110"}
+  expect: {send: false, blocked: [share.ship_to]}
