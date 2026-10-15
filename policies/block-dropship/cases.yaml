@@ -1,0 +1,9 @@
+- name: another merchant is sent
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 20, quantity: 1}}
+  expect: {send: true}
+- name: a blocked merchant is refused
+  outbound: {kind: cart, offer: {merchant: dropship.example, category: home, price_usd: 20, quantity: 1}}
+  expect: {send: false, blocked: [merchants.block]}
+- name: a subdomain of a blocked merchant is refused
+  outbound: {kind: cart, offer: {merchant: store.resale.example, category: home, price_usd: 20, quantity: 1}}
+  expect: {send: false, blocked: [merchants.block]}

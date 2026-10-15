@@ -1,0 +1,6 @@
+- name: a search without history is sent
+  outbound: {kind: search, category: home}
+  expect: {send: true}
+- name: a search carrying history is refused
+  outbound: {kind: search, category: home, history: [{item: lamp}]}
+  expect: {send: false, blocked: [share.history]}
