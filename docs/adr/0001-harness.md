@@ -4,7 +4,7 @@ Status: accepted · 2026-10-15 · merge rule amended by ADR-0003
 
 ## Context
 
-AI coding agents write most of this code and one maintainer reviews it. The repository is private now and becomes public at its launch gate, with its full history.
+AI coding agents write most of this code and one maintainer reviews it. The repository was private at first and is public from pre-alpha (ADR-0004), with its full history.
 
 ## Decision
 

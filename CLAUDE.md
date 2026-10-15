@@ -1,6 +1,6 @@
 # intent-gateway — Agent & Human Shipyard
 
-The gateway is a self-hosted Docker container. Agents reach it over MCP; it reaches Intent Cloud for offers and carts. Everything in this repository is written to be published: the repo goes public at its launch gate, so a file that is safe to commit is a file that is safe to show the world.
+The gateway is a self-hosted Docker container. Agents reach it over MCP; it reaches Intent Cloud for offers and carts. The repository is public (pre-alpha, ADR-0004): anyone can read every committed file and the full history.
 
 ## Invariants (never weaken; each one is why the gateway exists)
 
@@ -21,8 +21,8 @@ A change that touches an invariant carries a test that fails if the invariant br
 
 ## Keeping the repo public-safe
 
-- Committed files mention only public names: the gateway, Intent Cloud, its public API host, the confirm page. Internal service names, hosts, repos and people belong in `CLAUDE.local.md`. Why: the history is published as-is at launch.
-- `pnpm public-safety` (also a pre-commit hook and a CI job) fails on any tracked file containing a term from the private list: CI secret `PRIVATE_TERMS`, locally `~/.config/intent-gateway/private-terms`. When it fails, move the content to `CLAUDE.local.md`; the fix is never to edit the check or the list.
+- Committed files mention only public names: the gateway, Intent Cloud, its public API host, the confirm page. Internal service names, hosts, repos and people belong in `CLAUDE.local.md`. Why: the repository and its full history are public.
+- `pnpm public-safety` (also a pre-commit hook and a CI job) fails on any tracked file containing a term from the private list: CI secret `PRIVATE_TERMS`, locally `~/.config/intent-gateway/private-terms`. Without either it skips locally (contributors have no list) and fails in CI. When it fails, move the content to `CLAUDE.local.md`; the fix is never to edit the check or the list.
 
 ## Shared background
 

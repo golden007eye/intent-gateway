@@ -1,0 +1,9 @@
+name: Idea or feature
+description: Propose a feature, a policy for the library, or a design change
+labels: [idea]
+body:
+  - type: textarea
+    attributes: {label: The problem, description: "What are you trying to do with your agent?"}
+    validations: {required: true}
+  - type: textarea
+    attributes: {label: Proposal}
