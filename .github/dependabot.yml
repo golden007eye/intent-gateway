@@ -16,3 +16,6 @@ updates:
       # typescript-eslint 8.x supports TypeScript <6.1 only (peer range).
       - dependency-name: typescript
         versions: [">=6.1.0"]
+      # @types/node tracks the runtime major in .node-version; bump both together by hand.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
