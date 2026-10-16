@@ -229,7 +229,8 @@ function cloudConfig(raw: string, trustKeys: string | undefined, requireTrust: b
     const reason =
       rootKeys === undefined
         ? `${url.host} is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key`
-        : `no root key is pinned for ${url.host} in this build; pass --trust-keys <path>`;
+        : `this build has no trusted root key for ${url.host} yet; staging opens with the first preview release. ` +
+          `Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud`;
     if (requireTrust) throw new ConfigError(reason);
     return { url: url.origin, trust: { kind: "unpinned", host: url.host, reason } };
   }

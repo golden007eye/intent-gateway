@@ -20,7 +20,7 @@ export async function getBytes(
   } catch (err) {
     throw new CheckFailure("registry-error", `${url}: ${errorText(err)}`);
   }
-  if (!res.ok) throw new CheckFailure("registry-error", `${url}: HTTP ${String(res.status)}`);
+  if (!res.ok) throw new CheckFailure("registry-error", `${url}: HTTP ${String(res.status)}`, res.status);
   const tooLarge = (): CheckFailure =>
     new CheckFailure("registry-error", `${url}: response is larger than ${String(maxBytes)} bytes`);
   if (Number(res.headers.get("content-length") ?? 0) > maxBytes) {

@@ -61,11 +61,29 @@ describe("intent as a process", () => {
       expect(client.getServerVersion()).toMatchObject({ name: "intent-gateway", version: BUILD.version });
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name).sort()).toEqual(["create_cart", "find_offers", "get_approval_status"]);
-      expect(stderr).toContain("No policy file found; using the bundled zip-only policy: only your ZIP code leaves this machine.");
+      expect(stderr).toContain("No policy file found; using the bundled zip-only policy: the only detail about you it sends is your ZIP code.");
       expect(stderr).toContain("MCP over stdio is ready");
     } finally {
       await client.close();
     }
+  });
+
+  it("with no root key pinned, an MCP client's initialize fails with the reason and the next steps", { timeout: 30_000 }, async () => {
+    const dataDir = join(mkdtempSync(join(tmpdir(), "cli-unpinned-")), "data");
+    const transport = new StdioClientTransport({ command: process.execPath, args: [MAIN], env: env({ INTENT_DATA_DIR: dataDir }), stderr: "pipe" });
+    let stderr = "";
+    transport.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    const client = new Client({ name: "cli-test", version: "0" });
+    const failure = await client.connect(transport).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await client.close();
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain("intent-gateway could not start: configuration: this build has no trusted root key for staging-api.intentai.shop");
+    expect(message).toContain("staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud");
+    expect(stderr).toContain("intent: configuration: this build has no trusted root key");
   });
 
   it("approver accept with pipes for stdin and stdout refuses (exit 2)", { timeout: 30_000 }, async () => {

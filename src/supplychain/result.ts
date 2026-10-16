@@ -4,6 +4,7 @@
 /** Why a self-check failed. Each name is stable; `verify` and tests match on it. */
 export type FailureReason =
   | "package-unreadable" // the installed package.json is missing or has no valid name/version
+  | "not-published" // the registry has no such package or version (404, or a packument that does not list it)
   | "ref-invalid" // the image reference is not a digest reference to the gateway image
   | "registry-error" // the registry did not answer, answered non-2xx, or served content that does not match its digest
   | "trust-root-unavailable" // the Sigstore trusted root could not be loaded
@@ -52,9 +53,12 @@ export interface SelfCheckResult {
 /** A failure that ends the check. Internal to the module; results carry `Failure` values instead. */
 export class CheckFailure extends Error {
   readonly reason: FailureReason;
-  constructor(reason: FailureReason, detail: string) {
+  /** The HTTP status when the failure is a non-2xx answer. */
+  readonly status: number | undefined;
+  constructor(reason: FailureReason, detail: string, status?: number) {
     super(detail);
     this.reason = reason;
+    this.status = status;
   }
 }
 

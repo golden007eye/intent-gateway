@@ -461,7 +461,11 @@ describe("intent verify and intent panel", () => {
       const result = await s.run(["verify", "--trust-keys", trustFile(fake)]);
       expect(result.out).toMatch(/^chain: ok$/m);
       expect(result.out).toMatch(/^verify: ok\n$/m);
+      expect(result.out).toContain("self-check: not run: this install is not a published release (no build-info.json: running from source)");
       expect(result.code).toBe(0);
+      const offline = await s.run(["verify", "--trust-keys", trustFile(fake), "--skip-install-check"]);
+      expect(offline.out).toContain("self-check: skipped on request (--skip-install-check); npm provenance and the image signature were not checked");
+      expect(offline.code).toBe(0);
     } finally {
       await fake.close();
     }
@@ -470,7 +474,7 @@ describe("intent verify and intent panel", () => {
   it("verify without a root key is a usage error naming --trust-keys", async () => {
     const result = await setup().run(["verify"]);
     expect(result.code).toBe(1);
-    expect(result.err).toMatch(/^intent: configuration: no root key is pinned .+pass --trust-keys <path>; or run intent demo/);
+    expect(result.err).toMatch(/^intent: configuration: this build has no trusted root key for .+ yet; staging opens with the first preview release\. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n$/);
   });
 
   it("verify --image needs --version, and --install takes only npm (exit 2)", async () => {
@@ -507,12 +511,25 @@ describe("intent verify and intent panel", () => {
 });
 
 describe("serve failures", () => {
-  it("with no configuration, refuses the unpinned default host and points at --trust-keys and intent demo", async () => {
-    const result = await setup().run([]);
+  it("with no configuration, refuses the unpinned default host, says why and points at intent demo and --trust-keys", async () => {
+    const result = await setup().run([], { tty: true });
     expect(result.code).toBe(1);
-    expect(result.err).toBe(
-      "intent: configuration: no root key is pinned for staging-api.intentai.shop in this build; pass --trust-keys <path>; or run intent demo to try the gateway with no setup\n",
-    );
+    expect(result.err).toBe("intent: configuration: this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n");
+    expect(result.out).toBe("");
+  });
+
+  it("started by an MCP client (stdin not a terminal), answers initialize with the same reason as a JSON-RPC error", async () => {
+    const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } };
+    const result = await setup().run([], { input: `${JSON.stringify(initialize)}\n` });
+    expect(result.code).toBe(1);
+    expect(result.err).toBe("intent: configuration: this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n");
+    expect(JSON.parse(result.out)).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32000, message: "intent-gateway could not start: configuration: this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud" },
+    });
+    // --http and a terminal print to stderr only; stdout stays empty.
+    expect((await setup().run(["serve", "--http"], { input: `${JSON.stringify(initialize)}\n` })).out).toBe("");
   });
 
   it("a contract mismatch at start is one line naming intent doctor", async () => {
@@ -522,9 +539,9 @@ describe("serve failures", () => {
       const stub = {
         meta: () => Promise.resolve({ ok: true, status: 200, body: { contract_version: "9.9.9", contract_sums_sha256: "0".repeat(64) }, contractVersion: "9.9.9" }),
       } as unknown as DisclosedCloud;
-      const result = await s.run(["serve", "--trust-keys", trustFile(fake)], { io: { connect: () => stub } });
+      const result = await s.run(["serve", "--trust-keys", trustFile(fake)], { input: "", io: { connect: () => stub } });
       expect(result.code).toBe(1);
-      expect(result.err).toMatch(/^intent-gateway: No policy file found; using the bundled zip-only policy: only your ZIP code leaves this machine\. Change it with `intent policy add <name>`\.\n/);
+      expect(result.err).toMatch(/^intent-gateway: No policy file found; using the bundled zip-only policy: the only detail about you it sends is your ZIP code\. Change it with `intent policy add <name>`\.\n/);
       expect(result.err).toMatch(/\nintent: could not start: contract mismatch: .+; run intent doctor to see each check\n$/);
     } finally {
       await fake.close();
@@ -548,7 +565,7 @@ describe("serve failures", () => {
     // The hand-written chain's entries carry no receipts, so verify fails; it ran against the demo dir and test root.
     const verify = await s.run(["verify", "--demo"]);
     expect(verify.out).toMatch(/^chain: ok\n {2}11 entries/m);
-    expect(verify.out).toContain("self-check: skipped on request");
+    expect(verify.out).toContain("self-check: skipped on request (demo mode)");
     // INTENT_DEMO=1 (the image's switch) is the same as --demo.
     const env = setup({ INTENT_DEMO: "1" });
     await writeChain(join(env.dir, "demo"));

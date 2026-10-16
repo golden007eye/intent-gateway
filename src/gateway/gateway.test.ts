@@ -274,6 +274,9 @@ describe("policy", () => {
     expect(result.offers).toEqual([]);
     expect(result.hidden).toBe(1);
     expect(result.message).toContain("merchants.block");
+    // The summary's Blocked part counts the hidden offer by rule, never naming the merchant that matched.
+    expect(result.summary).toMatch(/ \/ Blocked: 1 offer \(merchants\.block\)$/);
+    expect(result.summary).not.toContain("dropship");
     // Cloud still offers it; the gateway refuses to cart an offer it did not show.
     const direct = await h.real.search({ category: "home", budget_max: { amount_minor: 5000, currency: "USD" }, ship_to: { country: "US", postal_code: "94103" } });
     const hiddenHandle = direct.ok ? (direct.body.offers[0]?.offer_handle ?? "") : "";
@@ -312,6 +315,8 @@ describe("policy", () => {
     // Trail Runner 3 is $89.99 + $5 shipping: over. Road Runner 2 is $64.99, free shipping: under.
     expect(result.offers.map((o) => o.title)).toEqual(["Road Runner 2"]);
     expect(result.hidden).toBe(1);
+    expect(result.summary).toMatch(/ \/ Blocked: 1 offer \(spend\.per_order_usd\)$/);
+    expect(result.summary).not.toMatch(/89\.99|94\.99|Trail/);
     const handle = result.offers[0]?.offer_handle ?? "";
     const two = await h.gateway.createCart({ offer_handle: handle, quantity: 2 });
     expect(two.status).toBe("blocked");
@@ -332,7 +337,9 @@ describe("policy", () => {
     expect(over.summary).toContain("spend.per_week_usd");
     expect(h.sends.createCart).toBe(1);
     // A search now hides both offers, since either would go over.
-    expect(offersOf(await h.gateway.findOffers(SHOES)).hidden).toBe(2);
+    const both = offersOf(await h.gateway.findOffers(SHOES));
+    expect(both.hidden).toBe(2);
+    expect(both.summary).toMatch(/ \/ Blocked: 2 offers \(spend\.per_week_usd\)$/);
 
     h.advance(7 * DAY_MS + 60_000);
     approvalOf(await h.gateway.createCart({ offer_handle: await offerHandle(h, "Road Runner 2") }));

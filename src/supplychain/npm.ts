@@ -47,9 +47,19 @@ async function check(pkgDir: string, name: string, version: string, opts: NpmOpt
   if (expectedSan === undefined) throw new CheckFailure("package-unreadable", `not a release version: ${version}`);
   const escapedName = name.replace("/", "%2f");
 
-  const packument = await getJson(doFetch, `${registry}/${escapedName}`, undefined, MAX_LARGE_BODY_BYTES);
-  const dist = isRecord(packument) && isRecord(packument.versions) ? packument.versions[version] : undefined;
-  if (!isRecord(dist) || !isRecord(dist.dist)) throw new CheckFailure("registry-error", `registry lists no ${name}@${version}`);
+  // Only "the registry has never heard of this name@version" is not-published; any other answer is a registry-error.
+  let packument: unknown;
+  try {
+    packument = await getJson(doFetch, `${registry}/${escapedName}`, undefined, MAX_LARGE_BODY_BYTES);
+  } catch (err) {
+    if (err instanceof CheckFailure && err.status === 404) throw new CheckFailure("not-published", `the registry has no package ${name} (HTTP 404)`);
+    throw err;
+  }
+  const versions = isRecord(packument) ? packument.versions : undefined;
+  if (!isRecord(versions)) throw new CheckFailure("registry-error", `registry answer for ${name} lists no versions`);
+  if (!Object.hasOwn(versions, version)) throw new CheckFailure("not-published", `the registry lists no ${name}@${version}`);
+  const dist = versions[version];
+  if (!isRecord(dist) || !isRecord(dist.dist)) throw new CheckFailure("registry-error", `registry entry for ${name}@${version} has no dist`);
   const { integrity, tarball } = dist.dist;
   const sha512 = typeof integrity === "string" ? sha512FromIntegrity(integrity) : undefined;
   if (sha512 === undefined || typeof tarball !== "string") {
