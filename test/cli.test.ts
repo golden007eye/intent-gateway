@@ -61,7 +61,7 @@ describe("intent as a process", () => {
       expect(client.getServerVersion()).toMatchObject({ name: "intent-gateway", version: BUILD.version });
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name).sort()).toEqual(["create_cart", "find_offers", "get_approval_status"]);
-      expect(stderr).toContain("No policy file found; using the bundled zip-only policy: only your ZIP code leaves this machine.");
+      expect(stderr).toContain("No policy file found; using the bundled zip-only policy: the only detail about you it sends is your ZIP code.");
       expect(stderr).toContain("MCP over stdio is ready");
     } finally {
       await client.close();

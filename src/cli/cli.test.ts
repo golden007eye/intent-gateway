@@ -460,7 +460,11 @@ describe("intent verify and intent panel", () => {
       const result = await s.run(["verify", "--trust-keys", trustFile(fake)]);
       expect(result.out).toMatch(/^chain: ok$/m);
       expect(result.out).toMatch(/^verify: ok\n$/m);
+      expect(result.out).toContain("self-check: not run: this install is not a published release (no build-info.json: running from source)");
       expect(result.code).toBe(0);
+      const offline = await s.run(["verify", "--trust-keys", trustFile(fake), "--skip-install-check"]);
+      expect(offline.out).toContain("self-check: skipped on request (--skip-install-check); npm provenance and the image signature were not checked");
+      expect(offline.code).toBe(0);
     } finally {
       await fake.close();
     }
@@ -523,7 +527,7 @@ describe("serve failures", () => {
       } as unknown as DisclosedCloud;
       const result = await s.run(["serve", "--trust-keys", trustFile(fake)], { io: { connect: () => stub } });
       expect(result.code).toBe(1);
-      expect(result.err).toMatch(/^intent-gateway: No policy file found; using the bundled zip-only policy: only your ZIP code leaves this machine\. Change it with `intent policy add <name>`\.\n/);
+      expect(result.err).toMatch(/^intent-gateway: No policy file found; using the bundled zip-only policy: the only detail about you it sends is your ZIP code\. Change it with `intent policy add <name>`\.\n/);
       expect(result.err).toMatch(/\nintent: could not start: contract mismatch: .+; run intent doctor to see each check\n$/);
     } finally {
       await fake.close();
@@ -547,7 +551,7 @@ describe("serve failures", () => {
     // The hand-written chain's entries carry no receipts, so verify fails; it ran against the demo dir and test root.
     const verify = await s.run(["verify", "--demo"]);
     expect(verify.out).toMatch(/^chain: ok\n {2}11 entries/m);
-    expect(verify.out).toContain("self-check: skipped on request");
+    expect(verify.out).toContain("self-check: skipped on request (demo mode)");
     // INTENT_DEMO=1 (the image's switch) is the same as --demo.
     const env = setup({ INTENT_DEMO: "1" });
     await writeChain(join(env.dir, "demo"));

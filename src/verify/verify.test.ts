@@ -467,7 +467,66 @@ describe("runVerify: the supply-chain self-check", () => {
   it("says so when the self-check was skipped or there is no installed artifact", async () => {
     const dir = await chain(keys);
     expect(formatReport(await verify(dir))).toContain("self-check: skipped on request");
-    expect(formatReport(await verify(dir, { skipSupplyChain: false }))).toContain("self-check: not run: running from source");
+    expect(formatReport(await verify(dir, { skipSupplyChain: true, skipReason: "--skip-install-check" }))).toContain(
+      "self-check: skipped on request (--skip-install-check); npm provenance and the image signature were not checked",
+    );
+    const source = await verify(dir, { skipSupplyChain: false });
+    expect(source.exitCode).toBe(0);
+    expect(formatReport(source)).toContain("self-check: not run: this install is not a published release (no build-info.json: running from source)");
+  });
+
+  it("a build the registry has never heard of (404) is not run, not failed: exit 0 when the chain checks pass", async () => {
+    const { pkgDir } = await release();
+    const report = await verify(await chain(keys), {
+      skipSupplyChain: false,
+      install: { kind: "npm", pkgDir },
+      selfCheck: { fetch: routedFetch(new Map()), trustedRoot: sigstore.trustedRoot },
+    });
+    expect(report.exitCode).toBe(0);
+    expect(check(report, "self-check")).toEqual({
+      name: "self-check",
+      ok: true,
+      details: [`self-check: not run: this install is not a published release (intent-gateway@${VERSION}: the registry has no package intent-gateway (HTTP 404))`],
+    });
+  });
+
+  it("a version the registry does not list is not run either; a broken chain still fails", async () => {
+    const { pkgDir } = await release();
+    const fetch = routedFetch(new Map<string, Route>([[`${REGISTRY}/intent-gateway`, { versions: { "9.9.9": {} } }]]));
+    const opts = { skipSupplyChain: false, install: { kind: "npm" as const, pkgDir }, selfCheck: { fetch, trustedRoot: sigstore.trustedRoot } };
+    const dir = await chain(keys);
+    const report = await verify(dir, opts);
+    expect(report.exitCode).toBe(0);
+    expect(formatReport(report)).toContain(`not a published release (intent-gateway@${VERSION}: the registry lists no intent-gateway@${VERSION})`);
+    // Not-run never masks the chain checks.
+    const file = join(dir, "audit.jsonl");
+    await writeFile(file, (await readFile(file, "utf8")).replace('"kind":"keys"', '"kind":"keyz"'));
+    const broken = await verify(dir, opts);
+    expect(broken.exitCode).toBe(1);
+    expect(check(broken, "chain")?.ok).toBe(false);
+  });
+
+  it("attack: a tampered published install still fails, and so does a registry that is reachable but broken", async () => {
+    const tampered = await release({ ...PACKED, "dist/main.js": "stealCards();\n" });
+    expect((await verify(await chain(keys), { skipSupplyChain: false, install: { kind: "npm", pkgDir: tampered.pkgDir }, selfCheck: tampered.selfCheck })).exitCode).toBe(1);
+    const { pkgDir } = await release();
+    for (const route of [500, "<html>", { versions: { [VERSION]: { dist: {} } } }] as Route[]) {
+      const fetch = routedFetch(new Map<string, Route>([[`${REGISTRY}/intent-gateway`, route]]));
+      const report = await verify(await chain(keys), { skipSupplyChain: false, install: { kind: "npm", pkgDir }, selfCheck: { fetch, trustedRoot: sigstore.trustedRoot } });
+      expect(report.exitCode).toBe(1);
+      expect(check(report, "self-check")?.details[1]).toMatch(/^ {2}registry-error: /);
+    }
+    // A published version whose attestation listing 404s is missing its provenance, not unpublished.
+    const full = await release();
+    const listing = `${REGISTRY}/-/npm/v1/attestations/intent-gateway@${VERSION}`;
+    const real = full.selfCheck.fetch;
+    const fetch = ((input: string | URL | Request, init?: RequestInit) =>
+      (typeof input === "string" ? input : input instanceof URL ? input.href : input.url) === listing
+        ? Promise.resolve(new Response("not found", { status: 404 }))
+        : real(input, init)) as typeof real;
+    const missing = await verify(await chain(keys), { skipSupplyChain: false, install: { kind: "npm", pkgDir: full.pkgDir }, selfCheck: { fetch, trustedRoot: sigstore.trustedRoot } });
+    expect(missing.exitCode).toBe(1);
+    expect(check(missing, "self-check")?.details[1]).toMatch(/^ {2}registry-error: .*HTTP 404/);
   });
 
   it("reaches the network only through the injected self-check transport", async () => {

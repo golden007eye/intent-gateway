@@ -19,6 +19,8 @@ export interface VerifyOptions {
   /** The installed artifact to self-check. Absent when running from source: there is no artifact to check. */
   readonly install?: Install;
   readonly skipSupplyChain?: boolean;
+  /** Why the self-check was skipped, printed after "skipped on request" (e.g. the flag that asked for it). */
+  readonly skipReason?: string;
   /** Transport and Sigstore trust root for the self-check; tests inject offline ones. */
   readonly selfCheck?: Omit<SelfCheckOptions, "now">;
 }
@@ -275,17 +277,24 @@ function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function notPublished(reason: string): { check: Check; usage: boolean } {
+  return { check: { name: "self-check", ok: true, details: [`self-check: not run: this install is not a published release (${reason})`] }, usage: false };
+}
+
 async function runSelfCheck(opts: VerifyOptions): Promise<{ check: Check; usage: boolean }> {
   if (opts.skipSupplyChain === true) {
-    return { check: { name: "self-check", ok: true, details: ["self-check: skipped on request; npm provenance and the image signature were not checked"] }, usage: false };
+    const why = opts.skipReason === undefined ? "" : ` (${opts.skipReason})`;
+    return { check: { name: "self-check", ok: true, details: [`self-check: skipped on request${why}; npm provenance and the image signature were not checked`] }, usage: false };
   }
   const { install } = opts;
-  if (install === undefined) {
-    return { check: { name: "self-check", ok: true, details: ["self-check: not run: running from source, no installed artifact to check"] }, usage: false };
-  }
+  if (install === undefined) return notPublished("no build-info.json: running from source");
   const options = { ...opts.selfCheck, now: () => opts.now };
   const result: SelfCheckResult =
     install.kind === "npm" ? await verifyNpm(install.pkgDir, options) : await verifyImage(install.ref, { ...options, version: install.version });
+  // A local or pre-release build the registry has never heard of has nothing published to check against. Any other
+  // failure, including a registry that knows the version but disagrees with the install, still fails.
+  const only = result.failures.length === 1 ? result.failures[0] : undefined;
+  if (only?.reason === "not-published") return notPublished(`${result.subject}: ${only.detail}`);
   const details = formatSelfCheck(result).trimEnd().split("\n");
   return { check: { name: "self-check", ok: result.ok, details }, usage: result.failures.some((f) => USAGE_REASONS.has(f.reason)) };
 }

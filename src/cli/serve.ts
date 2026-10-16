@@ -24,7 +24,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
   const dataDir = demo?.dataDir ?? config.dataDir;
   const { policy, bundled } = await activePolicy(config.policyPath);
   if (bundled !== null) {
-    say(`No policy file found; using the bundled ${bundled} policy: only your ZIP code leaves this machine. Change it with \`intent policy add <name>\`.`);
+    say(`No policy file found; using the bundled ${bundled} policy: the only detail about you it sends is your ZIP code. Change it with \`intent policy add <name>\`.`);
   }
   const now = io.now === undefined ? {} : { now: io.now };
   const banner = demo === null ? {} : { banner: DEMO_BANNER };
