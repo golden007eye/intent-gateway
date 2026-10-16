@@ -15,7 +15,7 @@ import { logFlags } from "./log-flags.ts";
 import { policyAdd, policyShow, policyTest } from "./policy.ts";
 import { serve } from "./serve.ts";
 import type { Demo } from "../demo/index.ts";
-import { cliConfig, PACKAGE_ROOT, startDemoFor, trustedKeys } from "./setup.ts";
+import { activePolicy, cliConfig, PACKAGE_ROOT, startDemoFor, trustedKeys } from "./setup.ts";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 
@@ -172,7 +172,19 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
     }
     case "panel": {
       const port = portOption(str("port"));
-      const panel = await startPanel(config.dataDir, { port, intent: INTENT });
+      const keys = await trustedKeys(config);
+      const panel = await startPanel(config.dataDir, {
+        port,
+        intent: INTENT,
+        mode: config.demo ? "demo" : "real",
+        policy: async () => {
+          const active = await activePolicy(config.policyPath);
+          return { policy: active.policy, source: active.bundled !== null ? `the bundled ${active.bundled} policy (no file at ${config.policyPath})` : config.policyPath };
+        },
+        // The chain checks of `intent verify`, offline and read-only; the install self-check stays with the command.
+        verify: () =>
+          runVerify({ dataDir: config.dataDir, pinnedRootKeys: keys, now: new Date((io.now ?? Date.now)()), skipSupplyChain: true, skipReason: "the panel checks the chain only" }),
+      });
       line(io.stdout, `panel: ${panel.url} (read-only; Ctrl-C stops it)`);
       return { code: 0, stop: () => panel.close() };
     }

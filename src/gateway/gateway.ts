@@ -619,7 +619,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         options.demo === undefined
           ? `Ask the buyer to open ${approvalUrl} (or scan the QR code) and approve with their passkey; ` +
             `the page shows check code ${created.check_code}. Then call get_approval_status.`
-          : `Demo: ask the user to open the approval link ${approvalUrl} and click Approve with demo passkey ` +
+          : `Demo: ask the user to open the approval link ${approvalUrl} and click "${approveLabel(created.snapshot.total.amount_minor)}" ` +
             `(enter the code shown in the gateway's terminal); the page shows check code ${created.check_code}. ` +
             "Then call get_approval_status.",
       summary: summary(fromSeq),
@@ -664,7 +664,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         status.state === "pending"
           ? options.demo === undefined
             ? "Waiting for the buyer to approve with their passkey."
-            : "Waiting for the user to click Approve with demo passkey on the approval link (with the code shown in the gateway's terminal)."
+            : `Waiting for the user to click "${approveLabel(bodyOf(pending).total_minor)}" on the approval link (with the code shown in the gateway's terminal).`
           : status.state === "rejected"
             ? "The buyer rejected this purchase."
             : "This approval expired. Create a new cart to try again.";
@@ -788,6 +788,12 @@ function checkSnapshot(created: ApprovalCreated, cart: Cart, zip: string): strin
   }
   if (s.ship_to.postal_prefix !== zip.slice(0, 3)) problems.push("ship_to differs from the ZIP sent");
   return problems;
+}
+
+/** The demo confirm page's Approve button, `Approve $1,234.56 with demo passkey`, so the agent names what the user sees. */
+function approveLabel(totalMinor: unknown): string {
+  if (typeof totalMinor !== "number" || !Number.isSafeInteger(totalMinor) || totalMinor < 0) return "Approve with demo passkey";
+  return `Approve $${Math.floor(totalMinor / 100).toLocaleString("en-US")}.${String(totalMinor % 100).padStart(2, "0")} with demo passkey`;
 }
 
 function bodyOf(entry: Entry): Record<string, unknown> {

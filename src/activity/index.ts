@@ -1,5 +1,5 @@
 // activity: the local hash chain read as correlated actions (search, cart, approval-status check, approval, block)
-// with what each sent, what came back and its outcome, plus summary counts. Pure; `intent log` and the panel share it.
+// with what each sent, what came back and its outcome, plus summary counts, and the actions of each purchase grouped. Pure; `intent log` and the panel share it.
 export {
   ACTION_KINDS,
   type ActionKind,
@@ -19,3 +19,4 @@ export {
   type Outcome,
   summarise,
 } from "./activity.ts";
+export { buildPurchases, type Purchase, type PurchaseState } from "./purchases.ts";

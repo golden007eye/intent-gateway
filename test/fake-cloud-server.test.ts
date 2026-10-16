@@ -26,11 +26,9 @@ describe("test/support/fake-cloud-server.ts", () => {
     }
   });
 
-  it("stays out of the npm package; the build ships src/cloud-fake for demo mode but no test files", () => {
+  // The bundle's side (src/cloud-fake in, no test file) is checked in scripts/bundle.test.ts.
+  it("stays out of the npm package", () => {
     const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { files: string[] };
     expect(pkg.files.some((f) => f === "test" || f.startsWith("test/"))).toBe(false);
-    const build = JSON.parse(readFileSync(join(repo, "tsconfig.build.json"), "utf8")) as { include: string[]; exclude: string[] };
-    expect(build.include).toEqual(["src"]);
-    expect(build.exclude).toEqual(["src/**/*.test.ts"]);
   });
 });

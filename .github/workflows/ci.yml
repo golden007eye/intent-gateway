@@ -16,6 +16,9 @@ concurrency:
 
 env:
   GITLEAKS_VERSION: "8.30.1"
+  # The syft the release workflow makes the image SBOM with; change both files together.
+  SYFT_VERSION: "1.54.1"
+  SYFT_SHA256: c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
 
 jobs:
   node:
@@ -72,7 +75,7 @@ jobs:
       - run: pnpm build
       - run: node --version && node dist/main.js --version
       - name: tests on Node ${{ matrix.node }}
-        run: node node_modules/vitest/vitest.mjs run --testNamePattern '^(?!.*npm pack --dry-run)'
+        run: node node_modules/vitest/vitest.mjs run --testNamePattern '^(?!.*npm pack)'
       # What a developer runs: the packed tarball through npx, with a fresh HOME and npm cache, and no engine warning.
       - name: npx the packed tarball, no EBADENGINE
         run: |
@@ -88,7 +91,8 @@ jobs:
           if grep -q EBADENGINE out.txt; then echo "::error::npm warned EBADENGINE on Node $(node --version)"; exit 1; fi
 
   # Below the floor the gateway prints one line naming the supported lines and exits 1 before it loads anything else.
-  # 22.17.1 is a Node a developer reported (F-t).
+  # 22.17.1 is a Node a developer reported (F-t). Through npx, npm may warn EBADENGINE for intent-gateway itself
+  # (honest `engines`), but for no other package: the dependencies are compiled in, so npx installs nothing else (F-w).
   node-floor:
     name: node-floor (22.17.1 gets one line and exit 1)
     runs-on: ubuntu-24.04
@@ -114,6 +118,24 @@ jobs:
           [[ ! -s out.txt ]] || { echo "::error::stdout is not empty"; exit 1; }
           [[ "$(wc -l < err.txt)" == 1 ]] || { echo "::error::stderr is not one line"; exit 1; }
           grep -qF "intent-gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+; this is Node 22.17.1." err.txt
+      - name: npx the packed tarball, no EBADENGINE from any other package, then the one line
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/fresh"
+          pnpm pack --pack-destination "$RUNNER_TEMP/fresh"
+          cd "$RUNNER_TEMP/fresh"
+          tgz="$(ls intent-gateway-*.tgz)"
+          code=0
+          HOME="$RUNNER_TEMP/fresh" npm_config_cache="$RUNNER_TEMP/fresh/.npm" npm_config_update_notifier=false \
+            npx -y "./$tgz" --help > out.txt 2>&1 || code=$?
+          cat out.txt
+          [[ "$code" == 1 ]] || { echo "::error::exit $code, not 1"; exit 1; }
+          others="$(grep EBADENGINE out.txt | grep -E "package|@" | grep -v "intent-gateway@" || true)"
+          [[ -z "$others" ]] || { echo "::error::npm warned EBADENGINE for another package: $others"; exit 1; }
+          # Everything that is not npm's own output is our one line.
+          ours="$(grep -v '^npm ' out.txt)"
+          [[ "$(printf '%s\n' "$ours" | wc -l)" == 1 ]] || { echo "::error::more than one line besides npm's"; exit 1; }
+          [[ "$ours" == "intent-gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+; this is Node 22.17.1."* ]]
 
   security:
     name: security (gitleaks, public-safety)
@@ -203,3 +225,15 @@ jobs:
             --build-arg BUILD_COMMIT --build-arg SOURCE_DATE_EPOCH \
             --output type=docker,name=intent-gateway:ci,rewrite-timestamp=true .
       - run: node test/image-smoke.ts intent-gateway:ci
+      # The release SBOM scan, on this image: the bundled packages must be in it (ADR-0013).
+      - name: image SBOM lists the bundled packages (syft, as the release runs it)
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -sSfLo syft.tar.gz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  syft.tar.gz" | sha256sum -c -
+          tar -xzf syft.tar.gz syft
+          ./syft scan "oci-archive:${RUNNER_TEMP}/image-1.tar" --source-name intent-gateway --source-version ci \
+            --select-catalogers "+sbom-cataloger" -o "cyclonedx-json=sbom.cdx.json"
+          jq -e 'any(.components[]; (.purl // "") | startswith("pkg:npm/%40sigstore/verify@"))' sbom.cdx.json > /dev/null
+          echo "image SBOM: $(jq '.components | length' sbom.cdx.json) components, $(stat -c %s sbom.cdx.json) bytes"
