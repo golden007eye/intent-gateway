@@ -35,6 +35,19 @@ describe("pnpm build", () => {
     await demoFirstRun(join(repo, "dist/main.js"));
   });
 
+  // The tarball is what npx runs and what the image copies (ADR-0005): the build, policies and contract, no tests.
+  it("packs a tarball with no test file, no test/support and no test-only server (npm pack --dry-run)", { timeout: 60_000 }, () => {
+    const packed = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })) as {
+      files: { path: string }[];
+    }[];
+    const files = (packed[0]?.files ?? []).map((f) => f.path);
+    expect(files).toContain("dist/main.js");
+    expect(files).toContain("dist/build-info.json");
+    expect(files).toContain("dist/demo/index.js");
+    expect(files.filter((f) => /(^|\/)(test|tests|__snapshots__)\/|\.test\.|fake-cloud-server|^src\/|^scripts\//.test(f))).toEqual([]);
+    expect(files.every((f) => /^(dist|policies|contract)\/|^(package\.json|LICENSE|NOTICE|README\.md)$/.test(f))).toBe(true);
+  });
+
   it("points both bin names at dist/main.js", () => {
     expect(pkg.bin).toEqual({ intent: "dist/main.js", "intent-gateway": "dist/main.js" });
   });

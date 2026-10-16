@@ -11,6 +11,8 @@ import { type PinnedRootKey, TEST_ROOT_KEY } from "../trust/index.ts";
 import { CONFIRM_PATH, startConfirmPage } from "./confirm.ts";
 
 export const DEMO_DIR = "demo";
+/** The confirm page's fixed port in the Docker image, which `-p 127.0.0.1:8788:8788` maps to the host. */
+export const CONTAINER_CONFIRM_PORT = 8788;
 const PASSKEY_FILE = "demo-passkey.json";
 
 export interface DemoOptions {
@@ -18,6 +20,8 @@ export interface DemoOptions {
   dataDir: string;
   /** The confirm page's port; 0 or absent picks a free one. */
   port?: number;
+  /** The confirm page's listen address (ConfirmPageOptions.bind); the Docker image passes 0.0.0.0. */
+  bind?: string;
   /** Milliseconds since the epoch. Defaults to Date.now. */
   now?: () => number;
 }
@@ -54,7 +58,13 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
   const passkey = demoPasskey(dataDir);
   const cloud = await startFakeCloud(options.now === undefined ? {} : { now: options.now });
   try {
-    const page = await startConfirmPage({ fake: cloud, passkey, port: options.port ?? 0, ...(options.now === undefined ? {} : { now: options.now }) });
+    const page = await startConfirmPage({
+      fake: cloud,
+      passkey,
+      port: options.port ?? 0,
+      ...(options.bind === undefined ? {} : { bind: options.bind }),
+      ...(options.now === undefined ? {} : { now: options.now }),
+    });
     return {
       cloudUrl: cloud.url,
       trustKeys: { rootKeys: [cloud.keys.rootPin] },

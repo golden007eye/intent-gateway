@@ -1,0 +1,19 @@
+# Allowlist: the build context is only what the Dockerfile copies. Everything else (.git, node_modules, dist,
+# local overlays, agent state, tests) stays out, so a local file can never reach the image or change its digest.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.json
+!tsconfig.build.json
+!LICENSE
+!NOTICE
+!README.md
+!scripts/build-info.ts
+!src/
+!policies/
+!contract/
+!docker/entrypoint.sh
+# Tests are not built (tsconfig.build.json excludes them); keep them out of the context too.
+src/**/*.test.ts
+src/**/__snapshots__

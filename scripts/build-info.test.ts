@@ -88,4 +88,41 @@ describe("writeBuildInfo", () => {
     const notRepo = mkdtempSync(join(tmpdir(), "no-git-"));
     expect(() => writeBuildInfo(notRepo, join(notRepo, "dist"))).toThrow();
   });
+
+  /** A folder with package.json and no .git, as the Docker build context is. */
+  function exported(): string {
+    const dir = mkdtempSync(join(tmpdir(), "no-git-"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }));
+    return dir;
+  }
+
+  it("records BUILD_COMMIT outside a git checkout (the Docker build)", () => {
+    const dir = exported();
+    const out = join(dir, "dist");
+    expect(writeBuildInfo(dir, out, commit)).toEqual({ version: "1.2.3", buildCommit: commit, dirty: false });
+    expect(written(out)).toEqual({ version: "1.2.3", buildCommit: commit, dirty: false });
+  });
+
+  it("refuses a BUILD_COMMIT outside a checkout that is not a full commit hash", () => {
+    const dir = exported();
+    expect(() => writeBuildInfo(dir, join(dir, "dist"), "HEAD")).toThrow(/full git commit hash/);
+  });
+
+  it("accepts BUILD_COMMIT inside a clean checkout when it is HEAD", () => {
+    const { dir, head } = repo();
+    expect(writeBuildInfo(dir, join(dir, "dist"), head)).toEqual({ version: "1.2.3", buildCommit: head, dirty: false });
+  });
+
+  // Attack: the override must not relabel a checkout git can see as another commit, or a dirty tree as clean.
+  it("refuses a BUILD_COMMIT inside a checkout that is not HEAD", () => {
+    const { dir } = repo();
+    expect(() => writeBuildInfo(dir, join(dir, "dist"), commit)).toThrow(/is not HEAD/);
+  });
+
+  it("refuses a BUILD_COMMIT inside a checkout with uncommitted changes", () => {
+    const { dir, head } = repo();
+    writeFileSync(join(dir, "policies", "index.json"), '{"edited":true}\n');
+    const out = mkdtempSync(join(tmpdir(), "build-info-out-"));
+    expect(() => writeBuildInfo(dir, out, head)).toThrow(/uncommitted changes/);
+  });
 });
