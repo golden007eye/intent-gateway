@@ -26,6 +26,9 @@ Options for every command:
   --trust-keys <file>  root keys for the Intent Cloud host: {"rootKeys":[{"kid":…,"jwk":…}]}
   --help, --version
 
+With no policy file the bundled zip-only policy applies: the only detail about you it sends is your ZIP code.
+intent policy add strict-default (or another library policy) narrows it.
+
 Settings: INTENT_DATA_DIR, INTENT_POLICY, INTENT_CLOUD_URL, INTENT_HTTP_HOST, INTENT_HTTP_PORT,
 INTENT_HTTP_TOKEN, INTENT_DEMO=1, INTENT_DEBUG=1 (stack traces).
 `;

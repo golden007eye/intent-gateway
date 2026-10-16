@@ -1,5 +1,5 @@
 // The `intent` executable as a real process (G18, ADR-0005, R3-6): `serve` (and no command) over stdio answers
-// `initialize` and lists the three tools, with the bundled strict-default policy when no policy file exists;
+// `initialize` and lists the three tools, with the bundled zip-only policy when no policy file exists;
 // `approver accept` refuses when its stdin and stdout are pipes; --version and an unknown command.
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -61,7 +61,7 @@ describe("intent as a process", () => {
       expect(client.getServerVersion()).toMatchObject({ name: "intent-gateway", version: BUILD.version });
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name).sort()).toEqual(["create_cart", "find_offers", "get_approval_status"]);
-      expect(stderr).toMatch(/no policy file at .+, so the bundled strict-default policy applies/);
+      expect(stderr).toContain("No policy file found; using the bundled zip-only policy: only your ZIP code leaves this machine.");
       expect(stderr).toContain("MCP over stdio is ready");
     } finally {
       await client.close();

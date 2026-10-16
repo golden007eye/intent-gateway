@@ -16,7 +16,7 @@ export async function policyTest(io: Io, config: Config, casesFile: string, poli
   let policy;
   try {
     if (policyFile === undefined) {
-      const active = await activePolicy(policyPath, config.demo);
+      const active = await activePolicy(policyPath);
       policy = active.policy;
       source = active.bundled !== null ? `the bundled ${active.bundled} policy (no file at ${policyPath})` : policyPath;
     } else {
@@ -108,7 +108,7 @@ function origin(lock: Lock): string {
 /** The active policy and its lock. Exit 1 when the lock does not describe the policy file. */
 export async function policyShow(io: Io, config: Config): Promise<number> {
   const { policyPath } = config;
-  const active = await activePolicy(policyPath, config.demo);
+  const active = await activePolicy(policyPath);
   let code = 0;
   if (active.bundled !== null) {
     line(io.stdout, `no policy file at ${policyPath}: the gateway uses the bundled ${active.bundled} policy`);

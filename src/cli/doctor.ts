@@ -35,7 +35,7 @@ export async function doctor(io: Io, config: Config): Promise<number> {
 
   line(io.stdout, `intent doctor: data dir ${config.dataDir}`);
   await checkDataDir(config.dataDir, report);
-  await checkPolicy(config.policyPath, config.demo, report);
+  await checkPolicy(config.policyPath, report);
   checkChain(config.dataDir, report);
   await checkLease(config.dataDir, now(), report);
 
@@ -91,9 +91,9 @@ async function checkDataDir(dataDir: string, report: Report): Promise<void> {
   report("ok", `data dir: yours, mode ${mode}`);
 }
 
-async function checkPolicy(policyPath: string, demo: boolean, report: Report): Promise<void> {
+async function checkPolicy(policyPath: string, report: Report): Promise<void> {
   try {
-    const active = await activePolicy(policyPath, demo);
+    const active = await activePolicy(policyPath);
     if (active.bundled !== null) {
       report("ok", `policy: the bundled ${active.bundled} (no file at ${policyPath}; intent policy add <name> writes one)`);
       return;
