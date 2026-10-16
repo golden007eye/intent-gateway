@@ -2,7 +2,9 @@
 # Outsider end-to-end run: the gateway as a stranger meets it. A fresh HOME, an empty working dir outside the
 # repository, a PATH with only node, npm, npx, docker and claude (plus the system's /usr/bin and /bin), and the
 # commands from README.md and docs/quickstart.md. Each scenario prints PASS, FAIL or SKIP with its evidence; every
-# log stays in the output dir printed at the end. The exit status is 1 when any scenario failed.
+# log stays in the output dir printed at the end. The exit status is 1 when any scenario failed. Docker runs with
+# an empty Docker config in the output dir (no registry credentials, as a stranger has none), except the
+# --docker build; a failed pull or build is a FAIL line.
 #
 # It runs on a maintainer's machine, on demand, never in CI: it drives a headless, logged-in Claude Code.
 # Before a release it must pass with --tarball (and --docker); after one, with --npm next (docs/release.md).
@@ -613,7 +615,22 @@ scenario_f_kill() {
 # ---------------------------------------------------------------------------------------------------- docker
 IMAGE=""
 VOL_A=""
+IMAGE_READY=0
 docker_name() { printf 'intent-e2e-%s-%s' "$RUN_ID" "$1"; }
+
+# outsider_docker: from here on, every docker command runs as a stranger's would: with an empty Docker config
+# (no registry credentials, so a pull is anonymous) and the same daemon. Stale credentials in the maintainer's
+# ~/.docker/config.json made GHCR deny a public image that an outsider can pull. A --docker build runs before
+# this, with the maintainer's config and buildx.
+outsider_docker() {
+  if [ -z "${DOCKER_HOST:-}" ]; then
+    DOCKER_HOST="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)"
+    if [ -n "$DOCKER_HOST" ]; then export DOCKER_HOST; else unset DOCKER_HOST; fi
+  fi
+  unset DOCKER_CONTEXT
+  export DOCKER_CONFIG="$OUT/docker-config"
+  mkdir -p "$DOCKER_CONFIG"
+}
 
 scenario_g_nodemo() {
   local c v f rc=0
@@ -699,13 +716,24 @@ case "$MODE" in
     need docker
     IMAGE="intent-gateway-e2e:$RUN_ID"
     say "building $IMAGE"
-    docker build -t "$IMAGE" "$REPO" >"$LOGS/docker-build.txt" 2>&1 || die "docker build failed; see $LOGS/docker-build.txt"
-    BUILT_IMAGE="$IMAGE"
+    if docker build -t "$IMAGE" "$REPO" >"$LOGS/docker-build.txt" 2>&1; then
+      BUILT_IMAGE="$IMAGE"
+      IMAGE_READY=1
+    else
+      record FAIL build "docker build -t $IMAGE" "$(tail -n 3 "$LOGS/docker-build.txt" | tr '\n' '|' | cut -c1-600); see $LOGS/docker-build.txt"
+    fi
+    outsider_docker
     ;;
   image)
     need docker
     IMAGE="$IMAGE_REF"
-    docker pull "$IMAGE" >"$LOGS/docker-pull.txt" 2>&1 || die "docker pull $IMAGE failed; see $LOGS/docker-pull.txt"
+    outsider_docker
+    say "pulling $IMAGE with no registry credentials, as an outsider would"
+    if docker pull "$IMAGE" >"$LOGS/docker-pull.txt" 2>&1; then
+      IMAGE_READY=1
+    else
+      record FAIL pull "docker pull $IMAGE, with no registry credentials" "$(tail -n 3 "$LOGS/docker-pull.txt" | tr '\n' '|' | cut -c1-600); see $LOGS/docker-pull.txt"
+    fi
     ;;
 esac
 
@@ -740,6 +768,7 @@ case "$MODE" in
     fi
     ;;
   docker | image)
+    [ "$IMAGE_READY" = 1 ] || { say "no image, so no scenario runs"; ONLY=""; }
     VOL_A="$(docker_name first)"
     VOLUMES+=("$VOL_A")
     wants a && run_scenario a "first run in the image: --help, doctor --demo, verify --demo on an empty chain" scenario_a
