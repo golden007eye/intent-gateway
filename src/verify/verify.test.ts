@@ -713,3 +713,182 @@ describe("runVerify: the supply-chain self-check", () => {
     expect(selfCheck.fetch.calls.map((c) => new URL(c.url).host)).toEqual(["registry.npmjs.org", "registry.npmjs.org", "registry.npmjs.org"]);
   });
 });
+
+describe("runVerify: a disclosure with no follow-up inside its gateway session (F-m)", () => {
+  const A = "11111111-1111-4111-8111-111111111111";
+  const B = "22222222-2222-4222-8222-222222222222";
+  const start = (s: Store, id: string) => s.append("session", { id });
+  /** A disclosure as the disclosure module logs it: number `n` of session `id`, with the session's open n's. */
+  const discloseIn = (s: Store, body: number, id: string, n: number, open: number[] = []) => disclose(s, body, { session: { id, n, open } });
+  const answered = async (s: Store, body: number, id: string, n: number, open: number[] = []) =>
+    receipt(s, await discloseIn(s, body, id, n, open), response(sent(body)));
+  const unansweredLine = (seqs: string) =>
+    `logged, maybe sent, no answer recorded (the gateway stopped before it finished, or is still waiting): ${seqs}`;
+
+  /** The chain's lines as entries. */
+  async function lines(dir: string): Promise<Entry[]> {
+    return (await readFile(join(dir, "audit.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Entry);
+  }
+  /** Rewrites the chain from `entries`, re-numbering and re-hashing every entry: what an attacker with the file can do. */
+  async function rehash(dir: string, entries: readonly Entry[]): Promise<void> {
+    let prev = "0".repeat(64);
+    const out: string[] = [];
+    for (const [seq, { ts, kind, body }] of entries.entries()) {
+      const fields = { seq, prev, ts, kind, body };
+      prev = sha256Hex(canonicalize(fields));
+      out.push(canonicalize({ ...fields, hash: prev }));
+    }
+    await writeFile(join(dir, "audit.jsonl"), `${out.join("\n")}\n`);
+  }
+
+  it("attack: fails when a later disclosure of the same session counts the unanswered one as answered", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      await start(s, A);
+      await answered(s, 1, A, 0);
+      await discloseIn(s, 2, A, 1);
+      await answered(s, 3, A, 2);
+    });
+    const report = await verify(dir);
+    expect(report.exitCode).toBe(1);
+    expect(failed(report)).toEqual(["disclosures"]);
+    expect(check(report, "disclosures")?.details).toContain(
+      "seq 4: the disclosure has no follow-up entry, but the disclosure at seq 5 of the same gateway session counts it as answered: its answer is missing from the chain",
+    );
+  });
+
+  it("passes when the unanswered disclosure is the last of its session, with a later session after it", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      await start(s, A);
+      await answered(s, 1, A, 0);
+      await discloseIn(s, 2, A, 1);
+      await start(s, B);
+      await answered(s, 3, B, 0);
+    });
+    const report = await verify(dir);
+    expect(failed(report)).toEqual([]);
+    expect(report.counts).toMatchObject({ disclosures: 3, unanswered: 1 });
+    expect(check(report, "disclosures")?.details).toContain(unansweredLine("1 (seq 4)"));
+  });
+
+  it("passes when a later disclosure of the session was sent while the unanswered one was still open (stopped with two in flight)", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      await start(s, A);
+      await discloseIn(s, 1, A, 0);
+      await answered(s, 2, A, 1, [0]);
+    });
+    const report = await verify(dir);
+    expect(failed(report)).toEqual([]);
+    expect(check(report, "disclosures")?.details).toContain(unansweredLine("1 (seq 2)"));
+  });
+
+  it("passes when two sessions on one data dir interleave and one is still waiting", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      await start(s, A);
+      await start(s, B);
+      const waiting = await discloseIn(s, 1, A, 0);
+      await answered(s, 2, B, 0);
+      await answered(s, 3, A, 1, [0]);
+      await answered(s, 4, B, 1);
+      await discloseIn(s, 5, B, 2);
+      await receipt(s, waiting, response(sent(1)));
+    });
+    const report = await verify(dir);
+    expect(failed(report)).toEqual([]);
+    expect(report.counts).toMatchObject({ disclosures: 5, receipts: 4, unanswered: 1 });
+  });
+
+  it("attack: a disclosure missing from the middle of a session fails, by its number", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      await start(s, A);
+      await answered(s, 1, A, 0);
+      await answered(s, 3, A, 2);
+    });
+    expect(check(await verify(dir), "disclosures")?.details).toContain(
+      "seq 4: the disclosure is number 2 of its gateway session, expected 1: a disclosure of that session is missing from the chain",
+    );
+  });
+
+  it("attack: a session no session entry starts, a malformed session and a repeated session id all fail", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      await answered(s, 1, A, 0);
+      await disclose(s, 2, { session: { id: B, n: "0", open: [] } });
+      await start(s, B);
+      await start(s, B);
+    });
+    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    expect(details).toContain(`seq 1: the disclosure names gateway session ${A}, which no earlier session entry starts`);
+    expect(details).toContain("seq 3: the disclosure's session is not {id, n, open}");
+    expect(details).toContain(`seq 5: the session entry repeats the id of an earlier gateway session (${B})`);
+  });
+
+  it("attack: forging a session id or an open list without re-hashing breaks the chain", async () => {
+    const write = async (s: Store) => {
+      await keys(s);
+      await start(s, A);
+      await answered(s, 1, A, 0);
+      await discloseIn(s, 2, A, 1);
+      await answered(s, 3, A, 2);
+    };
+    for (const forge of [
+      (text: string) => text.replace('"open":[]', '"open":[0]'),
+      (text: string) => text.replaceAll(A, B),
+    ]) {
+      const dir = await chain(write);
+      const file = join(dir, "audit.jsonl");
+      const text = await readFile(file, "utf8");
+      const forged = forge(text);
+      expect(forged).not.toBe(text);
+      await writeFile(file, forged);
+      const report = await verify(dir);
+      expect(report.exitCode).toBe(1);
+      expect(check(report, "chain")?.ok).toBe(false);
+    }
+  });
+
+  it("attack (F2): a receipt spliced out and the rest re-hashed fails mid-session; at the session's end only the saved head shows it", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      await start(s, A);
+      await answered(s, 1, A, 0);
+      await answered(s, 2, A, 1);
+      await start(s, B);
+      await answered(s, 3, B, 0);
+    });
+    const saved = (await verify(dir)).head;
+    const entries = await lines(dir);
+    const receiptOf = (seq: number) => entries.findIndex((e) => e.kind === "receipt" && (e.body as { disclosure_seq?: unknown }).disclosure_seq === seq);
+
+    // Mid-session: the receipt for A's first disclosure (seq 2), with A's next disclosure after it.
+    await rehash(dir, entries.filter((_, i) => i !== receiptOf(2)).map((e) => fixRef(e, 3)));
+    const mid = await verify(dir);
+    expect(mid.exitCode).toBe(1);
+    expect(check(mid, "disclosures")?.details).toContain(
+      "seq 2: the disclosure has no follow-up entry, but the disclosure at seq 3 of the same gateway session counts it as answered: its answer is missing from the chain",
+    );
+    expect(mid.head.hash).not.toBe(saved.hash);
+
+    // Last of its session: the receipt for A's last disclosure (seq 4). The file verifies; the head does not match.
+    await rehash(dir, entries.filter((_, i) => i !== receiptOf(4)).map((e) => fixRef(e, 5)));
+    const last = await verify(dir);
+    expect(last.exitCode).toBe(0);
+    expect(check(last, "disclosures")?.details).toContain(unansweredLine("1 (seq 4)"));
+    expect(last.head.seq).toBe(saved.seq - 1);
+    expect(last.head.hash).not.toBe(saved.hash);
+  });
+});
+
+/** After an entry at `removedAt` was spliced out, a follow-up's disclosure_seq past it moves down by one. */
+function fixRef(entry: Entry, removedAt: number): Entry {
+  const body = entry.body as { disclosure_seq?: unknown };
+  if (typeof body.disclosure_seq !== "number" || body.disclosure_seq < removedAt) return entry;
+  return { ...entry, body: { ...body, disclosure_seq: body.disclosure_seq - 1 } };
+}

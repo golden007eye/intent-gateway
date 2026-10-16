@@ -330,10 +330,10 @@ describe("other requests", () => {
     expect((await raw(port, { body: "{not json" })).status).toBe(400);
   });
 
-  it("logs to the given logger, never to stdout", async () => {
+  it("logs to the given logger, never to stdout; the address line is left to the caller (serve prints it once)", async () => {
     const write = vi.spyOn(process.stdout, "write");
     const { url } = await serve();
-    expect(logs.some((line) => line.includes(url))).toBe(true);
+    expect(logs.some((line) => line.includes(url))).toBe(false);
     expect(write).not.toHaveBeenCalled();
     write.mockRestore();
   });

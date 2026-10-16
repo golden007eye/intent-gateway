@@ -18,4 +18,5 @@ export {
   type DisclosureOptions,
   DisclosureBlockedError,
   DisclosureDiscardedError,
+  DisclosureStoppedError,
 } from "./disclosure.ts";

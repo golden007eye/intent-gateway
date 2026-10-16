@@ -15,7 +15,16 @@
 //      request never left the machine, and `intent log` and `intent verify` report it as not sent.
 //    - discarded: a 2xx without a valid receipt (its content is never returned: DisclosureDiscardedError), any
 //      response with Intent-Contract-Version and no receipt, or any invalid receipt.
+// 4. If any append around a send fails (the disclosure, or its follow-up), this disclosed cloud stops for good: every
+//    later call throws DisclosureStoppedError before anything is logged or sent. A disclosure with no follow-up is
+//    then the last one of its gateway session, which is what lets `intent verify` tell a stop from a cut answer.
+//
+// Gateway session: each disclosed cloud (one per gateway start) appends a `session` entry {id} with a random local
+// id before its first disclosure, and every disclosure body carries `session: {id, n, open}`: n counts the session's
+// disclosures from 0, and `open` lists the n of its earlier disclosures still awaiting their follow-up. The id is
+// local only: it is in the chain, never in the request (the logged body_b64 is what is sent).
 // Inbound bodies are never scanned: an offer title is Cloud's content, not the buyer's.
+import { randomUUID } from "node:crypto";
 import {
   CloudNetworkError,
   CloudResponseError,
@@ -77,6 +86,14 @@ export class DisclosureDiscardedError extends Error {
   }
 }
 
+/**
+ * An append around an earlier send failed, so this disclosed cloud sends nothing more: a send whose answer could not
+ * be recorded must stay the last one of its gateway session (invariant 2). Restarting the gateway starts a new one.
+ */
+export class DisclosureStoppedError extends Error {
+  override name = "DisclosureStoppedError";
+}
+
 /** A search, cart or approval call before a verified key statement: its receipt could not be checked, so nothing is sent. */
 export class DisclosureNoKeysError extends Error {
   override name = "DisclosureNoKeysError";
@@ -105,11 +122,25 @@ export function connectCloud(http: HttpCloudOptions, store: Store, options: Disc
 
 export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: DisclosureOptions): DisclosedCloud {
   const now = options.now ?? Date.now;
+  const session = { id: randomUUID(), next: 0, open: new Set<number>() };
+  let sessionEntry: Promise<unknown> | null = null;
+  let stopped: string | null = null;
+
+  /** Stops every later send, for good (the first reason is kept), and returns the error that says so. */
+  function stop(reason: string, cause: unknown): DisclosureStoppedError {
+    stopped ??= `${reason}: ${cause instanceof Error ? cause.message : String(cause)}`;
+    return stoppedError(cause);
+  }
+  function stoppedError(cause?: unknown): DisclosureStoppedError {
+    const message = `the gateway sends nothing more: ${String(stopped)}`;
+    return new DisclosureStoppedError(message, cause === undefined ? undefined : { cause });
+  }
 
   async function disclosed<T>(
     needsKeys: boolean,
     run: (beforeSend: (request: PreparedRequest) => Promise<void>) => Promise<CloudResult<T>>,
   ): Promise<CloudResult<T>> {
+    if (stopped !== null) throw stoppedError();
     if (needsKeys) {
       const keySet = options.keySet();
       if (keySet === null) {
@@ -119,8 +150,9 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
       if (now() >= keySet.expiresAt.getTime()) throw new DisclosureKeysExpiredError(keySet.expiresAt);
     }
     // A holder, not locals, because beforeSend fills it inside the adapter's call.
-    const logged: { seq: number | null; sent: SentRequest | null } = { seq: null, sent: null };
+    const logged: { seq: number | null; n: number; sent: SentRequest | null } = { seq: null, n: -1, sent: null };
     const beforeSend = async (request: PreparedRequest): Promise<void> => {
+      if (stopped !== null) throw stoppedError();
       const json = parseBody(request.body);
       const fields = fieldNames(json);
       const findings = findIdentity(json);
@@ -128,11 +160,41 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
         await store.append("block", { endpoint: request.operation, fields, blocked: findings.map(describe) });
         throw new DisclosureBlockedError(request.operation, findings);
       }
-      const body = disclosureBody(request, fields);
-      const entry = await store.append("disclosure", body);
+      try {
+        sessionEntry ??= store.append("session", { id: session.id });
+        await sessionEntry;
+      } catch (error) {
+        // The store's own error is what this call reports (it names a fence or a disk failure); later calls are refused.
+        stop("the session entry could not be logged", error);
+        throw error;
+      }
+      // From here to the append call nothing awaits, so the store's FIFO queue keeps n in chain order.
+      const n = session.next++;
+      const body = { ...disclosureBody(request, fields), session: { id: session.id, n, open: [...session.open].sort((a, b) => a - b) } };
+      session.open.add(n);
+      let entry;
+      try {
+        entry = await store.append("disclosure", body);
+      } catch (error) {
+        stop(`a request to ${request.operation} could not be logged, so it was not sent`, error);
+        throw error;
+      }
       logged.seq = entry.seq;
+      logged.n = n;
       logged.sent = sentRequest(body);
     };
+
+    /** Appends the follow-up; if that fails, nothing is sent again (the disclosure must stay last in its session). */
+    async function answer<R>(seq: number, append: () => Promise<R>): Promise<R> {
+      let value: R;
+      try {
+        value = await append();
+      } catch (error) {
+        throw stop(`the answer to disclosure #${String(seq)} could not be logged`, error);
+      }
+      session.open.delete(logged.n);
+      return value;
+    }
 
     let result: CloudResult<T>;
     try {
@@ -141,14 +203,17 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
       // seq is null when the request never got past beforeSend: nothing was sent, so nothing follows the log.
       const { seq, sent } = logged;
       if (seq !== null && sent !== null) {
-        if (error instanceof CloudResponseError) await acknowledge(seq, sent, error);
-        else await store.append("unacknowledged", { disclosure_seq: seq, reason: noResponseReason(error) });
+        await answer<unknown>(seq, () =>
+          error instanceof CloudResponseError
+            ? acknowledge(seq, sent, error)
+            : store.append("unacknowledged", { disclosure_seq: seq, reason: noResponseReason(error) }),
+        );
       }
       throw error;
     }
     const { seq, sent } = logged;
     if (seq === null || sent === null) throw new Error("the cloud adapter returned without calling beforeSend");
-    const discarded = await acknowledge(seq, sent, result);
+    const discarded = await answer(seq, () => acknowledge(seq, sent, result));
     if (discarded !== null) throw new DisclosureDiscardedError(seq, result.status, discarded);
     return result;
   }

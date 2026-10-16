@@ -489,6 +489,50 @@ describe("write failures (attack: log before send)", () => {
   });
 });
 
+describe("any append failure fences the handle (attack: no answer lost mid-chain)", () => {
+  // A disclosure whose follow-up append failed must stay the last thing this handle wrote: if a later append could
+  // succeed, the unanswered disclosure would sit inside the chain with later sends after it. Each case fails one
+  // fs call once with an error that is not a fence, then checks the next append is refused and nothing is written.
+  type Method = "open" | "readFile" | "writeFile" | "link";
+  function failOnce(method: Method, when: (args: unknown[]) => boolean, code: string): StoreFs {
+    let armed = false;
+    let done = false;
+    const wrap =
+      (name: Method) =>
+      (...args: unknown[]): Promise<unknown> => {
+        if (armed && !done && name === method && when(args)) {
+          done = true;
+          return Promise.reject(errno(code));
+        }
+        return (fast[name] as (...a: unknown[]) => Promise<unknown>)(...args);
+      };
+    const fs = { ...fast, open: wrap("open"), readFile: wrap("readFile"), writeFile: wrap("writeFile"), link: wrap("link") } as StoreFs;
+    return Object.assign(fs, { arm: () => (armed = true) });
+  }
+  const cases: [string, Method, (args: unknown[]) => boolean, string, boolean][] = [
+    ["the append-mode open of audit.jsonl", "open", (a) => a[0] === logPath() && isAppend(a[1]), "EMFILE", false],
+    ["the read of audit.jsonl in verify-on-acquire", "open", (a) => a[0] === logPath() && isRead(a[1]), "EMFILE", true],
+    ["the read of the lease file", "readFile", (a) => a[0] === lockPath(), "EACCES", true],
+    ["the write of the lease temp file", "writeFile", () => true, "ENOSPC", true],
+    ["the link that publishes the lease", "link", () => true, "EPERM", true],
+  ];
+  for (const [what, method, when, code, onAcquire] of cases) {
+    it(`fences on ${code} from ${what}`, async () => {
+      await (await filled(2)).close();
+      const fs = failOnce(method, when, code);
+      const store = await openStore(dir, { clock, fs });
+      // Warm the handle (lease taken, chain verified) unless the failure is one only a fresh acquire hits.
+      if (!onAcquire) await store.append("session", { warm: true });
+      (fs as StoreFs & { arm: () => void }).arm();
+      const text = logText();
+      await expect(store.append("disclosure", { n: 1 })).rejects.toThrow(code);
+      await expect(store.append("disclosure", { n: 2 })).rejects.toThrow(StoreFencedError);
+      expect(logText()).toBe(text);
+      expect(verifyChain(readChain(dir))).toEqual({ ok: true });
+    });
+  }
+});
+
 describe("verify on acquire (attack: a broken chain is not extended)", () => {
   const firstLine = () => `${logText().split("\n")[0] as string}\n`;
 

@@ -39,28 +39,35 @@ export function spendHistory(chain: readonly Entry[], now: number): Purchase[] {
 
 /** What one tool call disclosed, read from the chain entries it appended. Field names only, never values. */
 export interface Disclosed {
-  /** Each send: its operationId, the body fields it carried, and whether a verified receipt acknowledged it. */
-  readonly sends: readonly { endpoint: string; fields: readonly string[]; acknowledged: boolean }[];
+  /**
+   * Each logged send: its operationId, the body fields it carried, whether a verified receipt acknowledged it, and
+   * whether any entry answers it (one that none does was logged and maybe sent, with no answer recorded).
+   */
+  readonly sends: readonly { endpoint: string; fields: readonly string[]; acknowledged: boolean; answered: boolean }[];
   /** What was held back: `block` entries' items, then any the caller adds. */
   readonly blocked: readonly string[];
 }
 
 /** The entries after `fromSeq` (the chain's head before the call), as a Disclosed. */
 export function disclosedSince(chain: readonly Entry[], fromSeq: number): Disclosed {
-  const sends: { endpoint: string; fields: string[]; acknowledged: boolean }[] = [];
+  const sends: { endpoint: string; fields: string[]; acknowledged: boolean; answered: boolean }[] = [];
   const bySeq = new Map<number, (typeof sends)[number]>();
   const blocked: string[] = [];
   for (const entry of chain) {
     if (entry.seq <= fromSeq) continue;
     const body = asBody(entry.body);
     if (entry.kind === "disclosure") {
-      const send = { endpoint: String(body.endpoint), fields: leafFields(strings(body.fields)), acknowledged: false };
+      const send = { endpoint: String(body.endpoint), fields: leafFields(strings(body.fields)), acknowledged: false, answered: false };
       sends.push(send);
       bySeq.set(entry.seq, send);
-    } else if (entry.kind === "receipt" && body.verified === true && typeof body.disclosure_seq === "number") {
+    } else if ((entry.kind === "receipt" || entry.kind === "unacknowledged" || entry.kind === "discarded") && typeof body.disclosure_seq === "number") {
       const send = bySeq.get(body.disclosure_seq);
-      if (send !== undefined) send.acknowledged = true;
-    } else if (entry.kind === "unacknowledged" && neverLeft(entry.body) && typeof body.disclosure_seq === "number") {
+      if (send !== undefined) {
+        send.answered = true;
+        if (entry.kind === "receipt" && body.verified === true) send.acknowledged = true;
+      }
+    }
+    if (entry.kind === "unacknowledged" && neverLeft(entry.body) && typeof body.disclosure_seq === "number") {
       // No connection was made, so the logged request never left: it is not listed as sent (invariant 5).
       const send = bySeq.get(body.disclosure_seq);
       if (send !== undefined) sends.splice(sends.indexOf(send), 1);
@@ -71,14 +78,22 @@ export function disclosedSince(chain: readonly Entry[], fromSeq: number): Disclo
   return { sends, blocked };
 }
 
-/** "Sent: … / Blocked: …", the last line of every tool result (invariant 5: what was sent, nothing more). */
+/**
+ * "Sent: … / Blocked: …", the last line of every tool result (invariant 5: what was sent, nothing more). A send no
+ * entry answers is listed apart, as `intent log` does: "Logged, maybe sent; no answer recorded: …".
+ */
 export function summaryLine(disclosed: Disclosed, extraBlocked: readonly string[] = []): string {
-  const sent = disclosed.sends.map((s) => {
-    const fields = s.fields.length === 0 ? "no body fields" : s.fields.join(", ");
-    return `${s.endpoint} (${fields}${s.acknowledged ? "; receipt verified" : "; no verified receipt"})`;
-  });
+  const fieldsOf = (s: Disclosed["sends"][number]) => (s.fields.length === 0 ? "no body fields" : s.fields.join(", "));
+  const sent = disclosed.sends
+    .filter((s) => s.answered)
+    .map((s) => `${s.endpoint} (${fieldsOf(s)}${s.acknowledged ? "; receipt verified" : "; no verified receipt"})`);
+  const unanswered = disclosed.sends.filter((s) => !s.answered).map((s) => `${s.endpoint} (${fieldsOf(s)})`);
   const blocked = [...disclosed.blocked, ...extraBlocked];
-  return `Sent: ${sent.length === 0 ? "nothing" : sent.join("; ")} / Blocked: ${blocked.length === 0 ? "nothing" : blocked.join("; ")}`;
+  return [
+    `Sent: ${sent.length === 0 ? "nothing" : sent.join("; ")}`,
+    ...(unanswered.length === 0 ? [] : [`Logged, maybe sent; no answer recorded: ${unanswered.join("; ")}`]),
+    `Blocked: ${blocked.length === 0 ? "nothing" : blocked.join("; ")}`,
+  ].join(" / ");
 }
 
 function strings(value: unknown): string[] {

@@ -54,18 +54,19 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       const { host, port, token } = config.http;
       const http = await runHttp({ gateway, host, port, token, log, ...banner });
       transport = http;
-      policyLine();
       // In the Docker image the server listens on 0.0.0.0, which is no address to connect to; the documented
-      // mapping publishes it on the host's 127.0.0.1. The one connect line is printed here, now that the server
-      // is up (so a container that cannot start prints none): with the token on the first start that serves, else
-      // a `$(docker exec … cat …)` that reads it. No line with a placeholder token, which would get a 401.
+      // mapping publishes it on the host's 127.0.0.1. The address line and the one connect line are printed here,
+      // once, now that the server is up (so a container that cannot start prints none): the connect line with the
+      // token on the first start that serves, else a `$(docker exec … cat …)` that reads it. No line with a
+      // placeholder token, which would get a 401.
       const container = config.runtime === "container";
       const url = container ? `http://127.0.0.1:${String(http.port)}/mcp` : http.url;
+      say(`MCP over HTTP at ${url}`);
+      policyLine();
       if (container && token !== null && config.tokenFile !== null) {
         for (const text of containerConnect({ token, tokenFile: config.tokenFile, quiet: config.quietToken, dockerExec: DOCKER_EXEC })) log(text);
       }
       if (demo === null) {
-        say(`MCP over HTTP at ${url}`);
         const auth = token === null ? "" : ` --header "Authorization: Bearer $INTENT_HTTP_TOKEN"`;
         say(container ? "connect an agent with the claude mcp add line above" : `connect an agent: claude mcp add --transport http intent ${url}${auth}`);
       } else {

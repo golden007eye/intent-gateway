@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
 import type { ApprovalCreated, ApprovalStatus } from "../contract/index.ts";
-import { CloudNetworkError, connectCloud, type DisclosedCloud } from "../disclosure/index.ts";
+import { INTENT } from "../config/index.ts";
+import { CloudNetworkError, connectCloud, type DisclosedCloud, DisclosureStoppedError } from "../disclosure/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { loadPolicy } from "../policy/index.ts";
 import { createSession } from "../signing/index.ts";
@@ -157,7 +158,7 @@ describe("start", () => {
     const keys = bodies(h, "keys");
     expect(keys).toHaveLength(1);
     expect(keys[0]?.statement).toEqual(h.fake.statement);
-    expect(h.kinds().slice(0, 4)).toEqual(["disclosure", "receipt", "disclosure", "receipt"]);
+    expect(h.kinds().slice(0, 5)).toEqual(["session", "disclosure", "receipt", "disclosure", "receipt"]);
     expect(verifyChain(h.store.entries()).ok).toBe(true);
   });
 
@@ -236,6 +237,31 @@ describe("findOffers when Intent Cloud cannot be reached", () => {
     const result = await h.gateway.findOffers(SHOES);
     expect(result).toMatchObject({ status: "error", message: `${timeout}; the request may have reached it, and is logged as sent but not acknowledged.` });
     expect(result.message).not.toMatch(/not sent|never left/i);
+  });
+
+  it("a stopped disclosure log: refused plainly to the agent, and said once on the terminal", async () => {
+    const h = await setup();
+    const reason = "the gateway sends nothing more: the answer to disclosure #7 could not be logged: EMFILE";
+    // The first call's disclosure was logged, then its answer could not be: the summary never lists it as sent.
+    let first = true;
+    h.patch.search = async () => {
+      if (first) await h.store.append("disclosure", { endpoint: "searchCatalog", fields: ["ship_to", "ship_to.postal_code"] });
+      first = false;
+      throw new DisclosureStoppedError(reason);
+    };
+    const summaries: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const result = await h.gateway.findOffers(SHOES);
+      expect(result).toMatchObject({ status: "error", message: `Not sent: ${reason}. The developer must restart the gateway.` });
+      summaries.push(result.summary);
+    }
+    expect(summaries).toEqual([
+      "Sent: nothing / Logged, maybe sent; no answer recorded: searchCatalog (ship_to.postal_code) / Blocked: nothing",
+      "Sent: nothing / Blocked: nothing",
+    ]);
+    expect(h.warnings.filter((w) => w.includes(reason))).toEqual([
+      `intent-gateway: ${reason}. Restart the gateway, then run ${INTENT} verify.`,
+    ]);
   });
 });
 

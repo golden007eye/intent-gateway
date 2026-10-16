@@ -97,9 +97,18 @@ interface RecordedKeys {
   readonly keySet: KeySet | null;
 }
 
+/** A disclosure's `session` field: its gateway session's id, its number n in it, and the n still awaiting an answer. */
+interface SessionMark {
+  readonly id: string;
+  readonly n: number;
+  readonly open: readonly number[];
+}
+
 interface Disclosure {
   readonly entry: Entry;
   readonly followUps: number[];
+  /** Null on a chain written before disclosures carried their session (see the unanswered check). */
+  readonly session: SessionMark | null;
 }
 
 /** Checks 2–5 over a chain whose links already verified. */
@@ -110,6 +119,8 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
   const flags: string[] = [];
   const disclosures = new Map<number, Disclosure>();
   const pending = new Map<string, Entry>();
+  // Gateway session ids declared by a `session` entry, and the n of the last disclosure seen in each.
+  const sessions = new Map<string, number>();
   // Logged requests that never left (no connection was made): reported as not sent, not as sent (invariant 5).
   let notSent = 0;
   // Every recorded statement, checked at the time it was recorded: its KeySet, or null when it did not verify.
@@ -139,11 +150,31 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       case "keys":
         keys = { seq: entry.seq, keySet: statements.get(entry.seq) ?? null };
         break;
+      case "session":
+        if (typeof body.id === "string") {
+          if (sessions.has(body.id)) disclosureFailures.push(`${at}: the session entry repeats the id of an earlier gateway session (${body.id})`);
+          sessions.set(body.id, -1);
+        }
+        break;
       case "disclosure": {
         counts.disclosures += 1;
-        disclosures.set(entry.seq, { entry, followUps: [] });
+        const session = sessionMark(body.session);
+        disclosures.set(entry.seq, { entry, followUps: [], session: session === "malformed" ? null : session });
         const problem = bodyProblem(body);
         if (problem !== null) disclosureFailures.push(`${at}: the disclosure ${problem}`);
+        if (session === "malformed") {
+          disclosureFailures.push(`${at}: the disclosure's session is not {id, n, open}`);
+        } else if (session !== null) {
+          const last = sessions.get(session.id);
+          if (last === undefined) {
+            disclosureFailures.push(`${at}: the disclosure names gateway session ${session.id}, which no earlier session entry starts`);
+          } else if (session.n !== last + 1) {
+            disclosureFailures.push(
+              `${at}: the disclosure is number ${String(session.n)} of its gateway session, expected ${String(last + 1)}: a disclosure of that session is missing from the chain`,
+            );
+          }
+          sessions.set(session.id, session.n);
+        }
         break;
       }
       case "receipt":
@@ -188,14 +219,26 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
     }
   }
 
-  // A disclosure with no follow-up: the gateway logged it and may have sent it, then stopped (a crash, a kill) before
-  // it recorded an answer, or it is still waiting for one. That is normal life, not a broken chain: it is reported
-  // apart, and never counted as sent or acknowledged (invariant 5). Its follow-up cannot have been cut from inside the
-  // chain without breaking the links; cutting it from the end is the dropped-tail case the reported head answers.
+  // A disclosure with no follow-up: the gateway logged it and may have sent it, then stopped (a crash, a kill, or a
+  // follow-up append that failed, after which the disclosure layer sends nothing more) before it recorded an answer,
+  // or it is still waiting for one. That is normal life, not a broken chain: it is reported apart, and never counted
+  // as sent or acknowledged (invariant 5). It is so only while no later disclosure of the same gateway session counts
+  // it as answered (leaves its n out of `open`): then its answer was recorded and is missing, and verify fails.
+  // A follow-up cut from inside the chain changes every later hash, and so the head: compare the head with a saved
+  // copy. On a chain written before disclosures carried their session there is nothing to compare, and a disclosure
+  // with no follow-up is always reported apart.
   const unanswered: number[] = [];
-  for (const { entry, followUps } of disclosures.values()) {
+  const all = [...disclosures.values()];
+  for (const { entry, followUps, session } of all) {
     if (followUps.length === 0) {
       unanswered.push(entry.seq);
+      const answeredBy =
+        session === null ? undefined : all.find((d) => d.entry.seq > entry.seq && d.session?.id === session.id && !d.session.open.includes(session.n));
+      if (answeredBy !== undefined) {
+        disclosureFailures.push(
+          `seq ${String(entry.seq)}: the disclosure has no follow-up entry, but the disclosure at seq ${String(answeredBy.entry.seq)} of the same gateway session counts it as answered: its answer is missing from the chain`,
+        );
+      }
     } else if (followUps.length > 1) {
       disclosureFailures.push(`seq ${String(entry.seq)}: the disclosure has ${String(followUps.length)} follow-up entries (seq ${followUps.join(", ")}); expected one`);
     }
@@ -234,6 +277,15 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
 function demoChain(entries: readonly Entry[]): boolean {
   const [first] = entries;
   return first?.kind === "session" && record(first.body).mode === "demo";
+}
+
+/** A disclosure's `session` field; null when it has none (an older chain), "malformed" when it is not {id, n, open}. */
+function sessionMark(value: unknown): SessionMark | null | "malformed" {
+  if (value === undefined) return null;
+  const { id, n, open } = record(value);
+  const count = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
+  if (typeof id !== "string" || !count(n) || !Array.isArray(open) || !open.every(count)) return "malformed";
+  return { id, n, open };
 }
 
 /** Why a `receipt` entry does not acknowledge its disclosure, or null when it does. */

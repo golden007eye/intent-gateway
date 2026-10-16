@@ -102,9 +102,10 @@ export interface HttpCloudOptions {
   /**
    * Called with the host when a request sent `afterMs` ago has no complete response yet, once per request, so a
    * command can say it is still waiting instead of hanging silently until the deadline. Its timer starts when the
-   * request is sent, after beforeSend, so time spent logging it is not counted.
+   * request is sent, after beforeSend, so time spent logging it is not counted. `timeoutMs` is this adapter's
+   * deadline, so the notice can say when the wait ends.
    */
-  slow?: { afterMs: number; notify: (host: string) => void };
+  slow?: { afterMs: number; notify: (host: string, timeoutMs: number) => void };
 }
 
 /** The request was refused before anything was sent: a bad base URL, request body or handle. */
@@ -360,7 +361,7 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
         slow === undefined
           ? undefined
           : setTimeout(() => {
-              slow.notify(target.host);
+              slow.notify(target.host, timeoutMs);
             }, slow.afterMs);
       req.on("error", (error) => {
         const { words, neverLeft } = networkFailure((error as NodeJS.ErrnoException).code);
