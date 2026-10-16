@@ -92,7 +92,7 @@ On its first start the container makes an HTTP token, saves it in `/data/http-to
 $ claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"
 ```
 
-Later starts reuse the token without printing it; read it with `docker exec intent cat /data/http-token`. Port 8788 is the demo's confirm page and must be published on the same host port, as above. The demo code is in `docker logs intent`, or read it with `docker exec intent cat /data/demo/approval-code`. Check what was sent with `docker exec intent intent verify --demo`.
+Later starts reuse the token without printing it: their connect line reads it from the container (`$(docker exec <container id> cat /data/http-token)`), or read it yourself with `docker exec intent cat /data/http-token`. The log holds one connect line only; the demo's next steps point at it. Port 8788 is the demo's confirm page and must be published on the same host port, as above. The demo code is in `docker logs intent`, or read it with `docker exec intent cat /data/demo/approval-code`. Check what was sent with `docker exec intent intent verify --demo`.
 
 - Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`: inside the container the gateway listens on every interface, and the token is then the only protection.
 - The gateway runs as uid 1000, which owns the `/data` volume. For a bind mount, run as its owner: `--user "$(id -u):$(id -g)" -v "$PWD/data:/data"`.

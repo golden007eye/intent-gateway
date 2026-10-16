@@ -152,7 +152,7 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
     }
     case "panel": {
       const port = portOption(str("port"));
-      const panel = await startPanel(config.dataDir, { port });
+      const panel = await startPanel(config.dataDir, { port, intent: INTENT });
       line(io.stdout, `panel: ${panel.url} (read-only; Ctrl-C stops it)`);
       return { code: 0, stop: () => panel.close() };
     }

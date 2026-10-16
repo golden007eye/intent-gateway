@@ -125,7 +125,12 @@ async function tokenAndPolicy(): Promise<void> {
     await until("the server after restart", async () => ((await initialize(url, null)).status === 401 ? true : undefined));
     const all = logs(id);
     check(all.split(token).length - 1 === 1, "a restart reuses the token and does not print it again");
+    // --network host: HOSTNAME is the host's name, not the container id, so the commands keep <container>.
     check(all.includes("read it with: docker exec <container> cat /data/http-token"), "a restart says how to read the token");
+    check(
+      all.includes('  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer $(docker exec <container> cat /data/http-token)"'),
+      "a restart prints the connect line again, reading the token from the container instead of printing it",
+    );
     check((await initialize(url, `Bearer ${token}`)).status === 200, "initialize with the same token after a restart: 200");
   } finally {
     await cloud.close();
@@ -162,6 +167,10 @@ function quietToken(): Promise<void> {
   return until("the quiet start", () => (logs(id).includes("not printed: INTENT_QUIET_TOKEN=1") ? true : undefined)).then(() => {
     const token = docker("exec", id, "cat", "/data/http-token").trim();
     check(token.length === 43 && !logs(id).includes(token), "INTENT_QUIET_TOKEN=1 never prints the token");
+  }).then(async () => {
+    const line = `--header "Authorization: Bearer $(docker exec ${id.slice(0, 12)} cat /data/http-token)"`;
+    const found = await until("the quiet connect line", () => (logs(id).includes(line) ? true : undefined)).catch(() => false);
+    check(found, "INTENT_QUIET_TOKEN=1 still prints a connect line, which reads the token from this container by its id", logs(id));
   });
 }
 
@@ -171,6 +180,12 @@ async function demo(): Promise<void> {
   const url = new URL(`http://127.0.0.1:${String(mcpPort)}/mcp`);
   await until("the demo server", async () => ((await initialize(url.href, null)).status === 401 ? true : undefined), 60_000);
   check(logs(id).includes(DEMO_BANNER), "the demo banner is in the container log");
+  const short = id.slice(0, 12);
+  await until("the demo next steps", () => (logs(id).includes("Re-check what was sent afterwards with:") ? true : undefined));
+  check(logs(id).split("\n").filter((l) => l.includes("claude mcp add --") || l.includes("claude mcp add intent")).length === 1, "the demo log has exactly one connect line, the entrypoint's", logs(id));
+  check(!logs(id).includes("<token>") && !logs(id).includes("<container>"), "the demo log has no <token> or <container> placeholder", logs(id));
+  check(logs(id).includes("Add the demo gateway to Claude Code with the claude mcp add line above."), "the demo next steps point at that line");
+  check(logs(id).includes(`docker exec ${short} intent verify --demo`), "the demo log names this container by its id (HOSTNAME)");
   const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers: { authorization: `Bearer ${token}` } } });
   const client = new Client({ name: "image-smoke", version: "0" });
   await client.connect(transport as Transport);
@@ -190,7 +205,7 @@ async function demo(): Promise<void> {
     const html = await page.text();
     const csrf = /name="csrf" value="([A-Za-z0-9_-]+)"/.exec(html)?.[1] ?? "";
     check(page.status === 200 && html.includes("Approve with demo passkey"), "the host's browser reaches the confirm page");
-    check(html.includes("docker exec &#60;container&#62; cat /data/demo/approval-code"), "the confirm page says how to read the demo code from the container");
+    check(html.includes(`docker exec ${short} cat /data/demo/approval-code`), "the confirm page says how to read the demo code from this container", html);
     const code = docker("exec", id, "cat", "/data/demo/approval-code").trim();
     check(/^[0-9]{6}$/.test(code) && logs(id).includes(`Demo code for the confirm page: ${code} `), "the demo code is in the container log and its file");
     const approve = await fetch(link, {

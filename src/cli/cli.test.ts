@@ -185,6 +185,27 @@ describe("intent log (golden)", () => {
     );
   });
 
+  it("on a demo chain, names the local demo Intent Cloud and its test keys as the one that acknowledged", async () => {
+    const s = setup();
+    await writeChain(join(s.dir, "demo"), undefined, { demo: true });
+    const result = await s.run(["log", "--demo"]);
+    expect(result).toMatchObject({ code: 0, err: "" });
+    expect(result.out).toContain(
+      "#3    2026-10-15T12:00:00.000Z  receipt        #2: the local demo Intent Cloud acknowledged receiving it (demo chain, test keys) (status 200, signature verified)\n",
+    );
+    expect(result.out).not.toMatch(/: Intent Cloud acknowledged/);
+  });
+
+  it("attack: a demo session entry that is not the first entry does not relabel a real chain's receipts", async () => {
+    const s = setup();
+    await writeChain(s.dir, async (append) => {
+      await append("session", DEMO_SESSION);
+    });
+    const result = await s.run(["log"]);
+    expect(result.out).toContain("#2    2026-10-15T12:00:00.000Z  receipt        #1: Intent Cloud acknowledged receiving it (status 200, signature verified)\n");
+    expect(result.out).not.toContain("demo Intent Cloud");
+  });
+
   it("names a signature-counter flag as such, not as another passkey", async () => {
     const s = setup();
     await writeChain(s.dir, async (append) => {
@@ -615,13 +636,15 @@ describe("serve failures", () => {
 
   // The Docker image: `docker run -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 <image>`.
   // (test/image-smoke.ts drives the confirm page through the real port mapping.)
-  it("in the container, the demo prints the host's 127.0.0.1 URL without the token, with approval links on 8788", async () => {
+  it("in the container, the demo prints no second connect line (the entrypoint's is the one) and never the token", async () => {
     const token = "t".repeat(43);
     const port = String(40_000 + Math.floor(Math.random() * 10_000));
     const s = setup({ INTENT_RUNTIME: "container", INTENT_DEMO: "1", INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token });
     const result = await s.run(["serve", "--http"]);
     expect(result.code).toBe(0);
-    expect(result.err).toContain(`claude mcp add --transport http intent http://127.0.0.1:${port}/mcp --header "Authorization: Bearer <token>"`);
+    expect(result.err).toContain("Add the demo gateway to Claude Code with the claude mcp add line above.\n");
+    expect(result.err).not.toContain("claude mcp add --transport");
+    expect(result.err).not.toContain("<token>");
     expect(result.err).not.toContain(token);
     expect(CONTAINER_CONFIRM_PORT).toBe(8788);
   });
@@ -635,6 +658,23 @@ describe("serve failures", () => {
       const result = await s.run(["serve", "--http", "--trust-keys", trustFile(fake)]);
       expect(result.code).toBe(0);
       expect(result.err).toContain(`claude mcp add --transport http intent http://127.0.0.1:${port}/mcp --header "Authorization: Bearer $INTENT_HTTP_TOKEN"`);
+      expect(result.err).not.toContain(token);
+    } finally {
+      await fake.close();
+    }
+  });
+
+  it("in the container, serve --http prints no connect line with a placeholder token: it points at the entrypoint's", async () => {
+    const fake = await startFakeCloud({});
+    try {
+      const port = String(40_000 + Math.floor(Math.random() * 10_000));
+      const token = "v".repeat(43);
+      const s = setup({ INTENT_RUNTIME: "container", INTENT_CLOUD_URL: fake.url, INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token });
+      const result = await s.run(["serve", "--http", "--trust-keys", trustFile(fake)]);
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(`MCP over HTTP at http://127.0.0.1:${port}/mcp\n`);
+      expect(result.err).toContain("connect an agent with the claude mcp add line above\n");
+      expect(result.err).not.toContain("claude mcp add --transport");
       expect(result.err).not.toContain(token);
     } finally {
       await fake.close();
