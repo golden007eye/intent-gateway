@@ -51,6 +51,21 @@ export function dockerExec(env: Readonly<Record<string, string | undefined>>): s
 }
 
 /**
+ * The README's demo run of the image. Hints printed when the container cannot start use it instead of
+ * `docker exec … intent demo`: a container that failed to start has exited, so there is nothing to exec into.
+ */
+export const IMAGE_DEMO_RUN = "docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 -v intent-data:/data intent-gateway";
+
+/** How to pass a root key file to the image: a read-only mount, then the flag (the entrypoint adds `serve --http`). */
+export const IMAGE_TRUST_KEYS = `docker run … -v "$PWD/keys.json:/keys.json:ro" intent-gateway --trust-keys /keys.json`;
+
+/** Inside the image: re-run this container in demo mode. `docker rm` first, since a second `--name intent` clashes. */
+export function containerDemo(env: Readonly<Record<string, string | undefined>>): string {
+  const id = env.HOSTNAME ?? "";
+  return `re-run the container in demo mode: docker rm ${/^[0-9a-f]{12}$/.test(id) ? id : "<container>"} && ${IMAGE_DEMO_RUN}`;
+}
+
+/**
  * The spec npx installed this package from, read from the package.json of npx's cache folder (two levels above
  * `node_modules/intent-gateway`): a tarball or folder as `file:<absolute path>` (npx records it relative to the
  * cache folder), else the registry spec npx was given (`_npx.packages`), such as `intent-gateway@next`.

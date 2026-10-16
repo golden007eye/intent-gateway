@@ -6,14 +6,14 @@ import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBuild, type Build } from "./build.ts";
-import { dockerExec, invocation } from "./invocation.ts";
+import { containerDemo, dockerExec, IMAGE_TRUST_KEYS, invocation } from "./invocation.ts";
 
 export type { Build } from "./build.ts";
 
 /** Version and build commit of this gateway (buildCommit is null when running from source). */
 export const BUILD: Build = readBuild(new URL("../", import.meta.url));
 
-export { dockerExec, invocation, type InvocationInput } from "./invocation.ts";
+export { containerDemo, dockerExec, IMAGE_DEMO_RUN, IMAGE_TRUST_KEYS, invocation, type InvocationInput } from "./invocation.ts";
 
 /**
  * The command that runs this gateway, to print before a subcommand (`${INTENT} verify --demo`): `npx -y <spec>`
@@ -63,8 +63,10 @@ export interface Config {
   demo: boolean;
   /** INTENT_DEBUG=1: print stack traces with errors. */
   debug: boolean;
-  /** INTENT_QUIET_TOKEN=1: the Docker entrypoint never prints the HTTP token (read here only to check its value). */
+  /** INTENT_QUIET_TOKEN=1: the HTTP token is never printed (the Docker image's connect line reads it instead). */
   quietToken: boolean;
+  /** In the Docker image, the file its entrypoint keeps the HTTP token in (<data>/http-token); null on a host. */
+  tokenFile: string | null;
 }
 
 export interface LoadOptions {
@@ -142,6 +144,7 @@ export function loadConfig(
     intent.INTENT_CLOUD_URL ?? DEFAULT_CLOUD_URL,
     trustKeys === undefined ? undefined : path.resolve(cwd, userPath("--trust-keys", trustKeys)),
     options.requireTrust ?? true,
+    runtime === "container" ? containerDemo(env) : null,
   );
 
   return {
@@ -153,6 +156,7 @@ export function loadConfig(
     demo: flag("INTENT_DEMO", intent.INTENT_DEMO),
     debug: flag("INTENT_DEBUG", intent.INTENT_DEBUG),
     quietToken: flag("INTENT_QUIET_TOKEN", intent.INTENT_QUIET_TOKEN),
+    tokenFile: runtime === "container" ? path.join(dataDir, "http-token") : null,
   };
 }
 
@@ -217,7 +221,8 @@ function readTrustKeys(argv: readonly string[]): string | undefined {
   return found;
 }
 
-function cloudConfig(raw: string, trustKeys: string | undefined, requireTrust: boolean): Config["cloud"] {
+/** `container`: in the Docker image, how to re-run it in demo mode (null on a host), for the unpinned-host hints. */
+function cloudConfig(raw: string, trustKeys: string | undefined, requireTrust: boolean, container: string | null): Config["cloud"] {
   let url: URL;
   try {
     url = new URL(raw);
@@ -234,11 +239,15 @@ function cloudConfig(raw: string, trustKeys: string | undefined, requireTrust: b
   if (trustKeys !== undefined) return { url: url.origin, trust: { kind: "file", path: trustKeys } };
   const rootKeys = Object.hasOwn(PINNED_HOSTS, url.host) ? PINNED_HOSTS[url.host]?.rootKeys : undefined;
   if (rootKeys === undefined || rootKeys.length === 0) {
+    const staging = `this build has no trusted root key for ${url.host} yet; staging opens with the first preview release. `;
     const reason =
-      rootKeys === undefined
-        ? `${url.host} is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key`
-        : `this build has no trusted root key for ${url.host} yet; staging opens with the first preview release. ` +
-          `Try everything locally now with ${INTENT} demo, or pass --trust-keys <file> for a self-hosted Intent Cloud`;
+      container !== null
+        ? rootKeys === undefined
+          ? `${url.host} is not a pinned Intent Cloud host; mount its root key file and pass it: ${IMAGE_TRUST_KEYS}. Or try everything locally: ${container}`
+          : `${staging}Try everything locally now: ${container}; or, for a self-hosted Intent Cloud, mount its root key file: ${IMAGE_TRUST_KEYS}`
+        : rootKeys === undefined
+          ? `${url.host} is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key`
+          : `${staging}Try everything locally now with ${INTENT} demo, or pass --trust-keys <file> for a self-hosted Intent Cloud`;
     if (requireTrust) throw new ConfigError(reason);
     return { url: url.origin, trust: { kind: "unpinned", host: url.host, reason } };
   }

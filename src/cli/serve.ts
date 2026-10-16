@@ -3,11 +3,12 @@
 // In demo mode (`intent demo`, `--demo`) the same gateway runs against the in-process demo Intent Cloud with the
 // published test root pinned, the store in `<data>/demo`, approval links on the local confirm page, and the demo
 // banner on stderr and on every tool result.
-import { type Config, INTENT } from "../config/index.ts";
+import { type Config, DOCKER_EXEC, INTENT } from "../config/index.ts";
 import { DEMO_BANNER, type Demo, nextSteps } from "../demo/index.ts";
 import { createGateway } from "../gateway/index.ts";
 import { runHttp, runStdio } from "../mcp/index.ts";
 import { openStore } from "../store/index.ts";
+import { containerConnect } from "./connect.ts";
 import { type Io, line, type Outcome } from "./io.ts";
 import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
 
@@ -46,11 +47,14 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       const http = await runHttp({ gateway, host, port, token, log, ...banner });
       transport = http;
       // In the Docker image the server listens on 0.0.0.0, which is no address to connect to; the documented
-      // mapping publishes it on the host's 127.0.0.1. The entrypoint printed the one connect line there (with the
-      // token, or a `$(docker exec … cat …)` that reads it), so none is printed here: a second line with a
-      // placeholder token would get a 401 when pasted.
+      // mapping publishes it on the host's 127.0.0.1. The one connect line is printed here, now that the server
+      // is up (so a container that cannot start prints none): with the token on the first start that serves, else
+      // a `$(docker exec … cat …)` that reads it. No line with a placeholder token, which would get a 401.
       const container = config.runtime === "container";
       const url = container ? `http://127.0.0.1:${String(http.port)}/mcp` : http.url;
+      if (container && token !== null && config.tokenFile !== null) {
+        for (const text of containerConnect({ token, tokenFile: config.tokenFile, quiet: config.quietToken, dockerExec: DOCKER_EXEC })) log(text);
+      }
       if (demo === null) {
         say(`MCP over HTTP at ${url}`);
         const auth = token === null ? "" : ` --header "Authorization: Bearer $INTENT_HTTP_TOKEN"`;

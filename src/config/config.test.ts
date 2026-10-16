@@ -243,6 +243,26 @@ describe("cloud trust", () => {
     expect(() => load({}, LINUX, [])).toThrow(/no trusted root key for staging-api\.intentai\.shop yet; staging opens with the first preview release/);
   });
 
+  it("in the container, the unpinned-host hints re-run it in demo mode, never docker exec into it (F-h)", () => {
+    const container = { INTENT_RUNTIME: "container", HOSTNAME: "d3394f0ffd41" };
+    const staging = (() => {
+      try {
+        load(container, LINUX, []);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      return "";
+    })();
+    expect(staging).toBe(
+      "this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. " +
+        "Try everything locally now: re-run the container in demo mode: docker rm d3394f0ffd41 && " +
+        "docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 -v intent-data:/data intent-gateway; " +
+        'or, for a self-hosted Intent Cloud, mount its root key file: docker run … -v "$PWD/keys.json:/keys.json:ro" intent-gateway --trust-keys /keys.json',
+    );
+    expect(() => load({ ...container, INTENT_CLOUD_URL: "https://cloud.example" }, LINUX, [])).toThrow(/not a pinned Intent Cloud host; mount its root key file .+ -e INTENT_DEMO=1 /);
+    expect(() => load({ ...container, INTENT_CLOUD_URL: "https://cloud.example" }, LINUX, [])).not.toThrow(/docker exec/);
+  });
+
   it("with requireTrust false, an unpinned host is reported instead of refused (offline commands)", () => {
     const config = load({}, { ...LINUX, requireTrust: false }, []);
     expect(config.cloud.trust).toEqual({

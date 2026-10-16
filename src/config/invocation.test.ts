@@ -1,6 +1,6 @@
 // invocation(): every command the gateway prints must be one that works for this install (devrun F-b, F-d).
 import { describe, expect, it } from "vitest";
-import { dockerExec, INTENT, invocation, type InvocationInput } from "./index.ts";
+import { containerDemo, dockerExec, INTENT, invocation, type InvocationInput } from "./index.ts";
 
 const NPX_DIR = "/home/dev/.npm/_npx/0123abcd";
 const NPX_ROOT = `${NPX_DIR}/node_modules/intent-gateway`;
@@ -56,6 +56,7 @@ describe("invocation", () => {
     (hostname) => {
       expect(run({ argv1: "/app/dist/main.js", env: { INTENT_RUNTIME: "container", HOSTNAME: hostname } })).toBe("docker exec <container> intent");
       expect(dockerExec({ HOSTNAME: hostname })).toBe("docker exec <container>");
+      expect(containerDemo({ HOSTNAME: hostname })).toMatch(/^re-run the container in demo mode: docker rm <container> && docker run -d --name intent .* -e INTENT_DEMO=1 /);
     },
   );
 

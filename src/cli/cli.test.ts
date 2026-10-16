@@ -761,6 +761,30 @@ describe("serve failures", () => {
     }
   });
 
+  it("in the container, the token the entrypoint made is printed only once the gateway serves (F-h)", async () => {
+    const token = "w".repeat(43);
+    const port = String(40_000 + Math.floor(Math.random() * 10_000));
+    const env = { INTENT_RUNTIME: "container", INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token };
+    const s = setup(env);
+    mkdirSync(s.dir, { recursive: true });
+    writeFileSync(join(s.dir, "http-token"), `${token}\n`);
+    writeFileSync(join(s.dir, "http-token.unshown"), "");
+    // No root key and no demo: the start fails, prints no connect line, and keeps the token for the next start.
+    const failed = await s.run(["serve", "--http"]);
+    expect(failed.code).not.toBe(0);
+    expect(failed.err).not.toContain("claude mcp add");
+    expect(failed.err).not.toContain(token);
+    expect(failed.err).toContain("-e INTENT_DEMO=1");
+    expect(failed.err).not.toContain("docker exec");
+    expect(existsSync(join(s.dir, "http-token.unshown"))).toBe(true);
+    // The next start serves (the demo, on the same data dir): the token is printed, once, after the server is up.
+    const served = await setup({ ...env, INTENT_DATA_DIR: s.dir, INTENT_DEMO: "1" }).run(["serve", "--http"]);
+    expect(served.code).toBe(0);
+    expect(served.err).toContain(`  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer ${token}"\n`);
+    expect(served.err.split(token).length - 1).toBe(1);
+    expect(existsSync(join(s.dir, "http-token.unshown"))).toBe(false);
+  });
+
   it("INTENT_DEBUG=1 adds the stack trace; without it there is none", async () => {
     const quiet = await setup().run(["policy", "test", "/nope.yaml"]);
     expect(quiet.err).not.toMatch(/\n\s+at /);

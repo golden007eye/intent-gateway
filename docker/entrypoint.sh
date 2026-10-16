@@ -3,9 +3,10 @@
 # npm package ships; it adds no gateway code.
 #
 # Off loopback the gateway refuses to serve without a bearer token. When INTENT_HTTP_TOKEN is not set, the token
-# lives in <data>/http-token (0600): made on the first start, when it is printed once with the line to paste into
-# Claude Code (so it is kept in the container log too), and reused on later starts, which print only how to read
-# it. INTENT_QUIET_TOKEN=1 never prints it.
+# lives in <data>/http-token (0600): made on the first start and reused on later starts. The gateway prints the line
+# to paste into Claude Code once it is serving, so a container that cannot start prints none: the token itself on
+# the first start that serves (so it is kept in the container log too), afterwards a line that reads it from the
+# container. A new token not printed yet is marked by <data>/http-token.unshown. INTENT_QUIET_TOKEN=1 never prints it.
 set -eu
 
 data="${INTENT_DATA_DIR:-/data}"
@@ -70,26 +71,11 @@ if [ -z "${INTENT_HTTP_TOKEN:-}" ]; then
     if [ "${INTENT_QUIET_TOKEN:-}" = 1 ]; then
       say "made an HTTP token and saved it in $token_file (not printed: INTENT_QUIET_TOKEN=1); read it with: $exec_cmd cat $token_file"
     else
-      say "made an HTTP token and saved it in $token_file. Later starts reuse it and do not print it again."
-      say "The connect line below holds the token, so it is also kept in this container's log (docker logs); set INTENT_QUIET_TOKEN=1 to never print it."
-      made_token=1
+      (umask 077 && : >"$token_file.unshown")
+      say "made an HTTP token and saved it in $token_file; the gateway prints it once, in the connect line, when it is serving."
     fi
   fi
   export INTENT_HTTP_TOKEN
-fi
-
-# The one connect line (the gateway prints none in the container, so a pasted line never carries a placeholder).
-# Only the start that made the token prints it; otherwise the line reads it from the container when pasted.
-connect() { printf '  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer %s"\n' "$1" >&2; }
-if [ -n "${made_token:-}" ]; then
-  say "Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787):"
-  connect "$INTENT_HTTP_TOKEN"
-elif [ -f "$token_file" ] && [ "$(cat "$token_file")" = "$INTENT_HTTP_TOKEN" ]; then
-  say "Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787; the line reads the token from the container):"
-  connect "\$($exec_cmd cat $token_file)"
-else
-  say "Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787; the line reads your INTENT_HTTP_TOKEN from the container):"
-  connect "\$($exec_cmd printenv INTENT_HTTP_TOKEN)"
 fi
 
 exec node /app/dist/main.js "$@"

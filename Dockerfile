@@ -10,7 +10,7 @@
 # BUILD_COMMIT is the commit the build records (`.git` is not in the build context); pass it only for a checkout
 # with no local changes, as the CI package job does after checking.
 #
-# Run it (the token is printed once, on the first start):
+# Run it (the token is printed once, on the first start that serves):
 #   docker run -p 127.0.0.1:8787:8787 -v intent-data:/data intent-gateway:dev
 # Try the demo (sample catalog, test keys, nothing can be bought; 8788 is its local confirm page):
 #   docker run -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 intent-gateway:dev
