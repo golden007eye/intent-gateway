@@ -6,7 +6,9 @@
 // Lease: `audit.lock` holds {token, holder, expires_at}. A writer creates it with link() (fails if present) or
 // takes over an expired one with rename(); both publish a complete file in one step. The lease is held while the
 // handle has appends queued and is released when the queue drains, so writers on one data directory take turns.
-// Liveness comes only from expires_at, never from the holder's pid, which means nothing across pid namespaces.
+// Liveness comes only from expires_at, never from the holder's pid, which means nothing across pid namespaces. A
+// holder killed mid-append leaves its lease behind until it expires; a handle waiting on it longer than
+// waitNoticeMs calls onWait once, so the CLI can say what it waits for.
 //
 // Fencing: before each write the handle checks that the lock still holds its token, unexpired, and that the file's
 // tail is the head it last saw; after the write it checks that the tail is its own entry. Any mismatch throws
@@ -50,6 +52,20 @@ export interface StoreOptions {
   readonly host?: string;
   readonly leaseMs?: number;
   readonly fs?: StoreFs;
+  /**
+   * Called once per wait for the lease, when another holder's unexpired lease has kept this handle waiting for
+   * `waitNoticeMs` (default 1000), so a caller can say what it waits for instead of hanging silently. The wait itself
+   * is unchanged: it ends when the holder releases the lease or the lease expires.
+   */
+  readonly onWait?: (wait: LeaseWait) => void;
+  readonly waitNoticeMs?: number;
+}
+
+/** The lease a handle is waiting on: the lock file, its holder (`host:pid`, information only) and its expiry. */
+export interface LeaseWait {
+  readonly lock: string;
+  readonly holder: string;
+  readonly expiresAt: Date;
 }
 
 export interface Store {
@@ -91,6 +107,7 @@ interface Tail {
 const LOG = "audit.jsonl";
 const LOCK = "audit.lock";
 const DEFAULT_LEASE_MS = 30_000;
+const DEFAULT_WAIT_NOTICE_MS = 1000;
 const POLL_MS = 2;
 // O_NOFOLLOW makes open() fail on a symbolic link; Windows has no such flag, and there the lstat checks in
 // openStore are the only guard.
@@ -171,6 +188,8 @@ class FileStore implements Store {
   readonly #clock: () => number;
   readonly #holder: string;
   readonly #leaseMs: number;
+  readonly #onWait: ((wait: LeaseWait) => void) | undefined;
+  readonly #waitNoticeMs: number;
   #queue: Promise<unknown> = Promise.resolve();
   #pending = 0;
   #closed = false;
@@ -189,6 +208,8 @@ class FileStore implements Store {
     this.#clock = opts.clock ?? Date.now;
     this.#holder = `${opts.host ?? hostname()}:${String(opts.pid ?? process.pid)}`;
     this.#leaseMs = opts.leaseMs ?? DEFAULT_LEASE_MS;
+    this.#onWait = opts.onWait;
+    this.#waitNoticeMs = opts.waitNoticeMs ?? DEFAULT_WAIT_NOTICE_MS;
   }
 
   async append(kind: EntryKind, body: unknown): Promise<Entry> {
@@ -274,10 +295,16 @@ class FileStore implements Store {
   }
 
   async #acquire(): Promise<void> {
+    const since = this.#clock();
+    let noticed = false;
     for (;;) {
       const current = await this.#readLease();
       const now = this.#clock();
       if (current !== null && current !== "invalid" && current.expires_at > now) {
+        if (!noticed && now - since >= this.#waitNoticeMs) {
+          noticed = true;
+          this.#onWait?.({ lock: this.#lock, holder: current.holder, expiresAt: new Date(current.expires_at) });
+        }
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
         continue;
       }

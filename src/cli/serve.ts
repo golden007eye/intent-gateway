@@ -11,6 +11,7 @@ import { openStore } from "../store/index.ts";
 import { containerConnect } from "./connect.ts";
 import { type Io, line, type Outcome } from "./io.ts";
 import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
+import { leaseNotice, slowCloudNotice } from "./waiting.ts";
 
 export async function serve(io: Io, config: Config, options: { http: boolean; demo: Demo | null }): Promise<Outcome> {
   const { demo } = options;
@@ -24,15 +25,21 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
   const pinnedRootKeys = demo?.trustKeys.rootKeys ?? (await rootKeys(config));
   const dataDir = demo?.dataDir ?? config.dataDir;
   const { policy, bundled } = await activePolicy(config.policyPath);
-  if (bundled !== null) {
-    say(`No policy file found; using the bundled ${bundled} policy: the only detail about you it sends is your ZIP code. Change it with \`${INTENT} policy add <name>\`.`);
-  }
+  // Printed once the gateway is serving, like the connect line, so a start that fails prints no line to act on.
+  const policyLine = (): void => {
+    if (bundled !== null) {
+      say(`No policy file found; using the bundled ${bundled} policy: the only detail about you it sends is your ZIP code. Change it with \`${INTENT} policy add <name>\`.`);
+    }
+  };
   const now = io.now === undefined ? {} : { now: io.now };
   const banner = demo === null ? {} : { banner: DEMO_BANNER };
-  const store = await openStore(dataDir);
+  const store = await openStore(dataDir, { onWait: leaseNotice(say, io.now) });
+  // Only the start's requests (meta, key statement) say they are still waiting; a slow search later does not.
+  let starting = true;
+  const slow = slowCloudNotice(say, io.cloudNoticeMs, () => starting);
   try {
     const gateway = createGateway({
-      cloud: (keySet) => cloudFor(io, store, baseUrl, { keySet, ...now }),
+      cloud: (keySet) => cloudFor(io, store, baseUrl, { keySet, ...now }, slow),
       store,
       policy,
       pinnedRootKeys,
@@ -41,11 +48,13 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       ...now,
     });
     await gateway.start();
+    starting = false;
     let transport: { close(): Promise<void> };
     if (options.http) {
       const { host, port, token } = config.http;
       const http = await runHttp({ gateway, host, port, token, log, ...banner });
       transport = http;
+      policyLine();
       // In the Docker image the server listens on 0.0.0.0, which is no address to connect to; the documented
       // mapping publishes it on the host's 127.0.0.1. The one connect line is printed here, now that the server
       // is up (so a container that cannot start prints none): with the token on the first start that serves, else
@@ -66,6 +75,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       }
     } else {
       transport = await runStdio({ gateway, ...banner });
+      policyLine();
       if (demo === null) say(`MCP over stdio is ready; data dir ${dataDir}`);
       else for (const text of nextSteps({ code: { code: demo.code, file: demo.codeFile } })) log(text);
     }

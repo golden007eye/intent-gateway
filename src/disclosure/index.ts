@@ -5,6 +5,7 @@ export {
   CloudRequestError,
   CloudResponseError,
   type CloudResult,
+  DEFAULT_TIMEOUT_MS,
   type HttpCloudOptions,
   type IntentCloud,
 } from "../cloud/index.ts";

@@ -327,6 +327,19 @@ describe("intent log (golden)", () => {
     expect(result.out).not.toContain("aaaa 1111 is not the pinned approver");
   });
 
+  it("lists a send with no answer recorded (the gateway stopped mid-request) as logged and maybe sent, not as sent (F-l)", async () => {
+    const s = setup();
+    await writeChain(s.dir, async (append) => {
+      await append("disclosure", { endpoint: "searchCatalog", fields: ["category", "ship_to", "ship_to.postal_code"] });
+    });
+    const result = await s.run(["log"]);
+    expect(result.out).toContain(
+      "#11   2026-10-15T12:00:00.000Z  logged         searchCatalog: category, ship_to.postal_code (maybe sent; no answer recorded: the gateway stopped before it finished, or is still waiting)\n",
+    );
+    // Answered sends keep their rows.
+    expect(result.out).toContain("#1    2026-10-15T12:00:00.000Z  sent           searchCatalog:");
+  });
+
   it("says what to do on an empty or missing chain", async () => {
     const result = await setup().run(["log"]);
     expect(result).toEqual({ code: 0, err: "", out: "No entries yet: the gateway has sent nothing. Start it with intent serve, or try intent demo.\n" });
@@ -660,7 +673,8 @@ describe("intent doctor", () => {
     expect(doctor.out).toContain(`\nFAIL  ${line}\n`);
     const serve = await setup().run(["serve"], { input: "", io: { connect: () => stub } });
     expect(serve.code).toBe(1);
-    expect(serve.err).toMatch(new RegExp(`\\nintent: ${line.replace(/[().]/g, "\\$&")}\\n$`));
+    // A start that fails prints no policy line, only the error (F-l).
+    expect(serve.err).toBe(`intent: ${line}\n`);
   });
 
   it("in the container, an unreachable staging host's next step re-runs the container in demo mode (F-h)", async () => {
@@ -687,6 +701,53 @@ describe("intent doctor", () => {
     } finally {
       await silent.close();
     }
+  });
+
+  it("a host that accepts and never answers: serve and doctor say they still wait, then keep the final message (F-l)", async () => {
+    const silent = await startSilentHost();
+    try {
+      fake = await startFakeCloud({});
+      const port = new URL(silent.url).port;
+      const io: Partial<Io> = { connect: (http, store, options) => connectCloud({ ...http, timeoutMs: 400 }, store, options), cloudNoticeMs: 50 };
+      const waiting = `still waiting for Intent Cloud at 127.0.0.1:${port}: no answer yet (it gives up after 30 s)`;
+      const serve = await setup({ INTENT_CLOUD_URL: silent.url }).run(["serve", "--trust-keys", trustFile(fake)], { input: "", io });
+      expect(serve.code).toBe(1);
+      expect(serve.err).toMatch(new RegExp(`^intent-gateway: ${waiting.replace(/[().]/g, "\\$&")}\\nintent: .*no complete response within 400 ms.*\\n$`));
+      const doctor = await setup({ INTENT_CLOUD_URL: silent.url }).run(["doctor", "--trust-keys", trustFile(fake)], { io });
+      expect(doctor.err).toBe(`intent doctor: ${waiting}\n`);
+      expect(doctor.out).toContain(`\nFAIL  Intent Cloud at 127.0.0.1:${port} cannot be reached (no complete response within 400 ms)`);
+    } finally {
+      await silent.close();
+    }
+  });
+
+  it("an answer within the notice time prints no waiting line", async () => {
+    fake = await startFakeCloud({});
+    const s = setup({ INTENT_CLOUD_URL: fake.url });
+    const result = await s.run(["doctor", "--trust-keys", trustFile(fake)]);
+    expect(result.code).toBe(0);
+    expect(result.err).toBe("");
+  });
+
+  it("a data dir lock left by a gateway killed mid-write: says within a second what it waits for, then goes on (F-l)", async () => {
+    fake = await startFakeCloud({});
+    const s = setup({ INTENT_CLOUD_URL: fake.url });
+    mkdirSync(s.dir, { recursive: true, mode: 0o700 });
+    const expires = Date.now() + 3000;
+    writeFileSync(join(s.dir, "audit.lock"), JSON.stringify({ token: "killed", holder: "box:999999", expires_at: expires }));
+    const started = Date.now();
+    const result = await s.run(["doctor", "--trust-keys", trustFile(fake)]);
+    expect(result.code).toBe(0);
+    // It waited for the expiry: the lease is never taken over early because its pid looks dead.
+    expect(Date.now()).toBeGreaterThanOrEqual(expires);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+    expect(result.err).toMatch(
+      new RegExp(
+        `^intent doctor: waiting for the data dir lock ${join(s.dir, "audit.lock")}, held by box:999999 until ${new Date(expires).toISOString()}: ` +
+          "another gateway is writing to this data dir, or one stopped mid-write\\. The lock frees itself in [12] s; " +
+          "if another gateway runs on this data dir, stop it or set INTENT_DATA_DIR to another folder\\.\\n$",
+      ),
+    );
   });
 });
 
@@ -768,7 +829,7 @@ describe("serve failures", () => {
   it("started by an MCP client (stdin not a terminal), answers initialize with the same reason as a JSON-RPC error", async () => {
     const result = await setup().run([], { input: `${JSON.stringify(initialize)}\n`, io: noDns });
     expect(result.code).toBe(1);
-    expect(result.err).toMatch(new RegExp(`\\nintent: ${STAGING_DNS.replace(/[().]/g, "\\$&")}\\n$`));
+    expect(result.err).toBe(`intent: ${STAGING_DNS}\n`);
     expect(JSON.parse(result.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent-gateway could not start: ${STAGING_DNS}` } });
     // --http and a terminal print to stderr only; stdout stays empty.
     expect((await setup().run(["serve", "--http"], { input: `${JSON.stringify(initialize)}\n`, io: noDns })).out).toBe("");
@@ -777,7 +838,9 @@ describe("serve failures", () => {
   it("in the container, an unreachable staging host says to re-run it in demo mode, never docker exec into it (F-h)", async () => {
     const result = await setup({ INTENT_RUNTIME: "container", HOSTNAME: "d3394f0ffd41" }).run(["serve", "--http"], { io: noDns });
     expect(result.code).toBe(1);
-    expect(result.err).toMatch(/\nintent: Intent Cloud at staging-api\.intentai\.shop cannot be reached \(DNS: not found\); nothing was sent\. Staging may not be open yet; try everything locally: re-run the container in demo mode: docker rm d3394f0ffd41 && docker run -d --name intent .+ -e INTENT_DEMO=1 .+\n$/);
+    // Only the error: the policy line ("Change it with docker exec …") waits until the gateway is serving (F-l).
+    expect(result.err).toMatch(/^intent: Intent Cloud at staging-api\.intentai\.shop cannot be reached \(DNS: not found\); nothing was sent\. Staging may not be open yet; try everything locally: re-run the container in demo mode: docker rm d3394f0ffd41 && docker run -d --name intent .+ -e INTENT_DEMO=1 .+\n$/);
+    expect(result.err).not.toContain("policy add");
     expect(result.err).not.toContain("docker exec");
     expect(result.err).not.toContain("claude mcp add");
   });
@@ -804,8 +867,7 @@ describe("serve failures", () => {
       } as unknown as DisclosedCloud;
       const result = await s.run(["serve", "--trust-keys", trustFile(fake)], { input: "", io: { connect: () => stub } });
       expect(result.code).toBe(1);
-      expect(result.err).toMatch(/^intent-gateway: No policy file found; using the bundled zip-only policy: the only detail about you it sends is your ZIP code\. Change it with `intent policy add <name>`\.\n/);
-      expect(result.err).toMatch(/\nintent: could not start: contract mismatch: .+; run intent doctor to see each check\n$/);
+      expect(result.err).toMatch(/^intent: could not start: contract mismatch: .+; run intent doctor to see each check\n$/);
     } finally {
       await fake.close();
     }
@@ -926,12 +988,18 @@ describe("serve failures", () => {
     expect(failed.err).not.toContain(token);
     expect(failed.err).toContain("-e INTENT_DEMO=1");
     expect(failed.err).not.toContain("docker exec");
+    // Nor the policy line: "Change it with docker exec … policy add" names a container that is not running (F-l).
+    expect(failed.err).not.toContain("policy add");
     expect(existsSync(join(s.dir, "http-token.unshown"))).toBe(true);
     // The next start serves (the demo, on the same data dir): the token is printed, once, after the server is up.
     const served = await setup({ ...env, INTENT_DATA_DIR: s.dir, INTENT_DEMO: "1" }).run(["serve", "--http"]);
     expect(served.code).toBe(0);
     expect(served.err).toContain(`  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer ${token}"\n`);
     expect(served.err.split(token).length - 1).toBe(1);
+    // Serving, it says which policy applies, after the server is up.
+    const policyAt = served.err.indexOf("No policy file found; using the bundled zip-only policy");
+    expect(policyAt).toBeGreaterThan(served.err.indexOf("MCP over HTTP at"));
+    expect(served.err).toMatch(/Change it with `.*policy add <name>`\.\n/);
     expect(existsSync(join(s.dir, "http-token.unshown"))).toBe(false);
   });
 

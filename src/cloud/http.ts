@@ -99,6 +99,12 @@ export interface HttpCloudOptions {
   timeoutMs?: number;
   /** Largest response body accepted. Defaults to 1 MiB. */
   maxResponseBytes?: number;
+  /**
+   * Called with the host when a request sent `afterMs` ago has no complete response yet, once per request, so a
+   * command can say it is still waiting instead of hanging silently until the deadline. Its timer starts when the
+   * request is sent, after beforeSend, so time spent logging it is not counted.
+   */
+  slow?: { afterMs: number; notify: (host: string) => void };
 }
 
 /** The request was refused before anything was sent: a bad base URL, request body or handle. */
@@ -310,6 +316,7 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(slowTimer);
         req.destroy();
         agent?.destroy();
         if (error !== null) reject(error);
@@ -348,6 +355,13 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
         const within = timeoutMs % 1000 === 0 ? `${String(timeoutMs / 1000)} s` : `${String(timeoutMs)} ms`;
         fail("timeout", `no complete response within ${within}`);
       }, timeoutMs);
+      const { slow } = options;
+      const slowTimer =
+        slow === undefined
+          ? undefined
+          : setTimeout(() => {
+              slow.notify(target.host);
+            }, slow.afterMs);
       req.on("error", (error) => {
         const { words, neverLeft } = networkFailure((error as NodeJS.ErrnoException).code);
         fail("network", words, error, neverLeft);

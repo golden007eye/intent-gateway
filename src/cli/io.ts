@@ -23,6 +23,8 @@ export interface Io {
   /** Test seams: the library's commit and fetch, and the disclosed cloud doctor and serve connect through. */
   library?: Pick<AddOptions, "buildCommit" | "dirty" | "fetch" | "bundledRoot">;
   connect?: (http: HttpCloudOptions, store: Store, options: DisclosureOptions) => DisclosedCloud;
+  /** Test seam: how long serve and doctor wait on Intent Cloud before saying they still wait (CLOUD_NOTICE_MS). */
+  cloudNoticeMs?: number;
 }
 
 /** What a command returns: its exit code, and for a long-running one (serve, panel) how to stop it. */

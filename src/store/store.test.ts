@@ -261,6 +261,58 @@ describe("lease", () => {
     expect(await run).toMatchObject({ seq: 0 });
   });
 
+  it("says once what it waits for after waitNoticeMs: the lock, its holder and its expiry (F-l)", async () => {
+    await fsp.mkdir(dir, { recursive: true });
+    // What a holder killed mid-append leaves: its lease, unexpired, naming a pid that no longer runs.
+    await fsp.writeFile(lockPath(), JSON.stringify({ token: "killed", holder: "box:999999", expires_at: T0 + 30_000 }));
+    const waits: unknown[] = [];
+    // Each step waits for the store to poll the lock twice more, so a busy machine cannot skip a clock setting.
+    let polls = 0;
+    const fs: StoreFs = {
+      ...fast,
+      readFile: ((...args: Parameters<typeof fsp.readFile>) => {
+        if (args[0] === lockPath()) polls++;
+        return fsp.readFile(...args);
+      }) as typeof fsp.readFile,
+    };
+    const polled = async (): Promise<void> => {
+      const target = polls + 2;
+      while (polls < target) await tick();
+    };
+    const store = await openStore(dir, { clock, fs, waitNoticeMs: 1000, onWait: (w) => waits.push(w) });
+    const run = store.append("session", {});
+    await polled();
+    now = T0 + 999;
+    await polled();
+    expect(waits).toEqual([]);
+    now = T0 + 1000;
+    await polled();
+    now = T0 + 5000;
+    await polled();
+    expect(waits).toEqual([{ lock: lockPath(), holder: "box:999999", expiresAt: new Date(T0 + 30_000) }]);
+    // Attack (single writer): a dead-looking pid is never a reason to take over; only the expiry is.
+    expect(logText()).toBe("");
+    now = T0 + 30_000;
+    expect(await run).toMatchObject({ seq: 0 });
+    expect(waits).toHaveLength(1);
+  });
+
+  it("says nothing when the lease is free or expired, or freed before waitNoticeMs", async () => {
+    const waits: unknown[] = [];
+    const onWait = (w: unknown) => waits.push(w);
+    const store = await openStore(dir, { clock, fs: fast, onWait });
+    await store.append("session", {});
+    await fsp.writeFile(lockPath(), JSON.stringify({ token: "old", holder: "box:1", expires_at: T0 - 1 }));
+    await store.append("session", {});
+    await fsp.writeFile(lockPath(), JSON.stringify({ token: "brief", holder: "box:2", expires_at: T0 + 30_000 }));
+    const run = store.append("session", {});
+    now = T0 + 500;
+    await tick();
+    await fsp.unlink(lockPath());
+    expect(await run).toMatchObject({ seq: 2 });
+    expect(waits).toEqual([]);
+  });
+
   it("waits when another writer creates the lock between its read and its link", async () => {
     let raced = false;
     const fs: StoreFs = {
