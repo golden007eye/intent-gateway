@@ -18,7 +18,7 @@
 
 The demo runs the whole flow on your machine with no setup: a demo Intent Cloud on `127.0.0.1` with a sample catalog and the published test keys, and a local confirm page that stands in for the passkey step. Every tool result says `DEMO: test keys, sample catalog, nothing can be bought.`
 
-You need Node 24 LTS (24.15 or later) or Node 26+, pnpm (`corepack enable`) and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way.
+You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+, pnpm (`corepack enable`) and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way.
 
 **1 · Build the package** (until the first preview release is on npm):
 

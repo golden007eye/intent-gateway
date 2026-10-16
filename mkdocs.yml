@@ -87,3 +87,4 @@ nav:
       - "ADR-0009: Policy v1, narrow only": adr/0009-policy-v1-narrow-only.md
       - "ADR-0010: Release supply chain": adr/0010-release-supply-chain.md
       - "ADR-0011: Approver pin": adr/0011-approver-pin.md
+      - "ADR-0012: Node support": adr/0012-node-support.md

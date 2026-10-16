@@ -46,6 +46,75 @@ jobs:
           "$RUNNER_TEMP/docs-venv/bin/pip" install --quiet -r requirements-docs.txt
           "$RUNNER_TEMP/docs-venv/bin/mkdocs" build --strict --site-dir "$RUNNER_TEMP/site"
 
+  # The tests, the build and a packed tarball on every Node line package.json `engines` accepts (F-t). The `node` job
+  # above stays the required check on .node-version; this one is not required until the maintainer adds it to the
+  # ruleset. pnpm scripts run on the Node 24 that devEngines.runtime pins, so the tests here call vitest with the
+  # matrix Node directly, and the one test that runs `npm pack` in the repo (npm refuses a devEngines mismatch) is
+  # left to the `node` job.
+  node-compat:
+    name: node-compat (${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.22.2", "22", "24", "26"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node --version && node dist/main.js --version
+      - name: tests on Node ${{ matrix.node }}
+        run: node node_modules/vitest/vitest.mjs run --testNamePattern '^(?!.*npm pack --dry-run)'
+      # What a developer runs: the packed tarball through npx, with a fresh HOME and npm cache, and no engine warning.
+      - name: npx the packed tarball, no EBADENGINE
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/fresh"
+          pnpm pack --pack-destination "$RUNNER_TEMP/fresh"
+          cd "$RUNNER_TEMP/fresh"
+          # ./ so npx reads it as a package, as the README's `npx -y ./intent-gateway-*.tgz` does.
+          tgz="$(ls intent-gateway-*.tgz)"
+          HOME="$RUNNER_TEMP/fresh" npm_config_cache="$RUNNER_TEMP/fresh/.npm" \
+            npx -y "./$tgz" --help > out.txt 2>&1 || { cat out.txt; exit 1; }
+          cat out.txt
+          if grep -q EBADENGINE out.txt; then echo "::error::npm warned EBADENGINE on Node $(node --version)"; exit 1; fi
+
+  # Below the floor the gateway prints one line naming the supported lines and exits 1 before it loads anything else.
+  # 22.17.1 is a Node a developer reported (F-t).
+  node-floor:
+    name: node-floor (22.17.1 gets one line and exit 1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.17.1"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: one line, exit 1
+        run: |
+          set -euo pipefail
+          code=0
+          node dist/main.js --help > out.txt 2> err.txt || code=$?
+          cat out.txt err.txt
+          [[ "$code" == 1 ]] || { echo "::error::exit $code, not 1"; exit 1; }
+          [[ ! -s out.txt ]] || { echo "::error::stdout is not empty"; exit 1; }
+          [[ "$(wc -l < err.txt)" == 1 ]] || { echo "::error::stderr is not one line"; exit 1; }
+          grep -qF "intent-gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+; this is Node 22.17.1." err.txt
+
   security:
     name: security (gitleaks, public-safety)
     runs-on: ubuntu-24.04
