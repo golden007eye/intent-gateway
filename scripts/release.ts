@@ -415,12 +415,15 @@ async function watch(io: Io, version: string, sha: string): Promise<void> {
   const imageJob = jobs.find((j) => j.name.startsWith("image"));
   const log = imageJob === undefined ? "" : io.run("gh", ["run", "view", "-R", REPO, "--log", "--job", String(imageJob.databaseId)]).stdout;
   const digest = /built (sha256:[0-9a-f]{64}), pushed/.exec(log)?.[1];
+  const ghRelease = out(io, "gh", ["release", "view", tag, "-R", REPO, "--json", "url,isPrerelease"]);
+  const page = ghRelease.status === 0 ? (JSON.parse(ghRelease.stdout) as { url: string; isPrerelease: boolean }) : undefined;
   io.log(
     [
       `released ${PACKAGE} ${version}: the release run concluded ${conclusion} (${run.url})`,
       `  run it:    npx -y ${PACKAGE}@${distTag(version)}`,
       `  dist-tags: ${tags.status === 0 ? JSON.stringify(JSON.parse(tags.stdout)) : `npm view failed: ${firstLine(tags.stderr)}`}`,
       `  image:     ${digest === undefined ? `${IMAGE}:${version} (digest: see the image job of ${run.url})` : `${IMAGE}@${digest} (tag ${version})`}`,
+      `  github:    ${page === undefined ? `no GitHub Release for ${tag} (${firstLine(ghRelease.stderr)}): see the github-release job of ${run.url}` : `${page.url}${page.isPrerelease ? " (prerelease)" : ""}`}`,
     ].join("\n"),
   );
 }
