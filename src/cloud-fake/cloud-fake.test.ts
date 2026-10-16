@@ -30,6 +30,7 @@ import {
   SoftPasskey,
   startFakeCloud,
 } from "./index.ts";
+import { addressKey } from "./server.ts";
 
 const repo = join(import.meta.dirname, "..", "..");
 const load = (name: string): unknown => JSON.parse(readFileSync(join(repo, "contract", "vectors", name), "utf8"));
@@ -194,6 +195,10 @@ const post = (cloud: FakeCloud, session: Session, path: string, value: unknown):
   call(cloud, session, "POST", path, JSON.stringify(value));
 
 const SHIP = { country: "US", postal_code: "94110" };
+// The platform's error bodies (platform-shapes): one body per failure class, whatever the cause inside it.
+const UNAUTHORIZED = { error: "unauthorized", message: "authentication failed" };
+const DIGEST_MISMATCH = { error: "digest_mismatch", message: "content digest mismatch" };
+const UNKNOWN_HANDLE = { error: "not_found", message: "unknown handle" };
 
 async function offerHandle(cloud: FakeCloud, session: Session, title: string): Promise<string> {
   const { json } = await post(cloud, session, "/v1/catalog/search", { ship_to: SHIP });
@@ -238,12 +243,13 @@ describe("key statement (appendix F)", () => {
     expect(cloud.keys.rootPin).toEqual({ kid: "cloud-root-1", jwk: { kty: "OKP", crv: "Ed25519", x: s1.expected.root_public_key_b64url } });
   });
 
-  it("serves the keys from GET /v1/signature-keys that the statement lists", async () => {
+  it("serves at GET /v1/signature-keys, unsigned, only the approval key, as the statement lists it", async () => {
     const cloud = await start();
-    const { res, json } = await call(cloud, null, "GET", "/v1/signature-keys");
+    const { res, json, sent } = await call(cloud, null, "GET", "/v1/signature-keys");
     expect(res.status).toBe(200);
-    const listed = new Map(cloud.statement.keys.map((k) => [k.kid, k.x]));
-    for (const key of Jwks.parse(json).keys) expect(listed.get(key.kid)).toBe(key.x);
+    expect(receiptProblem(res, sent)).toBeNull();
+    const listed = cloud.statement.keys.find((k) => k.kid === "cloud-approval-202610");
+    expect(Jwks.parse(json)).toEqual({ keys: [{ kty: "OKP", crv: "Ed25519", kid: "cloud-approval-202610", x: listed?.x, use: "sig", alg: "EdDSA" }] });
   });
 });
 
@@ -257,6 +263,20 @@ describe("GET /v1/meta", () => {
     const source = /sha256 of `SHA256SUMS`: `([0-9a-f]{64})`/.exec(readFileSync(join(repo, "contract", "SOURCE.md"), "utf8"));
     expect(meta.contract_sums_sha256).toBe(source?.[1]);
     expect(meta.contract_version).toBe("1.5.0");
+    expect(json).toEqual({
+      contract_version: "1.5.0",
+      contract_sums_sha256: source?.[1],
+      rule_versions: ["recheck-v1"],
+      limits: { requests_per_minute: 120, carts_per_hour: 10, carts_per_hour_passkey: 50, approvals_per_day: 20 },
+    });
+    expect(json).not.toHaveProperty("enrol_origin");
+  });
+
+  it("is signed: an unsigned read gets 401 authentication failed", async () => {
+    const cloud = await start();
+    const { res, json } = await call(cloud, null, "GET", "/v1/meta");
+    expect(res.status).toBe(401);
+    expect(json).toEqual(UNAUTHORIZED);
   });
 });
 
@@ -313,6 +333,7 @@ describe("receipts (appendix D)", () => {
       [401, call(cloud, null, "GET", "/v1/meta")],
       [404, call(cloud, other, "POST", `/v1/carts/${cart.cart_handle}/approvals`)],
       [404, call(cloud, session, "GET", "/v1/nowhere")],
+      [405, call(cloud, session, "GET", "/v1/carts")],
       [409, post(cloud, session, "/v1/carts", { offer_handle: handle, quantity: 3, ship_to: SHIP })],
       [413, call(cloud, session, "POST", "/v1/carts", Buffer.alloc(16 * 1024 + 1, 0x20))],
     ];
@@ -371,7 +392,8 @@ describe("request signatures (appendix C)", () => {
       const cloud = await start({ catalog: [fixed] }, new Date(refusal.now * 1000).toISOString());
       const { res, json, sent } = await call(cloud, null, "POST", c2.input.path, refusal.body, { headers: refusal.headers });
       expect(res.status).toBe(refusal.status);
-      expect(ErrorBody.parse(json).error).toBe(refusal.status === 400 ? "digest_mismatch" : "unauthorized");
+      ErrorBody.parse(json);
+      expect(json).toEqual(refusal.status === 400 ? DIGEST_MISMATCH : UNAUTHORIZED);
       expect(receiptProblem(res, sent)).toBeNull();
     });
   }
@@ -389,7 +411,18 @@ describe("request signatures (appendix C)", () => {
     clock = c2.expected.replay.now * 1000;
     const replay = await call(cloud, session, "POST", c2.input.path, body, opts);
     expect(replay.res.status).toBe(c2.expected.replay.status);
-    expect(ErrorBody.parse(replay.json)).toEqual({ error: "unauthorized", message: "replay" });
+    expect(ErrorBody.parse(replay.json)).toEqual(UNAUTHORIZED);
+  });
+
+  it("keeps one nonce store across sessions: a nonce another session used is refused with 401", async () => {
+    const cloud = await start();
+    const nonce = Buffer.alloc(16, 9).toString("base64url");
+    const first = await call(cloud, createSession(), "GET", "/v1/meta", "", { nonce });
+    expect(first.res.status).toBe(200);
+    const other = await call(cloud, createSession(), "GET", "/v1/meta", "", { nonce });
+    expect(other.res.status).toBe(401);
+    expect(other.json).toEqual(UNAUTHORIZED);
+    expect(receiptProblem(other.res, other.sent)).toBeNull();
   });
 
   it("refuses missing headers, a short nonce and an unsigned request on a signed endpoint with 401", async () => {
@@ -407,7 +440,8 @@ describe("request signatures (appendix C)", () => {
       ErrorBody.parse(json);
       expect(receiptProblem(res, sent)).toBeNull();
     }
-    expect(results.map((r) => (r.json as { message: string }).message)).toEqual(["missing_header", "nonce_too_short", "missing_header"]);
+    // Attack: the body does not tell a prober which check failed.
+    expect(results.map((r) => r.json)).toEqual([UNAUTHORIZED, UNAUTHORIZED, UNAUTHORIZED]);
   });
 });
 
@@ -474,15 +508,25 @@ describe("catalog, carts and approvals", () => {
       expect(proof.ledger).toEqual(view?.ledger);
       expect(JSON.stringify(proof)).not.toContain("buyer-1");
 
+      expect(proof.issued_at).toBe(new Date(clock).toISOString().replace(/\.\d{3}Z$/, "Z"));
+
       const handoff = cloud.handoff(created.approval_handle);
       expect(handoff.status).toBe(200);
       expect(`sha256:${sha256Hex(handoff.continueUrl ?? "")}`).toBe(created.snapshot.continue_url_hash);
       expect((await status(cloud, session, created.approval_handle)).state).toBe("handed_off");
       const ordered = cloud.order(created.approval_handle);
+      clock += 90_000;
       const final = await status(cloud, session, created.approval_handle);
       expect(final.state).toBe("ordered");
       expect(final.order_number).toBe(ordered.orderNumber);
-      expect(final.proof).toEqual(proof);
+      // A later read is issued at that read, still names the `approved` ledger entry, and still verifies.
+      const later = final.proof;
+      if (later === undefined) throw new Error("no proof after order");
+      expect(seconds(later.issued_at) - seconds(proof.issued_at)).toBe(90);
+      expect(later.ledger).toEqual(proof.ledger);
+      expect({ ...later, issued_at: proof.issued_at, cloud_signature: "" }).toEqual({ ...proof, cloud_signature: "" });
+      expect(proofProblem(later, created.approval_handle, cloud.statement)).toBeNull();
+      expect(cloud.inspect(created.approval_handle)?.ledger).toEqual(proof.ledger);
     });
   }
 
@@ -534,6 +578,12 @@ describe("catalog, carts and approvals", () => {
     const unknown = await call(cloud, owner, "GET", "/v1/approvals/ap_doesnotexist");
     expect(unknown.res.status).toBe(404);
     expect(read.json).toEqual(unknown.json);
+    expect(read.json).toEqual(UNKNOWN_HANDLE);
+    const ownCart = await post(cloud, owner, "/v1/carts", { offer_handle: await offerHandle(cloud, owner, "Ceramic Mug"), quantity: 1, ship_to: SHIP });
+    const foreignCart = await call(cloud, intruder, "POST", `/v1/carts/${Cart.parse(ownCart.json).cart_handle}/approvals`);
+    expect([foreignCart.res.status, foreignCart.json]).toEqual([404, UNKNOWN_HANDLE]);
+    const offer = await post(cloud, owner, "/v1/carts", { offer_handle: "of_doesnotexist", quantity: 1, ship_to: SHIP });
+    expect([offer.res.status, offer.json]).toEqual([404, UNKNOWN_HANDLE]);
     expect((await call(cloud, owner, "GET", "/v1/approvals/bad")).res.status).toBe(400);
     expect((await call(cloud, owner, "POST", "/v1/carts/bad/approvals")).res.status).toBe(400);
   });
@@ -559,6 +609,86 @@ describe("catalog, carts and approvals", () => {
     expect((await call(cloud, session, "POST", path)).res.status).toBe(410);
   });
 
+  it("answers 404 not_found off the endpoints and 405 not_found for another method, each with a receipt", async () => {
+    const cloud = await start();
+    const session = createSession();
+    for (const [method, path, expected] of [
+      ["GET", "/v1/nowhere", 404],
+      ["POST", "/v2/meta", 404],
+      ["POST", "/v1/meta", 405],
+      ["GET", "/v1/catalog/search", 405],
+      ["POST", "/v1/key-statement", 405],
+      ["GET", "/v1/carts/ct_x/approvals", 405],
+      ["POST", "/v1/approvals/ap_x", 405],
+    ] as const) {
+      const { res, json, sent } = await call(cloud, session, method, path);
+      expect(res.status, `${method} ${path}`).toBe(expected);
+      expect(ErrorBody.parse(json).error).toBe("not_found");
+      expect(receiptProblem(res, sent)).toBeNull();
+    }
+  });
+
+  it("limits carts per address key: a new session resets nothing, a replay counts once, Retry-After is the oldest cart", async () => {
+    const cloud = await start({ quotas: { carts_per_hour: 2 } });
+    const first = createSession();
+    const offer = await offerHandle(cloud, first, "Trail Runner 3");
+    const request = { offer_handle: offer, quantity: 1, ship_to: SHIP };
+    expect((await post(cloud, first, "/v1/carts", request)).res.status).toBe(201);
+    expect((await post(cloud, first, "/v1/carts", request)).res.status).toBe(201); // the same cart: counted once
+    clock += 10 * 60_000;
+    const second = createSession(); // a new session key on the same address
+    expect((await post(cloud, second, "/v1/carts", request)).res.status).toBe(201);
+    const third = createSession();
+    const refused = await post(cloud, third, "/v1/carts", request);
+    expect(refused.res.status).toBe(429);
+    // The oldest counted cart leaves the hour 50 minutes from now.
+    expect(refused.json).toEqual({ error: "rate_limited", message: "the carts limit is used up; retry later", limit: "carts", retry_after_seconds: 3000 });
+    expect(refused.res.headers.get("retry-after")).toBe("3000");
+    expect(receiptProblem(refused.res, refused.sent)).toBeNull();
+    clock += 3000 * 1000;
+    const fresh = { ...request, offer_handle: await offerHandle(cloud, third, "Trail Runner 3") }; // the first expired
+    expect((await post(cloud, third, "/v1/carts", fresh)).res.status).toBe(201);
+  });
+
+  it("raises an address key to the passkey tier for 24 h once a cart from it is approved by passkey", async () => {
+    const cloud = await start({ quotas: { carts_per_hour: 1, carts_per_hour_passkey: 3 } });
+    const session = createSession();
+    const created = await newApproval(cloud, session); // cart 1 of 1
+    const mug = { offer_handle: await offerHandle(cloud, session, "Ceramic Mug"), quantity: 1, ship_to: SHIP };
+    expect((await post(cloud, session, "/v1/carts", mug)).res.status).toBe(429);
+    cloud.approveWithPasskey(created.approval_handle, new SoftPasskey());
+    const other = createSession();
+    expect((await post(cloud, other, "/v1/carts", mug)).res.status).toBe(201); // 2 of 3
+    expect((await post(cloud, other, "/v1/carts", { ...mug, quantity: 2 })).res.status).toBe(201); // 3 of 3
+    const limited = await post(cloud, other, "/v1/carts", { ...mug, quantity: 3 });
+    expect(RateLimited.parse(limited.json).limit).toBe("carts");
+    clock += 24 * 3600_000; // the hour and the 24 h tier have both passed
+    const again = { ...mug, offer_handle: await offerHandle(cloud, other, "Ceramic Mug") };
+    expect((await post(cloud, other, "/v1/carts", again)).res.status).toBe(201);
+    expect((await post(cloud, other, "/v1/carts", { ...again, quantity: 2 })).res.status).toBe(429);
+  });
+
+  it("names no owner, claimer or user handle in any response body", async () => {
+    const cloud = await start();
+    const session = createSession();
+    const passkey = new SoftPasskey({ sub: "buyer-sub-7" });
+    const offer = await offerHandle(cloud, session, "Trail Runner 3");
+    const cart = await post(cloud, session, "/v1/carts", { offer_handle: offer, quantity: 1, ship_to: SHIP });
+    const handle = Cart.parse(cart.json).cart_handle;
+    const created = await call(cloud, session, "POST", `/v1/carts/${handle}/approvals`);
+    const approval = ApprovalCreated.parse(created.json).approval_handle;
+    cloud.approveWithPasskey(approval, passkey);
+    const bodies = [cart, created, await call(cloud, session, "GET", `/v1/approvals/${approval}`)].map((c) => JSON.stringify(c.json));
+    cloud.handoff(approval);
+    cloud.order(approval);
+    bodies.push(JSON.stringify((await call(cloud, session, "GET", `/v1/approvals/${approval}`)).json));
+    for (const body of bodies) {
+      expect(body).not.toContain(session.keyid);
+      expect(body).not.toContain("buyer-sub-7");
+      expect(body).not.toMatch(/owner|claim|user_?handle/i);
+    }
+  });
+
   it("limits new approvals per day with 429 approvals", async () => {
     const cloud = await start({ quotas: { approvals_per_day: 1 } });
     const session = createSession();
@@ -567,7 +697,7 @@ describe("catalog, carts and approvals", () => {
     const cart = await post(cloud, session, "/v1/carts", { offer_handle: await offerHandle(cloud, session, "Ceramic Mug"), quantity: 1, ship_to: SHIP });
     const more = await call(cloud, session, "POST", `/v1/carts/${Cart.parse(cart.json).cart_handle}/approvals`);
     expect(more.res.status).toBe(429);
-    expect(RateLimited.parse(more.json).limit).toBe("approvals");
+    expect(RateLimited.parse(more.json)).toMatchObject({ limit: "approvals", message: "the approvals limit is used up; retry later" });
     expect(created.state).toBe("pending");
   });
 });
@@ -696,6 +826,21 @@ describe("the gateway's trust module (G15) accepts the fake and refuses its tamp
     cloud.tamper.statementExpired();
     const expired = (await call(cloud, null, "GET", "/v1/key-statement")).json;
     expect(verifyStatement(expired, pin(cloud), new Date(clock))).toMatchObject({ ok: false, step: 3, reason: "expired" });
+  });
+});
+
+describe("address keys", () => {
+  it("count IPv4 (also IPv4-mapped) by address and IPv6 by its /64", () => {
+    expect(addressKey("203.0.113.7")).toBe("203.0.113.7");
+    expect(addressKey("::ffff:203.0.113.7")).toBe("203.0.113.7");
+    expect(addressKey("2001:db8:1:2:aaaa::1")).toBe("2001:db8:1:2::/64");
+    expect(addressKey("2001:DB8:1:2:ffff:ffff:ffff:ffff")).toBe("2001:db8:1:2::/64");
+    expect(addressKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(addressKey("::1")).toBe("0:0:0:0::/64");
+    expect(addressKey("fe80::1%eth0")).toBe("fe80:0:0:0::/64");
+    // Attack: rotating addresses inside one /64 stays on one key; the next /64 is another key.
+    expect(addressKey("2001:db8:1:2::9")).toBe(addressKey("2001:db8:1:2:1:2:3:4"));
+    expect(addressKey("2001:db8:1:3::9")).not.toBe(addressKey("2001:db8:1:2::9"));
   });
 });
 
