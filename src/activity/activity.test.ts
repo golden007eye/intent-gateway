@@ -137,6 +137,33 @@ describe("buildActivity", () => {
     expect(summary.requests).toEqual({ logged: 4, sent: 2, acknowledged: 0, unacknowledged: 1, not_sent: 1, maybe_sent: 1, discarded: 1 });
   });
 
+  it("attack: an approval link asked over a request without a receipt keeps that request's outcome", () => {
+    const [cart] = buildActivity(
+      chain([
+        ["disclosure", disclosure("createCart", "POST", "/v1/carts", CART)],
+        ["unacknowledged", { disclosure_seq: 0, reason: "CloudNetworkError: timeout" }],
+        ["approval_pending", { handle: "ap_3", total_minor: 100 }],
+      ]),
+    ).activities;
+    expect(cart).toMatchObject({ action: "cart", outcome: "unacknowledged", facts: { approval_handle: "ap_3" } });
+  });
+
+  it("summary: the fields that may have left, and buyer identity found in their values", () => {
+    const { summary } = buildActivity(
+      chain([
+        ["disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", { ...SEARCH, product: "call +1 415 555 2671" }, [...SEARCH_FIELDS, "product"])],
+        ["receipt", { disclosure_seq: 0, status: 200, verified: true }],
+        ["disclosure", disclosure("createCart", "POST", "/v1/carts", CART, ["offer_handle"])],
+        ["unacknowledged", { disclosure_seq: 2, reason: `${NOT_SENT_REASON} (refused)` }],
+        ["disclosure", { endpoint: "getApproval", fields: [] }],
+        ["receipt", { disclosure_seq: 4, status: 200, verified: true }],
+      ]),
+    );
+    // The cart never left: its offer_handle is not among the fields sent.
+    expect(summary.sent_fields).toEqual(["budget_max.amount_minor", "budget_max.currency", "category", "must_haves", "product", "ship_to.country", "ship_to.postal_code"]);
+    expect(summary.identity).toEqual({ checked: 1, unchecked: 1, findings: [{ seq: 0, kinds: ["phone"] }] });
+  });
+
   it("attack: a receipt that names no earlier disclosure acknowledges nothing", () => {
     const { activities, summary } = buildActivity(
       chain([

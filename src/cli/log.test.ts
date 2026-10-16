@@ -5,11 +5,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEMO_SESSION } from "../gateway/index.ts";
 import { type Entry, NOT_SENT_REASON, openStore } from "../store/index.ts";
 import { type Io, main } from "./index.ts";
 import { clock } from "./log.ts";
+
+vi.setConfig({ testTimeout: 30_000 });
 
 const TS = Date.parse("2026-10-16T17:26:37.000Z");
 const b64 = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64");
@@ -104,6 +106,45 @@ describe("intent log --verbose and --json (golden)", () => {
     expect(result.out).toMatchSnapshot();
   });
 
+  it("the timeline: one line per action with the values it sent, what was and was never sent, the counts", async () => {
+    const s = setup();
+    await writeFlow(s.dir, false);
+    const result = await s.run(["log", "--utc"]);
+    expect(result).toMatchObject({ code: 0, err: "" });
+    expect(result.out.replace(s.dir, "<data>")).toMatchInlineSnapshot(`
+      "intent log · real chain · <data> · 18 entries
+
+      Friday 16 October 2026 (UTC)
+      17:26:37  keys      keys signed by cloud-root-1 · valid until 2027-01-14  ✓ recorded
+      17:27:37  search    running shoes · must: road · under $120 · ZIP 94103   ✓ receipt
+      17:28:37  blocked   search: category blocked by your gateway policy       ✗ nothing sent
+      17:29:37  cart      offer of_abc ×1 · at most $41.98 · ZIP 94103          → approval link to the agent  ✓ 2 receipts
+      17:30:37  status    approval ap_1                                         ✓ receipt
+      17:30:37  approved  $41.98 · passkey aaaa 1111 (pinned now)               ✓ passkey proof checked
+      17:31:37  search    running shoes · must: road · under $120 · ZIP 94103   ⚠ sent, no receipt
+      17:32:37  status    approval ap_1                                         ⚠ not sent: no connection was made
+      17:33:37  search    running shoes · must: road · under $120 · ZIP 94103   ⚠ maybe sent, no answer recorded
+
+      Sent to Intent Cloud only (1 request maybe sent): category, must-haves, budget, offer, quantity, ZIP code, country.
+      Never sent: your name, postal address, card.
+
+      9 actions · 3 searches · 1 cart · 2 status checks · 1 approval · 1 blocked · 4 receipts · 1 sent without receipt · 1 not sent · 1 maybe sent
+      Details: intent log -v · Machine-readable: intent log --json · Integrity: intent verify
+      "
+    `);
+  });
+
+  it("names buyer identity in what was sent instead of saying it was never sent", async () => {
+    const s = setup();
+    const store = await openStore(s.dir, { clock: () => TS });
+    await store.append("disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", { ...SEARCH, product: "jane@example.com" }, SEARCH_FIELDS));
+    await store.append("receipt", { disclosure_seq: 0, status: 200, verified: true });
+    await store.close();
+    const result = await s.run(["log"]);
+    expect(result.out).toContain("✗ Buyer identity in what was sent: seq 0 (email); run intent verify\n");
+    expect(result.out).not.toContain("Never sent");
+  });
+
   it("--json prints one action per line, the activity model with v: 1", async () => {
     const s = setup();
     await writeFlow(s.dir, false);
@@ -144,17 +185,15 @@ describe("intent log --verbose and --json (golden)", () => {
 });
 
 describe("intent log filters", () => {
-  it("--action keeps those actions; the default view then lists only their entries and says it is filtered", async () => {
+  it("--action keeps those actions; the timeline says it is filtered and counts only them", async () => {
     const s = setup();
     await writeFlow(s.dir, false);
-    const result = await s.run(["log", "--action", "blocked,approval"]);
-    expect(result.out.split("\n").filter((l) => l.startsWith("#"))).toEqual([
-      "#3    2026-10-16T17:28:37.000Z  blocked        searchCatalog: held back categories.block at category; nothing was sent",
-      "#11   2026-10-16T17:30:37.000Z  approver pin   aaaa 1111",
-      "#12   2026-10-16T17:30:37.000Z  approved       ap_1: passkey proof verified",
+    const result = await s.run(["log", "--action", "blocked,approval", "--utc"]);
+    expect(result.out.split("\n").filter((l) => /^\d\d:/.test(l))).toEqual([
+      "17:28:37  blocked   search: category blocked by your gateway policy  ✗ nothing sent",
+      "17:30:37  approved  $41.98 · passkey aaaa 1111 (pinned now)          ✓ passkey proof checked",
     ]);
-    expect(result.out).toContain("\nshowing 2 actions of 9 (filtered)\n");
-    expect(result.out).toMatch(/18 entries, every hash links, head seq 17\./);
+    expect(result.out).toContain("\n2 of 9 actions (filtered) · 1 approval · 1 blocked\n");
   });
 
   it("--since takes a duration before now or a date; --last N keeps the last N actions", async () => {
@@ -186,13 +225,16 @@ describe("intent log filters", () => {
 describe("intent log colour and time", () => {
   const ESC = "\u001b[";
 
-  it("colours the labels on a terminal only, and never with NO_COLOR, --no-color or TERM=dumb", async () => {
+  it("colours on a terminal only, and never with NO_COLOR, --no-color or TERM=dumb", async () => {
     const s = setup();
     await writeFlow(s.dir, false);
     const tty = await s.run(["log"], { tty: true });
-    expect(tty.out).toContain(`${ESC}32mreceipt       ${ESC}0m`);
-    expect(tty.out).toContain(`${ESC}31mblocked       ${ESC}0m`);
-    expect(tty.out).toContain(`${ESC}33mno receipt    ${ESC}0m`);
+    expect(tty.out).toContain(`${ESC}32m✓ receipt${ESC}0m`);
+    expect(tty.out).toContain(`${ESC}31m✗ nothing sent${ESC}0m`);
+    expect(tty.out).toContain(`${ESC}33m⚠ sent, no receipt${ESC}0m`);
+    // Date headers and the approved verb in sage: the brand colour on a 24-bit terminal, cyan otherwise.
+    expect(tty.out).toMatch(new RegExp(`\\u001b\\[1;36m\\w+day \\d+ October 2026\\u001b\\[0m`));
+    expect((await s.run(["log"], { tty: true, env: { COLORTERM: "truecolor" } })).out).toContain(`${ESC}1;38;2;175;201;181mapproved${ESC}0m`);
     expect((await s.run(["log", "-v"], { tty: true })).out).toContain(`${ESC}33mapproval asked${ESC}0m`);
     expect((await s.run(["log"])).out).not.toContain(ESC);
     expect((await s.run(["log"], { tty: true, env: { NO_COLOR: "1" } })).out).not.toContain(ESC);
@@ -214,18 +256,18 @@ describe("intent log --follow", () => {
     for (let i = 0; i < 200 && !check(); i += 1) await new Promise((r) => setTimeout(r, 10));
   };
 
-  it("default view: prints each entry appended after the first print, once", async () => {
+  it("default view: prints each new action once it is settled, as its timeline line", async () => {
     const s = setup();
     await writeFlow(s.dir, false);
-    const result = await s.run(["log", "--follow"], { io: { followMs: 10 } });
+    const result = await s.run(["log", "--follow", "--utc"], { io: { followMs: 10 } });
     expect(result.err).toBe(`following ${s.dir}; Ctrl-C stops\n`);
-    const store = await openStore(s.dir, { clock: () => TS });
-    await store.append("receipt", { disclosure_seq: 17, status: 200, verified: true });
+    const store = await openStore(s.dir, { clock: () => TS + 60 * 60_000 });
+    await store.append("disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", SEARCH, SEARCH_FIELDS));
+    await store.append("receipt", { disclosure_seq: 18, status: 200, verified: true });
     await store.close();
-    await until(() => s.out.join("").includes("#18 "));
+    await until(() => s.out.join("").length > result.out.length);
     await new Promise((r) => setTimeout(r, 50));
-    const tail = s.out.join("").split("head seq 17. intent verify re-checks the receipts and approvals.\n")[1];
-    expect(tail).toBe("#18   2026-10-16T17:26:37.000Z  receipt        #17: Intent Cloud acknowledged receiving it (status 200, signature verified)\n");
+    expect(s.out.join("").slice(result.out.length)).toBe("18:26:37  search    running shoes · must: road · under $120 · ZIP 94103   ✓ receipt\n");
   });
 
   it("--json: prints a new action once it is answered and settled, and an action that grew again with its seq", async () => {

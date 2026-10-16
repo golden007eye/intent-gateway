@@ -29,6 +29,7 @@ import { PolicyError } from "../policy/index.ts";
 import { type Entry, openStore, readChain, StoreCorruptError, StoreFencedError, StoreUnsafeError } from "../store/index.ts";
 import { approverFingerprint } from "../trust/index.ts";
 import { CliError, describeError, formatLog, help, type Io, main } from "./index.ts";
+import { formatVerbose } from "./log.ts";
 import { slowCloudNotice } from "./waiting.ts";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
@@ -269,43 +270,44 @@ describe("a policy that shares no ZIP says that search cannot work (F-h)", () =>
 });
 
 describe("intent log (golden)", () => {
-  it("prints the chain field by field", async () => {
-    const s = setup();
+  it("prints one line per action with what it sent and its outcome, then what was sent, the counts and where the details are", async () => {
+    const s = setup({ HOME: "/home/dev" });
     await writeChain(s.dir, async (append) => {
       await append("approver_flag", { fingerprint: "bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222" });
     });
-    const result = await s.run(["log"]);
+    const result = await s.run(["log", "--utc"]);
     expect(result).toMatchObject({ code: 0, err: "" });
-    expect(result.out).toBe(
-      [
-        "#0    2026-10-15T12:00:00.000Z  key statement  cloud-root-1 signed keys valid until 2027-01-13T00:00:00Z",
-        "#1    2026-10-15T12:00:00.000Z  sent           searchCatalog: budget_max.amount_minor, budget_max.currency, category, ship_to.country, ship_to.postal_code",
-        "#2    2026-10-15T12:00:00.000Z  receipt        #1: Intent Cloud acknowledged receiving it (status 200, signature verified)",
-        "#3    2026-10-15T12:00:00.000Z  blocked        searchCatalog: held back email at $.note; nothing was sent",
-        "#4    2026-10-15T12:00:00.000Z  sent           createCart: offer_handle, quantity",
-        "#5    2026-10-15T12:00:00.000Z  no receipt     #4: CloudNetworkError: timeout; it may or may not have arrived",
-        "#6    2026-10-15T12:00:00.000Z  sent           createApproval: no body fields",
-        "#7    2026-10-15T12:00:00.000Z  discarded      #6: 200 without a receipt; the response was not used",
-        "#8    2026-10-15T12:00:00.000Z  approval asked ap_one for $45.99: https://confirm.example/a/ap_one",
-        "#9    2026-10-15T12:00:00.000Z  approver pin   aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111",
-        "#10   2026-10-15T12:00:00.000Z  approved       ap_one: passkey proof verified",
-        "#11   2026-10-15T12:00:00.000Z  FLAGGED        bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222 bbbb 2222 is not the pinned approver; if it is your passkey, run intent approver accept",
-        "",
-        "12 entries, every hash links, head seq 11. intent verify re-checks the receipts and approvals.",
-        "",
-      ].join("\n"),
-    );
+    expect(result.out.replace(s.dir, "<data>")).toMatchInlineSnapshot(`
+      "intent log · real chain · <data> · 12 entries
+
+      Thursday 15 October 2026 (UTC)
+      12:00:00  keys      keys signed by cloud-root-1 · valid until 2027-01-13  ✓ recorded
+      12:00:00  search    budget_max.amount_minor, budget_max.currency, category, ship_to.country, ship_to.postal_code  ✓ receipt
+      12:00:00  blocked   search: an email address in note                      ✗ nothing sent
+      12:00:00  cart      at most $45.99                                        ✗ answer discarded: no valid receipt
+      12:00:00  pinned    passkey aaaa…1111 is the approver now                 ✓ pinned
+      12:00:00  approved  $45.99 · passkey aaaa…1111 (pinned)                   ✓ passkey proof checked
+      12:00:00  flagged   passkey bbbb…2222                                     ✗ not the pinned approver: not approved (intent approver accept)
+
+      Sent to Intent Cloud only: category, budget, offer, quantity, ZIP code, country.
+      Not checked: 3 requests have no logged bytes.
+
+      7 actions · 1 search · 1 cart · 1 approval · 1 blocked · 1 flagged · 1 receipt · 1 sent without receipt · 1 discarded
+      Details: intent log -v · Machine-readable: intent log --json · Integrity: intent verify
+      "
+    `);
   });
 
-  it("on a demo chain, names the local demo Intent Cloud and its test keys as the one that acknowledged", async () => {
+  it("on a demo chain, says DEMO in the header and names the local demo Intent Cloud and its test keys in -v", async () => {
     const s = setup();
     await writeChain(join(s.dir, "demo"), undefined, { demo: true });
     const result = await s.run(["log", "--demo"]);
     expect(result).toMatchObject({ code: 0, err: "" });
-    expect(result.out).toContain(
-      "#3    2026-10-15T12:00:00.000Z  receipt        #2: the local demo Intent Cloud acknowledged receiving it (demo chain, test keys) (status 200, signature verified)\n",
-    );
-    expect(result.out).not.toMatch(/: Intent Cloud acknowledged/);
+    expect(result.out.split("\n")[0]).toMatch(/^intent log · DEMO chain \(test keys\) · .+\/demo · 12 entries$/);
+    expect(result.out).toContain("Details: intent log --demo -v · Machine-readable: intent log --demo --json · Integrity: intent verify --demo\n");
+    const verbose = await s.run(["log", "--demo", "-v"]);
+    expect(verbose.out).toContain("#2: the local demo Intent Cloud acknowledged receiving it (demo chain, test keys) (status 200, signature verified)");
+    expect(verbose.out).not.toMatch(/: Intent Cloud acknowledged/);
   });
 
   it("attack: a demo session entry that is not the first entry does not relabel a real chain's receipts", async () => {
@@ -314,8 +316,11 @@ describe("intent log (golden)", () => {
       await append("session", DEMO_SESSION);
     });
     const result = await s.run(["log"]);
-    expect(result.out).toContain("#2    2026-10-15T12:00:00.000Z  receipt        #1: Intent Cloud acknowledged receiving it (status 200, signature verified)\n");
-    expect(result.out).not.toContain("demo Intent Cloud");
+    expect(result.out.split("\n")[0]).toContain("· real chain ·");
+    expect(result.out).not.toContain("DEMO");
+    const verbose = await s.run(["log", "-v"]);
+    expect(verbose.out).toContain("#1: Intent Cloud acknowledged receiving it (status 200, signature verified)\n");
+    expect(verbose.out).not.toContain("demo Intent Cloud");
   });
 
   it("names a signature-counter flag as such, not as another passkey", async () => {
@@ -324,21 +329,35 @@ describe("intent log (golden)", () => {
       await append("approver_flag", { fingerprint: "aaaa 1111", reason: "sign_count" });
     });
     const result = await s.run(["log"]);
-    expect(result.out).toContain("FLAGGED        aaaa 1111 signed with a signature counter that did not go up; the passkey may have been copied\n");
-    expect(result.out).not.toContain("aaaa 1111 is not the pinned approver");
+    expect(result.out).toMatch(/ flagged {3}passkey aaaa 1111 +✗ signature counter did not go up: not approved\n/);
+    expect(result.out).not.toContain("not the pinned approver");
   });
 
-  it("lists a send with no answer recorded (the gateway stopped mid-request) as logged and maybe sent, not as sent (F-l)", async () => {
+  it("lists a send with no answer recorded (the gateway stopped mid-request) as maybe sent, not as sent (F-l)", async () => {
     const s = setup();
     await writeChain(s.dir, async (append) => {
       await append("disclosure", { endpoint: "searchCatalog", fields: ["category", "ship_to", "ship_to.postal_code"] });
     });
     const result = await s.run(["log"]);
-    expect(result.out).toContain(
-      "#11   2026-10-15T12:00:00.000Z  logged         searchCatalog: category, ship_to.postal_code (maybe sent; no answer recorded: the gateway stopped before it finished, or is still waiting)\n",
-    );
-    // Answered sends keep their rows.
-    expect(result.out).toContain("#1    2026-10-15T12:00:00.000Z  sent           searchCatalog:");
+    expect(result.out).toMatch(/ search {4}category, ship_to\.postal_code +⚠ maybe sent, no answer recorded\n/);
+    expect(result.out).toMatch(/ · 1 maybe sent( ·|\n)/);
+    expect(result.out).toContain("Sent to Intent Cloud only (1 request maybe sent): ");
+    // Answered sends keep their receipt.
+    expect(result.out).toMatch(/ search {4}budget_max\.amount_minor, .+ +✓ receipt\n/);
+  });
+
+  it("ASCII symbols when the locale is not UTF-8; cuts lines to a terminal's width with an ellipsis", async () => {
+    const s = setup();
+    await writeChain(s.dir);
+    const ascii = await s.run(["log"], { io: { env: { ...s.env, LANG: "C" } } });
+    expect(ascii.out).not.toMatch(/[✓⚠✗→·…]/);
+    expect(ascii.out).toMatch(/ blocked {3}search: an email address in note +x nothing sent\n/);
+    const narrow = await s.run(["log", "--no-color"], { tty: true, io: { columns: 60 } });
+    const lines = narrow.out.trimEnd().split("\n");
+    expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(60);
+    expect(narrow.out).toMatch(/…/);
+    // The outcome survives the cut: the values give way first.
+    expect(narrow.out).toMatch(/ blocked {3}.*✗ nothing sent\n/);
   });
 
   it("says what to do on an empty or missing chain", async () => {
@@ -349,8 +368,8 @@ describe("intent log (golden)", () => {
   it("reports a broken chain and an unreadable line instead of hiding them", () => {
     const entry = { seq: 0, prev: "0".repeat(64), ts: "2026-10-15T12:00:00.000Z", kind: "disclosure", body: { endpoint: "getMeta", fields: [] }, hash: "f".repeat(64) };
     const text = formatLog([entry, "torn"]);
-    expect(text).toContain("line 2: not an entry (a torn or edited line); run intent verify");
-    expect(text).toMatch(/the chain breaks at seq 0 .*; run intent verify\n$/);
+    expect(text).toMatch(/ broken {4}line 2 is not an entry \(torn or edited\) +✗ run intent verify\n/);
+    expect(text).toContain("✗ the chain breaks at seq 0 (hash does not match the entry); run intent verify\n");
   });
 
   it("runs with no configuration at all: the unpinned default host does not matter offline", async () => {
@@ -659,9 +678,10 @@ describe("intent doctor", () => {
     expect(result.out).not.toMatch(RAW);
     expect(result.code).toBe(1);
     // Logged before the send, which never left: the log says so instead of "sent" (invariant 5).
-    const log = formatLog(readChain(s.dir));
-    expect(log).toMatch(/^#1 {4}\S+ {2}logged {9}getMeta: no body fields \(not sent: no connection was made\)$/m);
-    expect(log).toMatch(/^#2 {4}\S+ {2}not sent {7}#1: CloudNetworkError: not sent \(DNS: not found\); it never left this machine$/m);
+    const log = formatVerbose(readChain(s.dir));
+    expect(log).toMatch(/^ {2}#1 {4}logged {9}getMeta: no body fields \(not sent: no connection was made\)$/m);
+    expect(log).toMatch(/^ {2}#2 {4}not sent {7}#1: CloudNetworkError: not sent \(DNS: not found\); it never left this machine$/m);
+    expect(formatLog(readChain(s.dir))).toMatch(/ start {5}gateway started · key reads +⚠ not sent: no connection was made\n/);
     const verify = await s.run(["verify", "--skip-install-check"]);
     expect(verify.out).toContain("  sent: 0\n  logged but not sent (no connection was made): 1\n");
     expect(verify.out).toContain("  sent, not acknowledged: 0\n");
@@ -698,7 +718,8 @@ describe("intent doctor", () => {
         `\nFAIL  Intent Cloud at 127.0.0.1:${port} cannot be reached (no complete response within 200 ms); the request may have reached it ` +
           "(logged as sent, not acknowledged). Check your connection and INTENT_CLOUD_URL, or try everything locally with intent demo\n",
       );
-      expect(formatLog(readChain(s.dir))).toMatch(/^#2 {4}\S+ {2}no receipt {5}#1: CloudNetworkError: timeout; it may or may not have arrived$/m);
+      expect(formatVerbose(readChain(s.dir))).toMatch(/^ {2}#2 {4}no receipt {5}#1: CloudNetworkError: timeout; it may or may not have arrived$/m);
+      expect(formatLog(readChain(s.dir))).toMatch(/ start {5}gateway started · key reads +⚠ sent, no receipt\n/);
     } finally {
       await silent.close();
     }
@@ -883,7 +904,7 @@ describe("serve failures", () => {
     });
     const log = await s.run(["log", "--demo"]);
     expect(log.code).toBe(0);
-    expect(log.out).toMatch(/12 entries, every hash links/);
+    expect(log.out).toMatch(/ · 12 entries\n/);
     expect(log.out).not.toContain("real chain");
     const doctor = await s.run(["doctor", "--demo"]);
     expect(doctor.out).toContain(`intent doctor: data dir ${join(s.dir, "demo")}`);
@@ -898,7 +919,7 @@ describe("serve failures", () => {
     // INTENT_DEMO=1 (the image's switch) is the same as --demo.
     const env = setup({ INTENT_DEMO: "1" });
     await writeChain(join(env.dir, "demo"), undefined, { demo: true });
-    expect((await env.run(["log"])).out).toMatch(/12 entries, every hash links/);
+    expect((await env.run(["log"])).out).toMatch(/ · 12 entries\n/);
   });
 
   it("attack: doctor never writes a real keys entry into a demo chain, and --demo refuses a real chain", async () => {
@@ -1200,11 +1221,12 @@ describe("slowCloudNotice", () => {
   });
 });
 
-describe("formatLog: session entries", () => {
+describe("intent log: session entries", () => {
   it("names the demo chain and each gateway session by its local id", () => {
     const entry = (seq: number, body: unknown) => ({ seq, prev: "", ts: "t", kind: "session", body, hash: "" });
-    const text = formatLog([entry(0, { mode: "demo" }), entry(1, { id: "abc" })]);
-    expect(text).toContain("session        demo chain (test keys, sample catalog)");
-    expect(text).toContain("session        gateway session abc started (a local id, never sent)");
+    const items = [entry(0, { mode: "demo" }), entry(1, { id: "abc" })];
+    expect(formatLog(items).split("\n")[0]).toContain("· DEMO chain (test keys) ·");
+    expect(formatLog(items)).toMatch(/ start {5}gateway started +✓ recorded\n/);
+    expect(formatVerbose(items)).toContain("session        gateway session abc started (a local id, never sent)");
   });
 });

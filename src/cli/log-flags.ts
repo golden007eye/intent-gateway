@@ -26,8 +26,20 @@ export function logFlags(io: Io, values: Values): LogFlags {
       ...(action === undefined ? {} : { actions: parseActions(action) }),
       ...(last === undefined ? {} : { last: parseLast(last) }),
     },
-    style: { color: io.isTTY.stdout && !noColor, utc },
+    style: {
+      color: io.isTTY.stdout && !noColor,
+      truecolor: /^(truecolor|24bit)$/i.test(io.env.COLORTERM ?? ""),
+      unicode: utf8(io.env),
+      ...(io.isTTY.stdout && io.columns !== undefined && io.columns > 0 ? { columns: io.columns } : {}),
+      utc,
+    },
   };
+}
+
+/** Whether the locale is UTF-8: the first of LC_ALL, LC_CTYPE, LANG that is set says so; none set counts as UTF-8. */
+export function utf8(env: Readonly<Record<string, string | undefined>>): boolean {
+  const locale = [env.LC_ALL, env.LC_CTYPE, env.LANG].find((v) => v !== undefined && v !== "");
+  return locale === undefined || /utf-?8/i.test(locale);
 }
 
 /** `30m`, `2h`, `7d`, `1w` before now; or a date (`2026-10-16`, local midnight, UTC with --utc) or a time with its zone. */
