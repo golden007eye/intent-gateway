@@ -7,9 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startStubCloud, type StubCloud, type StubHandler, type StubReply } from "../../test/support/stub-cloud.ts";
+import { PINNED, S1, signReceipt, STATEMENT_VALID_AT } from "../../test/support/trust-kit.ts";
 import type { CartRequest, SearchRequest } from "../contract/index.ts";
+import { createHttpCloud } from "../cloud/index.ts";
 import { createSession } from "../signing/index.ts";
 import { type Entry, openStore, type Store, StoreFencedError, type StoreFs, verifyChain } from "../store/index.ts";
+import { type KeySet, verifyStatement } from "../trust/index.ts";
 import {
   CloudNetworkError,
   CloudRequestError,
@@ -18,6 +21,8 @@ import {
   createDisclosedCloud,
   DisclosureBlockedError,
   DisclosureDiscardedError,
+  DisclosureNoKeysError,
+  type DisclosureOptions,
   type IntentCloud,
 } from "./index.ts";
 
@@ -27,7 +32,8 @@ type Json = Record<string, unknown>;
 const vector = (name: string): Json =>
   JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "contract", "vectors", name), "utf8")) as Json;
 const d1 = ((vector("d1-receipt.json")["cases"] as Json[])[0] as Json)["expected"] as Json;
-const RECEIPT = { header: d1["intent_receipt"] as string, signature: d1["intent_receipt_signature"] as string };
+// A genuine receipt, but for another request (vector d1's cart request): it must not verify for ours.
+const FOREIGN_RECEIPT = { header: d1["intent_receipt"] as string, signature: d1["intent_receipt_signature"] as string };
 const STATEMENT = (vector("s1-key-statement.json")["expected"] as Json)["statement"] as Json;
 
 const NOW_MS = 1790251200_000;
@@ -95,21 +101,52 @@ const BODIES: Readonly<Record<string, Json>> = {
 const STATUS: Readonly<Record<string, number>> = { "/v1/carts": 201, "/v1/carts/ct_TEST0001/approvals": 201 };
 
 const VERSION: [string, string] = ["Intent-Contract-Version", "1.5.0"];
-const RECEIPT_HEADERS: [string, string][] = [
-  ["Intent-Receipt", RECEIPT.header],
-  ["Intent-Receipt-Signature", RECEIPT.signature],
+const FOREIGN_HEADERS: [string, string][] = [
+  ["Intent-Receipt", FOREIGN_RECEIPT.header],
+  ["Intent-Receipt-Signature", FOREIGN_RECEIPT.signature],
 ];
+/** In a reply's header list: a receipt the test edge signs over the request it received and the reply's status. */
+const SIGNED = "signed receipt";
+type HeaderSpec = [string, string] | typeof SIGNED;
+
+const statement = verifyStatement(S1.expected.statement, PINNED, STATEMENT_VALID_AT);
+if (!statement.ok) throw new Error("s1 does not verify");
+const KEYS: KeySet = statement.keySet;
+const DISCLOSURE_NOW = () => STATEMENT_VALID_AT.getTime();
+
+function edgeReceipt(req: Parameters<StubHandler>[0], status: number): [string, string][] {
+  const signatureInput = String(req.headers["signature-input"] ?? "");
+  const param = (name: string) => new RegExp(`;${name}=("?)([^";]*)\\1(?:;|$)`).exec(signatureInput)?.[2];
+  const keyid = param("keyid");
+  const nonce = param("nonce");
+  const created = param("created");
+  const request = {
+    method: req.method,
+    path: req.url,
+    content_digest: req.headers["content-digest"],
+    ...(keyid === undefined ? {} : { keyid }),
+    ...(nonce === undefined ? {} : { nonce }),
+    ...(created === undefined ? {} : { created: Number(created) }),
+  };
+  const signed = signReceipt({ v: 1, kid: "cloud-receipt-202610", request, status, received_at: "2026-10-15T12:00:01Z" });
+  return [
+    ["Intent-Receipt", signed.receipt],
+    ["Intent-Receipt-Signature", signed.signature],
+  ];
+}
 const JSON_TYPE: [string, string] = ["Content-Type", "application/json"];
 
 /** The endpoint's success body, with the headers given (by default the version and both receipt headers). */
 const reply =
-  (headers: [string, string][] = [VERSION, ...RECEIPT_HEADERS, JSON_TYPE], over: Partial<StubReply> = {}): StubHandler =>
-  (req) => ({
-    status: STATUS[req.url ?? ""] ?? 200,
-    headers,
-    body: JSON.stringify(BODIES[req.url ?? ""] ?? {}),
-    ...over,
-  });
+  (headers: HeaderSpec[] = [VERSION, SIGNED, JSON_TYPE], over: Partial<StubReply> = {}): StubHandler =>
+  (req) => {
+    const status = over.status ?? STATUS[req.url ?? ""] ?? 200;
+    return {
+      status,
+      headers: headers.flatMap((h) => (h === SIGNED ? edgeReceipt(req, status) : [h])),
+      body: over.body ?? JSON.stringify(BODIES[req.url ?? ""] ?? {}),
+    };
+  };
 
 const session = createSession();
 let dir: string;
@@ -124,10 +161,12 @@ afterEach(async () => {
   await stub.close();
 });
 
-async function setup(handler: StubHandler = reply(), fs?: StoreFs, clock?: () => number) {
+const trusted: DisclosureOptions = { keySet: () => KEYS, now: DISCLOSURE_NOW };
+
+async function setup(handler: StubHandler = reply(), fs?: StoreFs, clock?: () => number, options = trusted) {
   stub = await startStubCloud(handler);
   store = await openStore(dir, { ...(fs === undefined ? {} : { fs }), ...(clock === undefined ? {} : { clock }) });
-  return connectCloud({ baseUrl: stub.baseUrl, session, now: () => NOW_MS }, store);
+  return connectCloud({ baseUrl: stub.baseUrl, session, now: () => NOW_MS }, store, options);
 }
 
 const kinds = () => store.entries().map((e) => e.kind);
@@ -181,10 +220,11 @@ describe("invariant 2: log before send", () => {
     expect(nonce).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(bodyOf(receipt)).toEqual({
       disclosure_seq: disclosure?.seq,
-      receipt_header: RECEIPT.header,
-      receipt_signature: RECEIPT.signature,
+      receipt_header: result.receipt?.header,
+      receipt_signature: result.receipt?.signature,
       status: 200,
       contract_version: "1.5.0",
+      verified: true,
     });
     expect(verifyChain(store.entries())).toEqual({ ok: true });
   });
@@ -342,7 +382,7 @@ describe("what came back (ADR-0006)", () => {
   });
 
   it("a 4xx with a receipt is a receipt entry", async () => {
-    const cloud = await setup(reply([VERSION, ...RECEIPT_HEADERS], { status: 401, body: JSON.stringify({ error: "unauthorized", message: "no" }) }));
+    const cloud = await setup(reply([VERSION, SIGNED], { status: 401, body: JSON.stringify({ error: "unauthorized", message: "no" }) }));
     const result = await cloud.meta();
     expect(result).toMatchObject({ ok: false, status: 401 });
     expect(kinds()).toEqual(["disclosure", "receipt"]);
@@ -350,7 +390,7 @@ describe("what came back (ADR-0006)", () => {
   });
 
   it("an unusable response follows the same rules and rethrows the adapter's error", async () => {
-    const cloud = await setup(reply([VERSION, ...RECEIPT_HEADERS], { body: "not json" }));
+    const cloud = await setup(reply([VERSION, SIGNED], { body: "not json" }));
     await expect(cloud.meta()).rejects.toThrow(CloudResponseError);
     stub.handler = reply([JSON_TYPE], { body: "not json" });
     await expect(cloud.meta()).rejects.toThrow(CloudResponseError);
@@ -368,6 +408,55 @@ describe("what came back (ADR-0006)", () => {
     expect(kinds()).toEqual(["disclosure"]);
   });
 });
+
+describe("receipt verification (trust)", () => {
+  it("a 2xx whose receipt is for another request is discarded and not returned", async () => {
+    const cloud = await setup(reply([VERSION, ...FOREIGN_HEADERS, JSON_TYPE]));
+    await expect(cloud.search(SEARCH)).rejects.toThrow(DisclosureDiscardedError);
+    expect(kinds()).toEqual(["disclosure", "discarded"]);
+    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "200 with an invalid receipt (step 4: path_mismatch)" });
+  });
+
+  it("a receipt for another status, or under an expired key set, is discarded", async () => {
+    const cloud = await setup((req) => ({ ...(reply()(req) as StubReply), headers: [VERSION, ...edgeReceipt(req, 201)] }));
+    await expect(cloud.meta()).rejects.toThrow(DisclosureDiscardedError);
+    expect(bodyOf(store.entries()[1])).toMatchObject({ reason: "200 with an invalid receipt (step 5: status_mismatch)" });
+
+    const late = createDisclosedCloud(createLateCloud(), store, { keySet: () => KEYS, now: () => Date.UTC(2099, 0, 1) });
+    await expect(late.meta()).rejects.toThrow(DisclosureDiscardedError);
+    expect(bodyOf(store.entries()[3])).toMatchObject({ reason: "200 with an invalid receipt (step 3: statement_expired)" });
+  });
+
+  it("a non-2xx with an invalid receipt is discarded even without the version header, and returned", async () => {
+    const cloud = await setup(reply(FOREIGN_HEADERS, { status: 503, body: "" }));
+    const result = await cloud.search(SEARCH);
+    expect(result).toMatchObject({ ok: false, status: 503 });
+    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "503 with an invalid receipt (step 4: path_mismatch)" });
+  });
+
+  it("before a verified key statement only the bootstrap reads are sent; their receipts are logged unverified", async () => {
+    const cloud = await setup(reply(), undefined, undefined, { keySet: () => null });
+    for (const call of [
+      () => cloud.search(SEARCH),
+      () => cloud.createCart(CART_REQUEST),
+      () => cloud.createApproval("ct_TEST0001"),
+      () => cloud.getApproval("ap_TEST0001"),
+    ]) {
+      await expect(call()).rejects.toThrow(DisclosureNoKeysError);
+    }
+    expect(stub.connections).toHaveLength(0);
+    expect(kinds()).toEqual([]);
+
+    expect((await cloud.keyStatement()).ok).toBe(true);
+    expect(kinds()).toEqual(["disclosure", "receipt"]);
+    expect(bodyOf(store.entries()[1])).toMatchObject({ disclosure_seq: 0, verified: false });
+  });
+});
+
+/** The real adapter on the current stub, for a second disclosed cloud over the same store. */
+function createLateCloud(): IntentCloud {
+  return createHttpCloud({ baseUrl: stub.baseUrl, session, now: () => NOW_MS });
+}
 
 describe("an adapter that misbehaves", () => {
   const throwingCloud = (failure: unknown, callHook = true): IntentCloud => {
@@ -398,10 +487,10 @@ describe("an adapter that misbehaves", () => {
   it("a failure after the log append that is not a response is unacknowledged, named by its error", async () => {
     stub = await startStubCloud(reply());
     store = await openStore(dir);
-    await expect(createDisclosedCloud(throwingCloud(new CloudRequestError("keep-alive agent")), store).meta()).rejects.toThrow(
+    await expect(createDisclosedCloud(throwingCloud(new CloudRequestError("keep-alive agent")), store, trusted).meta()).rejects.toThrow(
       CloudRequestError,
     );
-    await expect(createDisclosedCloud(throwingCloud("not an error"), store).meta()).rejects.toBe("not an error");
+    await expect(createDisclosedCloud(throwingCloud("not an error"), store, trusted).meta()).rejects.toBe("not an error");
     expect(store.entries().map((e) => [e.kind, (e.body as Json)["reason"]])).toEqual([
       ["disclosure", undefined],
       ["unacknowledged", "CloudRequestError"],
@@ -413,6 +502,6 @@ describe("an adapter that misbehaves", () => {
   it("a result without the beforeSend call is refused", async () => {
     stub = await startStubCloud(reply());
     store = await openStore(dir);
-    await expect(createDisclosedCloud(throwingCloud(null, false), store).meta()).rejects.toThrow("without calling beforeSend");
+    await expect(createDisclosedCloud(throwingCloud(null, false), store, { keySet: () => KEYS }).meta()).rejects.toThrow("without calling beforeSend");
   });
 });

@@ -6,11 +6,12 @@
 // 2. A `disclosure` entry holding the exact body bytes and the full header set is appended; the store fsyncs before
 //    append resolves. If the append throws, beforeSend throws and the adapter sends nothing.
 // 3. After the exchange, exactly one of `receipt`, `unacknowledged` or `discarded` (ADR-0006):
-//    - receipt: both receipt headers came back. They are stored as received and verified later against the key
-//      statement (trust, by the gateway and `intent verify`); this module does not import trust.
-//    - unacknowledged: no HTTP response, or a non-2xx response without Intent-Contract-Version.
-//    - discarded: a 2xx without a receipt (its content is never returned: DisclosureDiscardedError), or any response
-//      with Intent-Contract-Version and no receipt.
+//    - receipt: both receipt headers came back and verify (trust's verifyReceipt) against the logged request and the
+//      verified key set. Before a key set exists only the three key-bootstrap reads may be sent; their receipts are
+//      logged with `verified: false`.
+//    - unacknowledged: no HTTP response, or a non-2xx response without Intent-Contract-Version and without a receipt.
+//    - discarded: a 2xx without a valid receipt (its content is never returned: DisclosureDiscardedError), any
+//      response with Intent-Contract-Version and no receipt, or any invalid receipt.
 // Inbound bodies are never scanned: an offer title is Cloud's content, not the buyer's.
 import {
   CloudResponseError,
@@ -24,6 +25,7 @@ import {
 import type { ApprovalCreated, ApprovalStatus, Cart, CartRequest, Jwks, KeyStatement, Meta, SearchRequest, SearchResponse } from "../contract/index.ts";
 import { type Finding, findIdentity } from "../privacy/index.ts";
 import type { Store } from "../store/index.ts";
+import { type KeySet, type SentRequest, verifyReceipt } from "../trust/index.ts";
 
 /** The same operations as IntentCloud; each call is logged before it is sent. */
 export interface DisclosedCloud {
@@ -34,6 +36,17 @@ export interface DisclosedCloud {
   createCart(request: CartRequest): Promise<CloudResult<Cart>>;
   createApproval(cartHandle: string): Promise<CloudResult<ApprovalCreated>>;
   getApproval(approvalHandle: string): Promise<CloudResult<ApprovalStatus>>;
+}
+
+export interface DisclosureOptions {
+  /**
+   * The key set of a verified key statement (trust's verifyStatement), read on every call. Null until the statement
+   * is verified: then only meta, signatureKeys and keyStatement may be sent, and their receipts are logged with
+   * `verified: false`, for `intent verify` to check once the statement is in the chain.
+   */
+  keySet: () => KeySet | null;
+  /** Milliseconds since the epoch, for the key set's expiry. Defaults to Date.now. */
+  now?: () => number;
 }
 
 /** The outbound body looked like buyer identity; a `block` entry was written and nothing was sent. */
@@ -48,7 +61,7 @@ export class DisclosureBlockedError extends Error {
   }
 }
 
-/** A 2xx arrived without a receipt; a `discarded` entry was written and its content is not returned. */
+/** A 2xx arrived without a valid receipt; a `discarded` entry was written and its content is not returned. */
 export class DisclosureDiscardedError extends Error {
   override name = "DisclosureDiscardedError";
   readonly disclosureSeq: number;
@@ -60,6 +73,11 @@ export class DisclosureDiscardedError extends Error {
   }
 }
 
+/** A search, cart or approval call before a verified key statement: its receipt could not be checked, so nothing is sent. */
+export class DisclosureNoKeysError extends Error {
+  override name = "DisclosureNoKeysError";
+}
+
 interface Acknowledgement {
   status: number;
   receipt: { header: string; signature: string } | null;
@@ -67,14 +85,22 @@ interface Acknowledgement {
 }
 
 /** The HTTP adapter (base URL, session, clock) wrapped in the disclosure log: the one way to reach Intent Cloud. */
-export function connectCloud(options: HttpCloudOptions, store: Store): DisclosedCloud {
-  return createDisclosedCloud(createHttpCloud(options), store);
+export function connectCloud(http: HttpCloudOptions, store: Store, options: DisclosureOptions): DisclosedCloud {
+  return createDisclosedCloud(createHttpCloud(http), store, options);
 }
 
-export function createDisclosedCloud(cloud: IntentCloud, store: Store): DisclosedCloud {
-  async function disclosed<T>(run: (beforeSend: (request: PreparedRequest) => Promise<void>) => Promise<CloudResult<T>>): Promise<CloudResult<T>> {
-    // A holder, not a local, because beforeSend sets it inside the adapter's call.
-    const logged: { seq: number | null } = { seq: null };
+export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: DisclosureOptions): DisclosedCloud {
+  const now = options.now ?? Date.now;
+
+  async function disclosed<T>(
+    needsKeys: boolean,
+    run: (beforeSend: (request: PreparedRequest) => Promise<void>) => Promise<CloudResult<T>>,
+  ): Promise<CloudResult<T>> {
+    if (needsKeys && options.keySet() === null) {
+      throw new DisclosureNoKeysError("no verified key statement yet: only meta, signatureKeys and keyStatement may be sent");
+    }
+    // A holder, not locals, because beforeSend fills it inside the adapter's call.
+    const logged: { seq: number | null; sent: SentRequest | null } = { seq: null, sent: null };
     const beforeSend = async (request: PreparedRequest): Promise<void> => {
       const json = parseBody(request.body);
       const fields = fieldNames(json);
@@ -83,8 +109,10 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store): Disclose
         await store.append("block", { endpoint: request.operation, fields, blocked: findings.map(describe) });
         throw new DisclosureBlockedError(request.operation, findings);
       }
-      const entry = await store.append("disclosure", disclosureBody(request, fields));
+      const body = disclosureBody(request, fields);
+      const entry = await store.append("disclosure", body);
       logged.seq = entry.seq;
+      logged.sent = sentRequest(body);
     };
 
     let result: CloudResult<T>;
@@ -92,53 +120,64 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store): Disclose
       result = await run(beforeSend);
     } catch (error) {
       // seq is null when the request never got past beforeSend: nothing was sent, so nothing follows the log.
-      const { seq } = logged;
-      if (seq !== null) {
-        if (error instanceof CloudResponseError) await acknowledge(seq, error);
+      const { seq, sent } = logged;
+      if (seq !== null && sent !== null) {
+        if (error instanceof CloudResponseError) await acknowledge(seq, sent, error);
         else await store.append("unacknowledged", { disclosure_seq: seq, reason: noResponseReason(error) });
       }
       throw error;
     }
-    const { seq } = logged;
-    if (seq === null) throw new Error("the cloud adapter returned without calling beforeSend");
-    const discarded = await acknowledge(seq, result);
+    const { seq, sent } = logged;
+    if (seq === null || sent === null) throw new Error("the cloud adapter returned without calling beforeSend");
+    const discarded = await acknowledge(seq, sent, result);
     if (discarded !== null) throw new DisclosureDiscardedError(seq, result.status, discarded);
     return result;
   }
 
   /** Appends the entry that answers disclosure `seq`; returns the reason when a 2xx's content must be discarded. */
-  async function acknowledge(seq: number, ack: Acknowledgement): Promise<string | null> {
+  async function acknowledge(seq: number, sent: SentRequest, ack: Acknowledgement): Promise<string | null> {
     const { status, receipt, contractVersion } = ack;
+    const success = status >= 200 && status < 300;
+    let reason: string;
     if (receipt !== null) {
-      await store.append("receipt", {
-        disclosure_seq: seq,
-        receipt_header: receipt.header,
-        receipt_signature: receipt.signature,
-        status,
-        contract_version: contractVersion,
-      });
+      const keySet = options.keySet();
+      const checked =
+        keySet === null
+          ? null
+          : verifyReceipt({ status, receipt: receipt.header, signature: receipt.signature }, sent, keySet, new Date(now()));
+      if (checked === null || checked.ok) {
+        await store.append("receipt", {
+          disclosure_seq: seq,
+          receipt_header: receipt.header,
+          receipt_signature: receipt.signature,
+          status,
+          contract_version: contractVersion,
+          verified: checked !== null,
+        });
+        return null;
+      }
+      // An invalid receipt counts as a missing one, and it shows the edge answered, so it is never unacknowledged.
+      reason = `${String(status)} with an invalid receipt (step ${String(checked.step)}: ${checked.reason})`;
+    } else if (success) {
+      reason = `${String(status)} without a receipt`;
+    } else if (contractVersion !== null) {
+      reason = `${String(status)} with Intent-Contract-Version but without a receipt`;
+    } else {
+      await store.append("unacknowledged", { disclosure_seq: seq, reason: `${String(status)} without Intent-Contract-Version` });
       return null;
     }
-    const success = status >= 200 && status < 300;
-    if (success || contractVersion !== null) {
-      const reason = success
-        ? `${String(status)} without a receipt`
-        : `${String(status)} with Intent-Contract-Version but without a receipt`;
-      await store.append("discarded", { disclosure_seq: seq, reason });
-      return success ? reason : null;
-    }
-    await store.append("unacknowledged", { disclosure_seq: seq, reason: `${String(status)} without Intent-Contract-Version` });
-    return null;
+    await store.append("discarded", { disclosure_seq: seq, reason });
+    return success ? reason : null;
   }
 
   return {
-    meta: () => disclosed((beforeSend) => cloud.meta({ beforeSend })),
-    signatureKeys: () => disclosed((beforeSend) => cloud.signatureKeys({ beforeSend })),
-    keyStatement: () => disclosed((beforeSend) => cloud.keyStatement({ beforeSend })),
-    search: (request) => disclosed((beforeSend) => cloud.search(request, { beforeSend })),
-    createCart: (request) => disclosed((beforeSend) => cloud.createCart(request, { beforeSend })),
-    createApproval: (handle) => disclosed((beforeSend) => cloud.createApproval(handle, { beforeSend })),
-    getApproval: (handle) => disclosed((beforeSend) => cloud.getApproval(handle, { beforeSend })),
+    meta: () => disclosed(false, (beforeSend) => cloud.meta({ beforeSend })),
+    signatureKeys: () => disclosed(false, (beforeSend) => cloud.signatureKeys({ beforeSend })),
+    keyStatement: () => disclosed(false, (beforeSend) => cloud.keyStatement({ beforeSend })),
+    search: (request) => disclosed(true, (beforeSend) => cloud.search(request, { beforeSend })),
+    createCart: (request) => disclosed(true, (beforeSend) => cloud.createCart(request, { beforeSend })),
+    createApproval: (handle) => disclosed(true, (beforeSend) => cloud.createApproval(handle, { beforeSend })),
+    getApproval: (handle) => disclosed(true, (beforeSend) => cloud.getApproval(handle, { beforeSend })),
   };
 }
 
@@ -191,6 +230,18 @@ function disclosureBody(request: PreparedRequest, fields: string[]) {
     keyid: param("keyid"),
     nonce: param("nonce"),
     created: created === null ? null : Number(created),
+  };
+}
+
+/** The logged request in the receipt's field names; keyid, nonce and created are absent for an unsigned request. */
+function sentRequest(body: ReturnType<typeof disclosureBody>): SentRequest {
+  return {
+    method: body.method,
+    path: body.path,
+    content_digest: body.content_digest ?? "",
+    ...(body.keyid === null ? {} : { keyid: body.keyid }),
+    ...(body.nonce === null ? {} : { nonce: body.nonce }),
+    ...(body.created === null ? {} : { created: body.created }),
   };
 }
 

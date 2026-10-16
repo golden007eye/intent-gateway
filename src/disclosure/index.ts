@@ -12,6 +12,8 @@ export {
   connectCloud,
   createDisclosedCloud,
   type DisclosedCloud,
+  DisclosureNoKeysError,
+  type DisclosureOptions,
   DisclosureBlockedError,
   DisclosureDiscardedError,
 } from "./disclosure.ts";
