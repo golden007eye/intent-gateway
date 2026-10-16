@@ -102,7 +102,7 @@ describe("meet", () => {
         }
       }
     }
-  }, 30_000); // 1000 pairs: allow for a loaded full-suite run
+  });
 
   it("keeps only merchants both allow-lists accept, including subdomains", () => {
     const a = loadPolicy("version: 1\napproval: passkey\nmerchants: {allow: [a.example, b.example]}\n");
