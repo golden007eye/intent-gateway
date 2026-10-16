@@ -414,6 +414,8 @@ describe("intent policy show", () => {
     expect(result.code).toBe(0);
     expect(result.out).toMatch(/^no policy file at .+: the gateway uses the bundled zip-only policy$/m);
     expect(result.out).toContain("ship_to: postcode_only");
+    // From source there is no build-info.json, so no commit is claimed.
+    expect(result.out).toMatch(/^gateway: \S+, no commit \(running from source\)$/m);
   });
 
   it("shows the lock written by policy add, and exit 1 once policy.yaml was edited after it", async () => {
@@ -727,6 +729,9 @@ describe("serve failures", () => {
     expect(result.err).not.toContain("<token>");
     expect(result.err).not.toContain(token);
     expect(CONTAINER_CONFIRM_PORT).toBe(8788);
+    // A detached container has no Ctrl-C: the last line says how to stop it (F-i).
+    expect(result.err).toMatch(/\nintent-gateway: serving; stop it with docker stop (<container>|[0-9a-f]{12})\n$/);
+    expect(result.err).not.toContain("Ctrl-C");
   });
 
   it("outside the container, serve --http names $INTENT_HTTP_TOKEN and the address it is bound to", async () => {
@@ -854,6 +859,8 @@ describe("intent demo --http (devrun F-c)", () => {
     expect(code).toBeDefined();
     expect(readFileSync(join(s.dir, "demo", "approval-code"), "utf8")).toBe(`${code ?? ""}\n`);
     expect(help()).toContain("demo [--http]");
+    expect(result.err).toMatch(/\nintent-gateway: serving until Ctrl-C\n$/);
+    expect(result.err).not.toContain("docker stop");
   });
 });
 

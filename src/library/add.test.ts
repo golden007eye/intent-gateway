@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalize } from "../jcs/index.ts";
 import { PolicyError, loadPolicy, meet } from "../policy/index.ts";
+import { noCommitReason } from "./add.ts";
 import { addPolicy, LibraryError, LIBRARY_REPO, MAX_GITHUB_BODY_BYTES, planPolicy, readLock, type AddOptions } from "./index.ts";
 
 // Each add fsyncs three times (two temp files and the directory); on a busy disk that alone can pass the
@@ -89,6 +90,12 @@ describe("addPolicy: bundled source", () => {
     expect(error.code).toBe("NO_BUILD_COMMIT");
     expect(error.message).toMatch(/--commit/);
     expect(existsSync(policyPath) || existsSync(lockPath)).toBe(false);
+  });
+
+  it("names why a build has no commit to record, including a local build without BUILD_COMMIT (F-i)", () => {
+    expect(noCommitReason({ dirty: null })).toBe("this gateway's commit is unknown (a local build without BUILD_COMMIT)");
+    expect(noCommitReason({ dirty: true })).toBe("this gateway was built from a tree with uncommitted changes");
+    expect(noCommitReason({ dirty: false })).toBe("this gateway runs from source");
   });
 
   it("refuses an unknown or path-like name", async () => {

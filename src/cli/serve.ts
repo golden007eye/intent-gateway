@@ -3,7 +3,7 @@
 // In demo mode (`intent demo`, `--demo`) the same gateway runs against the in-process demo Intent Cloud with the
 // published test root pinned, the store in `<data>/demo`, approval links on the local confirm page, and the demo
 // banner on stderr and on every tool result.
-import { type Config, DOCKER_EXEC, INTENT } from "../config/index.ts";
+import { type Config, DOCKER_EXEC, DOCKER_STOP, INTENT } from "../config/index.ts";
 import { DEMO_BANNER, type Demo, nextSteps } from "../demo/index.ts";
 import { createGateway } from "../gateway/index.ts";
 import { runHttp, runStdio } from "../mcp/index.ts";
@@ -61,7 +61,8 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
         say(container ? "connect an agent with the claude mcp add line above" : `connect an agent: claude mcp add --transport http intent ${url}${auth}`);
       } else {
         for (const text of nextSteps({ http: container ? "above" : { url, token }, code: { code: demo.code, file: demo.codeFile } })) log(text);
-        say("serving until Ctrl-C");
+        // A detached container has no terminal to press Ctrl-C in.
+        say(container ? `serving; stop it with ${DOCKER_STOP}` : "serving until Ctrl-C");
       }
     } else {
       transport = await runStdio({ gateway, ...banner });

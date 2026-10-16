@@ -80,7 +80,7 @@ $ npx -y intent-gateway@next verify --demo
 The image runs the same package and serves MCP over HTTP on port 8787. Until the first preview release puts it on GHCR, build it from the cloned folder:
 
 ```console
-$ docker build --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t intent-gateway .
+$ docker build --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t intent-gateway .   # the build-arg is optional: it records the commit
 $ docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 \
     -e INTENT_DEMO=1 -v intent-data:/data intent-gateway
 $ docker logs intent

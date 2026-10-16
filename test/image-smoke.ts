@@ -153,6 +153,11 @@ async function defaultPolicy(): Promise<void> {
       return s === 0 ? undefined : s;
     });
     check(status === 200 && /No policy file found; using the bundled zip-only policy/.test(logs(id)), "with no policy file the bundled zip-only default applies and initialize works");
+    // The commit `policy show` names is the one the image label records; a plain build (no BUILD_COMMIT) names none.
+    const shown = docker("exec", id, "intent", "policy", "show");
+    const revision = docker("inspect", "-f", '{{index .Config.Labels "org.opencontainers.image.revision"}}', image).trim();
+    const expected = revision === "" ? "commit unknown (local build without BUILD_COMMIT)" : `built from commit ${revision}`;
+    check(new RegExp(`^gateway: \\S+, ${expected.replace(/[()]/g, "\\$&")}$`, "m").test(shown), `policy show says: ${expected}`, shown);
   } finally {
     await cloud.close();
   }
@@ -189,6 +194,7 @@ async function demo(): Promise<void> {
   check(!logs(id).includes("<token>") && !logs(id).includes("<container>"), "the demo log has no <token> or <container> placeholder", logs(id));
   check(logs(id).includes("Add the demo gateway to Claude Code with the claude mcp add line above."), "the demo next steps point at that line");
   check(logs(id).includes(`docker exec ${short} intent verify --demo`), "the demo log names this container by its id (HOSTNAME)");
+  check(logs(id).includes(`intent-gateway: serving; stop it with docker stop ${short}\n`) && !logs(id).includes("Ctrl-C"), "a detached container says docker stop, not Ctrl-C", logs(id));
   const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers: { authorization: `Bearer ${token}` } } });
   const client = new Client({ name: "image-smoke", version: "0" });
   await client.connect(transport as Transport);
@@ -216,7 +222,9 @@ async function demo(): Promise<void> {
       headers: { "content-type": "application/x-www-form-urlencoded", origin: "http://127.0.0.1:8788", "sec-fetch-site": "same-origin" },
       body: new URLSearchParams({ csrf, action: "approve", code }).toString(),
     });
+    const approved = await approve.text();
     check(approve.status === 200, "Approve (a POST from the host) succeeds", String(approve.status));
+    check(approved.split("Approved with the demo passkey").length - 1 === 1 && approved.includes("<h1>Approved</h1>"), "the result page says it was approved once", approved);
     const status = await call("get_approval_status", { approval_handle: handle });
     check(/approved/i.test(status) && status.includes("Approver passkey fingerprint:"), "get_approval_status says approved", status);
   } finally {
@@ -242,6 +250,7 @@ async function noRootKey(): Promise<void> {
   const next = run(["-p", `127.0.0.1:${String(mcpPort + 30)}:8787`, "-e", "INTENT_DEMO=1", "-v", `${volume}:/data`, image]);
   const token = await until("the token line on the first start that serves", () => TOKEN_LINE.exec(logs(next))?.[1]);
   check(token === docker("exec", next, "cat", "/data/http-token").trim(), "the first start that serves prints the token made by the one that failed", logs(next));
+  check(!logs(next).includes("using the HTTP token in"), "the start that prints the token does not also say how to read it from the container", logs(next));
 }
 
 const volumes: string[] = [];
