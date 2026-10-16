@@ -8,4 +8,4 @@
 // `demoTrustKeys()` and starts nothing.
 export { DEMO_BANNER, nextSteps, type NextStepsOptions } from "./banner.ts";
 export { CONFIRM_CSP, CONFIRM_HOST, type ConfirmPage, startConfirmPage } from "./confirm.ts";
-export { type Demo, DEMO_DIR, demoDataDir, type DemoOptions, demoTrustKeys, startDemo } from "./demo.ts";
+export { CONTAINER_CONFIRM_PORT, type Demo, DEMO_DIR, demoDataDir, type DemoOptions, demoTrustKeys, startDemo } from "./demo.ts";
