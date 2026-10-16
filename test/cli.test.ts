@@ -68,6 +68,24 @@ describe("intent as a process", () => {
     }
   });
 
+  it("with no root key pinned, an MCP client's initialize fails with the reason and the next steps", { timeout: 30_000 }, async () => {
+    const dataDir = join(mkdtempSync(join(tmpdir(), "cli-unpinned-")), "data");
+    const transport = new StdioClientTransport({ command: process.execPath, args: [MAIN], env: env({ INTENT_DATA_DIR: dataDir }), stderr: "pipe" });
+    let stderr = "";
+    transport.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    const client = new Client({ name: "cli-test", version: "0" });
+    const failure = await client.connect(transport).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await client.close();
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toContain("intent-gateway could not start: configuration: this build has no trusted root key for staging-api.intentai.shop");
+    expect(message).toContain("Intent Cloud staging is not open yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud");
+    expect(stderr).toContain("intent: configuration: this build has no trusted root key");
+  });
+
   it("approver accept with pipes for stdin and stdout refuses (exit 2)", { timeout: 30_000 }, async () => {
     const dataDir = join(mkdtempSync(join(tmpdir(), "cli-pipe-")), "data");
     const result = await exec(["approver", "accept"], { INTENT_DATA_DIR: dataDir });

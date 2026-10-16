@@ -49,6 +49,7 @@ function worded(error: unknown, ctx: ErrorContext): string {
   const dataDir = ctx.dataDir ?? "the data dir";
   if (error instanceof CliError) return message;
   if (error instanceof ConfigError) {
+    if (/intent demo/.test(message)) return `configuration: ${message}`;
     if (/root key|pinned/.test(message)) return `configuration: ${message}; or run intent demo to try the gateway with no setup`;
     const fix = /pass |unset |give /.test(message) ? "" : "; correct that setting, or unset it to use the default (intent --help lists them)";
     return `configuration: ${message}${fix}`;

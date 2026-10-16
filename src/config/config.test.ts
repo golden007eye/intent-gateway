@@ -240,7 +240,7 @@ describe("cloud trust", () => {
 
   it("refuses the default host while its pin is empty", () => {
     expect(PINNED_HOSTS["staging-api.intentai.shop"]?.rootKeys).toEqual([]);
-    expect(() => load({}, LINUX, [])).toThrow(/no root key is pinned for staging-api\.intentai\.shop/);
+    expect(() => load({}, LINUX, [])).toThrow(/no trusted root key for staging-api\.intentai\.shop: Intent Cloud staging is not open yet/);
   });
 
   it("with requireTrust false, an unpinned host is reported instead of refused (offline commands)", () => {
@@ -248,7 +248,7 @@ describe("cloud trust", () => {
     expect(config.cloud.trust).toEqual({
       kind: "unpinned",
       host: "staging-api.intentai.shop",
-      reason: "no root key is pinned for staging-api.intentai.shop in this build; pass --trust-keys <path>",
+      reason: "this build has no trusted root key for staging-api.intentai.shop: Intent Cloud staging is not open yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud",
     });
     expect(load({ INTENT_CLOUD_URL: "https://cloud.example" }, { ...LINUX, requireTrust: false }, []).cloud.trust).toMatchObject({
       kind: "unpinned",

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { BUILD, type Config } from "../config/index.ts";
 import { startPanel } from "../panel/index.ts";
+import { answerStdioWithError } from "../mcp/index.ts";
 import { formatReport, type Install, runVerify } from "../verify/index.ts";
 import { approverAccept, approverList } from "./approver.ts";
 import { doctor } from "./doctor.ts";
@@ -57,6 +58,7 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
   }
   const ctx: ErrorContext = {};
   let config: Config | undefined;
+  let mcpOverStdio = false;
   try {
     const parsed = parse(argv);
     if (parsed === "help") {
@@ -65,12 +67,16 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
     }
     const { command, args, values } = parsed;
     const demoFlag = values.demo === true || command === "demo";
+    // An MCP client started this process (serve, or demo, over stdio): a startup failure must reach the agent too.
+    mcpOverStdio = (command === "serve" || command === "demo") && values.http !== true && !io.isTTY.stdin;
     // Only serve refuses an unpinned host up front; doctor reports it, and the offline commands never reach Cloud.
     config = cliConfig(io, argv, demoFlag, command === "serve");
     Object.assign(ctx, { dataDir: config.dataDir, policyPath: config.policyPath, cloudUrl: config.cloud.url });
     return await run(io, config, command, args, values);
   } catch (error) {
-    line(io.stderr, `intent: ${describeError(error, ctx)}`);
+    const described = describeError(error, ctx);
+    line(io.stderr, `intent: ${described}`);
+    if (mcpOverStdio) await answerStdioWithError(`intent-gateway could not start: ${described}`, io);
     if (error instanceof CliError && error.code === 2 && error.message.startsWith("unknown command")) io.stderr.write(`\n${HELP}`);
     const debug = config?.debug ?? io.env.INTENT_DEBUG === "1";
     if (debug && error instanceof Error && error.stack !== undefined) line(io.stderr, error.stack);
