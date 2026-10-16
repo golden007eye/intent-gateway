@@ -132,6 +132,10 @@ jobs:
           echo "BUILD_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # One BuildKit for every build that must give the published digest (package, image, rebuild): an unpinned
+          # builder could change between the image and rebuild jobs and change the layers it writes.
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
       # The same build as ci.yml's package job and the rebuild job below. The OCI archive is pushed byte for byte
       # (skopeo --preserve-digests), so the digest that is signed is the digest a rebuild must reproduce.
       - name: build the image (G24 reproducible flags)
@@ -287,6 +291,10 @@ jobs:
           echo "BUILD_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # One BuildKit for every build that must give the published digest (package, image, rebuild): an unpinned
+          # builder could change between the image and rebuild jobs and change the layers it writes.
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
       - name: rebuild and compare digests
         run: |
           set -euo pipefail

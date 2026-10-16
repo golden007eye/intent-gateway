@@ -37,13 +37,22 @@ RUN { test -n "${BUILD_COMMIT}" || echo "warning: no BUILD_COMMIT, so this image
  && BUILD_COMMIT="${BUILD_COMMIT:-unknown}" pnpm build \
  && chmod 0755 dist/main.js
 # The runtime tree: what `npm pack` puts in the tarball, plus the production dependencies from the lockfile.
-# pnpm's bookkeeping files carry install times, so they go, to keep the image reproducible.
+# What the tree's bytes depend on is pinned here, not left to how the install ran (F-q):
+# - pnpm's bookkeeping files carry install times, so they go.
+# - The dependencies are copied, not hard-linked from pnpm's store: a hard link makes the layer record a file as
+#   a link to whichever path shares its inode, and that sharing comes from a parallel import of store files in a
+#   lower layer, so it is not a property of the lockfile. The image then holds no hard links at all (checked).
+# - Every mtime is set to SOURCE_DATE_EPOCH. The exporter's rewrite-timestamp only lowers times later than the
+#   epoch, so a file dated earlier (a clock behind the commit time) would keep its own time.
+ARG SOURCE_DATE_EPOCH
 RUN mkdir /out \
  && cp -R package.json pnpm-lock.yaml pnpm-workspace.yaml dist policies contract LICENSE NOTICE README.md /out/ \
  && cd /out \
- && pnpm install --prod --frozen-lockfile --ignore-scripts \
+ && pnpm install --prod --frozen-lockfile --ignore-scripts --package-import-method=copy \
  && rm -f pnpm-lock.yaml pnpm-workspace.yaml node_modules/.modules.yaml node_modules/.pnpm-workspace-state*.json \
- && test -z "$(find dist -name '*.test.*')"
+ && test -z "$(find dist -name '*.test.*')" \
+ && test -z "$(find /out -type f -links +1)" \
+ && { test -z "${SOURCE_DATE_EPOCH}" || find /out -exec touch --no-dereference --date="@${SOURCE_DATE_EPOCH}" {} +; }
 
 FROM ${NODE_IMAGE}
 ARG BUILD_COMMIT
