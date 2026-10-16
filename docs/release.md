@@ -22,6 +22,8 @@ issued by `https://token.actions.githubusercontent.com`. `intent verify` checks 
 
 The SBOM is made with [syft](https://github.com/anchore/syft) (Apache-2.0) from the pushed OCI archive, so it describes the signed digest. BuildKit's own SBOM option is not used: it writes SPDX, not CycloneDX, and it adds an attestation manifest to the image, which changes the digest a rebuild must reproduce.
 
+The CI package job, the image job and the rebuild job all build with one pinned BuildKit (the `driver-opts` image in `setup-buildx-action`). Change it in all three places together. The Dockerfile keeps the image's bytes independent of how the build ran: it holds no hard links, and every app file is dated `SOURCE_DATE_EPOCH`. The package job builds three times and compares the digests. When they differ, `scripts/image-diff.sh` prints the layers, tar entries and files that differ in the job log. Run it locally on two OCI archives in the same way.
+
 ## Before the first release (maintainer)
 
 These steps need the maintainer's accounts. The workflow cannot succeed until they are done.
