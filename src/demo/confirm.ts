@@ -4,8 +4,10 @@
 // on Intent Cloud's confirm page.
 //
 // Approve also needs the demo code: six digits the gateway prints on its own stderr (and keeps in a 0600 file), never
-// in a tool result, so an agent that reads only tool results cannot approve. After MAX_WRONG_CODES wrong codes the
-// page refuses every approval until the demo restarts with a new code. Reject needs no code.
+// in a tool result, so an agent that reads only tool results cannot approve. The server keeps only the digits of what
+// was typed or pasted (codeDigits: "469 226", "469-226", "Demo code: 469226" all count), so no browser pattern has to.
+// A wrong code shows the form again with the error under the field and the tries left; after MAX_WRONG_CODES wrong
+// codes the page refuses every approval until the demo restarts with a new code. Reject needs no code.
 //
 // Loopback only, no external assets, a strict CSP and no script. A GET never changes anything. A POST needs the
 // one-time token of the page it came from (CSRF), and a foreign Host (421), Origin or Sec-Fetch-Site (403) is refused.
@@ -14,6 +16,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { FakeCloud, Outcome, SoftPasskey } from "../cloud-fake/index.ts";
 import type { Money } from "../contract/index.ts";
+import { UI_CSS } from "../ui/index.ts";
 import { DEMO_BANNER } from "./banner.ts";
 
 export const CONFIRM_HOST = "127.0.0.1";
@@ -25,7 +28,9 @@ const HEADERS = {
   "content-security-policy": CONFIRM_CSP,
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
-  "referrer-policy": "no-referrer",
+  // Not no-referrer: under it a browser sends `Origin: null` on the page's own form POST, which the Origin check
+  // refuses. The page links nowhere else, so same-origin sends nothing to any other site.
+  "referrer-policy": "same-origin",
   "cache-control": "no-store",
 } as const;
 
@@ -37,14 +42,18 @@ const MAX_TOKENS = 1000;
 /** Wrong demo codes before the page refuses every approval until the demo restarts. */
 export const MAX_WRONG_CODES = 5;
 
-const STYLE = `body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:2rem auto;padding:0 1rem;color:#111;background:#fff}
-.demo{background:#fde68a;border:2px solid #b45309;padding:.5rem .75rem;font-weight:700}
-.hint{color:#555}input{font:inherit;padding:.3rem .5rem;letter-spacing:.2em}
-dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem 1rem}dt{color:#555}dd{margin:0}
-button{font:inherit;padding:.6rem 1rem;margin:.5rem .5rem 0 0;border-radius:.4rem;border:1px solid #333;cursor:pointer}
-button[value=approve]{background:#166534;color:#fff}
-@media (prefers-color-scheme:dark){body{background:#111;color:#eee}dt,.hint{color:#aaa}.demo{color:#111}}
-`;
+const STYLE = `${UI_CSS}input{font:inherit;padding:.3rem .5rem;letter-spacing:.2em}\n`;
+
+/** The digits of a typed or pasted demo code: full-width digits count as digits, every other character is dropped. */
+export function codeDigits(input: string): string {
+  return input.normalize("NFKC").replace(/[^0-9]/g, "");
+}
+
+/** Why the form is shown again after an Approve: a wrong code, with the tries left and how many digits came. */
+interface WrongCode {
+  left: number;
+  digits: number;
+}
 
 export interface ConfirmPageOptions {
   fake: FakeCloud;
@@ -90,7 +99,7 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     return token;
   }
 
-  function page(link: string, handle: string): string {
+  function page(link: string, handle: string, wrong?: WrongCode): string {
     const view = fake.inspect(handle);
     if (view === undefined) return notFound();
     const s = view.snapshot;
@@ -107,11 +116,17 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     const form =
       view.state === "pending"
         ? `<form method="post" action="${esc(`${CONFIRM_PATH}/c/${link}`)}"><input type="hidden" name="csrf" value="${issue(link)}">` +
-          `<p><label for="code">Demo code</label> <input id="code" name="code" inputmode="numeric" autocomplete="off" ` +
-          `pattern="[0-9]{6}" maxlength="6" size="8"></p>` +
-          `<p class="hint">Enter the 6-digit code shown in the gateway's terminal. If your agent started the gateway, ` +
+          `<p><label for="code">Demo code</label> <input id="code" name="code" type="text" inputmode="numeric" ` +
+          `autocomplete="one-time-code" autocapitalize="off" spellcheck="false" size="8" ` +
+          `aria-describedby="${wrong === undefined ? "" : "code-error "}code-hint"${wrong === undefined ? "" : ' aria-invalid="true" autofocus'}></p>` +
+          (wrong === undefined
+            ? ""
+            : `<p class="error" id="code-error" role="alert">That is not the demo code` +
+              `${wrong.digits === 6 ? "" : ` (it has 6 digits; this had ${String(wrong.digits)})`}. ` +
+              `${String(wrong.left)} ${wrong.left === 1 ? "try" : "tries"} left.</p>`) +
+          `<p class="hint" id="code-hint">Enter the 6-digit code shown in the gateway's terminal. If your agent started the gateway, ` +
           `read it with: <code>${esc(options.codeHint)}</code></p>` +
-          `<button type="submit" name="action" value="approve">Approve with demo passkey</button>` +
+          `<button class="primary" type="submit" name="action" value="approve">Approve with demo passkey</button>` +
           `<button type="submit" name="action" value="reject">Reject</button></form>`
         : `<p>This approval is ${esc(view.state)}. Ask your agent to check the approval status.</p>`;
     return layout("Approve this purchase?", `<dl>${list}</dl>${form}`);
@@ -152,14 +167,15 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     const action = form.get("action");
     if (action !== "approve" && action !== "reject") return [400, layout("Bad request", "<p>Unknown action.</p>")];
     if (action === "approve") {
-      if (wrongCodes >= MAX_WRONG_CODES) {
-        return [403, layout("Locked", "<p>Too many wrong demo codes. Restart the demo to get a new code; until then nothing can be approved here.</p>")];
-      }
-      const given = Buffer.from(form.get("code")?.trim() ?? "");
+      if (wrongCodes >= MAX_WRONG_CODES) return [403, locked()];
+      const digits = codeDigits(form.get("code") ?? "");
+      const given = Buffer.from(digits);
       if (given.length !== code.length || !timingSafeEqual(given, code)) {
         wrongCodes += 1;
         const left = MAX_WRONG_CODES - wrongCodes;
-        return [403, layout("Wrong demo code", `<p>That is not the demo code. Go back, reload the page and enter the code shown in the gateway's terminal (${String(left)} tries left).</p>`)];
+        // The form again, with a fresh token, the error under the field and the tries left; at none left, the lockout.
+        if (left === 0) return [403, locked()];
+        return [403, page(link, approval, { left, digits: digits.length })];
       }
     }
     const outcome = action === "approve" ? fake.approveWithPasskey(approval, passkey) : fake.reject(approval, passkey);
@@ -230,6 +246,14 @@ function layout(title: string, body: string): string {
     `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<title>${esc(title)}</title><link rel="stylesheet" href="${STYLE_PATH}"></head><body>` +
     `<p class="demo">${esc(DEMO_BANNER)}</p><h1>${esc(title)}</h1>${body}</body></html>`
+  );
+}
+
+function locked(): string {
+  return layout(
+    "Locked",
+    "<p>Too many wrong demo codes. Restart the demo to get a new code; until then nothing can be approved here. " +
+      "Reload the page to reject instead.</p>",
   );
 }
 
