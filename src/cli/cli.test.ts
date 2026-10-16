@@ -647,7 +647,10 @@ describe("printed commands name the invocation that works for this install (devr
     const text = help(intent);
     expect(text).toContain(`\n  ${intent} demo\n`);
     expect(text).toContain(`  claude mcp add intent -- ${intent} demo     the demo`);
-    expect(text).toContain(`\n  ${intent} verify `);
+    // A long invocation (a path) is named once above the list; a short one leads every line.
+    if (intent.length > 30) expect(text).toContain(`Commands (run each as: ${intent} <command>):\n  serve [--http]  `);
+    else expect(text).toContain(`\n  ${intent} verify `);
+    expect(text).toContain(`\n${intent} policy add strict-default`);
     expect(text).not.toMatch(/^ {2}intent /m);
   });
 });
