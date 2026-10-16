@@ -51,7 +51,7 @@ export async function doctor(io: Io, config: Config): Promise<number> {
     // The demo Intent Cloud runs only inside intent demo, and its contract and keys are the ones this build ships.
     const kids = demoTrustKeys().rootKeys.map((k) => k.kid).join(", ");
     report("ok", `root key: ${kids} (the published test key; demo mode only)`);
-    report("ok", `Intent Cloud: demo mode runs its own on 127.0.0.1 when ${INTENT} demo starts; nothing to reach`);
+    report("ok", "Intent Cloud: the demo gateway runs its own on 127.0.0.1 while it is serving; nothing to reach");
   } else {
     let pins: readonly RootKey[] | null = null;
     try {
