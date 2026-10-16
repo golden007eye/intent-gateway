@@ -1,0 +1,200 @@
+{
+  "id": "E1-RS256",
+  "appendix": "E",
+  "description": "As E1 with an RS256 passkey (RSA 2048, PKCS#1 v1.5). Verify only: the passkey's private key is not published. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "input": {
+    "approval_handle": "ap_TEST0001",
+    "valid_at": 1791029130,
+    "statement": "s1-key-statement.json",
+    "confirm_origin": "https://confirm.example",
+    "rp_id": "example",
+    "approval_key_seed_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
+  },
+  "expected": {
+    "proof": {
+      "v": 1,
+      "approval_handle": "ap_TEST0001",
+      "snapshot": {
+        "v": 1,
+        "approval": "ap_TEST0001",
+        "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+        "merchant": {
+          "name": "Trail Supply Co (mock)",
+          "domain": "merchant-mock.example.workers.dev"
+        },
+        "item": {
+          "title": "Trail Runner 3",
+          "variant": "US 10 / Blue"
+        },
+        "quantity": 1,
+        "unit_price": {
+          "amount_minor": 8999,
+          "currency": "USD"
+        },
+        "shipping": {
+          "amount_minor": 500,
+          "currency": "USD"
+        },
+        "total": {
+          "amount_minor": 9499,
+          "currency": "USD"
+        },
+        "total_kind": "exact",
+        "ship_to": {
+          "country": "US",
+          "postal_prefix": "941"
+        },
+        "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+        "rule_version": "recheck-v1",
+        "expires_at": "2026-10-03T12:15:00Z"
+      },
+      "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+      "assertion": {
+        "credential_id": "Y3JlZC0x",
+        "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+        "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "QZskx4bjamQXQYokl7_Ux84T6lzimhBLO-XTUhan148RhEzt3NwrP6ggVBFKSfjBbnMAnJ4ITdVG24Yly3HbvJh78zhO42fAMJH2CjV6RgpLYU9nRq6cC_rYRbalp_9vq-zFZPJOi2hOQMdtTUilHdbvJ80k-b3JuRA79fY33HRV8ProlKUNNxCr3MQidnElWtJlqDGFX0Z260WLeMZ0aOvqqPLv0To_ExqjXVLGD9YNE7DocReufKzc_LKP2cfiqaAv3PFxNWHdasDU8FL7DIjZ5LpeeYVv6Y1ZiBtxO9P4TLmePUX3d5K2EJ14Uca92XqwzXeQ_1DSjLpWUPcmMQ"
+      },
+      "credential_public_key": {
+        "kty": "RSA",
+        "n": "lFf3NIK3Pkl2s5W8uhH2U8yBxX2GjQZk_c3fxY1pvl31XR4p4sWD4YrpMMVMrp63i83q8ye72bmQhR6V0Ez7hOFBl9vm3m-pgTP-3XyBaE3shPiCbojBKxhs3DxI6ZoyOYnF-zG_DGyAA7t3enSnzZj9Rbcd43vBNJ0Fh2Ol_dG-Kx5PmeVzjMAwZ-Z1FyZvW_4WF-vaTA0kHuCkLhASjFlhC77oSeEMpPjGQJDvs20QVh-KypPphEgnv6SgnltO_eAJahwrrMgqGJ4C7qx1QyjuL708MkFoxq1oN4RuLlyU2zvE-Oh3gMos1zhMKShP35yQTy9-soTpc5HFwXyG3Q",
+        "e": "AQAB",
+        "alg": "RS256"
+      },
+      "ledger": {
+        "seq": 1,
+        "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+      },
+      "issued_at": "2026-10-03T12:05:01Z",
+      "kid": "cloud-approval-202610",
+      "cloud_signature": "f_L8Pofg3zlK-C08okinTnXtnfbyeO7SDcBO2u9PCF5VT0dhgC6_5Edrs9tTtvyNdFCdUGcCMPZmmuuGjUOeCg"
+    },
+    "signing_input": "intent-approval-v1\n{\"approval_handle\":\"ap_TEST0001\",\"assertion\":{\"authenticator_data\":\"UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA\",\"client_data_json\":\"eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ\",\"credential_id\":\"Y3JlZC0x\",\"signature\":\"QZskx4bjamQXQYokl7_Ux84T6lzimhBLO-XTUhan148RhEzt3NwrP6ggVBFKSfjBbnMAnJ4ITdVG24Yly3HbvJh78zhO42fAMJH2CjV6RgpLYU9nRq6cC_rYRbalp_9vq-zFZPJOi2hOQMdtTUilHdbvJ80k-b3JuRA79fY33HRV8ProlKUNNxCr3MQidnElWtJlqDGFX0Z260WLeMZ0aOvqqPLv0To_ExqjXVLGD9YNE7DocReufKzc_LKP2cfiqaAv3PFxNWHdasDU8FL7DIjZ5LpeeYVv6Y1ZiBtxO9P4TLmePUX3d5K2EJ14Uca92XqwzXeQ_1DSjLpWUPcmMQ\"},\"credential_public_key\":{\"alg\":\"RS256\",\"e\":\"AQAB\",\"kty\":\"RSA\",\"n\":\"lFf3NIK3Pkl2s5W8uhH2U8yBxX2GjQZk_c3fxY1pvl31XR4p4sWD4YrpMMVMrp63i83q8ye72bmQhR6V0Ez7hOFBl9vm3m-pgTP-3XyBaE3shPiCbojBKxhs3DxI6ZoyOYnF-zG_DGyAA7t3enSnzZj9Rbcd43vBNJ0Fh2Ol_dG-Kx5PmeVzjMAwZ-Z1FyZvW_4WF-vaTA0kHuCkLhASjFlhC77oSeEMpPjGQJDvs20QVh-KypPphEgnv6SgnltO_eAJahwrrMgqGJ4C7qx1QyjuL708MkFoxq1oN4RuLlyU2zvE-Oh3gMos1zhMKShP35yQTy9-soTpc5HFwXyG3Q\"},\"issued_at\":\"2026-10-03T12:05:01Z\",\"kid\":\"cloud-approval-202610\",\"ledger\":{\"entry_hash\":\"da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e\",\"seq\":1},\"snapshot\":{\"approval\":\"ap_TEST0001\",\"continue_url_hash\":\"sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f\",\"expires_at\":\"2026-10-03T12:15:00Z\",\"item\":{\"title\":\"Trail Runner 3\",\"variant\":\"US 10 / Blue\"},\"merchant\":{\"domain\":\"merchant-mock.example.workers.dev\",\"name\":\"Trail Supply Co (mock)\"},\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_prefix\":\"941\"},\"shipping\":{\"amount_minor\":500,\"currency\":\"USD\"},\"total\":{\"amount_minor\":9499,\"currency\":\"USD\"},\"total_kind\":\"exact\",\"unit_price\":{\"amount_minor\":8999,\"currency\":\"USD\"},\"v\":1},\"snapshot_hash\":\"21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49\",\"v\":1}"
+  },
+  "refusals": [
+    {
+      "name": "passkey signature over other data",
+      "step": 6,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "fpU3TuBSuUGLv5hx778lgl0UtUmRRA94EVaiI-55tw0iuCfNbwPESF8do7zcDklEV8CQyRCoqqUA9aK8E-hlMXO6AeRt0jUPfddwHd1XmzBft5AaXTYX3KiSRI91S341u769PXeT_EDMobBgYE_jbSWkAKhFUJfPxPFVTGdzTIW41-nDRphP5wVYO-sukJQPBanmKVSZSEr6KuwcwFhClwAJtUBMsuyOZE-0TN8Fiktx-yLyf_8EB81R1DDIPYCzIIXSNfPbAZ6ytfS5XFXAsioZd4m3e8bgMOUoKsiY7rBBT9th4xctb3u-Ig0I29-2VRQKUm6Ulk1hiFGZKtPCyA"
+        },
+        "credential_public_key": {
+          "kty": "RSA",
+          "n": "lFf3NIK3Pkl2s5W8uhH2U8yBxX2GjQZk_c3fxY1pvl31XR4p4sWD4YrpMMVMrp63i83q8ye72bmQhR6V0Ez7hOFBl9vm3m-pgTP-3XyBaE3shPiCbojBKxhs3DxI6ZoyOYnF-zG_DGyAA7t3enSnzZj9Rbcd43vBNJ0Fh2Ol_dG-Kx5PmeVzjMAwZ-Z1FyZvW_4WF-vaTA0kHuCkLhASjFlhC77oSeEMpPjGQJDvs20QVh-KypPphEgnv6SgnltO_eAJahwrrMgqGJ4C7qx1QyjuL708MkFoxq1oN4RuLlyU2zvE-Oh3gMos1zhMKShP35yQTy9-soTpc5HFwXyG3Q",
+          "e": "AQAB",
+          "alg": "RS256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "SKTfSCpdJEbtjxEyoppu5r8OvoPnHdKQeX6jMSedxi-J0Bn6rJeM3fNyInpVNllMIacVO2AZLXp09Mps6eV5CQ"
+      }
+    },
+    {
+      "name": "ES256 alg on an RSA key",
+      "step": 1,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "QZskx4bjamQXQYokl7_Ux84T6lzimhBLO-XTUhan148RhEzt3NwrP6ggVBFKSfjBbnMAnJ4ITdVG24Yly3HbvJh78zhO42fAMJH2CjV6RgpLYU9nRq6cC_rYRbalp_9vq-zFZPJOi2hOQMdtTUilHdbvJ80k-b3JuRA79fY33HRV8ProlKUNNxCr3MQidnElWtJlqDGFX0Z260WLeMZ0aOvqqPLv0To_ExqjXVLGD9YNE7DocReufKzc_LKP2cfiqaAv3PFxNWHdasDU8FL7DIjZ5LpeeYVv6Y1ZiBtxO9P4TLmePUX3d5K2EJ14Uca92XqwzXeQ_1DSjLpWUPcmMQ"
+        },
+        "credential_public_key": {
+          "kty": "RSA",
+          "n": "lFf3NIK3Pkl2s5W8uhH2U8yBxX2GjQZk_c3fxY1pvl31XR4p4sWD4YrpMMVMrp63i83q8ye72bmQhR6V0Ez7hOFBl9vm3m-pgTP-3XyBaE3shPiCbojBKxhs3DxI6ZoyOYnF-zG_DGyAA7t3enSnzZj9Rbcd43vBNJ0Fh2Ol_dG-Kx5PmeVzjMAwZ-Z1FyZvW_4WF-vaTA0kHuCkLhASjFlhC77oSeEMpPjGQJDvs20QVh-KypPphEgnv6SgnltO_eAJahwrrMgqGJ4C7qx1QyjuL708MkFoxq1oN4RuLlyU2zvE-Oh3gMos1zhMKShP35yQTy9-soTpc5HFwXyG3Q",
+          "e": "AQAB",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "f_L8Pofg3zlK-C08okinTnXtnfbyeO7SDcBO2u9PCF5VT0dhgC6_5Edrs9tTtvyNdFCdUGcCMPZmmuuGjUOeCg"
+      }
+    }
+  ]
+}

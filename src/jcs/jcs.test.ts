@@ -1,6 +1,5 @@
 // Expected outputs are written out by hand from RFC 8785, never computed by the code under test.
-// The shared vectors a1/b1 do not exist yet; their byte-for-byte reproduction test is added by G05a, which brings
-// the vectors in with the public contract.
+// The shared contract vectors (a1, a2, b1, j1) are reproduced byte for byte in vectors.test.ts.
 import { describe, expect, it } from "vitest";
 import { canonicalize, JcsError, sha256Hex } from "./index.ts";
 

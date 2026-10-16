@@ -1,0 +1,102 @@
+{
+  "id": "D1",
+  "appendix": "D",
+  "description": "Receipts signed by the test receipt key cloud-receipt-202610 (listed in s1); the first and third cases are for the c2 request. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "input": {
+    "kid": "cloud-receipt-202610",
+    "ed25519_seed_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+  },
+  "expected": {
+    "public_key_b64url": "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0",
+    "signing_prefix": "intent-receipt-v1\n"
+  },
+  "cases": [
+    {
+      "name": "signed cart request, 201",
+      "input": {
+        "method": "POST",
+        "path": "/v1/carts",
+        "body": "{\"offer_handle\":\"of_TEST0001\",\"quantity\":1,\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"}}",
+        "signature_input": "sig1=(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+        "status": 201,
+        "received_at": 1790251201
+      },
+      "expected": {
+        "receipt": {
+          "v": 1,
+          "kid": "cloud-receipt-202610",
+          "request": {
+            "method": "POST",
+            "path": "/v1/carts",
+            "content_digest": "sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:",
+            "keyid": "gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc",
+            "nonce": "bm9uY2UtdGVzdC0wMDAwMg==",
+            "created": 1790251200
+          },
+          "status": 201,
+          "received_at": "2026-09-24T12:00:01Z"
+        },
+        "jcs": "{\"kid\":\"cloud-receipt-202610\",\"received_at\":\"2026-09-24T12:00:01Z\",\"request\":{\"content_digest\":\"sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:\",\"created\":1790251200,\"keyid\":\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\",\"method\":\"POST\",\"nonce\":\"bm9uY2UtdGVzdC0wMDAwMg==\",\"path\":\"/v1/carts\"},\"status\":201,\"v\":1}",
+        "intent_receipt": "eyJraWQiOiJjbG91ZC1yZWNlaXB0LTIwMjYxMCIsInJlY2VpdmVkX2F0IjoiMjAyNi0wOS0yNFQxMjowMDowMVoiLCJyZXF1ZXN0Ijp7ImNvbnRlbnRfZGlnZXN0Ijoic2hhLTI1Nj06ZURRdy9WZk5pZUliMHFjVThuMlJ3UWx1R1U5Rll0Y09yd05SVTZLUDkvaz06IiwiY3JlYXRlZCI6MTc5MDI1MTIwMCwia2V5aWQiOiJndy1LYXk2NFVHOHl2Q3lMaHFVMDAwTHh6WWVVbTBMX2hMSWw1UzhreUtXYmRjIiwibWV0aG9kIjoiUE9TVCIsIm5vbmNlIjoiYm05dVkyVXRkR1Z6ZEMwd01EQXdNZz09IiwicGF0aCI6Ii92MS9jYXJ0cyJ9LCJzdGF0dXMiOjIwMSwidiI6MX0",
+        "intent_receipt_signature": "Y09ApHW445dZ4pfmI81tv5jfYEYmdhnc-bgtJGBsDZ5LaAbnfe-8LbvzZrK_NB315u0-TxFOhJkC3Od-lsGNDA"
+      }
+    },
+    {
+      "name": "unsigned key-statement read, 200",
+      "input": {
+        "method": "GET",
+        "path": "/v1/key-statement",
+        "body": "",
+        "signature_input": null,
+        "status": 200,
+        "received_at": 1790251202
+      },
+      "expected": {
+        "receipt": {
+          "v": 1,
+          "kid": "cloud-receipt-202610",
+          "request": {
+            "method": "GET",
+            "path": "/v1/key-statement",
+            "content_digest": "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:"
+          },
+          "status": 200,
+          "received_at": "2026-09-24T12:00:02Z"
+        },
+        "jcs": "{\"kid\":\"cloud-receipt-202610\",\"received_at\":\"2026-09-24T12:00:02Z\",\"request\":{\"content_digest\":\"sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:\",\"method\":\"GET\",\"path\":\"/v1/key-statement\"},\"status\":200,\"v\":1}",
+        "intent_receipt": "eyJraWQiOiJjbG91ZC1yZWNlaXB0LTIwMjYxMCIsInJlY2VpdmVkX2F0IjoiMjAyNi0wOS0yNFQxMjowMDowMloiLCJyZXF1ZXN0Ijp7ImNvbnRlbnRfZGlnZXN0Ijoic2hhLTI1Nj06NDdERVFwajhIQlNhKy9USW1XKzVKQ2V1UWVSa201Tk1wSldaRzNoU3VGVT06IiwibWV0aG9kIjoiR0VUIiwicGF0aCI6Ii92MS9rZXktc3RhdGVtZW50In0sInN0YXR1cyI6MjAwLCJ2IjoxfQ",
+        "intent_receipt_signature": "Jvh4EYwUo1qHvYMMYYB5_Gyk85AUCai4fosZCmonEkGXuy0mYV_crrvQIMnddzCdzlyfMnFLQ2HJVToAnYy3CA"
+      }
+    },
+    {
+      "name": "signed request the edge refused, 429",
+      "input": {
+        "method": "POST",
+        "path": "/v1/carts",
+        "body": "{\"offer_handle\":\"of_TEST0001\",\"quantity\":1,\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"}}",
+        "signature_input": "sig1=(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+        "status": 429,
+        "received_at": 1790251201
+      },
+      "expected": {
+        "receipt": {
+          "v": 1,
+          "kid": "cloud-receipt-202610",
+          "request": {
+            "method": "POST",
+            "path": "/v1/carts",
+            "content_digest": "sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:",
+            "keyid": "gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc",
+            "nonce": "bm9uY2UtdGVzdC0wMDAwMg==",
+            "created": 1790251200
+          },
+          "status": 429,
+          "received_at": "2026-09-24T12:00:01Z"
+        },
+        "jcs": "{\"kid\":\"cloud-receipt-202610\",\"received_at\":\"2026-09-24T12:00:01Z\",\"request\":{\"content_digest\":\"sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:\",\"created\":1790251200,\"keyid\":\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\",\"method\":\"POST\",\"nonce\":\"bm9uY2UtdGVzdC0wMDAwMg==\",\"path\":\"/v1/carts\"},\"status\":429,\"v\":1}",
+        "intent_receipt": "eyJraWQiOiJjbG91ZC1yZWNlaXB0LTIwMjYxMCIsInJlY2VpdmVkX2F0IjoiMjAyNi0wOS0yNFQxMjowMDowMVoiLCJyZXF1ZXN0Ijp7ImNvbnRlbnRfZGlnZXN0Ijoic2hhLTI1Nj06ZURRdy9WZk5pZUliMHFjVThuMlJ3UWx1R1U5Rll0Y09yd05SVTZLUDkvaz06IiwiY3JlYXRlZCI6MTc5MDI1MTIwMCwia2V5aWQiOiJndy1LYXk2NFVHOHl2Q3lMaHFVMDAwTHh6WWVVbTBMX2hMSWw1UzhreUtXYmRjIiwibWV0aG9kIjoiUE9TVCIsIm5vbmNlIjoiYm05dVkyVXRkR1Z6ZEMwd01EQXdNZz09IiwicGF0aCI6Ii92MS9jYXJ0cyJ9LCJzdGF0dXMiOjQyOSwidiI6MX0",
+        "intent_receipt_signature": "qzHKMJRSRLVF17km_r5fSSljmFNcMgfNzqHB0ysCtvuxVLu686JH5JO33t_WKlAV-X7Gdw3gBe7KQPdX7AUWAw"
+      }
+    }
+  ]
+}

@@ -1,0 +1,837 @@
+{
+  "id": "E1",
+  "appendix": "E",
+  "description": "Approval proof with an ES256 passkey (P-256, DER signature) over the A1 snapshot, signed by the test approval key cloud-approval-202610 (listed in s1). Verify only: the passkey's private key is not published. Each refusal is correctly cloud-signed and fails exactly the Appendix E step named. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "input": {
+    "approval_handle": "ap_TEST0001",
+    "valid_at": 1791029130,
+    "statement": "s1-key-statement.json",
+    "confirm_origin": "https://confirm.example",
+    "rp_id": "example",
+    "approval_key_seed_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
+  },
+  "expected": {
+    "proof": {
+      "v": 1,
+      "approval_handle": "ap_TEST0001",
+      "snapshot": {
+        "v": 1,
+        "approval": "ap_TEST0001",
+        "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+        "merchant": {
+          "name": "Trail Supply Co (mock)",
+          "domain": "merchant-mock.example.workers.dev"
+        },
+        "item": {
+          "title": "Trail Runner 3",
+          "variant": "US 10 / Blue"
+        },
+        "quantity": 1,
+        "unit_price": {
+          "amount_minor": 8999,
+          "currency": "USD"
+        },
+        "shipping": {
+          "amount_minor": 500,
+          "currency": "USD"
+        },
+        "total": {
+          "amount_minor": 9499,
+          "currency": "USD"
+        },
+        "total_kind": "exact",
+        "ship_to": {
+          "country": "US",
+          "postal_prefix": "941"
+        },
+        "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+        "rule_version": "recheck-v1",
+        "expires_at": "2026-10-03T12:15:00Z"
+      },
+      "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+      "assertion": {
+        "credential_id": "Y3JlZC0x",
+        "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+        "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "MEYCIQD9R7t31dTY8hfIlWA5xd703utDqp8VMOD5jVYmCpdWkgIhAJXp7VuYNwzoBtVS9aCE8O6YTOI8eGPr7Lawv_cyPQIu"
+      },
+      "credential_public_key": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+        "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+        "alg": "ES256"
+      },
+      "ledger": {
+        "seq": 1,
+        "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+      },
+      "issued_at": "2026-10-03T12:05:01Z",
+      "kid": "cloud-approval-202610",
+      "cloud_signature": "fh8VYferYbPM35zhmTi8aluK8LTwCSUM7pjwHUBqwkwygeCi8ktCsaJTn_85Tqrncopu_4jvxYDmB_x1qdwICA"
+    },
+    "signing_input": "intent-approval-v1\n{\"approval_handle\":\"ap_TEST0001\",\"assertion\":{\"authenticator_data\":\"UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA\",\"client_data_json\":\"eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ\",\"credential_id\":\"Y3JlZC0x\",\"signature\":\"MEYCIQD9R7t31dTY8hfIlWA5xd703utDqp8VMOD5jVYmCpdWkgIhAJXp7VuYNwzoBtVS9aCE8O6YTOI8eGPr7Lawv_cyPQIu\"},\"credential_public_key\":{\"alg\":\"ES256\",\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA\",\"y\":\"peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g\"},\"issued_at\":\"2026-10-03T12:05:01Z\",\"kid\":\"cloud-approval-202610\",\"ledger\":{\"entry_hash\":\"da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e\",\"seq\":1},\"snapshot\":{\"approval\":\"ap_TEST0001\",\"continue_url_hash\":\"sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f\",\"expires_at\":\"2026-10-03T12:15:00Z\",\"item\":{\"title\":\"Trail Runner 3\",\"variant\":\"US 10 / Blue\"},\"merchant\":{\"domain\":\"merchant-mock.example.workers.dev\",\"name\":\"Trail Supply Co (mock)\"},\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_prefix\":\"941\"},\"shipping\":{\"amount_minor\":500,\"currency\":\"USD\"},\"total\":{\"amount_minor\":9499,\"currency\":\"USD\"},\"total_kind\":\"exact\",\"unit_price\":{\"amount_minor\":8999,\"currency\":\"USD\"},\"v\":1},\"snapshot_hash\":\"21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49\",\"v\":1}",
+    "challenge": "EgHQNheQla4tIpfHK3ypCdTVl1CQIlHbLfuaAZ2CpJM",
+    "client_data_json": "{\"type\":\"webauthn.get\",\"challenge\":\"EgHQNheQla4tIpfHK3ypCdTVl1CQIlHbLfuaAZ2CpJM\",\"origin\":\"https://confirm.example\",\"crossOrigin\":false}",
+    "authenticator_data_hex": "50d858e0985ecc7f60418aaf0cc5ab587f42c2570a884095a9e8ccacd0f6545c0500000000"
+  },
+  "refusals": [
+    {
+      "name": "assertion over the reject challenge",
+      "step": 4,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiMXNIU0F1Uk5mUHpWOXZFY3NMbjhkNjNOZUt1NG9wN0lUY1p1Ykg3SlZxYyIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEUCIQDrpmmfGTqh5fzG8xX_474zr45nr8_o88nentigjeV2MQIgayAOsrQc4xJ-UWmIUk4chQMINTOIyUmPDfnALALz7Og"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "rLNzkdIAT6UaqQa6pkFL3K4WNKzsqAc2zXvEeNLLYVxL6MVYFGso-tJaEzcOo0dPNF6x7caURc-KT5476-6dAw"
+      }
+    },
+    {
+      "name": "wrong origin",
+      "step": 4,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vZXZpbC5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEUCIGvHtksjpvG5vsCioSpe1Cf5R0lx2AkmPatCgWhZsPEuAiEArTZLqgqutKJt7I7bOwse-_WFc8YL9NzZFYJ_QYl9kuU"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "swyzlxX-6wE59Ay4NeoiENwhMrf_1VmBkES07mOX-YvdHg_Ury5-8E003a_xrqhzRj6UDiIFfMbNGXM3AHrbAg"
+      }
+    },
+    {
+      "name": "crossOrigin true",
+      "step": 4,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOnRydWV9",
+          "signature": "MEQCICwogcNWg8r7qswDUAxYJ2HauDBiubSx2f2EgO6bzKCVAiBiwb3r8x13nULKCcFDlWMYVoK3prEiqSiDY-xyxMUupQ"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "Bbtq3OuwS-2z2Uynd4f1ZJpdxfw81Dg5ZajrkVEGsuXnt9d5ydEEZtN3O7M-ZxljEXrf9XNSMYX0jQli2vguCw"
+      }
+    },
+    {
+      "name": "type webauthn.create",
+      "step": 4,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEUCID-s0Gudp5FLZEWUm-YsCicjiHTyhj6yRnIVEYCdkdv5AiEAk31W-lt8Bl63e374nyIs71oaBOr6cx-_ZDDo1EoWfmM"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "7R_6heh8jO-MWteuOu8nPMWZM8Tkxg-0n6lLIXkplcdZ0UqFLNk1lExsPmg4oXypbMX-9S3PzL6xoLvHyhG4Dg"
+      }
+    },
+    {
+      "name": "rpIdHash of another rp_id",
+      "step": 5,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "nBgN4M1pnueIl8R8_bPn7h11kG4xt3RqR0fepTaQmDcFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEUCIHrWAAgp5JKCI1UMAObEWmxtnl9yJSqLkT4WpxbSwZBUAiEApjXVyLknjX8M0uP1sJscQGlhAXu7lAX3lgmNEq27Ijs"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "LH1Iq3seswkY9Lrwp3BGLQT-3vlp-WKuIK7Dj1Q6akVwb_nOLh6loNFT9hx58tCVhaTE56u02hZc-royDeIlAg"
+      }
+    },
+    {
+      "name": "user verification flag off",
+      "step": 5,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwBAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEUCIAmRms5L3zLAr-u3_YgjaKyOpcpcGtpYJjVD3hfB23i8AiEA6xPAOlFVOjVU0o8hvTw7HONTsbFpFwqzMfE24wvbLWQ"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "LccPZP5CYpFFQguBnqQawUkuMW3LD3kpm6FczzKUtyobIUCDgYCNO1V5fLVMThNnrIdd94i8-PQm4yRQ600_CA"
+      }
+    },
+    {
+      "name": "user presence flag off",
+      "step": 5,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwEAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEQCIFPATfOdXfTDKT64J998er-SkxtRyQcDWqpbCVdIkeepAiAJP43DpcTAvg5FSFNyxcHK01no07Z-cJ7L-qPeQNkrtA"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "B1GB2JYDPuYmUFTYSqbX6MpkGn8RS0oi1dpFHuHVDHILw9aX9Mer-qDaZGmZImBI9kVU6p1Dmmwe1grxZcTKDw"
+      }
+    },
+    {
+      "name": "passkey signature over other data",
+      "step": 6,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEUCIFPSbqkAieOQhZdpOOD_7dIuWxxBP503IxVq-c4dqOayAiEA9XHT0QgVcgMseLjDzCNUOS6EXYtSUKZcJVed3Eoki48"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "KjhHCCqFSBL5NX9Kmom9uW2-8GeXTxeV5tJXB4IWRMMWU2NtSqzzKKHBomdkaqimMfTxBJOgWESGoEijPBoWBA"
+      }
+    },
+    {
+      "name": "cloud_signature altered",
+      "step": 2,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEYCIQD9R7t31dTY8hfIlWA5xd703utDqp8VMOD5jVYmCpdWkgIhAJXp7VuYNwzoBtVS9aCE8O6YTOI8eGPr7Lawv_cyPQIu"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "fx8VYferYbPM35zhmTi8aluK8LTwCSUM7pjwHUBqwkwygeCi8ktCsaJTn_85Tqrncopu_4jvxYDmB_x1qdwICA"
+      }
+    },
+    {
+      "name": "kid not in the statement",
+      "step": 2,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEYCIQD9R7t31dTY8hfIlWA5xd703utDqp8VMOD5jVYmCpdWkgIhAJXp7VuYNwzoBtVS9aCE8O6YTOI8eGPr7Lawv_cyPQIu"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202612",
+        "cloud_signature": "goznhlCF_mGmpZC2j_ISDn6sE5ZYn3va12Y5h6Iq3RHj7AEkzbtAjBKOv7AsAAeCrRIRuysuArGy2THra1UYBw"
+      }
+    },
+    {
+      "name": "snapshot changed, hash kept",
+      "step": 3,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9599,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEYCIQD9R7t31dTY8hfIlWA5xd703utDqp8VMOD5jVYmCpdWkgIhAJXp7VuYNwzoBtVS9aCE8O6YTOI8eGPr7Lawv_cyPQIu"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "P0r8NCscDoEpoxVp-d9nNTcVQcuuDiUxvO1XfB3tIeUXY3CefZ6w8NbL921xTOk6z8LPR5CPcoOz4KJgX1EyAg"
+      }
+    },
+    {
+      "name": "proof for another approval",
+      "step": 1,
+      "proof": {
+        "v": 1,
+        "approval_handle": "ap_TEST0001",
+        "snapshot": {
+          "v": 1,
+          "approval": "ap_TEST0001",
+          "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+          "merchant": {
+            "name": "Trail Supply Co (mock)",
+            "domain": "merchant-mock.example.workers.dev"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 8999,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 9499,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_prefix": "941"
+          },
+          "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-03T12:15:00Z"
+        },
+        "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+        "assertion": {
+          "credential_id": "Y3JlZC0x",
+          "authenticator_data": "UNhY4JhezH9gQYqvDMWrWH9CwlcKiECVqejMrND2VFwFAAAAAA",
+          "client_data_json": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiRWdIUU5oZVFsYTR0SXBmSEszeXBDZFRWbDFDUUlsSGJMZnVhQVoyQ3BKTSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uZmlybS5leGFtcGxlIiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+          "signature": "MEYCIQD9R7t31dTY8hfIlWA5xd703utDqp8VMOD5jVYmCpdWkgIhAJXp7VuYNwzoBtVS9aCE8O6YTOI8eGPr7Lawv_cyPQIu"
+        },
+        "credential_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "Rby658FmotpxvMuamczkbJELV3uXEm-2lfHPxUMBDEA",
+          "y": "peJhWucoT4nzDc8B-7EwlnRYOgIz4eWfViu7Mj5cr-g",
+          "alg": "ES256"
+        },
+        "ledger": {
+          "seq": 1,
+          "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+        },
+        "issued_at": "2026-10-03T12:05:01Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "fh8VYferYbPM35zhmTi8aluK8LTwCSUM7pjwHUBqwkwygeCi8ktCsaJTn_85Tqrncopu_4jvxYDmB_x1qdwICA"
+      },
+      "approval_handle": "ap_OTHER0001"
+    }
+  ]
+}
