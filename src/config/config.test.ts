@@ -157,6 +157,13 @@ describe("environment validation", () => {
     expect((error as Error).message).toMatch(message);
   });
 
+  it("accepts a variable the caller owns only when it names it in settings, and still refuses it empty", () => {
+    expect(() => loadConfig({ INTENT_OWNED: "1" }, TRUST, LINUX)).toThrow(/unknown environment variable INTENT_OWNED/);
+    expect(() => loadConfig({ INTENT_OWNED: "1" }, TRUST, { ...LINUX, settings: ["INTENT_OWNED"] })).not.toThrow();
+    expect(() => loadConfig({ INTENT_OWNED: "" }, TRUST, { ...LINUX, settings: ["INTENT_OWNED"] })).toThrow(/INTENT_OWNED is set but empty/);
+    expect(() => loadConfig({ INTENT_OTHER: "1" }, TRUST, { ...LINUX, settings: ["INTENT_OWNED"] })).toThrow(/known: .*INTENT_OWNED/);
+  });
+
   it("an undefined value counts as unset", () => {
     expect(loadConfig({ INTENT_HTTP_PORT: undefined, INTENT_BOGUS: undefined }, TRUST, LINUX).http.port).toBe(8787);
   });

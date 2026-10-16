@@ -3,8 +3,8 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import { type Config, ConfigError, DOCKER_EXEC, loadConfig, type RootKey } from "../config/index.ts";
-import { CONTAINER_CONFIRM_PORT, type Demo, demoDataDir, demoTrustKeys, startDemo } from "../demo/index.ts";
+import { type Config, ConfigError, DOCKER_EXEC, loadConfig, parsePort, type RootKey } from "../config/index.ts";
+import { type Demo, DEMO_CONFIRM_PORT, demoDataDir, demoTrustKeys, startDemo } from "../demo/index.ts";
 import { connectCloud, type DisclosedCloud, type DisclosureOptions, type HttpCloudOptions } from "../disclosure/index.ts";
 import { loadPolicy, type Policy } from "../policy/index.ts";
 import { createSession } from "../signing/index.ts";
@@ -17,7 +17,8 @@ export const PACKAGE_ROOT = new URL("../../", import.meta.url);
 /** The config for a command. In demo mode the data dir (and a default policy path) move to `<data>/demo`. */
 export function cliConfig(io: Io, argv: readonly string[], demo: boolean, requireTrust: boolean): Config {
   // Demo mode brings its own Intent Cloud and root key, so the configured host's pin does not matter.
-  const config = loadConfig(io.env, argv, { requireTrust: requireTrust && !demo && io.env.INTENT_DEMO !== "1", ...cwd(io) });
+  const config = loadConfig(io.env, argv, { requireTrust: requireTrust && !demo && io.env.INTENT_DEMO !== "1", settings: [CONFIRM_PORT], ...cwd(io) });
+  chosenConfirmPort(io); // a typo fails at start, as every other setting does
   if (!demo && !config.demo) return config;
   const dataDir = demoDataDir(config.dataDir);
   const policyPath = io.env.INTENT_POLICY === undefined ? join(dataDir, "policy.yaml") : config.policyPath;
@@ -29,12 +30,35 @@ function cwd(io: Io): { cwd?: string } {
 }
 
 /** Starts the demo Intent Cloud and confirm page for a demo-mode config (whose dataDir is already `<data>/demo`). */
-export function startDemoFor(config: Config, io: Io): Promise<Demo> {
+export async function startDemoFor(config: Config, io: Io): Promise<Demo> {
   // cliConfig moved dataDir to demoDataDir(<data>); startDemo takes <data> and adds the demo folder itself.
+  // The confirm page listens on a known port (8788, or INTENT_DEMO_CONFIRM_PORT), so an `ssh -L` forward or a
+  // Docker `-p` mapping can be set up before it starts. On a host it binds 127.0.0.1, and a taken default port falls
+  // back to a free one (said on stderr); a port the developer chose is never swapped for another.
   // In the Docker image the host's browser must reach the confirm page through a port mapping, so it listens on
-  // all interfaces at a fixed port there; its links still say 127.0.0.1:8788 (map it to the same port on the host).
-  const container = config.runtime === "container" ? { bind: "0.0.0.0", port: CONTAINER_CONFIRM_PORT, readCommand: `${DOCKER_EXEC} cat` } : {};
-  return startDemo({ dataDir: dirname(config.dataDir), ...container, ...(io.now === undefined ? {} : { now: io.now }) });
+  // all interfaces there with no fallback; its links still say 127.0.0.1:<port> (map it to the same port on the host).
+  const chosen = chosenConfirmPort(io);
+  const port = chosen ?? DEMO_CONFIRM_PORT;
+  const container = config.runtime === "container";
+  const where = container ? { bind: "0.0.0.0", readCommand: `${DOCKER_EXEC} cat` } : { portFallback: chosen === null };
+  try {
+    return await startDemo({ dataDir: dirname(config.dataDir), port, ...where, ...(io.now === undefined ? {} : { now: io.now }) });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code !== "EADDRINUSE") throw error;
+    const named = chosen === null ? "" : ` (${CONFIRM_PORT})`;
+    throw new CliError(`the demo confirm page cannot listen on port ${String(port)}${named}: that port is taken; stop what uses it or set ${CONFIRM_PORT} to another port`);
+  }
+}
+
+/**
+ * The demo confirm page's port setting. The CLI owns it rather than src/config, which holds no confirm literal
+ * (confirm origins come only from Intent Cloud's signed statement); loadConfig accepts the name through `settings`.
+ */
+const CONFIRM_PORT = "INTENT_DEMO_CONFIRM_PORT";
+
+function chosenConfirmPort(io: Io): number | null {
+  const value = io.env[CONFIRM_PORT];
+  return value === undefined ? null : parsePort(CONFIRM_PORT, value);
 }
 
 /** The root keys a command trusts: the demo's published test root in demo mode, else rootKeys(config). */

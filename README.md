@@ -34,13 +34,17 @@ $ pnpm install && pnpm build && npm pack && mv intent-gateway-*.tgz intent-gatew
 $ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
 ```
 
+If Claude Code already has an MCP server named `intent` (for example a connector added in your Claude account), use another name, `claude mcp add intent-demo -- …`, so the agent cannot pick the wrong one.
+
 **3 · Ask for something.** Start `claude` and ask:
 
 ```text
 > Find running shoes to ZIP 94103, under $200, and prepare a cart for the cheapest.
 ```
 
-The agent calls `find_offers`, then `create_cart`, and shows an approval link such as `http://127.0.0.1:<port>/confirm/c/…`. Open it, check the item and total, enter the demo code and click **Approve with demo passkey**. The code is six digits, new on every start and never shown to the agent; the page shows the command that reads it (`cat <data dir>/demo/approval-code`). Then ask the agent to check the approval status: it reports the purchase as approved, with the approver passkey's fingerprint. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started.
+The agent calls `find_offers`, then `create_cart`, and shows an approval link such as `http://127.0.0.1:8788/confirm/c/…`. Open it, check the item and total, enter the demo code and click **Approve with demo passkey**. The code is six digits, new on every start and never shown to the agent; the page shows the command that reads it (`cat <data dir>/demo/approval-code`). Then ask the agent to check the approval status: it reports the purchase as approved, with the approver passkey's fingerprint. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started.
+
+Working on a remote machine over SSH? Forward the confirm page to your laptop's browser with `ssh -L 8788:127.0.0.1:8788 <host>`. If port 8788 is taken, the demo uses another one and says so on startup; `INTENT_DEMO_CONFIRM_PORT` chooses it ([demo page](docs/demo.md#the-confirm-pages-port)).
 
 **4 · Check what was sent**, in the cloned folder:
 
@@ -76,7 +80,7 @@ On its first start the container makes an HTTP token and saves it in `/data/http
 $ claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"
 ```
 
-Later starts reuse the token without printing it; read it with `docker exec intent cat /data/http-token`. Port 8788 is the demo's confirm page and must be published on the same host port, as above. The demo code is in `docker logs intent`, or read it with `docker exec intent cat /data/demo/approval-code`. Check what was sent with `docker exec intent intent verify --demo`.
+Later starts reuse the token without printing it; read it with `docker exec intent cat /data/http-token`. Port 8788 is the demo's confirm page and must be published on the same host port, as above. Over SSH, `ssh -L 8788:127.0.0.1:8788 <host>` is the only forward you need: the agent runs on the server and connects to 8787 there. The demo code is in `docker logs intent`, or read it with `docker exec intent cat /data/demo/approval-code`. Check what was sent with `docker exec intent intent verify --demo`.
 
 Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`. For a bind mount instead of a volume, add `--user "$(id -u):$(id -g)"`. Without `INTENT_DEMO=1` the container talks to the Intent Cloud staging host, whose root key this build pins; until that host is open, it exits with a line saying so and how to re-run it in demo mode.
 

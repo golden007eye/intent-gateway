@@ -13,12 +13,17 @@ export interface NextStepsOptions {
   intent?: string;
   /** The demo code the confirm page's Approve needs, and the file that keeps it (Demo.code, Demo.codeFile). */
   code?: { code: string; file: string };
+  /**
+   * The confirm page's origin, `http://127.0.0.1:<port>`, and the port asked for when it was taken and a free one
+   * was used instead (Demo.confirmPortBusy).
+   */
+  confirm?: { origin: string; busy: number | null };
 }
 
 /** The lines printed on stderr when the demo starts, ready to paste. Never put in a tool result: they hold the code. */
 export function nextSteps(options: NextStepsOptions = {}): string[] {
   const intent = options.intent ?? INTENT;
-  const { http } = options;
+  const { http, confirm } = options;
   const add =
     http === undefined
       ? `claude mcp add intent -- ${intent} demo`
@@ -31,9 +36,20 @@ export function nextSteps(options: NextStepsOptions = {}): string[] {
     "Then ask your agent to find something to buy (for example running shoes to ZIP 94103, under $200).",
     "When it prepares a cart, open the approval link, enter the demo code and click Approve with demo passkey,",
     "then ask the agent to check the approval status.",
+    ...(confirm === undefined ? [] : confirmLines(confirm)),
     ...(options.code === undefined
       ? []
       : [`Demo code for the confirm page: ${options.code.code} (new on every start; also in ${options.code.file}; never sent to the agent)`]),
     `Re-check what was sent afterwards with: ${intent} verify --demo`,
   ];
+}
+
+/** Where the approval links point, with the SSH forward for a developer whose browser is on another machine. */
+function confirmLines(confirm: { origin: string; busy: number | null }): string[] {
+  const port = new URL(confirm.origin).port;
+  const busy =
+    confirm.busy === null
+      ? []
+      : [`Port ${String(confirm.busy)} is taken (another demo running?), so the confirm page uses ${port}; set INTENT_DEMO_CONFIRM_PORT to choose one.`];
+  return [...busy, `Approval links open the demo confirm page at ${confirm.origin} (over SSH, forward it: ssh -L ${port}:127.0.0.1:${port} <host>)`];
 }

@@ -9,11 +9,14 @@ import { join } from "node:path";
 import { catalogCategories, type FakeCloud, SAMPLE_CATALOG, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
 import { EXCLUDED_CATEGORIES } from "../policy/index.ts";
 import { type PinnedRootKey, TEST_ROOT_KEY } from "../trust/index.ts";
-import { CONFIRM_PATH, startConfirmPage } from "./confirm.ts";
+import { CONFIRM_PATH, type ConfirmPage, startConfirmPage } from "./confirm.ts";
 
 export const DEMO_DIR = "demo";
-/** The confirm page's fixed port in the Docker image, which `-p 127.0.0.1:8788:8788` maps to the host. */
-export const CONTAINER_CONFIRM_PORT = 8788;
+/**
+ * The confirm page's port unless INTENT_DEMO_CONFIRM_PORT names another. It is fixed so that `ssh -L 8788:127.0.0.1:8788`
+ * can be set up before the demo starts, and so that the Docker image's `-p 127.0.0.1:8788:8788` maps it to the host.
+ */
+export const DEMO_CONFIRM_PORT = 8788;
 const PASSKEY_FILE = "demo-passkey.json";
 /** The demo code of the running demo (0600), for a person whose gateway was started by an agent, with no terminal. */
 export const CODE_FILE = "approval-code";
@@ -23,6 +26,8 @@ export interface DemoOptions {
   dataDir: string;
   /** The confirm page's port; 0 or absent picks a free one. */
   port?: number;
+  /** When `port` is taken, listen on a free port instead of failing; Demo.confirmPortBusy then says so. */
+  portFallback?: boolean;
   /** The confirm page's listen address (ConfirmPageOptions.bind); the Docker image passes 0.0.0.0. */
   bind?: string;
   /** Milliseconds since the epoch. Defaults to Date.now. */
@@ -41,6 +46,8 @@ export interface Demo {
   trustKeys: { rootKeys: PinnedRootKey[] };
   /** Pass as GatewayOptions.demo.confirmBaseUrl: `http://127.0.0.1:<port>/confirm`. */
   confirmBaseUrl: string;
+  /** The port asked for, when it was taken and the confirm page fell back to a free one (portFallback); else null. */
+  confirmPortBusy: number | null;
   /** `<dataDir>/demo`: open the store here. */
   dataDir: string;
   /** The demo passkey the confirm page signs with; the same key on every run over the same data dir. */
@@ -83,19 +90,32 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   try {
-    const page = await startConfirmPage({
-      fake: cloud,
-      passkey,
-      code,
-      codeHint: `${options.readCommand ?? "cat"} ${codeFile}`,
-      port: options.port ?? 0,
-      ...(options.bind === undefined ? {} : { bind: options.bind }),
-      ...(options.now === undefined ? {} : { now: options.now }),
-    });
+    const pageOn = (port: number): Promise<ConfirmPage> =>
+      startConfirmPage({
+        fake: cloud,
+        passkey,
+        code,
+        codeHint: `${options.readCommand ?? "cat"} ${codeFile}`,
+        port,
+        ...(options.bind === undefined ? {} : { bind: options.bind }),
+        ...(options.now === undefined ? {} : { now: options.now }),
+      });
+    const wanted = options.port ?? 0;
+    let page: ConfirmPage;
+    let confirmPortBusy: number | null = null;
+    try {
+      page = await pageOn(wanted);
+    } catch (error) {
+      const busy = (error as NodeJS.ErrnoException | null)?.code === "EADDRINUSE";
+      if (!(busy && options.portFallback === true && wanted !== 0)) throw error;
+      page = await pageOn(0);
+      confirmPortBusy = wanted;
+    }
     return {
       cloudUrl: cloud.url,
       trustKeys: { rootKeys: [cloud.keys.rootPin] },
       confirmBaseUrl: page.origin + CONFIRM_PATH,
+      confirmPortBusy,
       dataDir,
       passkey,
       code,
