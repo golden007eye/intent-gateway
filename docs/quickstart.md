@@ -96,7 +96,7 @@ Later starts reuse the token without printing it: their connect line reads it fr
 
 - Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`: inside the container the gateway listens on every interface, and the token is then the only protection.
 - The gateway runs as uid 1000, which owns the `/data` volume. For a bind mount, run as its owner: `--user "$(id -u):$(id -g)" -v "$PWD/data:/data"`.
-- Without `INTENT_DEMO=1` the container talks to the Intent Cloud staging host and needs its pinned root key, which arrives with the first preview release.
+- Without `INTENT_DEMO=1` the container talks to the Intent Cloud staging host, whose root key this build pins. Until that host is open, the container exits with a line saying it cannot be reached and how to re-run it in demo mode.
 
 ## Next
 

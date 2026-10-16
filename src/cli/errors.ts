@@ -1,6 +1,6 @@
 // Every failure the CLI can meet, as one line: what failed, then the command or setting that fixes it. Stack
 // traces only with INTENT_DEBUG=1. Pure.
-import { ConfigError, INTENT } from "../config/index.ts";
+import { type Config, ConfigError, DEFAULT_CLOUD_URL, INTENT, tryLocally, UPDATE_COMMAND } from "../config/index.ts";
 import {
   CloudNetworkError,
   CloudRequestError,
@@ -22,11 +22,13 @@ export interface ErrorContext {
   dataDir?: string;
   policyPath?: string;
   cloudUrl?: string;
+  /** The demo next step for this runtime (config's tryLocally); defaults to `try everything locally with <INTENT> demo`. */
+  tryLocally?: string;
 }
 
 const LIBRARY_FIX: Readonly<Record<LibraryErrorCode, string>> = {
   UNKNOWN_POLICY: "see the names in the policies/ folder of the gateway repository",
-  INDEX_INVALID: "reinstall the gateway (npx -y intent-gateway@latest), or pass --commit <sha> to take the library from GitHub",
+  INDEX_INVALID: `reinstall the gateway (${UPDATE_COMMAND}), or pass --commit <sha> to take the library from GitHub`,
   HASH_MISMATCH: "nothing was written; reinstall the gateway, or pass --commit <sha> of a signed commit on main",
   NO_BUILD_COMMIT: "pass --commit <sha> of a signed commit on main to take the policy from GitHub",
   BAD_COMMIT: "copy the full hash of a commit on main from git log",
@@ -38,6 +40,26 @@ const LIBRARY_FIX: Readonly<Record<LibraryErrorCode, string>> = {
   LOCK_STALE: `run ${INTENT} policy add <name> again`,
   POLICY_CHANGED: "run the command again",
 };
+
+/** What describeError needs to name the fix for a command: the paths, the Intent Cloud URL and this runtime's demo next step. */
+export function errorContext(config: Config, env: Readonly<Record<string, string | undefined>>): ErrorContext {
+  return { dataDir: config.dataDir, policyPath: config.policyPath, cloudUrl: config.cloud.url, tryLocally: tryLocally(config.runtime, env) };
+}
+
+/** What to do when Intent Cloud cannot be used: wait for staging (the default host) or check the setting; or the demo. */
+function unavailableNext(ctx: ErrorContext): string {
+  const local = ctx.tryLocally ?? `try everything locally with ${INTENT} demo`;
+  return ctx.cloudUrl === DEFAULT_CLOUD_URL ? `Staging may not be open yet; ${local}` : `Check your connection and INTENT_CLOUD_URL, or ${local}`;
+}
+
+/**
+ * Intent Cloud's first request (meta, no body fields) came back with an HTTP error: the host answers but does not
+ * serve the gateway yet. Says only what came back (invariant 5).
+ */
+export function metaRefused(status: number, ctx: ErrorContext): string {
+  const host = ctx.cloudUrl === undefined ? "Intent Cloud" : `Intent Cloud at ${new URL(ctx.cloudUrl).host}`;
+  return `${host} answered HTTP ${String(status)} to the gateway's first request (meta, no body fields). ${unavailableNext(ctx)}`;
+}
 
 /** One line, no trailing newline. */
 export function describeError(error: unknown, ctx: ErrorContext = {}): string {
@@ -55,6 +77,7 @@ function worded(error: unknown, ctx: ErrorContext): string {
     return `configuration: ${message}${fix}`;
   }
   if (error instanceof GatewayStartError) {
+    if (error.metaStatus !== null) return metaRefused(error.metaStatus, ctx);
     return `could not start: ${message}; run ${INTENT} doctor to see each check`;
   }
   if (error instanceof GatewayNotStartedError) return `${message}; run ${INTENT} doctor`;
@@ -74,7 +97,9 @@ function worded(error: unknown, ctx: ErrorContext): string {
   }
   const cloud = ctx.cloudUrl ?? "Intent Cloud";
   if (error instanceof CloudNetworkError) {
-    return `could not reach ${cloud}: ${message}; check your connection or INTENT_CLOUD_URL, or run ${INTENT} demo to try without a network`;
+    // Invariant 5: "nothing was sent" only when no connection was ever made; otherwise the request may have arrived.
+    const sent = error.neverLeft ? "nothing was sent" : "the request may have reached it (logged as sent, not acknowledged)";
+    return `${message}; ${sent}. ${unavailableNext(ctx)}`;
   }
   if (error instanceof CloudResponseError || error instanceof DisclosureDiscardedError) {
     return `${cloud} answered something the gateway does not accept: ${message}; run ${INTENT} doctor`;

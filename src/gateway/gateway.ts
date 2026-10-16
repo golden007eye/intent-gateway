@@ -109,6 +109,12 @@ export function contractSums(): string {
 /** start() could not establish a trusted connection: the contract differs, or the key statement did not verify. */
 export class GatewayStartError extends Error {
   override name = "GatewayStartError";
+  /** The HTTP status when Intent Cloud's first request (meta) answered with an error: the host is up but not serving. */
+  readonly metaStatus: number | null;
+  constructor(message: string, metaStatus: number | null = null) {
+    super(message);
+    this.metaStatus = metaStatus;
+  }
 }
 
 /** A tool was called before start() succeeded. */
@@ -281,7 +287,9 @@ export function createGateway(options: GatewayOptions): Gateway {
       }
       if (error instanceof DisclosureNoKeysError) return refuse("error", "No verified key statement: restart the gateway.");
       if (error instanceof CloudNetworkError) {
-        return refuse("error", "Intent Cloud could not be reached; the request is logged as sent but not acknowledged.");
+        // Invariant 5: with no connection made, the logged request never left, and the summary does not list it as sent.
+        if (error.neverLeft) return refuse("error", `Not sent: ${error.message}, so the request never left this machine. Try again later.`);
+        return refuse("error", `${error.message}; the request may have reached it, and is logged as sent but not acknowledged.`);
       }
       if (error instanceof CloudResponseError) return refuse("error", `Intent Cloud's answer was malformed (${error.reason}).`);
       if (error instanceof CloudRequestError) return refuse("invalid", `Not sent: ${error.message}`);
@@ -322,7 +330,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (keySet !== null) return;
     await checkMode();
     const meta = await cloud.meta();
-    if (!meta.ok) throw new GatewayStartError(`Intent Cloud meta failed with status ${String(meta.status)}`);
+    if (!meta.ok) throw new GatewayStartError(`Intent Cloud meta failed with status ${String(meta.status)}`, meta.status);
     const sums = contractSums();
     const problems: string[] = [];
     if (meta.contractVersion !== CONTRACT_VERSION) {

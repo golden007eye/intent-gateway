@@ -78,11 +78,11 @@ $ claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Aut
 
 Later starts reuse the token without printing it; read it with `docker exec intent cat /data/http-token`. Port 8788 is the demo's confirm page and must be published on the same host port, as above. The demo code is in `docker logs intent`, or read it with `docker exec intent cat /data/demo/approval-code`. Check what was sent with `docker exec intent intent verify --demo`.
 
-Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`. For a bind mount instead of a volume, add `--user "$(id -u):$(id -g)"`. Without `INTENT_DEMO=1` the container needs the root key pinned for the Intent Cloud host, which arrives with the first preview release.
+Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`. For a bind mount instead of a volume, add `--user "$(id -u):$(id -g)"`. Without `INTENT_DEMO=1` the container talks to the Intent Cloud staging host, whose root key this build pins; until that host is open, it exits with a line saying so and how to re-run it in demo mode.
 
 ## Real purchases
 
-Not yet. The preview gateway talks to Intent Cloud staging, whose public host is not live, and its root key is not pinned in this build: `intent serve` without `--demo` stops with the next step to take. Real purchases wait for the [launch gate](docs/adr/0004-public-pre-alpha.md). When they arrive, the buyer still approves each purchase with their own passkey on intent's confirm page and pays on the merchant's checkout.
+Not yet. The preview gateway talks to Intent Cloud staging and pins its root key, but the staging host is not open yet: `intent serve` without `--demo` stops with a line saying it cannot reach the host and the next step to take. Real purchases wait for the [launch gate](docs/adr/0004-public-pre-alpha.md). When they arrive, the buyer still approves each purchase with their own passkey on intent's confirm page and pays on the merchant's checkout.
 
 ## How privacy is verified
 

@@ -106,15 +106,59 @@ export class CloudRequestError extends Error {
   override name = "CloudRequestError";
 }
 
-/** No complete response arrived: connection failure, reset or timeout. The request may have reached Cloud. */
+/**
+ * No complete response arrived: connection failure, reset or timeout. The request may have reached Cloud, unless
+ * `neverLeft`: the host name did not resolve, or no connection could be opened, so no byte of the request was sent.
+ */
 export class CloudNetworkError extends Error {
   override name = "CloudNetworkError";
   readonly reason: "network" | "timeout";
   readonly request: PreparedRequest;
-  constructor(reason: "network" | "timeout", request: PreparedRequest, message: string, options?: ErrorOptions) {
+  /** True only when no connection was ever made (DNS failure, refused, unreachable): nothing left the machine. */
+  readonly neverLeft: boolean;
+  /** What failed, in plain words with no error code: `DNS: not found`, `connection refused`, … */
+  readonly failure: string;
+  constructor(
+    reason: "network" | "timeout",
+    request: PreparedRequest,
+    message: string,
+    options?: ErrorOptions & { neverLeft?: boolean; failure?: string },
+  ) {
     super(message, options);
     this.reason = reason;
     this.request = request;
+    this.neverLeft = options?.neverLeft ?? false;
+    this.failure = options?.failure ?? reason;
+  }
+}
+
+/**
+ * A failed connection's error code in plain words, and whether it proves that no connection was made. Only a failed
+ * lookup or a connection that was never opened counts as never sent; anything else may have reached Cloud.
+ */
+export function networkFailure(code: unknown): { words: string; neverLeft: boolean } {
+  switch (code) {
+    case "ENOTFOUND":
+      return { words: "DNS: not found", neverLeft: true };
+    case "EAI_AGAIN":
+    case "EAI_FAIL":
+      return { words: "DNS: lookup failed", neverLeft: true };
+    case "ECONNREFUSED":
+      return { words: "connection refused", neverLeft: true };
+    case "EHOSTUNREACH":
+    case "ENETUNREACH":
+    case "ENETDOWN":
+      return { words: "network unreachable", neverLeft: true };
+    case "ETIMEDOUT":
+      return { words: "connection timed out", neverLeft: false };
+    case "ECONNRESET":
+    case "EPIPE":
+      return { words: "connection reset", neverLeft: false };
+    default:
+      return {
+        words: typeof code === "string" && /CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/.test(code) ? "TLS: the certificate is not trusted or the handshake failed" : "network error",
+        neverLeft: false,
+      };
   }
 }
 
@@ -271,8 +315,9 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
         if (error !== null) reject(error);
         else if (exchange !== undefined) resolve(exchange);
       };
-      const fail = (reason: "network" | "timeout", message: string, cause?: unknown): void => {
-        finish(new CloudNetworkError(reason, request, message, cause === undefined ? undefined : { cause }));
+      const fail = (reason: "network" | "timeout", words: string, cause?: unknown, neverLeft = false): void => {
+        const message = `Intent Cloud at ${target.host} cannot be reached (${words})`;
+        finish(new CloudNetworkError(reason, request, message, { neverLeft, failure: words, ...(cause === undefined ? {} : { cause }) }));
       };
       const req = (target.secure ? httpsRequest : httpRequest)(requestOptions, (res: IncomingMessage) => {
         const status = res.statusCode ?? 0;
@@ -300,10 +345,12 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
         });
       });
       const timer = setTimeout(() => {
-        fail("timeout", `no complete response within ${String(timeoutMs)} ms`);
+        const within = timeoutMs % 1000 === 0 ? `${String(timeoutMs / 1000)} s` : `${String(timeoutMs)} ms`;
+        fail("timeout", `no complete response within ${within}`);
       }, timeoutMs);
       req.on("error", (error) => {
-        fail("network", `request to ${target.host} failed: ${error.message}`, error);
+        const { words, neverLeft } = networkFailure((error as NodeJS.ErrnoException).code);
+        fail("network", words, error, neverLeft);
       });
       req.end(request.body.length > 0 ? request.body : undefined);
     });

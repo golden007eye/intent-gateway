@@ -7,9 +7,24 @@ import { afterEach, describe, expect, it } from "vitest";
 import { describeBuild, readBuild } from "./build.ts";
 import { BUILD, ConfigError, loadConfig, PINNED_HOSTS, type LoadOptions } from "./index.ts";
 
-// The staging pin is empty until the release task commits the root key, so most cases pass --trust-keys.
+// Most cases pass --trust-keys, so they hold for any host; the cloud trust cases below cover the pins.
 const TRUST = ["--trust-keys", "/keys/root.jwk"];
 const LINUX: LoadOptions = { platform: "linux", homedir: "/home/dev", cwd: "/work" };
+
+/** Intent Cloud staging's root public key, as docs/release.md has the release pin it. */
+const STAGING_ROOT = { kid: "cloud-root-1", jwk: { kty: "OKP", crv: "Ed25519", x: "7-sDUcgqFgaDKZvWfEjmnhcntLrcrnNVlM1VFyGHFoI" } };
+
+/** A host pinned with no root key, as a host is before its release commits one; added only for `run`. */
+const EMPTY_PIN_URL = "https://empty-pin.example";
+function withEmptyPin<T>(run: () => T): T {
+  const pins = PINNED_HOSTS as Record<string, { rootKeys: unknown[] }>;
+  pins["empty-pin.example"] = { rootKeys: [] };
+  try {
+    return run();
+  } finally {
+    delete pins["empty-pin.example"];
+  }
+}
 
 function load(env: Record<string, string>, options: LoadOptions = LINUX, argv: string[] = TRUST) {
   return loadConfig(env, argv, options);
@@ -238,23 +253,35 @@ describe("cloud trust", () => {
     expect(() => load({ INTENT_CLOUD_URL: "https://constructor" }, LINUX, [])).toThrow(/not a pinned/);
   });
 
-  it("refuses the default host while its pin is empty", () => {
-    expect(PINNED_HOSTS["staging-api.intentai.shop"]?.rootKeys).toEqual([]);
-    expect(() => load({}, LINUX, [])).toThrow(/no trusted root key for staging-api\.intentai\.shop yet; staging opens with the first preview release/);
+  it("loads the pinned cloud-root-1 key for the default host, with no --trust-keys", () => {
+    expect(load({}, LINUX, []).cloud).toEqual({
+      url: "https://staging-api.intentai.shop",
+      trust: { kind: "pinned", host: "staging-api.intentai.shop", rootKeys: [STAGING_ROOT] },
+    });
+    // The offline commands see the same pin.
+    expect(load({}, { ...LINUX, requireTrust: false }, []).cloud.trust).toEqual({ kind: "pinned", host: "staging-api.intentai.shop", rootKeys: [STAGING_ROOT] });
+  });
+
+  it("refuses a host whose pin lists no root key, naming the demo and --trust-keys", () => {
+    withEmptyPin(() => {
+      expect(() => load({ INTENT_CLOUD_URL: EMPTY_PIN_URL }, LINUX, [])).toThrow(
+        "this build has no trusted root key for empty-pin.example yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud",
+      );
+    });
   });
 
   it("in the container, the unpinned-host hints re-run it in demo mode, never docker exec into it (F-h)", () => {
     const container = { INTENT_RUNTIME: "container", HOSTNAME: "d3394f0ffd41" };
-    const staging = (() => {
+    const empty = withEmptyPin(() => {
       try {
-        load(container, LINUX, []);
+        load({ ...container, INTENT_CLOUD_URL: EMPTY_PIN_URL }, LINUX, []);
       } catch (error) {
         return (error as Error).message;
       }
       return "";
-    })();
-    expect(staging).toBe(
-      "this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. " +
+    });
+    expect(empty).toBe(
+      "this build has no trusted root key for empty-pin.example yet. " +
         "Try everything locally now: re-run the container in demo mode: docker rm d3394f0ffd41 && " +
         "docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 -v intent-data:/data intent-gateway; " +
         'or, for a self-hosted Intent Cloud, mount its root key file: docker run … -v "$PWD/keys.json:/keys.json:ro" intent-gateway --trust-keys /keys.json',
@@ -264,11 +291,11 @@ describe("cloud trust", () => {
   });
 
   it("with requireTrust false, an unpinned host is reported instead of refused (offline commands)", () => {
-    const config = load({}, { ...LINUX, requireTrust: false }, []);
+    const config = withEmptyPin(() => load({ INTENT_CLOUD_URL: EMPTY_PIN_URL }, { ...LINUX, requireTrust: false }, []));
     expect(config.cloud.trust).toEqual({
       kind: "unpinned",
-      host: "staging-api.intentai.shop",
-      reason: "this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud",
+      host: "empty-pin.example",
+      reason: "this build has no trusted root key for empty-pin.example yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud",
     });
     expect(load({ INTENT_CLOUD_URL: "https://cloud.example" }, { ...LINUX, requireTrust: false }, []).cloud.trust).toMatchObject({
       kind: "unpinned",
@@ -279,7 +306,9 @@ describe("cloud trust", () => {
   });
 
   it("refuses an empty pin even when other arguments are present", () => {
-    expect(() => load({}, LINUX, ["serve", "--trust-keys-x", "k"])).toThrow(ConfigError);
+    withEmptyPin(() => {
+      expect(() => load({ INTENT_CLOUD_URL: EMPTY_PIN_URL }, LINUX, ["serve", "--trust-keys-x", "k"])).toThrow(ConfigError);
+    });
   });
 
   it("uses a pinned host's root keys when the pin is filled", () => {
@@ -323,7 +352,10 @@ describe("cloud trust", () => {
   });
 });
 
-/** Why a pin is not `{ rootKeys: [{ kid: cloud-root-1, public jwk }] }`, or [] when it is. */
+/** The published test root (src/demo, the fake Intent Cloud): its private seed is public, so no host may pin it. */
+const TEST_ROOT_X = "F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U";
+
+/** Why a pin is not `{ rootKeys: [{ kid: cloud-root-1, jwk: { kty: OKP, crv: Ed25519, x } }] }`, or [] when it is. */
 function pinProblems(pin: unknown): string[] {
   const problems: string[] = [];
   const p = pin as { rootKeys?: unknown };
@@ -331,20 +363,34 @@ function pinProblems(pin: unknown): string[] {
   for (const key of p.rootKeys as { kid?: unknown; jwk?: Record<string, unknown> }[]) {
     if (Object.keys(key).sort().join() !== "jwk,kid") problems.push("key has fields other than kid and jwk");
     if (key.kid !== "cloud-root-1") problems.push(`kid ${String(key.kid)}`);
+    const jwk = key.jwk ?? {};
     for (const secret of ["d", "p", "q", "dp", "dq", "qi", "k"]) {
-      if (key.jwk !== undefined && Object.hasOwn(key.jwk, secret)) problems.push(`private field ${secret}`);
+      if (Object.hasOwn(jwk, secret)) problems.push(`private field ${secret}`);
     }
+    const extra = Object.keys(jwk).filter((f) => !["kty", "crv", "x", "d", "p", "q", "dp", "dq", "qi", "k"].includes(f));
+    if (extra.length > 0) problems.push(`jwk fields ${extra.join(", ")}`);
+    if (jwk.kty !== "OKP" || jwk.crv !== "Ed25519") problems.push("not an Ed25519 public key");
+    if (typeof jwk.x !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(jwk.x)) problems.push("x is not 32 bytes of base64url");
+    if (jwk.x === TEST_ROOT_X) problems.push("the published test root");
   }
   return problems;
 }
 
 describe("PINNED_HOSTS holds only root public keys", () => {
-  it("the shape check catches a private key or an extra field (attack cases)", () => {
-    const pub = { kty: "OKP", crv: "Ed25519", x: "AAAA" };
+  it("the shape check catches a private key, another kid, the test root or an extra field (attack cases)", () => {
+    const pub = { kty: "OKP", crv: "Ed25519", x: "A".repeat(43) };
     expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: pub }] })).toEqual([]);
     expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: { ...pub, d: "secret" } }] })).toEqual(["private field d"]);
-    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: { kty: "oct", k: "secret" } }] })).toEqual(["private field k"]);
+    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: { kty: "oct", k: "secret" } }] })).toEqual([
+      "private field k",
+      "not an Ed25519 public key",
+      "x is not 32 bytes of base64url",
+    ]);
     expect(pinProblems({ rootKeys: [{ kid: "signing-1", jwk: pub }] })).toEqual(["kid signing-1"]);
+    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-2", jwk: pub }] })).toEqual(["kid cloud-root-2"]);
+    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: { ...pub, x: TEST_ROOT_X } }] })).toEqual(["the published test root"]);
+    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: { ...pub, alg: "EdDSA" } }] })).toEqual(["jwk fields alg"]);
+    expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: { ...pub, x: "AAAA" } }] })).toEqual(["x is not 32 bytes of base64url"]);
     expect(pinProblems({ rootKeys: [], confirmOrigin: "x" })).toEqual(["not { rootKeys: [...] }"]);
     expect(pinProblems({ rootKeys: [{ kid: "cloud-root-1", jwk: pub, origin: "x" }] })).toEqual([
       "key has fields other than kid and jwk",
@@ -352,17 +398,22 @@ describe("PINNED_HOSTS holds only root public keys", () => {
   });
 
   it("attack: no host ever pins the published test root, whose private seed is public (R3-8)", () => {
-    // The real staging root key arrives with K11 (docs/release.md); until then the staging pin stays empty.
-    const testRootX = "F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U";
     for (const [host, pin] of Object.entries(PINNED_HOSTS)) {
-      expect(pin.rootKeys.map((k) => k.jwk.x), host).not.toContain(testRootX);
+      expect(pin.rootKeys.map((k) => k.jwk.x), host).not.toContain(TEST_ROOT_X);
     }
   });
 
+  it("the staging host pins exactly the release's cloud-root-1 public key", () => {
+    expect(PINNED_HOSTS["staging-api.intentai.shop"]).toEqual({ rootKeys: [STAGING_ROOT] });
+  });
+
   it("every entry is { rootKeys: [{ kid: cloud-root-1, public jwk }] }", () => {
-    // Non-vacuous: there is a pin to check, even while its root key list is still empty.
+    // Non-vacuous: there is a pin to check.
     expect(Object.keys(PINNED_HOSTS).length).toBeGreaterThan(0);
-    for (const [host, pin] of Object.entries(PINNED_HOSTS)) expect(pinProblems(pin), host).toEqual([]);
+    for (const [host, pin] of Object.entries(PINNED_HOSTS)) {
+      expect(pinProblems(pin), host).toEqual([]);
+      expect(pin.rootKeys.length, `${host} pins no root key`).toBeGreaterThan(0);
+    }
   });
 });
 

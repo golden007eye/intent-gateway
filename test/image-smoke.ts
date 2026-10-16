@@ -1,8 +1,9 @@
 // Smoke test of a built Docker image (G24; AC-R2, ADR-0005), run by CI's package job and by hand:
 //   node test/image-smoke.ts <image> [--mcp-port 8787]
 // It needs Docker and runs these containers, removing each (and its volume) afterwards:
-// 1. No configuration beyond a mounted policy file, against a fake Intent Cloud on the host (host network, because
-//    no real host has a pinned root key yet): the entrypoint makes a 43-character token in /data/http-token (0600,
+// No step reaches the real Intent Cloud host: steps 1-2 use a fake on the host, 5-6 make the staging host unreachable.
+// 1. No configuration beyond a mounted policy file, against a fake Intent Cloud on the host (host network, with its
+//    test root key mounted): the entrypoint makes a 43-character token in /data/http-token (0600,
 //    owned by uid 1000) and prints it once; MCP `initialize` on /mcp works with it and gets 401 without it or with
 //    a wrong one; the healthcheck turns healthy without the token; after a restart the token is reused and not
 //    printed again.
@@ -11,9 +12,11 @@
 // 4. The demo exactly as documented: `-p 127.0.0.1:<mcp>:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1`, then
 //    find_offers → create_cart → Approve (a POST from the host to the mapped confirm page) → approved, and
 //    `docker exec … intent verify --demo` passes.
-// 5. The first run as documented but without INTENT_DEMO, so with no root key: the container exits 1 with no
-//    connect line and a hint to re-run it with -e INTENT_DEMO=1 (not `docker exec`, it has exited); the next start
-//    that serves, on the same volume, prints the token it made.
+// 5. The first run as documented but without INTENT_DEMO, with the staging host refusing (--add-host to the
+//    container itself): the container exits 1 with no connect line, a plain line that the host cannot be reached
+//    and nothing was sent, and a hint to re-run it with -e INTENT_DEMO=1 (not `docker exec`, it has exited); the
+//    next start that serves, on the same volume, prints the token it made.
+// 6. With no network at all (--network none): the same line, naming the DNS failure.
 // TEST KEYS ONLY. Not part of the npm package or the image.
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -234,28 +237,48 @@ async function demo(): Promise<void> {
   check(verify.status === 0 && /^verify: ok$/m.test(verify.stdout), "docker exec <c> intent verify --demo passes", verify.stdout + verify.stderr);
 }
 
-async function noRootKey(): Promise<void> {
+async function stagingUnreachable(): Promise<void> {
   const volume = `image-smoke-${String(process.pid)}`;
   volumes.push(volume);
-  const id = run(["-p", `127.0.0.1:${String(mcpPort + 30)}:8787`, "-v", `${volume}:/data`, image]);
+  // The staging host's name points at the container itself, where nothing listens on 443: a refused connection,
+  // whatever the real host's state, so this step never reaches the network.
+  const id = run(["-p", `127.0.0.1:${String(mcpPort + 30)}:8787`, "--add-host", "staging-api.intentai.shop:127.0.0.1", "-v", `${volume}:/data`, image]);
   const exit = await until("the container to exit", () => {
     const s = docker("inspect", "-f", "{{.State.Status}} {{.State.ExitCode}}", id).trim();
     return s.startsWith("exited") ? s : undefined;
   });
   const first = logs(id);
-  check(exit === "exited 1", "with no root key and no INTENT_DEMO the container exits 1", exit);
+  check(exit === "exited 1", "with the staging host unreachable and no INTENT_DEMO the container exits 1", exit);
   check(!first.includes("claude mcp add"), "a container that cannot start prints no connect line (and no token)", first);
+  check(
+    first.includes("intent: Intent Cloud at staging-api.intentai.shop cannot be reached (connection refused); nothing was sent. Staging may not be open yet;"),
+    "it says plainly that the staging host cannot be reached and that nothing was sent",
+    first,
+  );
   check(first.includes(`docker rm ${id.slice(0, 12)} && docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 -v intent-data:/data intent-gateway`), "the hint re-runs the container with -e INTENT_DEMO=1", first);
-  check(first.includes("--trust-keys /keys.json") && !first.includes("docker exec"), "the hint names a mounted root key file and no docker exec into the exited container", first);
+  const failure = first.split("\n").find((l) => l.startsWith("intent: ")) ?? "";
+  check(!failure.includes("docker exec"), "the failure line names no docker exec into the exited container", failure);
+  check(!/ECONNREFUSED|ENOTFOUND|getaddrinfo|\n\s+at /.test(first), "no error code and no stack in the log", first);
   const next = run(["-p", `127.0.0.1:${String(mcpPort + 30)}:8787`, "-e", "INTENT_DEMO=1", "-v", `${volume}:/data`, image]);
   const token = await until("the token line on the first start that serves", () => TOKEN_LINE.exec(logs(next))?.[1]);
   check(token === docker("exec", next, "cat", "/data/http-token").trim(), "the first start that serves prints the token made by the one that failed", logs(next));
   check(!logs(next).includes("using the HTTP token in"), "the start that prints the token does not also say how to read it from the container", logs(next));
 }
 
+function noNetwork(): Promise<void> {
+  // No network at all: the host name cannot be looked up. The same plain line, with the DNS failure named.
+  const r = spawnSync("docker", ["run", "--rm", "--network", "none", image], { encoding: "utf8", timeout: 90_000 });
+  check(
+    r.status === 1 && /intent: Intent Cloud at staging-api\.intentai\.shop cannot be reached \(DNS: [a-z ]+\); nothing was sent\. Staging may not be open yet; try everything locally: re-run the container in demo mode: docker rm /.test(r.stderr),
+    "with no network the container exits 1 naming the DNS failure and the demo re-run",
+    r.stderr,
+  );
+  return Promise.resolve();
+}
+
 const volumes: string[] = [];
 try {
-  for (const step of [tokenAndPolicy, defaultPolicy, foreignDataDir, quietToken, demo, noRootKey]) {
+  for (const step of [tokenAndPolicy, defaultPolicy, foreignDataDir, quietToken, demo, stagingUnreachable, noNetwork]) {
     try {
       await step();
     } catch (error) {

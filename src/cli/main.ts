@@ -7,7 +7,7 @@ import { answerStdioWithError } from "../mcp/index.ts";
 import { formatReport, type Install, runVerify } from "../verify/index.ts";
 import { approverAccept, approverList } from "./approver.ts";
 import { doctor } from "./doctor.ts";
-import { describeError, type ErrorContext } from "./errors.ts";
+import { describeError, errorContext, type ErrorContext } from "./errors.ts";
 import { help } from "./help.ts";
 import { CliError, type Io, line, type Outcome } from "./io.ts";
 import { formatLog, readLog } from "./log.ts";
@@ -71,7 +71,7 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
     mcpOverStdio = (command === "serve" || command === "demo") && values.http !== true && !io.isTTY.stdin;
     // Only serve refuses an unpinned host up front; doctor reports it, and the offline commands never reach Cloud.
     config = cliConfig(io, argv, demoFlag, command === "serve");
-    Object.assign(ctx, { dataDir: config.dataDir, policyPath: config.policyPath, cloudUrl: config.cloud.url });
+    Object.assign(ctx, errorContext(config, io.env));
     return await run(io, config, command, args, values);
   } catch (error) {
     const described = describeError(error, ctx);

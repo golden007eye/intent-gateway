@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
 import type { ApprovalCreated, ApprovalStatus } from "../contract/index.ts";
-import { connectCloud, type DisclosedCloud } from "../disclosure/index.ts";
+import { CloudNetworkError, connectCloud, type DisclosedCloud } from "../disclosure/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { loadPolicy } from "../policy/index.ts";
 import { createSession } from "../signing/index.ts";
@@ -214,6 +214,30 @@ describe("start", () => {
 });
 
 // ---- readiness ----------------------------------------------------------------------------------------------------
+
+describe("findOffers when Intent Cloud cannot be reached", () => {
+  it("a refused connection: logged before the send, reported as not sent, and not listed as sent (invariant 5)", async () => {
+    const h = await setup();
+    await h.fake.close(); // the port now refuses connections
+    const result = await h.gateway.findOffers(SHOES);
+    const host = new URL(h.fake.url).host;
+    expect(result).toEqual({
+      status: "error",
+      message: `Not sent: Intent Cloud at ${host} cannot be reached (connection refused), so the request never left this machine. Try again later.`,
+      summary: "Sent: nothing / Blocked: nothing",
+    });
+    expect(h.kinds().slice(-2)).toEqual(["disclosure", "unacknowledged"]);
+  });
+
+  it("no answer in time: never reported as not sent, since the request may have reached it", async () => {
+    const h = await setup();
+    const timeout = "Intent Cloud at cloud.example cannot be reached (no complete response within 30 s)";
+    h.patch.search = () => Promise.reject(new CloudNetworkError("timeout", {} as never, timeout));
+    const result = await h.gateway.findOffers(SHOES);
+    expect(result).toMatchObject({ status: "error", message: `${timeout}; the request may have reached it, and is logged as sent but not acknowledged.` });
+    expect(result.message).not.toMatch(/not sent|never left/i);
+  });
+});
 
 describe("findOffers readiness", () => {
   it("lists every missing detail and calls nothing", async () => {

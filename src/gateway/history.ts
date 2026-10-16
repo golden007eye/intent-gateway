@@ -1,7 +1,7 @@
 // What the gateway reads back from its own chain: the spend history for the policy's daily and weekly caps, and
 // the "Sent: … / Blocked: …" summary of one tool call. Pure; the chain is passed in.
 import type { Purchase } from "../policy/index.ts";
-import type { Entry } from "../store/index.ts";
+import { type Entry, neverLeft } from "../store/index.ts";
 
 type Body = Record<string, unknown>;
 const asBody = (value: unknown): Body => (typeof value === "object" && value !== null ? (value as Body) : {});
@@ -60,6 +60,10 @@ export function disclosedSince(chain: readonly Entry[], fromSeq: number): Disclo
     } else if (entry.kind === "receipt" && body.verified === true && typeof body.disclosure_seq === "number") {
       const send = bySeq.get(body.disclosure_seq);
       if (send !== undefined) send.acknowledged = true;
+    } else if (entry.kind === "unacknowledged" && neverLeft(entry.body) && typeof body.disclosure_seq === "number") {
+      // No connection was made, so the logged request never left: it is not listed as sent (invariant 5).
+      const send = bySeq.get(body.disclosure_seq);
+      if (send !== undefined) sends.splice(sends.indexOf(send), 1);
     } else if (entry.kind === "block") {
       blocked.push(...strings(body.blocked));
     }
