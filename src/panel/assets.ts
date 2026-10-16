@@ -141,6 +141,8 @@ export const APP_JS = `"use strict";
       }
     });
     window.addEventListener("hashchange", function () { apply(true); });
+    // At load the browser scrolls to the section the address names, past the brand bar; start at the top instead.
+    window.addEventListener("load", function () { window.scrollTo(0, 0); });
     apply(false);
     setInterval(refresh, 4000);
   });
@@ -173,7 +175,7 @@ h1:focus,h2:focus{outline:none}
 .dot{width:9px;height:9px;border-radius:50%;display:inline-block}.dot-ok{background:var(--success)}.dot-bad{background:var(--danger-on-ground)}
 .nav-foot{margin-top:auto;font-size:12px;color:var(--on-card-muted);padding:0 12px}
 main{padding:24px 28px 48px;min-width:0;outline:none}
-.view{display:flex;flex-direction:column;gap:16px;margin-bottom:40px}
+.view{display:flex;flex-direction:column;gap:16px;margin-bottom:40px;scroll-margin-top:96px}
 .view[hidden]{display:none}
 .view>.live{display:flex;flex-direction:column;gap:16px}
 .view h1{font-size:22px;font-weight:600;letter-spacing:-.01em}
@@ -269,6 +271,7 @@ background:var(--paper);box-shadow:-12px 0 32px rgba(0,0,0,.45)}
 .nav a{white-space:nowrap;padding:8px 10px}
 .nav-foot{display:none}
 main{padding:18px 16px 40px}
+.view{scroll-margin-top:140px}
 .steps-line{grid-template-columns:repeat(2,minmax(0,1fr))}
 .feed li{grid-template-columns:44px 70px minmax(0,1fr);gap:8px}
 .kv>div{grid-template-columns:minmax(0,1fr);gap:0}
