@@ -46,22 +46,33 @@ async function chain(write: (s: Store) => Promise<unknown>): Promise<string> {
 const verify = (dataDir: string, extra: Partial<VerifyOptions> = {}): Promise<Report> =>
   runVerify({ dataDir, pinnedRootKeys: PINNED, now: NOW, skipSupplyChain: true, ...extra });
 
+const bodyOf = (n: number) => Buffer.from(`{"query":"lamp ${String(n)}"}`, "utf8");
+const digestOf = (bytes: Buffer) => `sha-256=:${createHash("sha256").update(bytes).digest("base64")}:`;
+
 /** The request the gateway signed and sent for body `n`; the digest is computed here, not by the code under test. */
 function sent(n: number) {
-  const content_digest = `sha-256=:${createHash("sha256").update(`{"query":"lamp ${String(n)}"}`, "utf8").digest("base64")}:`;
-  return { method: "POST", path: "/v1/search", content_digest, keyid: KEYID, nonce: `nonce-${String(n)}`.padEnd(22, "A"), created: 1790251200 + n };
+  return { method: "POST", path: "/v1/catalog/search", content_digest: digestOf(bodyOf(n)), keyid: KEYID, nonce: `nonce-${String(n)}`.padEnd(22, "A"), created: 1790251200 + n };
 }
 
+/** The receipt-entry fields for a receipt over `request`, as the disclosure module logs them. */
 function response(request: object, opts: { status?: number; kid?: string; key?: Parameters<typeof signReceipt>[1] } = {}) {
   const status = opts.status ?? 200;
-  const receipt = { v: 1, kid: opts.kid ?? "cloud-receipt-202610", request, status, received_at: "2026-09-24T12:00:01Z" };
-  return { status, ...signReceipt(receipt, opts.key) };
+  const signed = signReceipt({ v: 1, kid: opts.kid ?? "cloud-receipt-202610", request, status, received_at: "2026-09-24T12:00:01Z" }, opts.key);
+  return { status, receipt_header: signed.receipt, receipt_signature: signed.signature, contract_version: "1.5.0", verified: true };
 }
 
 const keys = (s: Store, statement: unknown = S1.expected.statement) => s.append("keys", { statement });
-const disclose = (s: Store, n: number, request: object = sent(n)) =>
-  s.append("disclosure", { endpoint: "search", fields: ["query"], blocked: [], request });
-const receipt = (s: Store, d: Entry, res: object) => s.append("receipt", { disclosure_seq: d.seq, reason: "received", response: res });
+/** A disclosure body in the disclosure module's shape (src/disclosure). */
+const disclose = (s: Store, n: number, changes: Record<string, unknown> = {}) =>
+  s.append("disclosure", {
+    endpoint: "search",
+    fields: ["query"],
+    body_b64: bodyOf(n).toString("base64"),
+    headers: [],
+    ...sent(n),
+    ...changes,
+  });
+const receipt = (s: Store, d: Entry, res: object) => s.append("receipt", { disclosure_seq: d.seq, ...res });
 const followUp = (s: Store, kind: EntryKind, d: Entry, reason: string) => s.append(kind, { disclosure_seq: d.seq, reason });
 
 /** A verified approval as the gateway chains it: pending, the pin for the first passkey, then {handle, proof}. */
@@ -151,11 +162,24 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
   it("a rechained disclosure whose logged request was edited no longer matches its receipt", async () => {
     const dir = await chain(async (s) => {
       await keys(s);
-      await receipt(s, await disclose(s, 1, { ...sent(1), content_digest: sent(2).content_digest }), response(sent(1)));
+      await receipt(s, await disclose(s, 1, { path: "/v1/carts" }), response(sent(1)));
+      await receipt(s, await disclose(s, 2, { body_b64: bodyOf(3).toString("base64"), content_digest: digestOf(bodyOf(3)) }), response(sent(2)));
     });
     const report = await verify(dir);
     expect(report.exitCode).toBe(1);
-    expect(check(report, "disclosures")?.details).toContain("seq 2: the receipt for the disclosure at seq 1 does not verify (step 4: digest_mismatch)");
+    expect(check(report, "disclosures")?.details).toContain("seq 2: the receipt for the disclosure at seq 1 does not verify (step 4: path_mismatch)");
+    expect(check(report, "disclosures")?.details).toContain("seq 4: the receipt for the disclosure at seq 3 does not verify (step 4: digest_mismatch)");
+  });
+
+  it("a rechained disclosure whose logged body was edited no longer matches its content_digest", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      await receipt(s, await disclose(s, 1, { body_b64: bodyOf(2).toString("base64") }), response(sent(1)));
+      await receipt(s, await disclose(s, 2, { body_b64: "not base64!" }), response(sent(2)));
+    });
+    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    expect(details).toContain("seq 1: the disclosure body does not match its content_digest");
+    expect(details).toContain("seq 3: the disclosure body_b64 is not base64");
   });
 
   it("a dropped receipt leaves its disclosure without a follow-up", async () => {
@@ -220,13 +244,16 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
   it("a receipt without a logged request or without a response fails", async () => {
     const dir = await chain(async (s) => {
       await keys(s);
-      const bare = await s.append("disclosure", { endpoint: "search", fields: ["query"], blocked: [] });
+      const bare = await s.append("disclosure", { endpoint: "search", fields: ["query"] });
       await receipt(s, bare, response(sent(1)));
-      await s.append("receipt", { disclosure_seq: (await disclose(s, 2)).seq, reason: "received" });
+      await s.append("receipt", { disclosure_seq: (await disclose(s, 2)).seq });
+      await receipt(s, await disclose(s, 3), { status: 200 });
     });
     const details = check(await verify(dir), "disclosures")?.details ?? [];
+    expect(details).toContain("seq 1: the disclosure holds no body_b64 and content_digest");
     expect(details).toContain("seq 2: the receipt for the disclosure at seq 1 cannot be checked: the disclosure holds no logged request");
-    expect(details).toContain("seq 4: the receipt for the disclosure at seq 3 holds no response {status, receipt, signature}");
+    expect(details).toContain("seq 4: the receipt for the disclosure at seq 3 holds no status");
+    expect(details).toContain("seq 6: the receipt for the disclosure at seq 5 does not verify (step 1: missing)");
   });
 
   it("a changed recorded statement fails against the pinned root, and nothing verifies under it", async () => {
@@ -253,12 +280,28 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
     );
   });
 
-  it("a receipt with no statement recorded before it fails", async () => {
+  it("a receipt in a chain that records no statement fails", async () => {
     const dir = await chain(async (s) => {
       await receipt(s, await disclose(s, 1), response(sent(1)));
     });
     expect(check(await verify(dir), "disclosures")?.details).toContain(
-      "seq 1: the receipt for the disclosure at seq 0 cannot be checked: no key statement was recorded before it",
+      "seq 1: the receipt for the disclosure at seq 0 cannot be checked: the chain records no key statement",
+    );
+  });
+
+  it("a bootstrap receipt logged before the first statement is checked against that statement", async () => {
+    const outsider = generateKeyPairSync("ed25519").privateKey;
+    const good = await chain(async (s) => {
+      await receipt(s, await disclose(s, 1), { ...response(sent(1)), verified: false });
+      await keys(s);
+    });
+    expect(await verify(good)).toMatchObject({ exitCode: 0, counts: { receipts: 1 } });
+    const forged = await chain(async (s) => {
+      await receipt(s, await disclose(s, 1), { ...response(sent(1), { key: outsider }), verified: false });
+      await keys(s);
+    });
+    expect(check(await verify(forged), "disclosures")?.details).toContain(
+      "seq 1: the receipt for the disclosure at seq 0 does not verify (step 3: bad_signature)",
     );
   });
 

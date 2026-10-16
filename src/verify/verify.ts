@@ -5,6 +5,7 @@
 // or an approval proof at the time it was chained. A statement that has expired since is still good evidence for
 // what it covered then. `now` is the self-check's clock.
 import { ReceiptRequest } from "../contract/index.ts";
+import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
 import { checkApprover, type KeySet, type PinnedRootKey, type ReceiptResponse, type SentRequest, verifyApprovalProof, verifyReceipt, verifyStatement } from "../trust/index.ts";
@@ -81,6 +82,11 @@ function usage(details: string[], head: Report["head"], counts: Report["counts"]
   return { ok: false, exitCode: 2, head, checks: [{ name: "usage", ok: false, details }], counts };
 }
 
+interface RecordedKeys {
+  readonly seq: number;
+  readonly keySet: KeySet | null;
+}
+
 interface Disclosure {
   readonly entry: Entry;
   readonly followUps: number[];
@@ -94,31 +100,39 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
   const flags: string[] = [];
   const disclosures = new Map<number, Disclosure>();
   const pending = new Map<string, Entry>();
-  // The latest recorded statement: its seq, and its KeySet when it verified.
-  let keys: { seq: number; keySet: KeySet | null } | null = null;
-  let statements = 0;
+  // Every recorded statement, checked at the time it was recorded: its KeySet, or null when it did not verify.
+  const statements = new Map<number, KeySet | null>();
+  for (const entry of entries) {
+    if (entry.kind !== "keys") continue;
+    const ts = new Date(entry.ts);
+    const verified = Number.isNaN(ts.getTime()) ? null : verifyStatement(record(entry.body).statement, pinned, ts);
+    statements.set(entry.seq, verified?.ok === true ? verified.keySet : null);
+    if (verified?.ok !== true) {
+      const why = verified === null ? "the entry's ts is not a time" : `step ${String(verified.step)}: ${verified.reason}`;
+      keyFailures.push(`seq ${String(entry.seq)}: the recorded key statement does not verify against the pinned root (${why})`);
+    }
+  }
+  // The key-bootstrap reads are sent before any statement is recorded; their receipts are checked against the first.
+  const [first] = statements;
+  const bootstrap: RecordedKeys | null = first === undefined ? null : { seq: first[0], keySet: first[1] };
+  // The latest statement recorded before the entry being checked.
+  let keys: RecordedKeys | null = null;
 
   for (const [index, entry] of entries.entries()) {
     const at = `seq ${String(entry.seq)}`;
     const ts = new Date(entry.ts);
     const body = record(entry.body);
     switch (entry.kind) {
-      case "keys": {
-        statements += 1;
-        const verified = Number.isNaN(ts.getTime()) ? null : verifyStatement(body.statement, pinned, ts);
-        if (verified?.ok === true) {
-          keys = { seq: entry.seq, keySet: verified.keySet };
-        } else {
-          keys = { seq: entry.seq, keySet: null };
-          const why = verified === null ? "the entry's ts is not a time" : `step ${String(verified.step)}: ${verified.reason}`;
-          keyFailures.push(`${at}: the recorded key statement does not verify against the pinned root (${why})`);
-        }
+      case "keys":
+        keys = { seq: entry.seq, keySet: statements.get(entry.seq) ?? null };
         break;
-      }
-      case "disclosure":
+      case "disclosure": {
         counts.disclosures += 1;
         disclosures.set(entry.seq, { entry, followUps: [] });
+        const problem = bodyProblem(body);
+        if (problem !== null) disclosureFailures.push(`${at}: the disclosure ${problem}`);
         break;
+      }
       case "receipt":
       case "unacknowledged":
       case "discarded": {
@@ -133,7 +147,7 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
         if (entry.kind === "discarded") {
           disclosureFailures.push(`${at}: discarded: a response to ${of} came without a valid receipt (${String(body.reason)})`);
         } else if (entry.kind === "receipt") {
-          const problem = receiptProblem(body, target.entry, keys, ts);
+          const problem = receiptProblem(body, target.entry, keys ?? bootstrap, ts);
           if (problem !== null) disclosureFailures.push(`${at}: the receipt for ${of} ${problem}`);
         }
         break;
@@ -168,7 +182,7 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
     {
       name: "key statements",
       ok: keyFailures.length === 0,
-      details: [`${String(statements)} recorded, checked offline against the pinned root key`, ...keyFailures],
+      details: [`${String(statements.size)} recorded, checked offline against the pinned root key`, ...keyFailures],
     },
     {
       name: "disclosures",
@@ -187,12 +201,12 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
 }
 
 /** Why a `receipt` entry does not acknowledge its disclosure, or null when it does. */
-function receiptProblem(body: Record<string, unknown>, disclosure: Entry, keys: { seq: number; keySet: KeySet | null } | null, ts: Date): string | null {
-  const sent = sentRequest(record(disclosure.body).request);
+function receiptProblem(body: Record<string, unknown>, disclosure: Entry, keys: RecordedKeys | null, ts: Date): string | null {
+  const sent = sentRequest(record(disclosure.body));
   if (sent === null) return "cannot be checked: the disclosure holds no logged request";
-  const response = receiptResponse(body.response);
-  if (response === null) return "holds no response {status, receipt, signature}";
-  if (keys === null) return "cannot be checked: no key statement was recorded before it";
+  const response = receiptResponse(body);
+  if (response === null) return "holds no status";
+  if (keys === null) return "cannot be checked: the chain records no key statement";
   if (keys.keySet === null) return `cannot be checked: the key statement at seq ${String(keys.seq)} did not verify`;
   const result = verifyReceipt(response, sent, keys.keySet, ts);
   return result.ok ? null : `does not verify (step ${String(result.step)}: ${result.reason})`;
@@ -202,7 +216,7 @@ function receiptProblem(body: Record<string, unknown>, disclosure: Entry, keys: 
 function approvalProblem(
   body: Record<string, unknown>,
   pending: ReadonlyMap<string, Entry>,
-  keys: { seq: number; keySet: KeySet | null } | null,
+  keys: RecordedKeys | null,
   before: readonly Entry[],
   ts: Date,
 ): string | null {
@@ -220,27 +234,40 @@ function approvalProblem(
   return null;
 }
 
-function sentRequest(value: unknown): SentRequest | null {
-  const parsed = ReceiptRequest.safeParse(value);
+/** Why a disclosure's logged body bytes are not the bytes its content_digest names, or null when they are. */
+function bodyProblem(body: Record<string, unknown>): string | null {
+  const { body_b64, content_digest } = body;
+  if (typeof body_b64 !== "string" || typeof content_digest !== "string") return "holds no body_b64 and content_digest";
+  const bytes = Buffer.from(body_b64, "base64");
+  if (bytes.toString("base64") !== body_b64) return "body_b64 is not base64";
+  return contentDigest(bytes) === content_digest ? null : "body does not match its content_digest";
+}
+
+/** The request a disclosure logged, in the receipt's field names; keyid, nonce and created are null when unsigned. */
+function sentRequest(body: Record<string, unknown>): SentRequest | null {
+  const { method, path, content_digest, keyid, nonce, created } = body;
+  const signed = keyid === null && nonce === null && created === null ? {} : { keyid, nonce, created };
+  const parsed = ReceiptRequest.safeParse({ method, path, content_digest, ...signed });
   if (!parsed.success) return null;
-  const { method, path, content_digest, keyid, nonce, created } = parsed.data;
+  const r = parsed.data;
   return {
-    method,
-    path,
-    content_digest,
-    ...(keyid === undefined ? {} : { keyid }),
-    ...(nonce === undefined ? {} : { nonce }),
-    ...(created === undefined ? {} : { created }),
+    method: r.method,
+    path: r.path,
+    content_digest: r.content_digest,
+    ...(r.keyid === undefined ? {} : { keyid: r.keyid }),
+    ...(r.nonce === undefined ? {} : { nonce: r.nonce }),
+    ...(r.created === undefined ? {} : { created: r.created }),
   };
 }
 
-function receiptResponse(value: unknown): ReceiptResponse | null {
-  const { status, receipt, signature } = record(value);
+/** The response a receipt entry logged: its status and the raw receipt header values. */
+function receiptResponse(body: Record<string, unknown>): ReceiptResponse | null {
+  const { status, receipt_header, receipt_signature } = body;
   if (typeof status !== "number") return null;
   return {
     status,
-    receipt: typeof receipt === "string" ? receipt : undefined,
-    signature: typeof signature === "string" ? signature : undefined,
+    receipt: typeof receipt_header === "string" ? receipt_header : undefined,
+    signature: typeof receipt_signature === "string" ? receipt_signature : undefined,
   };
 }
 
