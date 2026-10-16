@@ -13,7 +13,8 @@ import { verifyStatement } from "../trust/index.ts";
 import { describeError } from "./errors.ts";
 import { type Io, line } from "./io.ts";
 import { readLog } from "./log.ts";
-import { activePolicy, cloudFor, type Demo, rootKeys } from "./setup.ts";
+import { demoTrustKeys } from "../demo/index.ts";
+import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
 
 type Level = "ok" | "warn" | "fail";
 interface Finding {
@@ -24,7 +25,7 @@ interface Finding {
 const DAY_MS = 86_400_000;
 const EXPIRY_WARNING_DAYS = 14;
 
-export async function doctor(io: Io, config: Config, demo: Demo | null): Promise<number> {
+export async function doctor(io: Io, config: Config): Promise<number> {
   const now = io.now ?? Date.now;
   const findings: Finding[] = [];
   const report = (level: Level, text: string): void => {
@@ -34,19 +35,25 @@ export async function doctor(io: Io, config: Config, demo: Demo | null): Promise
 
   line(io.stdout, `intent doctor: data dir ${config.dataDir}`);
   await checkDataDir(config.dataDir, report);
-  await checkPolicy(config.policyPath, report);
+  await checkPolicy(config.policyPath, config.demo, report);
   checkChain(config.dataDir, report);
   await checkLease(config.dataDir, now(), report);
 
-  const cloudUrl = demo?.cloudUrl ?? config.cloud.url;
-  let pins: readonly RootKey[] | null = null;
-  try {
-    pins = demo?.trustKeys.rootKeys ?? (await rootKeys(config));
-    report("ok", `root key: ${pins.map((k) => k.kid).join(", ")} (${demo !== null ? "demo test key" : config.cloud.trust.kind === "file" ? "from --trust-keys" : "pinned in this build"})`);
-  } catch (error) {
-    report("fail", `root key: ${describeError(error)}`);
+  if (config.demo) {
+    // The demo Intent Cloud runs only inside intent demo, and its contract and keys are the ones this build ships.
+    const kids = demoTrustKeys().rootKeys.map((k) => k.kid).join(", ");
+    report("ok", `root key: ${kids} (the published test key; demo mode only)`);
+    report("ok", "Intent Cloud: demo mode runs its own on 127.0.0.1 when intent demo starts; nothing to reach");
+  } else {
+    let pins: readonly RootKey[] | null = null;
+    try {
+      pins = await rootKeys(config);
+      report("ok", `root key: ${pins.map((k) => k.kid).join(", ")} (${config.cloud.trust.kind === "file" ? "from --trust-keys" : "pinned in this build"})`);
+    } catch (error) {
+      report("fail", `root key: ${describeError(error)}`);
+    }
+    if (pins !== null) await checkCloud(io, config, config.cloud.url, pins, now, report);
   }
-  if (pins !== null) await checkCloud(io, config, cloudUrl, pins, now, report);
 
   const failed = findings.filter((f) => f.level === "fail").length;
   line(io.stdout, failed === 0 ? "doctor: ok" : `doctor: ${String(failed)} problem${failed === 1 ? "" : "s"}; each line above says the fix`);
@@ -84,11 +91,11 @@ async function checkDataDir(dataDir: string, report: Report): Promise<void> {
   report("ok", `data dir: yours, mode ${mode}`);
 }
 
-async function checkPolicy(policyPath: string, report: Report): Promise<void> {
+async function checkPolicy(policyPath: string, demo: boolean, report: Report): Promise<void> {
   try {
-    const active = await activePolicy(policyPath);
-    if (active.bundled) {
-      report("ok", `policy: the bundled strict-default (no file at ${policyPath}; intent policy add <name> writes one)`);
+    const active = await activePolicy(policyPath, demo);
+    if (active.bundled !== null) {
+      report("ok", `policy: the bundled ${active.bundled} (no file at ${policyPath}; intent policy add <name> writes one)`);
       return;
     }
     const lock = await readLock(policyPath);

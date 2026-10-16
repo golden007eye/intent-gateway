@@ -7,7 +7,7 @@ Try it now, with no setup (demo Intent Cloud on this machine, test keys, nothing
   npx -y intent-gateway demo
 
 Connect an agent:
-  claude mcp add intent -- npx -y intent-gateway --demo        demo
+  claude mcp add intent -- npx -y intent-gateway demo          the demo
   claude mcp add intent -- npx -y intent-gateway --trust-keys <file>
 
 Commands:

@@ -1,39 +1,25 @@
 // What several commands share: the config (with demo mode applied), the trusted root keys, the active policy, and
 // a store plus disclosed cloud to reach Intent Cloud through.
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import { type Config, ConfigError, loadConfig, type RootKey } from "../config/index.ts";
+import { type Demo, demoDataDir, demoTrustKeys, startDemo } from "../demo/index.ts";
 import { connectCloud, type DisclosedCloud, type DisclosureOptions } from "../disclosure/index.ts";
 import { loadPolicy, type Policy } from "../policy/index.ts";
 import { createSession } from "../signing/index.ts";
 import type { Store } from "../store/index.ts";
-import { CliError, type Io, line } from "./io.ts";
+import { CliError, type Io } from "./io.ts";
 
 /** The package root: `policies/` and `package.json` sit here, beside both `src/` and `dist/`. */
 export const PACKAGE_ROOT = new URL("../../", import.meta.url);
-const STRICT_DEFAULT = new URL("policies/strict-default/policy.yaml", PACKAGE_ROOT);
-
-export const DEMO_BANNER = "DEMO: test keys, sample catalog, nothing can be bought";
-
-/** A running demo Intent Cloud (src/demo, task G29). */
-export interface Demo {
-  cloudUrl: string;
-  trustKeys: { rootKeys: readonly RootKey[] };
-  confirmBaseUrl: string;
-  close(): Promise<void>;
-}
-
-interface DemoModule {
-  startDemo(options: { port?: number; dataDir: string }): Promise<Demo>;
-}
 
 /** The config for a command. In demo mode the data dir (and a default policy path) move to `<data>/demo`. */
 export function cliConfig(io: Io, argv: readonly string[], demo: boolean, requireTrust: boolean): Config {
   // Demo mode brings its own Intent Cloud and root key, so the configured host's pin does not matter.
   const config = loadConfig(io.env, argv, { requireTrust: requireTrust && !demo && io.env.INTENT_DEMO !== "1", ...cwd(io) });
   if (!demo && !config.demo) return config;
-  const dataDir = join(config.dataDir, "demo");
+  const dataDir = demoDataDir(config.dataDir);
   const policyPath = io.env.INTENT_POLICY === undefined ? join(dataDir, "policy.yaml") : config.policyPath;
   return { ...config, demo: true, dataDir, policyPath };
 }
@@ -42,30 +28,15 @@ function cwd(io: Io): { cwd?: string } {
   return io.cwd === undefined ? {} : { cwd: io.cwd };
 }
 
-/** Starts the demo Intent Cloud, or explains that this build has none. */
-export async function startDemo(config: Config, io: Io): Promise<Demo> {
-  let module: DemoModule;
-  try {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment -- src/demo is built in parallel (G29); until it lands this build has no demo
-    // @ts-ignore
-    module = (await import("../demo/index.ts")) as DemoModule;
-  } catch (error) {
-    if (!isMissingModule(error)) throw error;
-    throw new CliError(
-      "demo mode is not available in this build; update the gateway (npx -y intent-gateway@latest), or run against Intent Cloud with --trust-keys <file>",
-      2,
-    );
-  }
-  const demo = await module.startDemo({ dataDir: config.dataDir });
-  line(io.stderr, `intent-gateway ${DEMO_BANNER}`);
-  line(io.stderr, `intent-gateway demo Intent Cloud at ${demo.cloudUrl}; approve carts at ${demo.confirmBaseUrl}`);
-  return demo;
+/** Starts the demo Intent Cloud and confirm page for a demo-mode config (whose dataDir is already `<data>/demo`). */
+export function startDemoFor(config: Config, io: Io): Promise<Demo> {
+  // cliConfig moved dataDir to demoDataDir(<data>); startDemo takes <data> and adds the demo folder itself.
+  return startDemo({ dataDir: dirname(config.dataDir), ...(io.now === undefined ? {} : { now: io.now }) });
 }
 
-function isMissingModule(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  const message = error instanceof Error ? error.message : "";
-  return code === "ERR_MODULE_NOT_FOUND" || (/demo[\\/]index/.test(message) && /find|load|resolve/i.test(message));
+/** The root keys a command trusts: the demo's published test root in demo mode, else rootKeys(config). */
+export async function trustedKeys(config: Config): Promise<readonly RootKey[]> {
+  return config.demo ? demoTrustKeys().rootKeys : rootKeys(config);
 }
 
 const TrustFile = z.strictObject({
@@ -104,20 +75,29 @@ export async function rootKeys(config: Config): Promise<readonly RootKey[]> {
 export interface ActivePolicy {
   policy: Policy;
   text: string;
-  /** True when no policy file exists and the bundled strict-default is used. */
-  bundled: boolean;
+  /** The bundled library policy used because no policy file exists, or null when the file is used. */
+  bundled: string | null;
 }
 
-/** The policy at `policyPath`, or the bundled strict-default when there is no file. A bad file is an error. */
-export async function activePolicy(policyPath: string): Promise<ActivePolicy> {
+/**
+ * The library policy that applies when there is no policy file: strict-default, or zip-only in demo mode.
+ * strict-default shares no ship-to at all, so no search can be sent under it (a search needs a ZIP); the demo
+ * uses zip-only, the cloud baseline plus a 5-digit ZIP, so the first run can search and build a cart.
+ */
+export function defaultPolicyName(demo: boolean): string {
+  return demo ? "zip-only" : "strict-default";
+}
+
+/** The policy at `policyPath`, or the bundled default (defaultPolicyName) when there is no file. A bad file is an error. */
+export async function activePolicy(policyPath: string, demo = false): Promise<ActivePolicy> {
   let text: string;
-  let bundled = false;
+  let bundled: string | null = null;
   try {
     text = await readFile(policyPath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    text = await readFile(STRICT_DEFAULT, "utf8");
-    bundled = true;
+    bundled = defaultPolicyName(demo);
+    text = await readFile(new URL(`policies/${bundled}/policy.yaml`, PACKAGE_ROOT), "utf8");
   }
   return { policy: loadPolicy(text), text, bundled };
 }

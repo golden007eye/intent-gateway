@@ -12,7 +12,8 @@ import { CliError, type Io, line, type Outcome } from "./io.ts";
 import { formatLog, readLog } from "./log.ts";
 import { policyAdd, policyShow, policyTest } from "./policy.ts";
 import { serve } from "./serve.ts";
-import { cliConfig, type Demo, PACKAGE_ROOT, rootKeys, startDemo } from "./setup.ts";
+import type { Demo } from "../demo/index.ts";
+import { cliConfig, PACKAGE_ROOT, startDemoFor, trustedKeys } from "./setup.ts";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 
@@ -115,26 +116,27 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
   switch (command) {
     case "serve":
     case "demo":
-      return withDemo(io, config, true, async (demo) => {
+      return withDemo(io, config, async (demo) => {
         // `intent demo` typed at a terminal serves over HTTP, so it has something to show; an MCP client runs it over stdio.
         const http = values.http === true || (command === "demo" && io.isTTY.stdin);
-        if (demo !== null && !http) line(io.stderr, "intent-gateway: connect an agent: claude mcp add intent -- npx -y intent-gateway --demo");
         return serve(io, config, { http, demo });
       });
     case "log":
       io.stdout.write(formatLog(readLog(config.dataDir)));
       return { code: 0 };
-    case "verify":
-      return withDemo(io, config, false, async (demo) => {
-        const report = await runVerify({
-          dataDir: config.dataDir,
-          pinnedRootKeys: demo?.trustKeys.rootKeys ?? (await rootKeys(config)),
-          now: new Date((io.now ?? Date.now)()),
-          ...install(values, str),
-        });
-        io.stdout.write(formatReport(report));
-        return { code: report.exitCode };
+    case "verify": {
+      const chosen = install(values, str);
+      const report = await runVerify({
+        dataDir: config.dataDir,
+        pinnedRootKeys: await trustedKeys(config),
+        now: new Date((io.now ?? Date.now)()),
+        ...chosen,
+        // Demo mode checks the demo chain; the install's self-check runs only when asked for with --install/--image.
+        ...(config.demo && values.install === undefined && values.image === undefined ? { skipSupplyChain: true } : {}),
       });
+      io.stdout.write(formatReport(report));
+      return { code: report.exitCode };
+    }
     case "panel": {
       const port = portOption(str("port"));
       const panel = await startPanel(config.dataDir, { port });
@@ -142,7 +144,7 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
       return { code: 0, stop: () => panel.close() };
     }
     case "doctor":
-      return withDemo(io, config, false, async (demo) => ({ code: await doctor(io, config, demo) }));
+      return { code: await doctor(io, config) };
     case "policy test":
       return { code: await policyTest(io, config, arg(0), str("policy")) };
     case "policy add":
@@ -158,16 +160,11 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
   }
 }
 
-/**
- * Runs `body` with the demo Intent Cloud when the config is in demo mode (null otherwise). A long-running command
- * keeps the demo up and closes it from its own stop; any other command closes it when done.
- */
-async function withDemo(io: Io, config: Config, longRunning: boolean, body: (demo: Demo | null) => Promise<Outcome>): Promise<Outcome> {
-  const demo = config.demo ? await startDemo(config, io) : null;
+/** Runs a long-running `body` with the demo Intent Cloud in demo mode (null otherwise); its stop closes the demo. */
+async function withDemo(io: Io, config: Config, body: (demo: Demo | null) => Promise<Outcome>): Promise<Outcome> {
+  const demo = config.demo ? await startDemoFor(config, io) : null;
   try {
-    const outcome = await body(demo);
-    if (!longRunning) await demo?.close();
-    return outcome;
+    return await body(demo);
   } catch (error) {
     await demo?.close();
     throw error;

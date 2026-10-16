@@ -530,14 +530,28 @@ describe("serve failures", () => {
     }
   });
 
-  it("demo mode in a build without src/demo says so (exit 2)", async () => {
-    const result = await setup().run(["log", "--demo"]);
-    // log works in demo mode without the demo cloud: it only reads <data>/demo.
-    expect(result.code).toBe(0);
-    const doctor = await setup().run(["doctor", "--demo"]);
-    if (existsSync(new URL("../demo/index.ts", import.meta.url))) return; // G29 merged: covered by its own tests
-    expect(doctor.code).toBe(2);
-    expect(doctor.err).toMatch(/^intent: demo mode is not available in this build; update the gateway/);
+  it("--demo on log, doctor and verify reads <data>/demo with the test root, starts nothing and needs no config", async () => {
+    const s = setup();
+    await writeChain(join(s.dir, "demo"));
+    await writeChain(s.dir, async (append) => {
+      await append("approver_flag", { fingerprint: "real chain" });
+    });
+    const log = await s.run(["log", "--demo"]);
+    expect(log.code).toBe(0);
+    expect(log.out).toMatch(/11 entries, every hash links/);
+    expect(log.out).not.toContain("real chain");
+    const doctor = await s.run(["doctor", "--demo"]);
+    expect(doctor.out).toContain(`intent doctor: data dir ${join(s.dir, "demo")}`);
+    expect(doctor.out).toMatch(/^ok {4}root key: .+ \(the published test key; demo mode only\)$/m);
+    expect(doctor.code).toBe(0);
+    // The hand-written chain's entries carry no receipts, so verify fails; it ran against the demo dir and test root.
+    const verify = await s.run(["verify", "--demo"]);
+    expect(verify.out).toMatch(/^chain: ok\n {2}11 entries/m);
+    expect(verify.out).toContain("self-check: skipped on request");
+    // INTENT_DEMO=1 (the image's switch) is the same as --demo.
+    const env = setup({ INTENT_DEMO: "1" });
+    await writeChain(join(env.dir, "demo"));
+    expect((await env.run(["log"])).out).toMatch(/11 entries, every hash links/);
   });
 
   it("INTENT_DEBUG=1 adds the stack trace; without it there is none", async () => {
