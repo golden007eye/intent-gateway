@@ -25,9 +25,11 @@ module.exports = {
     },
     {
       name: "only-disclosure-reaches-cloud",
-      comment: "Every send goes through the disclosure log (invariant 2), so only src/disclosure/ may use the cloud adapter.",
+      comment:
+        "Every send goes through the disclosure log (invariant 2), so only src/disclosure/ may use the cloud adapter. " +
+        "The contract suite (test/contract/) drives the adapter directly to check the wire contract itself.",
       severity: "error",
-      from: { pathNot: "^src/(disclosure|cloud)/" },
+      from: { pathNot: ["^src/(disclosure|cloud)/", "^test/contract/"] },
       to: { path: "^src/cloud/" },
     },
     {
