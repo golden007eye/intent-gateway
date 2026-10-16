@@ -15,6 +15,7 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Policy library** | `intent policy add` (planned) | The public, signed collection of shared gateway policies, reviewed by PR. |
 | **Policy lock** | `policy.lock` | The file beside `policy.yaml` that `intent policy add` writes: the library policy's name, the commit it came from, its sha256, its source (`bundled` with the gateway, or `github` for `--commit`) and `policy_sha256`, the hash of the `policy.yaml` it wrote. It records what was applied, not the policy itself; a lock whose `policy_sha256` does not match `policy.yaml` is stale. |
 | **Shopping session** | session key | A short-lived key for one anonymous run of searches and carts. The gateway sends no identifier that links it to other sessions. Not an account. |
+| **Session keyid** | `gw-…`, `src/signing` | The shopping session's identity on the wire: `gw-` plus the base64url of its raw Ed25519 public key. Self-certifying: Intent Cloud reads the public key from it, with no registration. Every request carries it in its RFC 9421 signature (contract appendix C). |
 | **Disclosure log** | — | The gateway's local hash chain of every field it sent to Intent Cloud, appended before each send. |
 | **Disclosure receipt** | — | Intent Cloud's signed statement of what it received, matched against the disclosure log. |
 | **Local audit trail** | — | The same local hash chain read as a whole: disclosure log entries plus each signed Approval the gateway verified. |
