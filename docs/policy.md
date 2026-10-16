@@ -1,30 +1,98 @@
 # Gateway policy
 
-!!! planned "Planned"
-    The gateway policy is not implemented. The format below is a draft and may change before the first release.
+A gateway policy (`policy.yaml`) decides what may leave the gateway and how much may be spent. It can only **narrow** the rules Intent Cloud enforces, never loosen them: a policy that turns purchase approval off, or tries to allow anything the baseline refuses, is rejected at load time with an error. This is why a policy shared through the [policy library](policy-library.md) cannot switch off a safety rule ([ADR-0009](adr/0009-policy-v1-narrow-only.md)).
 
-A gateway policy (`policy.yaml`) decides what may leave the gateway and how much may be spent. It can only **narrow** Intent Cloud's rules, never loosen them: a policy that turns purchase approval off is rejected at load time with an error. This is why a policy shared through the [policy library](policy-library.md) cannot switch off a safety rule.
+## The default: `zip-only`
+
+With no policy file, the gateway uses the bundled `zip-only` policy and says so on stderr:
 
 ```yaml
-# policy.yaml · can only narrow Intent Cloud's rules (draft format)
 version: 1
+approval: passkey   # required; the only legal value
 share:
-  ship_to: postcode_only   # never street or name
-  history: false
-spend:
-  per_order_usd: 60
-  per_week_usd: 150
-merchants:
-  block: ["dropship.example"]
-approval: passkey          # required; "off" is rejected
+  ship_to: postcode_only
 ```
 
-## When there is no policy file
+Only a 5-digit ZIP leaves the gateway as the ship-to location, which is the minimum a search needs. Everything else is the baseline below. `intent policy show` prints the policy in force and where it came from.
 
-With no `policy.yaml`, every command (`serve`, `demo`, `doctor`, `policy show`, `policy test`) uses the bundled `zip-only` policy and says so. Under it, the only detail about the buyer that a search sends is a 5-digit ZIP code, the least a search needs. To share less, run `intent policy add strict-default`: it sends no ship-to at all, so no search can be sent under it.
+The policy file is `<data dir>/policy.yaml` (on Linux `~/.local/share/intent-gateway/policy.yaml`), or `<data dir>/demo/policy.yaml` in demo mode. Set `INTENT_POLICY` to use another path. A running gateway reads its policy at start; restart it after a change.
+
+## Schema v1
+
+Every key except `version` and `approval` is optional. Any other key is refused.
+
+```yaml
+version: 1                    # required; must be 1
+approval: passkey             # required; the only legal value
+share:
+  ship_to: postcode_only      # postcode_only (a 5-digit ZIP) or none (no ship-to at all)
+  history: false              # false is the only legal value
+spend:                        # whole US dollars, each optional
+  per_order_usd: 60           # price × quantity of one cart
+  per_day_usd: 40             # approved purchases in the last 24 hours, plus this cart
+  per_week_usd: 150           # approved purchases in the last 7 days, plus this cart
+quantity:
+  max: 1                      # 1 to 3
+merchants:
+  allow: [shop.example]       # if present, only these hostnames and their subdomains
+  block: [dropship.example]   # these hostnames and their subdomains
+categories:
+  block: [electronics]        # a category blocks its subcategories (electronics/headphones)
+```
+
+The **baseline** is the loosest policy the gateway will run, and every loaded policy is combined with it: passkey approval, at most 3 items per cart, a 5-digit US ZIP as the only ship-to detail, and the categories excluded under the rules Intent Cloud enforces (health and medical; alcohol, tobacco, cannabis, adult and weapons; gift cards, crypto, subscriptions and digital goods).
+
+## What is refused at load time
+
+A policy file is read strictly, so it cannot mean one thing to the gateway and another to a reviewer.
+
+| Refused | Why |
+|---|---|
+| `approval:` anything but `passkey`, or missing | Purchase approval cannot be turned off (invariant 4). |
+| `share.ship_to` other than `postcode_only` or `none`; `share.history: true` | Nothing beyond a ZIP can be shared. |
+| `quantity.max` above 3; a spend limit that is zero, negative or not a whole number | It would loosen, or read as "no limit". |
+| `categories.allow` | A policy can only block categories. |
+| Unknown keys, duplicate keys, YAML merge keys (`<<`), more than 16 aliases, files over 64 KiB | A file that parses two ways could hide a loosened rule. |
+| A merchant that is not a bare hostname (a scheme, port, path or `*`) | Hostnames are compared after Unicode and IDN normalisation, so look-alikes match. |
+
+The error names the file, the key and the reason, and the gateway does not start:
+
+```console
+$ intent policy show
+intent: policy /home/me/.local/share/intent-gateway/policy.yaml: approval: purchase approval must be `passkey`; a policy cannot turn it off or change it; fix that line, or delete the file to use the bundled zip-only policy
+```
+
+## The commands
+
+```console
+$ intent policy show                   # the active policy and its policy.lock
+$ intent policy add per-order-60       # narrow it with a library policy (diff first)
+$ intent policy test cases.yaml        # run test cases against the active policy
+$ intent policy test cases.yaml --policy other.yaml
+```
+
+`intent policy add` is described in [Policy library](policy-library.md).
+
+### Test cases
+
+`intent policy test` runs sample requests against a policy and checks the decision. Each library policy ships its own `cases.yaml`. This file passes against `per-order-60`:
+
+```yaml
+- name: a 5-digit ZIP is sent
+  outbound: {kind: search, category: home, ship_to_zip: "94110"}
+  expect: {send: true}
+- name: a ZIP+4 is refused
+  outbound: {kind: search, category: home, ship_to_zip: "94110-1234"}
+  expect: {send: false, blocked: [share.ship_to]}
+- name: a cart over the limit is refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 61, quantity: 1}}
+  expect: {send: false, blocked: [spend.per_order_usd]}
+```
+
+An `outbound` is a `search` (`category`, `must_haves`, `budget_usd`, `ship_to_zip`) or a `cart` (`offer` with `merchant`, `category`, `price_usd`, `quantity`). A case may add `now` and a `history` of earlier purchases (`{at, total_usd}`) for the daily and weekly limits. `blocked` lists the rules expected to refuse it. The command prints `ok` or `FAIL` per case and exits 0 only when all pass.
 
 ## What a policy cannot do
 
 - Turn off the passkey Approval for a purchase.
 - Send the buyer's name, postal address or card: the gateway never holds them.
-- Raise a limit above what Intent Cloud enforces.
+- Raise a limit above the rules Intent Cloud enforces.

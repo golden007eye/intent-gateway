@@ -8,11 +8,11 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 
 | Term | Code name | What it is |
 |---|---|---|
-| **Gateway** | `intent-gateway` | The self-hosted Docker container a developer runs. It talks to the agent over MCP and to Intent Cloud for offers and carts. |
+| **Gateway** | `intent-gateway` | The self-hosted gateway a developer runs with npx or Docker. It talks to the agent over MCP and to Intent Cloud for offers and carts. |
 | **Intent Cloud** | — | The hosted service behind the gateway: product discovery, merchants, offers and carts. Reached only through its public API host. |
 | **Gateway policy** | `policy.yaml` | The developer's YAML rules for what may leave the gateway and how much may be spent. It can only narrow Intent Cloud's rules, never loosen them. |
 | **Cloud baseline** | `CLOUD_BASELINE` | The rules Intent Cloud enforces, held by the gateway as the loosest policy it will run: passkey approval, at most 3 items, US delivery, the excluded categories. Every policy is checked against it. |
-| **Policy library** | `intent policy add` (planned) | The public, signed collection of shared gateway policies, reviewed by PR. |
+| **Policy library** | `intent policy add` | The public, signed collection of shared gateway policies, reviewed by PR. |
 | **Policy lock** | `policy.lock` | The file beside `policy.yaml` that `intent policy add` writes: the library policy's name, the commit it came from, its sha256, its source (`bundled` with the gateway, or `github` for `--commit`) and `policy_sha256`, the hash of the `policy.yaml` it wrote. It records what was applied, not the policy itself; a lock whose `policy_sha256` does not match `policy.yaml` is stale. |
 | **Shopping session** | session key | A short-lived key for one anonymous run of searches and carts. The gateway sends no identifier that links it to other sessions. Not an account. |
 | **Session keyid** | `gw-…`, `src/signing` | The shopping session's identity on the wire: `gw-` plus the base64url of its raw Ed25519 public key. Self-certifying: Intent Cloud reads the public key from it, with no registration. Every request carries it in its RFC 9421 signature (contract appendix C). |
@@ -47,3 +47,5 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Panel** | `startPanel` | The read-only local web page on `127.0.0.1`: chain status, disclosures, pending approvals, the approver pin fingerprint and flags. GET only; it never writes the chain and loads nothing from outside the gateway. |
 | **Public contract** | `contract/` | The Intent Cloud public contract: the gateway API spec, its normative appendices and test vectors, published under Apache-2.0. The gateway vendors it byte for byte; `contract/SOURCE.md` names the version and the sha256 of `SHA256SUMS`. |
 | **Test vector** | `contract/vectors/*.json` | An input with the exact output Intent Cloud computed for it. Both sides must reproduce it byte for byte; formats are shared this way, never by sharing code. |
+| **Claims rule** | `scripts/claims.test.ts`, `docs/claims-allow.txt` | Invariant 5 as a test: every sentence in the README, the docs and the CLI's strings that names Intent Cloud as an actor uses a verb from a short, checkable list (receives, acknowledges, returns, signs, enforces, reported), or is allow-listed with a reason. |
+| **Feature map** | `docs/feature-map.json` | The features the docs describe as working, each with the `intent` subcommand or test file that proves it. A `!!! planned` block names its feature in a `<!-- feature: <id> -->` line, and that id must not be in the map. |
