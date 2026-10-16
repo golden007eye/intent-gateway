@@ -11,6 +11,16 @@ export type { Build } from "./build.ts";
 /** Version and build commit of this gateway (buildCommit is null when running from source). */
 export const BUILD: Build = readBuild(new URL("../", import.meta.url));
 
+/**
+ * The npx package spec that runs this gateway's release line: `intent-gateway` for a stable release (the `latest`
+ * dist-tag), `intent-gateway@next` for a prerelease such as 0.1.0-preview.1 and for an unreleased 0.0.0 build,
+ * because prereleases are published only under `next` (.github/workflows/release.yml).
+ */
+export function npxPackage(version: string = BUILD.version): string {
+  const stable = /^\d+\.\d+\.\d+$/.test(version) && !/^0\.0\.0$/.test(version);
+  return stable ? "intent-gateway" : "intent-gateway@next";
+}
+
 export interface RootKey {
   kid: string;
   jwk: Readonly<JsonWebKey>;

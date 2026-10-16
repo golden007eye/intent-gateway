@@ -11,17 +11,17 @@ There is no release on npm yet, so build the package from a clone:
 ```console
 $ git clone https://github.com/golden007eye/intent-gateway.git
 $ cd intent-gateway
-$ pnpm install && pnpm build && npm pack
+$ pnpm install && pnpm build && npm pack && mv intent-gateway-*.tgz intent-gateway.tgz
 ```
 
-`npm pack` writes `intent-gateway-0.0.0.tgz`, the same package a release publishes.
+`npm pack` writes the same package a release publishes; renaming it to `intent-gateway.tgz` keeps the commands below the same for every version.
 
 ## 2. Connect your agent
 
 From the same folder:
 
 ```console
-$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway-0.0.0.tgz" demo
+$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
 ```
 
 Claude Code starts the gateway over stdio when it needs it. The gateway starts a demo Intent Cloud and a local confirm page on `127.0.0.1`, and keeps its data in `<data dir>/demo` (on Linux `~/.local/share/intent-gateway/demo`).
@@ -44,8 +44,8 @@ Start `claude` and ask:
 In the cloned folder:
 
 ```console
-$ npx -y ./intent-gateway-0.0.0.tgz log --demo
-$ npx -y ./intent-gateway-0.0.0.tgz verify --demo
+$ npx -y ./intent-gateway.tgz log --demo
+$ npx -y ./intent-gateway.tgz verify --demo
 ```
 
 `log` lists each entry of the local hash chain. `verify` re-checks the chain, each receipt and the approval, and ends with `verify: ok` and the chain's head seq and hash. [Verify](verify.md) says what each check proves.
@@ -55,7 +55,7 @@ $ npx -y ./intent-gateway-0.0.0.tgz verify --demo
 `demo` run in a terminal serves MCP over HTTP on `127.0.0.1:8787` and prints the line to connect with:
 
 ```console
-$ npx -y ./intent-gateway-0.0.0.tgz demo
+$ npx -y ./intent-gateway.tgz demo
 DEMO: test keys, sample catalog, nothing can be bought.
 Add the demo gateway to Claude Code:
   claude mcp add --transport http intent http://127.0.0.1:8787/mcp

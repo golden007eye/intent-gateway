@@ -1,5 +1,5 @@
 // The first-run path a developer takes, against the built package: `intent demo` over stdio (as
-// `claude mcp add intent -- npx -y intent-gateway demo` runs it) → find_offers → create_cart → Approve on the local
+// `claude mcp add intent -- npx -y intent-gateway@next demo` runs it) → find_offers → create_cart → Approve on the local
 // confirm page (an HTTP POST, as the button sends) → get_approval_status approved → `intent verify --demo` exit 0.
 // Called from test/build.test.ts after its build, so it never races the rebuild. TEST KEYS ONLY.
 import { spawnSync } from "node:child_process";
@@ -65,7 +65,7 @@ export async function demoFirstRun(main: string): Promise<void> {
 
     expect(await call("get_approval_status", { approval_handle: handle })).toContain("Approver passkey fingerprint:");
     expect(stderr).toContain(DEMO_BANNER);
-    expect(stderr).toContain("claude mcp add intent -- npx -y intent-gateway demo");
+    expect(stderr).toContain("claude mcp add intent -- npx -y intent-gateway@next demo");
   } finally {
     await client.close();
   }

@@ -18,6 +18,8 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+# npm pack output (the quickstart packs into the clone; it must not make a build dirty)
+/intent-gateway*.tgz
 
 # OS / editor
 .DS_Store

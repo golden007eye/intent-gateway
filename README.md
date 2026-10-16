@@ -25,13 +25,13 @@ You need Node 24 or later, pnpm (`corepack enable`) and [Claude Code](https://cl
 ```console
 $ git clone https://github.com/golden007eye/intent-gateway.git
 $ cd intent-gateway
-$ pnpm install && pnpm build && npm pack
+$ pnpm install && pnpm build && npm pack && mv intent-gateway-*.tgz intent-gateway.tgz
 ```
 
 **2 · Add the demo gateway to Claude Code**, from the same folder:
 
 ```console
-$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway-0.0.0.tgz" demo
+$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
 ```
 
 **3 · Ask for something.** Start `claude` and ask:
@@ -45,10 +45,10 @@ The agent calls `find_offers`, then `create_cart`, and shows an approval link su
 **4 · Check what was sent**, in the cloned folder:
 
 ```console
-$ npx -y ./intent-gateway-0.0.0.tgz verify --demo
+$ npx -y ./intent-gateway.tgz verify --demo
 ```
 
-It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway-0.0.0.tgz log --demo` lists each send field by field. The [demo page](docs/demo.md) has the details, and `npx -y ./intent-gateway-0.0.0.tgz demo` run in a terminal serves the demo over HTTP instead.
+It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` lists each send field by field. The [demo page](docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo` run in a terminal serves the demo over HTTP instead.
 
 ### From the first preview release
 
