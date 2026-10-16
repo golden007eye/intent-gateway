@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { type Config, ConfigError, loadConfig, type RootKey } from "../config/index.ts";
-import { type Demo, demoDataDir, demoTrustKeys, startDemo } from "../demo/index.ts";
+import { CONTAINER_CONFIRM_PORT, type Demo, demoDataDir, demoTrustKeys, startDemo } from "../demo/index.ts";
 import { connectCloud, type DisclosedCloud, type DisclosureOptions } from "../disclosure/index.ts";
 import { loadPolicy, type Policy } from "../policy/index.ts";
 import { createSession } from "../signing/index.ts";
@@ -31,7 +31,10 @@ function cwd(io: Io): { cwd?: string } {
 /** Starts the demo Intent Cloud and confirm page for a demo-mode config (whose dataDir is already `<data>/demo`). */
 export function startDemoFor(config: Config, io: Io): Promise<Demo> {
   // cliConfig moved dataDir to demoDataDir(<data>); startDemo takes <data> and adds the demo folder itself.
-  return startDemo({ dataDir: dirname(config.dataDir), ...(io.now === undefined ? {} : { now: io.now }) });
+  // In the Docker image the host's browser must reach the confirm page through a port mapping, so it listens on
+  // all interfaces at a fixed port there; its links still say 127.0.0.1:8788 (map it to the same port on the host).
+  const container = config.runtime === "container" ? { bind: "0.0.0.0", port: CONTAINER_CONFIRM_PORT } : {};
+  return startDemo({ dataDir: dirname(config.dataDir), ...container, ...(io.now === undefined ? {} : { now: io.now }) });
 }
 
 /** The root keys a command trusts: the demo's published test root in demo mode, else rootKeys(config). */

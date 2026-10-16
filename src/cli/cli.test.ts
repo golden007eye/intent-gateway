@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeCloud, startFakeCloud } from "../cloud-fake/index.ts";
 import { BUILD, ConfigError } from "../config/index.ts";
 import { CONTRACT_VERSION, type CredentialPublicKey } from "../contract/index.ts";
+import { CONTAINER_CONFIRM_PORT } from "../demo/index.ts";
 import {
   CloudNetworkError,
   CloudRequestError,
@@ -552,6 +553,34 @@ describe("serve failures", () => {
     const env = setup({ INTENT_DEMO: "1" });
     await writeChain(join(env.dir, "demo"));
     expect((await env.run(["log"])).out).toMatch(/11 entries, every hash links/);
+  });
+
+  // The Docker image: `docker run -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 <image>`.
+  // (test/image-smoke.ts drives the confirm page through the real port mapping.)
+  it("in the container, the demo prints the host's 127.0.0.1 URL without the token, with approval links on 8788", async () => {
+    const token = "t".repeat(43);
+    const port = String(40_000 + Math.floor(Math.random() * 10_000));
+    const s = setup({ INTENT_RUNTIME: "container", INTENT_DEMO: "1", INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token });
+    const result = await s.run(["serve", "--http"]);
+    expect(result.code).toBe(0);
+    expect(result.err).toContain(`claude mcp add --transport http intent http://127.0.0.1:${port}/mcp --header "Authorization: Bearer <token>"`);
+    expect(result.err).not.toContain(token);
+    expect(CONTAINER_CONFIRM_PORT).toBe(8788);
+  });
+
+  it("outside the container, serve --http names $INTENT_HTTP_TOKEN and the address it is bound to", async () => {
+    const fake = await startFakeCloud({});
+    try {
+      const port = String(40_000 + Math.floor(Math.random() * 10_000));
+      const token = "u".repeat(43);
+      const s = setup({ INTENT_CLOUD_URL: fake.url, INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token });
+      const result = await s.run(["serve", "--http", "--trust-keys", trustFile(fake)]);
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(`claude mcp add --transport http intent http://127.0.0.1:${port}/mcp --header "Authorization: Bearer $INTENT_HTTP_TOKEN"`);
+      expect(result.err).not.toContain(token);
+    } finally {
+      await fake.close();
+    }
   });
 
   it("INTENT_DEBUG=1 adds the stack trace; without it there is none", async () => {
