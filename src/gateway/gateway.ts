@@ -89,22 +89,30 @@ export class GatewayNotStartedError extends Error {
 
 // ---- Tool inputs ----------------------------------------------------------------------------------------------
 
-const FindOffersInput = z.strictObject({
-  product: z.string().max(200).optional(),
-  category: z.string().max(60).optional(),
-  must_haves: z.array(z.string().min(1).max(60)).max(8).optional(),
-  budget_usd: z.number().optional(),
-  zip: z.string().optional(),
+// The tool input schemas. The MCP module lists these very schemas to agents (as JSON Schema), so the descriptions
+// are written for an agent: pass only what the user said, never guess.
+export const FindOffersInput = z.strictObject({
+  product: z.string().max(200).optional().describe("An exact product the user named. Give this or category."),
+  category: z.string().max(60).optional().describe("The kind of product the user wants, such as running-shoes. Give this or product."),
+  must_haves: z
+    .array(z.string().min(1).max(60))
+    .max(8)
+    .optional()
+    .describe("Features the user said the product must have, in their words."),
+  budget_usd: z.number().optional().describe("The most the user said they will spend, in US dollars. Never guess it."),
+  zip: z.string().optional().describe("The 5-digit US ZIP code the user said to ship to. Never guess it."),
 });
 export type FindOffersInput = z.input<typeof FindOffersInput>;
 
-const CreateCartInput = z.strictObject({
-  offer_handle: OfferHandle,
-  quantity: z.int().min(1).max(3).optional(),
+export const CreateCartInput = z.strictObject({
+  offer_handle: OfferHandle.describe("The offer_handle of the offer the user picked, from find_offers."),
+  quantity: z.int().min(1).max(3).optional().describe("How many the user asked for (1 to 3). Defaults to 1."),
 });
 export type CreateCartInput = z.input<typeof CreateCartInput>;
 
-const ApprovalStatusInput = z.strictObject({ approval_handle: ApprovalHandle });
+export const ApprovalStatusInput = z.strictObject({
+  approval_handle: ApprovalHandle.describe("The approval_handle that create_cart returned."),
+});
 export type ApprovalStatusInput = z.input<typeof ApprovalStatusInput>;
 
 // ---- Tool results ---------------------------------------------------------------------------------------------
