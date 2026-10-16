@@ -474,7 +474,7 @@ describe("intent verify and intent panel", () => {
   it("verify without a root key is a usage error naming --trust-keys", async () => {
     const result = await setup().run(["verify"]);
     expect(result.code).toBe(1);
-    expect(result.err).toMatch(/^intent: configuration: this build has no trusted root key for .+: Intent Cloud staging is not open yet\. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n$/);
+    expect(result.err).toMatch(/^intent: configuration: this build has no trusted root key for .+ yet; staging opens with the first preview release\. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n$/);
   });
 
   it("verify --image needs --version, and --install takes only npm (exit 2)", async () => {
@@ -514,7 +514,7 @@ describe("serve failures", () => {
   it("with no configuration, refuses the unpinned default host, says why and points at intent demo and --trust-keys", async () => {
     const result = await setup().run([], { tty: true });
     expect(result.code).toBe(1);
-    expect(result.err).toBe("intent: configuration: this build has no trusted root key for staging-api.intentai.shop: Intent Cloud staging is not open yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n");
+    expect(result.err).toBe("intent: configuration: this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n");
     expect(result.out).toBe("");
   });
 
@@ -522,11 +522,11 @@ describe("serve failures", () => {
     const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } };
     const result = await setup().run([], { input: `${JSON.stringify(initialize)}\n` });
     expect(result.code).toBe(1);
-    expect(result.err).toBe("intent: configuration: this build has no trusted root key for staging-api.intentai.shop: Intent Cloud staging is not open yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n");
+    expect(result.err).toBe("intent: configuration: this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n");
     expect(JSON.parse(result.out)).toEqual({
       jsonrpc: "2.0",
       id: 1,
-      error: { code: -32000, message: "intent-gateway could not start: configuration: this build has no trusted root key for staging-api.intentai.shop: Intent Cloud staging is not open yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud" },
+      error: { code: -32000, message: "intent-gateway could not start: configuration: this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud" },
     });
     // --http and a terminal print to stderr only; stdout stays empty.
     expect((await setup().run(["serve", "--http"], { input: `${JSON.stringify(initialize)}\n` })).out).toBe("");

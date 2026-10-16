@@ -17,7 +17,7 @@ approvals: ok
   verified: 1
 approver flags: ok
   flagged: 0
-self-check: skipped on request; npm provenance and the image signature were not checked
+self-check: skipped on request (demo mode); npm provenance and the image signature were not checked
 head: seq 16 hash 96e8d697…fa40
   Compare this head with a copy of the chain taken earlier, or with your receipts.
 verify: ok
@@ -77,7 +77,7 @@ $ cosign verify-attestation --type cyclonedx \
 
 <!-- feature: signed-releases -->
 !!! planned "Signed releases"
-    No release has been published yet, so there is no provenance, image signature or SBOM to check. `intent verify --demo` skips the self-check unless you pass `--install npm` or `--image <ref> --version <v>`. On a build that is not published, from a clone or a packed tarball, there is nothing for the self-check to compare against, so it never reports ok. The first preview release ([ADR-0010](adr/0010-release-supply-chain.md)) is published with npm provenance, a keyless cosign signature and a CycloneDX SBOM.
+    No release has been published yet, so there is no provenance, image signature or SBOM to check. `intent verify --demo` skips the self-check unless you pass `--install npm` or `--image <ref> --version <v>`. On a build that is not published, from a clone or a packed tarball (no `build-info.json`, or the registry has no such version), there is nothing for the self-check to compare against: it reports `self-check: not run: this install is not a published release (<reason>)` and does not fail `intent verify`. Any other self-check failure still fails. `--skip-install-check` skips it for offline use, and the output says so. The first preview release ([ADR-0010](adr/0010-release-supply-chain.md)) is published with npm provenance, a keyless cosign signature and a CycloneDX SBOM.
 
 To self-check an installed package or an image explicitly:
 

@@ -82,7 +82,7 @@ describe("intent as a process", () => {
     expect(failure).toBeInstanceOf(Error);
     const message = (failure as Error).message;
     expect(message).toContain("intent-gateway could not start: configuration: this build has no trusted root key for staging-api.intentai.shop");
-    expect(message).toContain("Intent Cloud staging is not open yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud");
+    expect(message).toContain("staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud");
     expect(stderr).toContain("intent: configuration: this build has no trusted root key");
   });
 
