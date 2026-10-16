@@ -20,7 +20,16 @@ import {
 } from "../contract/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { createSession, type Session, sessionFromSeed, signRequest } from "../signing/index.ts";
-import { type CatalogItem, DEFAULT_CATALOG, type FakeCloud, type FakeCloudOptions, SoftPasskey, startFakeCloud } from "./index.ts";
+import { verifyApprovalProof, verifyReceipt, verifyStatement } from "../trust/index.ts";
+import {
+  type CatalogItem,
+  CONFIRM_ORIGIN,
+  DEFAULT_CATALOG,
+  type FakeCloud,
+  type FakeCloudOptions,
+  SoftPasskey,
+  startFakeCloud,
+} from "./index.ts";
 
 const repo = join(import.meta.dirname, "..", "..");
 const load = (name: string): unknown => JSON.parse(readFileSync(join(repo, "contract", "vectors", name), "utf8"));
@@ -628,6 +637,65 @@ describe("tamper hooks", () => {
     expect(proof === undefined ? "none" : proofProblem(proof, next.approval_handle, cloud.statement)).toBeNull();
     expect(proof?.assertion.credential_id).toBe(passkey.credentialId);
     expect(proof?.assertion.credential_id).not.toBe(first.credentialId);
+  });
+});
+
+describe("the gateway's trust module (G15) accepts the fake and refuses its tampering", () => {
+  const pin = (cloud: FakeCloud) => [cloud.keys.rootPin];
+  const keySetOf = (cloud: FakeCloud, st: unknown) => {
+    const result = verifyStatement(st, pin(cloud), new Date(clock));
+    if (!result.ok) throw new Error(`statement refused: ${result.reason}`);
+    return result.keySet;
+  };
+  const sentOf = (c: Call) => ({ method: c.sent.method, path: c.sent.path, content_digest: digestOf(c.sent.body), ...c.sent.signed });
+  const responseOf = (c: Call) => ({
+    status: c.res.status,
+    receipt: c.res.headers.get("intent-receipt") ?? undefined,
+    signature: c.res.headers.get("intent-receipt-signature") ?? undefined,
+  });
+
+  it("verifyStatement, verifyReceipt and verifyApprovalProof accept the fake's statement, receipts and proof", async () => {
+    const cloud = await start();
+    const session = createSession();
+    const keySet = keySetOf(cloud, (await call(cloud, null, "GET", "/v1/key-statement")).json);
+    const meta = await call(cloud, session, "GET", "/v1/meta");
+    expect(verifyReceipt(responseOf(meta), sentOf(meta), keySet, new Date(clock)).ok).toBe(true);
+
+    const created = await newApproval(cloud, session);
+    const pending = {
+      kind: "approval_pending",
+      body: { handle: created.approval_handle, approval_url: `${CONFIRM_ORIGIN}${created.approval_link_path}`, snapshot_hash: created.snapshot_hash },
+    };
+    cloud.approveWithPasskey(created.approval_handle, new SoftPasskey({ alg: "RS256" }));
+    const approved = await call(cloud, session, "GET", `/v1/approvals/${created.approval_handle}`);
+    expect(verifyApprovalProof(approved.json, pending, keySet, [pending], new Date(clock)).ok).toBe(true);
+
+    cloud.tamper.proofHash();
+    const badHash = await call(cloud, session, "GET", `/v1/approvals/${created.approval_handle}`);
+    expect(verifyApprovalProof(badHash.json, pending, keySet, [pending], new Date(clock))).toMatchObject({ ok: false, step: 3 });
+    cloud.tamper.reset();
+    cloud.tamper.proofUnknownKid();
+    const badKid = await call(cloud, session, "GET", `/v1/approvals/${created.approval_handle}`);
+    expect(verifyApprovalProof(badKid.json, pending, keySet, [pending], new Date(clock))).toMatchObject({ ok: false, step: 2, reason: "unknown_kid" });
+    cloud.tamper.reset();
+    cloud.tamper.receiptSignature();
+    const badReceipt = await call(cloud, session, "GET", "/v1/meta");
+    expect(verifyReceipt(responseOf(badReceipt), sentOf(badReceipt), keySet, new Date(clock))).toMatchObject({ ok: false, step: 3 });
+    cloud.tamper.reset();
+    cloud.tamper.receiptDigest();
+    const otherDigest = await call(cloud, session, "GET", "/v1/meta");
+    expect(verifyReceipt(responseOf(otherDigest), sentOf(otherDigest), keySet, new Date(clock))).toMatchObject({ ok: false, step: 4 });
+  });
+
+  it("verifyStatement refuses the non-root and expired statements", async () => {
+    const cloud = await start();
+    cloud.tamper.statementNonRoot();
+    const nonRoot = (await call(cloud, null, "GET", "/v1/key-statement")).json;
+    expect(verifyStatement(nonRoot, pin(cloud), new Date(clock))).toMatchObject({ ok: false, step: 2, reason: "bad_signature" });
+    cloud.tamper.reset();
+    cloud.tamper.statementExpired();
+    const expired = (await call(cloud, null, "GET", "/v1/key-statement")).json;
+    expect(verifyStatement(expired, pin(cloud), new Date(clock))).toMatchObject({ ok: false, step: 3, reason: "expired" });
   });
 });
 
