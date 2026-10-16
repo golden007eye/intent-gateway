@@ -1,7 +1,6 @@
 # Security
 
-!!! planned "Planned"
-    The threat model is not published yet; it will be before the gateway is usable. There is no release to attack yet.
+The gateway is a pre-alpha preview: nothing can be bought with it yet, but its checks are real and open to review. The [threat model](threat-model.md) lists the assets, the trust boundaries, how each invariant is enforced, and what is out of scope.
 
 ## Reporting a vulnerability
 
@@ -15,8 +14,11 @@ These are invariants in the repository's agent guide; each change that touches o
 2. **Log before send.** Every field sent to Intent Cloud is appended to the local hash chain before the request leaves.
 3. **No buyer identity in the gateway.** The gateway never stores or forwards the buyer's name, postal address or card.
 4. **One human approval per purchase.** A purchase proceeds only with a passkey-signed Approval the gateway has verified and chained.
-5. **Claim only what was sent.** Docs, logs and CLI output describe what the gateway sent, never what Intent Cloud does afterwards.
+5. **Claim only what was sent.** Docs, logs and CLI output describe what the gateway sent and what Intent Cloud acknowledged receiving, nothing more.
 
-## Planned supply-chain checks
+## What you can check yourself
 
-- Signed Docker images and an SBOM per release, checked by [`intent verify`](verify.md).
+- `intent verify` re-checks the local hash chain, every receipt and every approval offline. [Verify](verify.md) says what each check proves and what it does not.
+- `intent log` and the [panel](panel.md) show every send field by field, and every block.
+- `intent doctor` checks the data dir's permissions, the policy, the chain, the root key and the Intent Cloud host, and gives the fix for each problem.
+- The release checks you run with your own tools, `npm audit signatures` and `cosign verify`, are on the [Verify](verify.md#self-check-and-outside-checks) page. They apply from the first preview release.

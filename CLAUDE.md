@@ -1,6 +1,6 @@
 # intent-gateway — Agent & Human Shipyard
 
-The gateway is a self-hosted Docker container. Agents reach it over MCP; it reaches Intent Cloud for offers and carts. The repository is public (pre-alpha, ADR-0004): anyone can read every committed file and the full history.
+The gateway is a self-hosted gateway you run with npx or Docker. Agents reach it over MCP; it reaches Intent Cloud for offers and carts. The repository is public (pre-alpha, ADR-0004): anyone can read every committed file and the full history.
 
 ## Invariants (never weaken; each one is why the gateway exists)
 

@@ -1,0 +1,24 @@
+{
+  "$comment": "Features the docs describe as working, each with the intent subcommand or the test file that proves it exists. A `!!! planned` block in docs/ names its feature in a `<!-- feature: <id> -->` line above it, and that id must not be here: once a feature is listed, its planned marker must go (scripts/docs-structure.test.ts).",
+  "features": {
+    "demo-mode": { "command": "intent demo" },
+    "mcp-stdio": { "test": "test/mcp-stdio.test.ts" },
+    "mcp-http": { "test": "src/mcp/mcp.test.ts" },
+    "serve": { "command": "intent serve" },
+    "disclosure-log": { "command": "intent log" },
+    "verify": { "command": "intent verify" },
+    "panel": { "command": "intent panel" },
+    "doctor": { "command": "intent doctor" },
+    "policy-show": { "command": "intent policy show" },
+    "policy-add": { "command": "intent policy add" },
+    "policy-test": { "command": "intent policy test" },
+    "policy-library": { "test": "src/policy/library-seeds.test.ts" },
+    "approver-list": { "command": "intent approver list" },
+    "approver-accept": { "command": "intent approver accept" },
+    "identity-block": { "test": "src/privacy/privacy.test.ts" },
+    "approval-proof": { "test": "src/trust/approval.test.ts" },
+    "receipts": { "test": "src/trust/receipt.test.ts" },
+    "self-check": { "test": "src/supplychain/npm.test.ts" },
+    "claims-rule": { "test": "scripts/claims.test.ts" }
+  }
+}

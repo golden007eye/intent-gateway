@@ -1,19 +1,20 @@
 # intent-gateway
 
-intent-gateway is a self-hosted Docker gateway that gives AI agents real shopping under a privacy policy the developer controls. It is the developer channel of [intent](https://intentai.shop): the agent searches and builds carts, a person approves each purchase with a passkey, and the buyer pays on the merchant's own checkout.
+intent-gateway is a self-hosted gateway, run with npx or Docker, that gives AI agents real shopping under a privacy policy the developer controls. It is the developer channel of [intent](https://intentai.shop): the agent searches and builds carts, a person approves each purchase with a passkey, and the buyer pays on the merchant's own checkout.
 
-!!! planned "Pre-alpha: in development, not usable yet"
-    Everything marked *planned* on these pages does not exist yet. The repository holds the project's harness and CI only: there is no gateway code, Docker image, `intent` CLI or release. Commands are shown to describe the intended design, not as working instructions. Follow progress on [GitHub](https://github.com/golden007eye/intent-gateway).
+!!! note "Pre-alpha preview"
+    The gateway, the `intent` CLI and [demo mode](demo.md) work today, built from the repository. There is no release on npm or GHCR yet, and nothing can be bought: the first preview targets the Intent Cloud staging host, and real purchases wait for the launch criteria in [ADR-0004](adr/0004-public-pre-alpha.md). Anything not built yet is marked *planned*.
 
 ## How it fits together
 
 | Part | What it is |
 |---|---|
-| Gateway (`intent-gateway`) | The Docker container you run. It talks to your agent over MCP and to Intent Cloud for offers and carts. |
+| Gateway (`intent-gateway`) | What you run, with npx or Docker. It talks to your agent over MCP and to Intent Cloud for offers and carts. |
 | Intent Cloud | The hosted service behind the gateway: product discovery, merchants, offers and carts. |
-| Gateway policy (`policy.yaml`) | Your YAML rules for what may leave the gateway and how much may be spent. It can only narrow Intent Cloud's rules. |
+| Gateway policy (`policy.yaml`) | Your YAML rules for what may leave the gateway and how much may be spent. It can only narrow the rules Intent Cloud enforces. |
 | Approval | A buyer's passkey signature over one purchase. One per purchase; it cannot be turned off. |
-| Hand-off (`continue_url`) | The buyer leaves the confirm page for the merchant's checkout and pays there. |
+| Local hash chain | Every field the gateway sent, every receipt that came back and every verified Approval, in one file you can check with `intent verify`. |
+| Hand-off | The buyer leaves the confirm page for the merchant's checkout and pays there. |
 
 ## What it does not do
 
@@ -24,7 +25,9 @@ intent-gateway is a self-hosted Docker gateway that gives AI agents real shoppin
 
 ## Where to go next
 
-- [Quickstart](quickstart.md): the planned first run, in three commands.
-- [Gateway policy](policy.md): what you can restrict.
+- [Quickstart](quickstart.md): the demo, end to end, in four steps.
+- [Demo mode](demo.md): what the demo runs and what it does not prove.
+- [Gateway policy](policy.md) and [Policy library](policy-library.md): what you can restrict.
 - [Verify](verify.md): how you check what left your machine.
-- [Security](security.md): the threat model and how to report a vulnerability.
+- [Panel](panel.md): the read-only local page.
+- [Threat model](threat-model.md) and [Security](security.md).

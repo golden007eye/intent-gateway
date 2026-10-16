@@ -1,0 +1,32 @@
+# Sentences that name Intent Cloud as an actor without one of the verbs scripts/claims.test.ts allows
+# (receives, received, acknowledges, acknowledged, returns, signs, enforces, reported), each with the reason it
+# makes no claim about what Intent Cloud does with the data after receiving it (invariant 5).
+# Format: path | an exact fragment of the sentence | reason. The test fails on an entry that no longer matches.
+
+# Decision records: settled text describing the protocol and trust design, not data handling.
+docs/adr/0006-session-keys-receipts.md | Intent Cloud's signing keys rotate | describes key rotation, the reason for the key statement
+docs/adr/0006-session-keys-receipts.md | Nothing can sign what Intent Cloud's code never saw | explains why some responses carry no receipt
+docs/adr/0006-session-keys-receipts.md | Intent Cloud accepts a 60-second window | the request-signature rule of the public contract (appendix C)
+docs/adr/0006-session-keys-receipts.md | Intent Cloud can check a request's signature without any account | the request-signature rule of the public contract (appendix C)
+docs/adr/0007-local-store-jsonl.md | Intent Cloud receipts, which carry the digest | names receipts as outside evidence; "acknowledge" describes the receipt
+docs/adr/0008-public-contract-copy.md | Intent Cloud's `Meta` response reports | the Meta field the contract test compares; a response's content, not data handling
+docs/adr/0008-public-contract-copy.md | The gateway and Intent Cloud must agree byte for byte | the reason for shared test vectors
+docs/adr/0008-public-contract-copy.md | its fake and Intent Cloud all reproduce the same vectors | the reason for shared test vectors
+docs/adr/0009-policy-v1-narrow-only.md | never looser than Intent Cloud's rules | names the baseline a policy is compared with
+docs/adr/0011-approver-pin.md | if Intent Cloud were wrong or compromised | a threat the approver pin defends against, not a claim
+docs/adr/0011-approver-pin.md | The first purchase still trusts Intent Cloud | states a limit of the gateway's own check
+
+# CLI strings: status lines about a response the gateway received, or names of configuration.
+src/cli/doctor.ts | Intent Cloud: demo mode runs its own | doctor's label for the demo's local stand-in
+src/cli/doctor.ts | Intent Cloud not checked | doctor's label for a check it skipped
+src/cli/doctor.ts | meta answered | reports the status a response came back with
+src/cli/doctor.ts | Intent Cloud publishes the next one before then | the key statement's renewal, which the contract specifies
+src/cli/help.ts | the gateway between your agent and Intent Cloud | says where the gateway sits, not what Intent Cloud does
+src/config/index.ts | is not a pinned Intent Cloud host | names a configuration error
+src/gateway/gateway.ts | Intent Cloud's answer carried no valid receipt | reports a response the gateway discarded
+src/gateway/gateway.ts | Intent Cloud's answer was malformed | reports a response the gateway refused
+src/gateway/gateway.ts | Intent Cloud answered | reports the status a response came back with
+src/gateway/gateway.ts | Intent Cloud meta failed with status | reports the status a response came back with
+src/gateway/gateway.ts | Intent Cloud key statement failed with status | reports the status a response came back with
+src/gateway/gateway.ts | the cart Intent Cloud created does not match | reports a mismatch between the cart returned and the one asked for
+src/policy/policy.ts | never allow ones Intent Cloud excludes | a policy load error naming the baseline's excluded categories

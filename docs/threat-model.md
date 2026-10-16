@@ -1,0 +1,99 @@
+# Threat model
+
+This page says what the gateway protects, from whom, and where its protection ends. It covers the gateway as it is built today, in demo mode and against an Intent Cloud host. The rules the code is held to are the five invariants in the repository's agent guide; each section below names how one is enforced and tested. Settled design decisions are in the [ADRs](adr/0005-packaging-npx-docker.md).
+
+To report a vulnerability, see [Security](security.md).
+
+## Assets
+
+| Asset | Why it matters |
+|---|---|
+| The buyer's identity: name, postal address, card, email, phone | Never held by the gateway; the buyer gives it to the merchant at checkout. A leak would be the worst failure. |
+| The buyer's money | Spent only through one passkey Approval per purchase and paid by hand at the merchant. |
+| The local hash chain (`<data dir>/audit.jsonl`) | The developer's proof of what left the machine and what came back. A gap or an edit makes it worthless. |
+| The gateway policy and `policy.lock` | Decides what may leave and how much may be spent. A loosened policy would weaken every other control. |
+| The approver pin | Which passkey the gateway accepts for Approvals. |
+| The pinned root key | The one key the gateway trusts for an Intent Cloud host; every receipt and approval key is checked against the statement it signs. |
+| The MCP HTTP bearer token | Off loopback, the only thing between the network and the tools. |
+
+## Trust boundaries
+
+| Boundary | Who is on the other side | What crosses it |
+|---|---|---|
+| Agent ↔ gateway (MCP, stdio or HTTP) | The agent, which is **not trusted**: it may be confused, prompt-injected or hostile. | Tool calls with search terms, a budget, a ZIP, an offer handle; results with offers, a cart and an approval link. |
+| Gateway to Intent Cloud (HTTPS) | Intent Cloud's public edge, which receives the requests, reached through the network. The network is not trusted, and the gateway trusts what Intent Cloud signs only as far as the keys under the pinned root. | Signed requests whose every field is logged first; responses with a signed receipt. |
+| Buyer ↔ confirm page | The buyer's own browser and passkey, on intent's confirm page. | The purchase snapshot and check code; the passkey assertion. |
+| Buyer ↔ merchant | The merchant's own checkout. | Name, address and card, which never touch the gateway. |
+| Developer ↔ local files and terminal | The developer's own account. Other local users are not trusted. | The data dir (mode 700), the policy, `intent verify`, `intent approver accept`, the panel. |
+| Build ↔ developer | The npm registry, GHCR and the release workflow. | The package and the image, with provenance, signature and SBOM. |
+
+## Invariant 1: the policy can only narrow
+
+**Threat.** A shared or edited policy turns off purchase approval, raises a limit above the baseline, allows an excluded category, or is written so that the gateway and a human reviewer read it differently.
+
+**Controls.** Policy v1 is a strict schema: every value that could loosen the baseline is refused at load time with `POLICY_LOOSENS`, and the gateway does not start. `approval` must be `passkey`. Unknown keys, duplicate keys, YAML merge keys, alias bombs and oversized files are refused. Every loaded policy is combined with the baseline (the rules Intent Cloud enforces) by taking the stricter of each rule, and `intent policy add` writes the same combination of your policy and the library's, so adding a library policy can only tighten. Library policies are checked against their sha256 in `policies/index.json`; `--commit` also needs a signed commit on `main`. Category and merchant names are compared after Unicode and IDN normalisation, so look-alikes match the block list. Tests: `src/policy/*.test.ts`, with property tests on the combination and attack cases for each refused construct ([ADR-0009](adr/0009-policy-v1-narrow-only.md)).
+
+## Invariant 2: log before send
+
+**Threat.** A field leaves the machine without a log entry, or the log is changed afterwards to hide one.
+
+**Controls.** The only path from gateway code to Intent Cloud is the disclosed cloud: it appends the exact request bytes, digest and signature parameters to the chain and only then sends. If the append fails, the send does not happen. One writer at a time holds a fenced lease on the chain and re-checks the tail before and after each write; a writer that lost its lease, or finds the tail moved, is refused for good. The chain refuses a data dir that is not owned by the current user. `intent verify` re-checks every link offline. Tests: `src/disclosure/*.test.ts` and `src/store/*.test.ts`, including byte comparisons with what the fake Intent Cloud received, and lease fencing with a paused holder ([ADR-0007](adr/0007-local-store-jsonl.md)).
+
+## Invariant 3: no buyer identity in the gateway
+
+**Threat.** The agent passes the buyer's name, address, email, phone or card number to a tool, in a field or hidden inside another one, and the gateway forwards it.
+
+**Controls.** The MCP tools take only search terms, a budget, a 5-digit ZIP and an offer handle. Every outbound body is scanned before it is logged: card numbers (Luhn, including split across fields), emails, phone numbers, street addresses and identity-named keys, after Unicode normalisation. A match blocks the send, and the log records what was blocked (field paths, never values). The gateway has no field for a name, address or card at all; the buyer gives those to the merchant. Tests: `src/privacy/privacy.test.ts` and the gateway's outbound privacy suite.
+
+## Invariant 4: one human approval per purchase
+
+**Threat.** A purchase goes ahead without a person: the agent approves for them, an approval is replayed for another cart, or a forged approval is accepted.
+
+**Controls.** `create_cart` never buys; it returns an approval link. The gateway counts a purchase as approved only when the approval carries a passkey assertion over the exact purchase snapshot that was pending, signed by an approval key from the statement under the pinned root, from the [approver pin](#phone-hand-off-and-self-approval), and not used before. The check code on the confirm page is the start of the snapshot hash, so the buyer can match the cart the agent showed. Tests: the proof attack suite in `src/trust/*.test.ts` and `src/gateway/gateway.test.ts` ([ADR-0011](adr/0011-approver-pin.md)).
+
+## Invariant 5: claim only what was sent
+
+**Threat.** The docs, the log or the CLI say more than the gateway can check, so a developer trusts a claim about what happens to their data after it left.
+
+**Controls.** Output describes what the gateway sent and what Intent Cloud acknowledged receiving. A receipt means "received at Intent Cloud's public edge" and nothing more; a send with no receipt is reported as "sent, not acknowledged"; a response that should have carried a receipt and did not is discarded and fails verify. A test (`scripts/claims.test.ts`) reads every sentence in the README, the docs and the CLI's strings that names Intent Cloud and fails unless it uses a verb from a short, checkable list (receives, acknowledges, returns, signs, enforces, reported) or is listed with a reason in `docs/claims-allow.txt`.
+
+## HTTP transport and Docker
+
+- `intent serve --http` binds to `127.0.0.1:8787` by default. Off loopback, it refuses to start without a bearer token of at least 32 characters (`INTENT_HTTP_TOKEN`). `localhost` is not treated as loopback, because it can resolve elsewhere.
+- With a token, a missing or wrong `Authorization: Bearer` gets 401; the comparison is constant-time. A `Host` or `Origin` that does not name the server gets 421, so a web page cannot rebind a DNS name to `127.0.0.1` and drive the tools through the developer's browser. Bodies over 256 KiB get 413.
+- On loopback without a token, any process of any user on the machine can call the tools, as with stdio for the agent's own user. The tools can search and prepare carts; they cannot approve or pay.
+- The Docker image runs the same package, serves MCP over HTTP, and is documented with the host side of the port bound to `127.0.0.1`. It generates its token on first start and keeps it in its data volume. The image is available with the first preview release ([ADR-0005](adr/0005-packaging-npx-docker.md)).
+
+## Phone hand-off and self-approval
+
+The agent is not trusted, and an agent with shell access on the developer's machine can try to approve its own purchases.
+
+- **Trust on first use.** The first passkey whose Approval the gateway verifies becomes the approver pin. Its fingerprint is printed on stderr and shown in the [panel](panel.md) when the pin is created. An Approval from any other passkey is flagged: the purchase is not reported as approved, and the agent is told to have a person run `intent approver accept`.
+- **`intent approver accept` needs a person at a terminal.** It refuses unless stdin and stdout are both terminals, and it asks for the flagged fingerprint, which the person compares with the panel and their passkey manager. The TTY check raises the bar but is not a guarantee. An agent that can open a pseudo-terminal can pass it.
+- **If the agent goes first.** An agent that enrols its own passkey and approves before the human does becomes the pin. The signals are the fingerprint shown at creation, and the human's own passkey being flagged at their first purchase.
+- **The backstop.** The approval only lets the confirm page hand the buyer to the merchant's checkout; the gateway holds no card and cannot pay. Payment by hand at the merchant is the backstop against self-approval. A self-approved cart still cannot be paid for without the human entering their payment details.
+- **The hand-off.** The approval link and QR code open intent's confirm page, on the origin named in the signed key statement. The page shows the item, merchant, total, the ZIP prefix and the check code; the buyer checks them against what the agent showed before using their passkey.
+
+In demo mode the confirm page is local and signs with a software demo passkey; see [Demo mode](demo.md).
+
+## Local panel
+
+The [panel](panel.md) binds to `127.0.0.1` only, serves GET only (405 otherwise), checks `Host` (421 otherwise), loads nothing from outside under a strict Content-Security-Policy, writes chain values as text, never as HTML, and never writes the chain. It refuses to start when the data dir or a file in it can be read by other users. It shows field names, never values.
+
+## Supply chain
+
+- Releases are published from GitHub Actions with npm provenance and a keyless cosign signature and CycloneDX SBOM on the image, and the image rebuilds to the same digest ([ADR-0010](adr/0010-release-supply-chain.md)). No release exists yet.
+- `intent verify` runs a **self-check** of the installed package or image. It runs inside the code it checks, so a tampered gateway could report anything; its output says so and names the outside checks to run with your own tools: `npm audit signatures`, `cosign verify` and `cosign verify-attestation`. See [Verify](verify.md#self-check-and-outside-checks).
+- Runtime dependencies are few, pinned by the lockfile, at least 7 days old when added, and licence-checked. Gateway code may not start processes or load code dynamically, and only the modules that need the network may use it; CI enforces both.
+- The demo's test keys are public. The test root key is trusted only in demo mode, it may never be pinned for an Intent Cloud host, and a demo chain never mixes with a real one.
+
+## Out of scope
+
+The TLS fingerprint and the carrier-NAT tier are out of scope.
+
+- **TLS fingerprint.** The gateway's HTTPS client has the TLS fingerprint of its Node.js runtime, the same for every gateway, so a network observer can tell gateway traffic from a browser's. The gateway does nothing to disguise it. Shopping sessions stay unlinkable by their keys, which are fresh per session.
+- **Carrier-NAT tier sharing.** Intent Cloud enforces its rate limits per IP address (per /64 for IPv6), with a higher tier for an address that recently completed a passkey Approval. Behind carrier-grade NAT, one passkey user raises the tier for everyone sharing that address. Per-claimer caps are weak too, since a claimer costs nothing to create; the IP limit is the real cap.
+- **Clean tail truncation.** Dropping whole entries from the end of `audit.jsonl` leaves a valid, shorter chain. It is detectable only by outside evidence: a head seq and hash saved earlier, the receipts Intent Cloud returns, or the chained approval proofs. `intent verify` prints the head for that comparison.
+- **What happens after receipt.** The gateway can show what it sent and what Intent Cloud acknowledged receiving, not what is done with it afterwards.
+- **A compromised developer account.** Anyone who runs code as the developer's user can read the data dir, edit the policy and pass the TTY check.
+- **The merchant.** The checkout, payment and delivery are between the buyer and the merchant.
