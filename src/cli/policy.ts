@@ -1,7 +1,7 @@
 // `intent policy test | add | show`. A policy can only narrow (invariant 1): `add` writes meet(current, library),
 // shows the change as a diff first, and asks before writing (or needs --yes when no one is at the terminal).
 import { readFile } from "node:fs/promises";
-import { type Config, INTENT } from "../config/index.ts";
+import { BUILD, type Config, describeBuild, INTENT } from "../config/index.ts";
 import { LibraryError, type Lock, planPolicy, readLock } from "../library/index.ts";
 import { loadPolicy, type Policy, PolicyError, runCases } from "../policy/index.ts";
 import { describeError } from "./errors.ts";
@@ -150,6 +150,8 @@ export async function policyShow(io: Io, config: Config): Promise<number> {
   }
   const note = noShipToNote(active.policy);
   if (note !== null) line(io.stdout, `note: ${note}; ${shipToFix(policyPath)}`);
+  // The commit the bundled library policies come from, as the build recorded it (never a guessed one).
+  line(io.stdout, `gateway: ${describeBuild(BUILD)}`);
   line(io.stdout, "---");
   io.stdout.write(active.text.endsWith("\n") ? active.text : `${active.text}\n`);
   return code;

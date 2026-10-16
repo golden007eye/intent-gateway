@@ -7,11 +7,21 @@
 // The override is taken only where git cannot check it; inside a checkout it must equal HEAD of a clean tree, so it
 // never relabels a dirty or different tree. Outside a checkout, whoever passes it vouches that the files are that
 // commit unchanged (CI's package job checks that its checkout is clean first).
+//
+// BUILD_COMMIT=unknown is the plain `docker build` with no --build-arg: outside a checkout it records that the commit
+// is not known (`buildCommit: null, dirty: null`), so nothing claims a commit and bundled policies are refused as for a
+// dirty tree. Inside a checkout it is refused like any other BUILD_COMMIT that is not HEAD.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export type BuildInfo = { version: string; buildCommit: string; dirty: false } | { version: string; buildCommit: null; dirty: true };
+export type BuildInfo =
+  | { version: string; buildCommit: string; dirty: false }
+  | { version: string; buildCommit: null; dirty: true }
+  | { version: string; buildCommit: null; dirty: null };
+
+/** The BUILD_COMMIT value for a build outside a checkout whose commit nobody named (the Dockerfile's fallback). */
+export const UNKNOWN_COMMIT = "unknown";
 
 /** The build info for `buildCommit`, or for a dirty tree when `dirty` is true (the commit is then not recorded). */
 export function buildInfo(version: string, buildCommit: string, dirty = false): BuildInfo {
@@ -42,15 +52,28 @@ export function writeBuildInfo(repo: string, outDir: string, commitOverride?: st
     throw new Error(`BUILD_COMMIT ${JSON.stringify(commitOverride)} is not HEAD (${commit}) of this checkout`);
   }
   if (commitOverride !== undefined && dirty) throw new Error("BUILD_COMMIT is set but the checkout has uncommitted changes");
-  const info = buildInfo(pkg.version, commit, dirty);
+  // Only reached outside a checkout: inside one, "unknown" is not HEAD and was refused above.
+  if (commit === UNKNOWN_COMMIT) {
+    if (pkg.version === "") throw new Error("version is empty");
+    return write(outDir, { version: pkg.version, buildCommit: null, dirty: null });
+  }
+  return write(outDir, buildInfo(pkg.version, commit, dirty));
+}
+
+function write(outDir: string, info: BuildInfo): BuildInfo {
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, "build-info.json"), `${JSON.stringify(info, null, 2)}\n`);
   return info;
+}
+
+function describe(info: BuildInfo): string {
+  if (info.dirty === null) return `build-info: ${info.version}, commit unknown (local build without BUILD_COMMIT; none recorded)`;
+  return info.dirty ? `build-info: ${info.version} from a dirty tree (no commit recorded)` : `build-info: ${info.version} at ${info.buildCommit}`;
 }
 
 if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === import.meta.filename) {
   const repo = join(import.meta.dirname, "..");
   const override = process.env.BUILD_COMMIT;
   const info = writeBuildInfo(repo, join(repo, "dist"), override === undefined || override === "" ? undefined : override);
-  console.log(info.dirty ? `build-info: ${info.version} from a dirty tree (no commit recorded)` : `build-info: ${info.version} at ${info.buildCommit}`);
+  console.log(describe(info));
 }

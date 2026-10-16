@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildInfo, writeBuildInfo } from "./build-info.ts";
+import { buildInfo, UNKNOWN_COMMIT, writeBuildInfo } from "./build-info.ts";
 
 const commit = "0123456789abcdef0123456789abcdef01234567";
 
@@ -101,6 +101,21 @@ describe("writeBuildInfo", () => {
     const out = join(dir, "dist");
     expect(writeBuildInfo(dir, out, commit)).toEqual({ version: "1.2.3", buildCommit: commit, dirty: false });
     expect(written(out)).toEqual({ version: "1.2.3", buildCommit: commit, dirty: false });
+  });
+
+  // A plain `docker build` with no --build-arg BUILD_COMMIT: the Dockerfile passes "unknown" (F-i).
+  it("records an unknown commit for BUILD_COMMIT=unknown outside a git checkout, and names no commit", () => {
+    const dir = exported();
+    const out = join(dir, "dist");
+    expect(UNKNOWN_COMMIT).toBe("unknown");
+    expect(writeBuildInfo(dir, out, UNKNOWN_COMMIT)).toEqual({ version: "1.2.3", buildCommit: null, dirty: null });
+    expect(written(out)).toEqual({ version: "1.2.3", buildCommit: null, dirty: null });
+  });
+
+  // Attack: "unknown" must not relabel a checkout git can see (clean or dirty) as a build of unknown commit.
+  it("refuses BUILD_COMMIT=unknown inside a checkout", () => {
+    const { dir } = repo();
+    expect(() => writeBuildInfo(dir, join(dir, "dist"), UNKNOWN_COMMIT)).toThrow(/is not HEAD/);
   });
 
   it("refuses a BUILD_COMMIT outside a checkout that is not a full commit hash", () => {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
-import { readBuild } from "./build.ts";
+import { describeBuild, readBuild } from "./build.ts";
 import { BUILD, ConfigError, loadConfig, PINNED_HOSTS, type LoadOptions } from "./index.ts";
 
 // The staging pin is empty until the release task commits the root key, so most cases pass --trust-keys.
@@ -497,6 +497,20 @@ describe("BUILD", () => {
     });
   });
 
+  // A plain `docker build` with no BUILD_COMMIT (F-i): the commit is unknown, and nothing may claim one.
+  it("reads a build that did not know its commit as unknown, never as a commit", () => {
+    const build = readBuild(tree(JSON.stringify({ version: "1.2.3", buildCommit: null, dirty: null })));
+    expect(build).toEqual({ version: "1.2.3", buildCommit: null, dirty: null });
+    expect(describeBuild(build)).toBe("1.2.3, commit unknown (local build without BUILD_COMMIT)");
+  });
+
+  it("describes each kind of build without naming a commit it does not know", () => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    expect(describeBuild({ version: "1.2.3", buildCommit: commit, dirty: false })).toBe(`1.2.3, built from commit ${commit}`);
+    expect(describeBuild({ version: "1.2.3", buildCommit: null, dirty: true })).toBe("1.2.3, no commit (built from a tree with uncommitted changes)");
+    expect(describeBuild({ version: "1.2.3", buildCommit: null, dirty: false })).toBe("1.2.3, no commit (running from source)");
+  });
+
   it("falls back to package.json when build-info.json is absent", () => {
     expect(readBuild(tree())).toEqual({ version: "1.2.3", buildCommit: null, dirty: false });
   });
@@ -507,6 +521,9 @@ describe("BUILD", () => {
     [JSON.stringify({ buildCommit: "0".repeat(40), dirty: false }), /no version/],
     // Attack: a dirty build that still names a commit would let bundled policies claim that commit.
     [JSON.stringify({ version: "1.2.3", buildCommit: "0".repeat(40), dirty: true }), /records a commit for a dirty build/],
+    // Attack: an unknown-commit build that also names a commit is refused, not read as that commit.
+    [JSON.stringify({ version: "1.2.3", buildCommit: "0".repeat(40), dirty: null }), /did not know its commit/],
+    [JSON.stringify({ version: "1.2.3", buildCommit: "unknown", dirty: null }), /did not know its commit/],
     [JSON.stringify({ version: "1.2.3", buildCommit: "0".repeat(40) }), /does not say whether the build tree was dirty/],
     [JSON.stringify({ version: "1.2.3", buildCommit: "0".repeat(40), dirty: "no" }), /does not say whether/],
   ])("rejects a malformed build-info.json: %s", (text, message) => {

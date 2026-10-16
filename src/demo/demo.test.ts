@@ -146,7 +146,9 @@ describe("demo flow", () => {
     expect(page.body).toContain(`cat ${demo.codeFile}`);
     const done = await post(link, { csrf: csrfOf(page.body), action: "approve", code: demo.code }, { origin: new URL(link).origin, "sec-fetch-site": "same-origin" });
     expect(done.status).toBe(200);
-    expect(done.body).toContain("Approved with the demo passkey.");
+    expect(done.body).toContain("<h1>Approved</h1><p>Approved with the demo passkey. Go back to your agent and ask it to check the approval status.</p>");
+    expect(done.body.split("Approved with the demo passkey").length - 1).toBe(1);
+    expect(done.body).toContain(DEMO_BANNER);
 
     const status = texts(await call("get_approval_status", { approval_handle: handle })).join("\n");
     expect(status).toContain("Approver passkey fingerprint:");
@@ -171,7 +173,10 @@ describe("demo flow", () => {
     await gateway.start();
     const { url, handle } = await pendingApproval(gateway);
     const page = await raw(url);
-    expect((await post(url, { csrf: csrfOf(page.body), action: "reject" })).body).toContain("Rejected.");
+    const rejected = (await post(url, { csrf: csrfOf(page.body), action: "reject" })).body;
+    expect(rejected).toContain("<h1>Rejected</h1><p>You rejected this purchase. Go back to your agent and ask it to check the approval status.</p>");
+    expect(rejected.split("Rejected").length - 1).toBe(2); // the <title> and the heading, not the paragraph too
+    expect(rejected).toContain(DEMO_BANNER);
     expect(demo.cloud.inspect(handle)?.state).toBe("rejected");
     const after = await raw(url);
     expect(after.body).not.toContain('name="csrf"');

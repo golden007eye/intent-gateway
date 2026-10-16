@@ -207,7 +207,7 @@ function install(values: Values, str: (name: string) => string | undefined): { i
   }
   if (kind !== undefined && kind !== "npm") throw new CliError(`--install takes npm, got "${kind}"; for an image use --image <ref> --version <v>`, 2);
   const pkgDir = str("pkg-dir");
-  if (kind === undefined && pkgDir === undefined && BUILD.buildCommit === null && !BUILD.dirty) return {}; // from source
+  if (kind === undefined && pkgDir === undefined && BUILD.buildCommit === null && BUILD.dirty === false) return {}; // from source
   return { install: { kind: "npm", pkgDir: pkgDir ?? fileURLToPath(PACKAGE_ROOT) } };
 }
 

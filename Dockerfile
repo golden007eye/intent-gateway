@@ -8,7 +8,9 @@
 # rewrite-timestamp needs a BuildKit builder that applies it (`docker buildx create --use`, as CI's setup-buildx
 # does); the classic `docker` driver ignores it and the digest then changes on every build.
 # BUILD_COMMIT is the commit the build records (`.git` is not in the build context); pass it only for a checkout
-# with no local changes, as the CI package job does after checking.
+# with no local changes, as the CI package job does after checking. It is optional: a plain
+# `docker build -t intent-gateway .` records the commit as unknown (and warns), so `policy show` says so and
+# `policy add` takes a library policy only with --commit <sha>.
 #
 # Run it (the token is printed once, on the first start that serves):
 #   docker run -p 127.0.0.1:8787:8787 -v intent-data:/data intent-gateway:dev
@@ -30,8 +32,8 @@ COPY src src
 COPY policies policies
 COPY contract contract
 ARG BUILD_COMMIT
-RUN test -n "${BUILD_COMMIT}" || { echo "pass --build-arg BUILD_COMMIT=\$(git rev-parse HEAD)" >&2; exit 1; } \
- && BUILD_COMMIT="${BUILD_COMMIT}" pnpm build \
+RUN { test -n "${BUILD_COMMIT}" || echo "warning: no BUILD_COMMIT, so this image records its commit as unknown; to record it, pass --build-arg BUILD_COMMIT=\$(git rev-parse HEAD)" >&2; } \
+ && BUILD_COMMIT="${BUILD_COMMIT:-unknown}" pnpm build \
  && chmod 0755 dist/main.js
 # The runtime tree: what `npm pack` puts in the tarball, plus the production dependencies from the lockfile.
 # pnpm's bookkeeping files carry install times, so they go, to keep the image reproducible.

@@ -119,8 +119,9 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
 
   function decided(outcome: Outcome, action: "approve" | "reject"): string {
     if (outcome.status === 200) {
-      const what = action === "approve" ? "Approved with the demo passkey." : "Rejected.";
-      return layout(what, "<p>Go back to your agent and ask it to check the approval status.</p>");
+      // The heading names the outcome once; the paragraph says how and what to do next, without repeating it.
+      const [title, how] = action === "approve" ? ["Approved", "Approved with the demo passkey."] : ["Rejected", "You rejected this purchase."];
+      return layout(title, `<p>${how} Go back to your agent and ask it to check the approval status.</p>`);
     }
     return layout("Not done", `<p>${esc(outcome.reason ?? `state ${outcome.state ?? "unknown"}`)}</p>`);
   }

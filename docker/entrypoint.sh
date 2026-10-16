@@ -61,7 +61,11 @@ if [ -z "${INTENT_HTTP_TOKEN:-}" ]; then
   fi
   if [ -f "$token_file" ]; then
     INTENT_HTTP_TOKEN="$(cat "$token_file")"
-    say "using the HTTP token in $token_file; read it with: $exec_cmd cat $token_file"
+    # A token not printed yet (an earlier start made it but did not serve) is printed in the connect line once
+    # this start serves, so saying how to read it from the container would only repeat that line.
+    if [ "${INTENT_QUIET_TOKEN:-}" = 1 ] || [ ! -e "$token_file.unshown" ]; then
+      say "using the HTTP token in $token_file; read it with: $exec_cmd cat $token_file"
+    fi
   else
     # 32 random bytes as unpadded base64url: 43 characters.
     INTENT_HTTP_TOKEN="$(head -c 32 /dev/urandom | base64 -w 0 | tr '+/' '-_' | tr -d '=')"

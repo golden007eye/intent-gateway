@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { stringify } from "yaml";
-import { BUILD, INTENT } from "../config/index.ts";
+import { BUILD, type Build, INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { loadPolicy, meet, type Policy } from "../policy/index.ts";
 
@@ -196,13 +196,17 @@ interface Fetched {
   source: Lock["source"];
 }
 
+/** Why a build with no commit (`buildCommit: null`) cannot record one for its bundled policies. */
+export function noCommitReason(build: Pick<Build, "dirty">): string {
+  if (build.dirty === true) return "this gateway was built from a tree with uncommitted changes";
+  if (build.dirty === null) return "this gateway's commit is unknown (a local build without BUILD_COMMIT)";
+  return "this gateway runs from source";
+}
+
 async function readBundled(name: string, opts: AddOptions): Promise<Fetched> {
   const commit = opts.buildCommit === undefined ? BUILD.buildCommit : opts.buildCommit;
   if (commit === null) {
-    const why =
-      opts.buildCommit === undefined && BUILD.dirty
-        ? "this gateway was built from a tree with uncommitted changes"
-        : "this gateway runs from source";
+    const why = opts.buildCommit === undefined ? noCommitReason(BUILD) : "this gateway runs from source";
     throw new LibraryError("NO_BUILD_COMMIT", `${why}, so its bundled policies have no build commit to record; use --commit <sha>`);
   }
   const root = opts.bundledRoot ?? BUNDLED_ROOT;

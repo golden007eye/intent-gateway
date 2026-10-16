@@ -6,14 +6,15 @@ import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBuild, type Build } from "./build.ts";
-import { containerDemo, dockerExec, IMAGE_TRUST_KEYS, invocation } from "./invocation.ts";
+import { containerDemo, containerRef, dockerExec, IMAGE_TRUST_KEYS, invocation } from "./invocation.ts";
 
 export type { Build } from "./build.ts";
+export { describeBuild } from "./build.ts";
 
 /** Version and build commit of this gateway (buildCommit is null when running from source). */
 export const BUILD: Build = readBuild(new URL("../", import.meta.url));
 
-export { containerDemo, dockerExec, IMAGE_DEMO_RUN, IMAGE_TRUST_KEYS, invocation, type InvocationInput } from "./invocation.ts";
+export { containerDemo, containerRef, dockerExec, IMAGE_DEMO_RUN, IMAGE_TRUST_KEYS, invocation, type InvocationInput } from "./invocation.ts";
 
 /**
  * The command that runs this gateway, to print before a subcommand (`${INTENT} verify --demo`): `npx -y <spec>`
@@ -24,6 +25,9 @@ export const INTENT: string = invocation({ argv1: process.argv[1], packageRoot: 
 
 /** `docker exec <this container's id>`, to print before a command run inside the image. See dockerExec(). */
 export const DOCKER_EXEC: string = dockerExec(process.env);
+
+/** `docker stop <this container's id>`: a detached container has no Ctrl-C to stop it. */
+export const DOCKER_STOP: string = `docker stop ${containerRef(process.env)}`;
 
 export interface RootKey {
   kid: string;

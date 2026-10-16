@@ -46,8 +46,13 @@ export function invocation(input: InvocationInput): string {
  * placeholder `<container>` is printed instead of a name that would not work.
  */
 export function dockerExec(env: Readonly<Record<string, string | undefined>>): string {
+  return `docker exec ${containerRef(env)}`;
+}
+
+/** This container's short id for `docker exec`/`docker stop` (see dockerExec()), or the placeholder `<container>`. */
+export function containerRef(env: Readonly<Record<string, string | undefined>>): string {
   const id = env.HOSTNAME ?? "";
-  return `docker exec ${/^[0-9a-f]{12}$/.test(id) ? id : "<container>"}`;
+  return /^[0-9a-f]{12}$/.test(id) ? id : "<container>";
 }
 
 /**
