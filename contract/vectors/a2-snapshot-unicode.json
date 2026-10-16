@@ -1,0 +1,53 @@
+{
+  "id": "A2",
+  "appendix": "A",
+  "description": "Snapshot with non-ASCII text: accents, an astral character (U+1D11E), U+2028, DEL and a tab. JCS keeps non-ASCII as UTF-8, escapes only the tab, and hashes UTF-8 bytes.",
+  "input": {
+    "continue_url": "https://xn--caf-dma.example/checkout/ck_ü",
+    "snapshot": {
+      "v": 1,
+      "approval": "ap_TEST0002",
+      "nonce": "AQIDBAUGBwgJCgsMDQ4PEA",
+      "merchant": {
+        "name": "Café Ünïcode ☕ \"Quoted\" & <Tags>",
+        "domain": "xn--caf-dma.example"
+      },
+      "item": {
+        "title": "Laufschuh „Größe“ 𝄞 — tab\there",
+        "variant": "EU 42 / Blau Zeile"
+      },
+      "quantity": 2,
+      "unit_price": {
+        "amount_minor": 12999,
+        "currency": "USD"
+      },
+      "shipping": {
+        "amount_minor": 0,
+        "currency": "USD"
+      },
+      "total": {
+        "amount_minor": 25998,
+        "currency": "USD"
+      },
+      "total_kind": "max",
+      "ship_to": {
+        "country": "US",
+        "postal_prefix": "100"
+      },
+      "continue_url_hash": "sha256:c2fdb5875996c63b429abb03c8ceff33662ecfd60db99feda995fccffadd3aee",
+      "rule_version": "recheck-v1",
+      "expires_at": "2026-10-03T12:15:00Z"
+    }
+  },
+  "expected": {
+    "continue_url_hash": "sha256:c2fdb5875996c63b429abb03c8ceff33662ecfd60db99feda995fccffadd3aee",
+    "jcs": "{\"approval\":\"ap_TEST0002\",\"continue_url_hash\":\"sha256:c2fdb5875996c63b429abb03c8ceff33662ecfd60db99feda995fccffadd3aee\",\"expires_at\":\"2026-10-03T12:15:00Z\",\"item\":{\"title\":\"Laufschuh „Größe“ 𝄞 — tab\\there\",\"variant\":\"EU 42 / Blau Zeile\"},\"merchant\":{\"domain\":\"xn--caf-dma.example\",\"name\":\"Café Ünïcode ☕ \\\"Quoted\\\" & <Tags>\"},\"nonce\":\"AQIDBAUGBwgJCgsMDQ4PEA\",\"quantity\":2,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_prefix\":\"100\"},\"shipping\":{\"amount_minor\":0,\"currency\":\"USD\"},\"total\":{\"amount_minor\":25998,\"currency\":\"USD\"},\"total_kind\":\"max\",\"unit_price\":{\"amount_minor\":12999,\"currency\":\"USD\"},\"v\":1}",
+    "jcs_utf8_hex": "7b22617070726f76616c223a2261705f5445535430303032222c22636f6e74696e75655f75726c5f68617368223a227368613235363a63326664623538373539393663363362343239616262303363386365666633333636326563666436306462393966656461393935666363666661646433616565222c22657870697265735f6174223a22323032362d31302d30335431323a31353a30305a222c226974656d223a7b227469746c65223a224c617566736368756820e2809e4772c3b6c39f65e2809c20f09d849e20e28094207461625c7468657265222c2276617269616e74223a224555203432202f20426c6175e280a85a65696c657f227d2c226d65726368616e74223a7b22646f6d61696e223a22786e2d2d6361662d646d612e6578616d706c65222c226e616d65223a22436166c3a920c39c6ec3af636f646520e29895205c2251756f7465645c222026203c546167733e227d2c226e6f6e6365223a2241514944424155474277674a4367734d445134504541222c227175616e74697479223a322c2272756c655f76657273696f6e223a227265636865636b2d7631222c22736869705f746f223a7b22636f756e747279223a225553222c22706f7374616c5f707265666978223a22313030227d2c227368697070696e67223a7b22616d6f756e745f6d696e6f72223a302c2263757272656e6379223a22555344227d2c22746f74616c223a7b22616d6f756e745f6d696e6f72223a32353939382c2263757272656e6379223a22555344227d2c22746f74616c5f6b696e64223a226d6178222c22756e69745f7072696365223a7b22616d6f756e745f6d696e6f72223a31323939392c2263757272656e6379223a22555344227d2c2276223a317d",
+    "snapshot_hash": "84959128f40a1a0a2776c784cfe9bc14b10941e7b8d56f9aacd8c733a0591955",
+    "check_code": "84959128",
+    "challenge": {
+      "approve": "TDL_s6KqMxbQbuTqJzEGTA98A6P-8m9McS3OG291YNE",
+      "reject": "beb4pXTA7bWTfGttGdLqE6FEJXO8aPM-8MlU_TYk2Ns"
+    }
+  }
+}

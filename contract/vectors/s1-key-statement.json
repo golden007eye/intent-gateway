@@ -1,0 +1,285 @@
+{
+  "id": "S1",
+  "appendix": "F",
+  "description": "Key statement signed by the test root cloud-root-1, listing the current and next receipt and approval keys (d1, e1). TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "input": {
+    "root_kid": "cloud-root-1",
+    "root_seed_hex": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+    "key_seeds_hex": {
+      "cloud-receipt-202610": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+      "cloud-receipt-202611": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "cloud-approval-202610": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+      "cloud-approval-202611": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf"
+    },
+    "unsigned": {
+      "v": 1,
+      "keys": [
+        {
+          "kid": "cloud-receipt-202610",
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0"
+        },
+        {
+          "kid": "cloud-receipt-202611",
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "zRSzf5VulTGU_3-3Oz2B3MVh1hp1OAlLfD4aZD7l86o"
+        },
+        {
+          "kid": "cloud-approval-202610",
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "T9CZzNR9eJPf6ewkQU7LDZtUICMqrTDZHEZb4zy-ZcQ"
+        },
+        {
+          "kid": "cloud-approval-202611",
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g"
+        }
+      ],
+      "confirm_origin": "https://confirm.example",
+      "rp_id": "example",
+      "issued_at": "2026-09-01T00:00:00Z",
+      "expires_at": "2026-11-30T00:00:00Z"
+    }
+  },
+  "expected": {
+    "root_public_key_b64url": "F0VTtFbd38aQjsqxwQH-arIeK6oGF3lbfUOmNIKZP9U",
+    "signing_input": "intent-statement-v1\n{\"confirm_origin\":\"https://confirm.example\",\"expires_at\":\"2026-11-30T00:00:00Z\",\"issued_at\":\"2026-09-01T00:00:00Z\",\"keys\":[{\"crv\":\"Ed25519\",\"kid\":\"cloud-receipt-202610\",\"kty\":\"OKP\",\"x\":\"JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0\"},{\"crv\":\"Ed25519\",\"kid\":\"cloud-receipt-202611\",\"kty\":\"OKP\",\"x\":\"zRSzf5VulTGU_3-3Oz2B3MVh1hp1OAlLfD4aZD7l86o\"},{\"crv\":\"Ed25519\",\"kid\":\"cloud-approval-202610\",\"kty\":\"OKP\",\"x\":\"T9CZzNR9eJPf6ewkQU7LDZtUICMqrTDZHEZb4zy-ZcQ\"},{\"crv\":\"Ed25519\",\"kid\":\"cloud-approval-202611\",\"kty\":\"OKP\",\"x\":\"3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g\"}],\"kid\":\"cloud-root-1\",\"rp_id\":\"example\",\"v\":1}",
+    "statement": {
+      "v": 1,
+      "keys": [
+        {
+          "kid": "cloud-receipt-202610",
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0"
+        },
+        {
+          "kid": "cloud-receipt-202611",
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "zRSzf5VulTGU_3-3Oz2B3MVh1hp1OAlLfD4aZD7l86o"
+        },
+        {
+          "kid": "cloud-approval-202610",
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "T9CZzNR9eJPf6ewkQU7LDZtUICMqrTDZHEZb4zy-ZcQ"
+        },
+        {
+          "kid": "cloud-approval-202611",
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g"
+        }
+      ],
+      "confirm_origin": "https://confirm.example",
+      "rp_id": "example",
+      "issued_at": "2026-09-01T00:00:00Z",
+      "expires_at": "2026-11-30T00:00:00Z",
+      "kid": "cloud-root-1",
+      "signature": "7uVAPpejuknZAgHCd7H5fIgX1AJAYHLP8Gu9XWuUxkPF6B0ncPCAfEVogwg0Uwvuisgk4T_7Dk_fKlc7u5uhCg"
+    },
+    "valid_at": 1790251200
+  },
+  "refusals": [
+    {
+      "name": "expired (now = expires_at)",
+      "statement": {
+        "v": 1,
+        "keys": [
+          {
+            "kid": "cloud-receipt-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0"
+          },
+          {
+            "kid": "cloud-receipt-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "zRSzf5VulTGU_3-3Oz2B3MVh1hp1OAlLfD4aZD7l86o"
+          },
+          {
+            "kid": "cloud-approval-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "T9CZzNR9eJPf6ewkQU7LDZtUICMqrTDZHEZb4zy-ZcQ"
+          },
+          {
+            "kid": "cloud-approval-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g"
+          }
+        ],
+        "confirm_origin": "https://confirm.example",
+        "rp_id": "example",
+        "issued_at": "2026-09-01T00:00:00Z",
+        "expires_at": "2026-11-30T00:00:00Z",
+        "kid": "cloud-root-1",
+        "signature": "7uVAPpejuknZAgHCd7H5fIgX1AJAYHLP8Gu9XWuUxkPF6B0ncPCAfEVogwg0Uwvuisgk4T_7Dk_fKlc7u5uhCg"
+      },
+      "now": 1795996800
+    },
+    {
+      "name": "issued more than 5 minutes ahead",
+      "statement": {
+        "v": 1,
+        "keys": [
+          {
+            "kid": "cloud-receipt-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0"
+          },
+          {
+            "kid": "cloud-receipt-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "zRSzf5VulTGU_3-3Oz2B3MVh1hp1OAlLfD4aZD7l86o"
+          },
+          {
+            "kid": "cloud-approval-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "T9CZzNR9eJPf6ewkQU7LDZtUICMqrTDZHEZb4zy-ZcQ"
+          },
+          {
+            "kid": "cloud-approval-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g"
+          }
+        ],
+        "confirm_origin": "https://confirm.example",
+        "rp_id": "example",
+        "issued_at": "2026-09-01T00:00:00Z",
+        "expires_at": "2026-11-30T00:00:00Z",
+        "kid": "cloud-root-1",
+        "signature": "7uVAPpejuknZAgHCd7H5fIgX1AJAYHLP8Gu9XWuUxkPF6B0ncPCAfEVogwg0Uwvuisgk4T_7Dk_fKlc7u5uhCg"
+      },
+      "now": 1788220499
+    },
+    {
+      "name": "field changed after signing",
+      "statement": {
+        "v": 1,
+        "keys": [
+          {
+            "kid": "cloud-receipt-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0"
+          },
+          {
+            "kid": "cloud-receipt-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "zRSzf5VulTGU_3-3Oz2B3MVh1hp1OAlLfD4aZD7l86o"
+          },
+          {
+            "kid": "cloud-approval-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "T9CZzNR9eJPf6ewkQU7LDZtUICMqrTDZHEZb4zy-ZcQ"
+          },
+          {
+            "kid": "cloud-approval-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g"
+          }
+        ],
+        "confirm_origin": "https://confirm.example",
+        "rp_id": "evil.example",
+        "issued_at": "2026-09-01T00:00:00Z",
+        "expires_at": "2026-11-30T00:00:00Z",
+        "kid": "cloud-root-1",
+        "signature": "7uVAPpejuknZAgHCd7H5fIgX1AJAYHLP8Gu9XWuUxkPF6B0ncPCAfEVogwg0Uwvuisgk4T_7Dk_fKlc7u5uhCg"
+      },
+      "now": 1790251200
+    },
+    {
+      "name": "signed by a root key that is not pinned",
+      "statement": {
+        "v": 1,
+        "keys": [
+          {
+            "kid": "cloud-receipt-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0"
+          },
+          {
+            "kid": "cloud-receipt-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "zRSzf5VulTGU_3-3Oz2B3MVh1hp1OAlLfD4aZD7l86o"
+          },
+          {
+            "kid": "cloud-approval-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "T9CZzNR9eJPf6ewkQU7LDZtUICMqrTDZHEZb4zy-ZcQ"
+          },
+          {
+            "kid": "cloud-approval-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g"
+          }
+        ],
+        "confirm_origin": "https://confirm.example",
+        "rp_id": "example",
+        "issued_at": "2026-09-01T00:00:00Z",
+        "expires_at": "2026-11-30T00:00:00Z",
+        "kid": "cloud-root-1",
+        "signature": "_FcJOtgpGG8H09Aulc6L8kT5yMLzFZlQuBqJIz4-BSMewO56amptzwQ5UZ_57enfmpuheYCuqh4K4NJNVbFuBQ"
+      },
+      "now": 1790251200
+    },
+    {
+      "name": "kid not pinned",
+      "statement": {
+        "v": 1,
+        "keys": [
+          {
+            "kid": "cloud-receipt-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "JUO5L_EJVRFHatyDadtt3JM2ZaEZeN2hQE7hBmypVZ0"
+          },
+          {
+            "kid": "cloud-receipt-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "zRSzf5VulTGU_3-3Oz2B3MVh1hp1OAlLfD4aZD7l86o"
+          },
+          {
+            "kid": "cloud-approval-202610",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "T9CZzNR9eJPf6ewkQU7LDZtUICMqrTDZHEZb4zy-ZcQ"
+          },
+          {
+            "kid": "cloud-approval-202611",
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g"
+          }
+        ],
+        "confirm_origin": "https://confirm.example",
+        "rp_id": "example",
+        "issued_at": "2026-09-01T00:00:00Z",
+        "expires_at": "2026-11-30T00:00:00Z",
+        "kid": "cloud-root-2",
+        "signature": "7uVAPpejuknZAgHCd7H5fIgX1AJAYHLP8Gu9XWuUxkPF6B0ncPCAfEVogwg0Uwvuisgk4T_7Dk_fKlc7u5uhCg"
+      },
+      "now": 1790251200
+    }
+  ]
+}

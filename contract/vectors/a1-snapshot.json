@@ -1,0 +1,52 @@
+{
+  "id": "A1",
+  "appendix": "A",
+  "description": "Approval snapshot: continue_url_hash, JCS, snapshot_hash, check_code and approve/reject challenges.",
+  "input": {
+    "continue_url": "https://merchant-mock.example.workers.dev/checkout/ck_7Q2",
+    "snapshot": {
+      "v": 1,
+      "approval": "ap_TEST0001",
+      "nonce": "AAAAAAAAAAAAAAAAAAAAAA",
+      "merchant": {
+        "name": "Trail Supply Co (mock)",
+        "domain": "merchant-mock.example.workers.dev"
+      },
+      "item": {
+        "title": "Trail Runner 3",
+        "variant": "US 10 / Blue"
+      },
+      "quantity": 1,
+      "unit_price": {
+        "amount_minor": 8999,
+        "currency": "USD"
+      },
+      "shipping": {
+        "amount_minor": 500,
+        "currency": "USD"
+      },
+      "total": {
+        "amount_minor": 9499,
+        "currency": "USD"
+      },
+      "total_kind": "exact",
+      "ship_to": {
+        "country": "US",
+        "postal_prefix": "941"
+      },
+      "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+      "rule_version": "recheck-v1",
+      "expires_at": "2026-10-03T12:15:00Z"
+    }
+  },
+  "expected": {
+    "continue_url_hash": "sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f",
+    "jcs": "{\"approval\":\"ap_TEST0001\",\"continue_url_hash\":\"sha256:0025dccde87a4c3a064bea7a527ce1040f329dcccf3fce5d687bcb398fc0320f\",\"expires_at\":\"2026-10-03T12:15:00Z\",\"item\":{\"title\":\"Trail Runner 3\",\"variant\":\"US 10 / Blue\"},\"merchant\":{\"domain\":\"merchant-mock.example.workers.dev\",\"name\":\"Trail Supply Co (mock)\"},\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_prefix\":\"941\"},\"shipping\":{\"amount_minor\":500,\"currency\":\"USD\"},\"total\":{\"amount_minor\":9499,\"currency\":\"USD\"},\"total_kind\":\"exact\",\"unit_price\":{\"amount_minor\":8999,\"currency\":\"USD\"},\"v\":1}",
+    "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+    "check_code": "21f3edb0",
+    "challenge": {
+      "approve": "EgHQNheQla4tIpfHK3ypCdTVl1CQIlHbLfuaAZ2CpJM",
+      "reject": "1sHSAuRNfPzV9vEcsLn8d63NeKu4op7ITcZubH7JVqc"
+    }
+  }
+}

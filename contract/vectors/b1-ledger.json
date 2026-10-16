@@ -1,0 +1,20 @@
+{
+  "id": "B1",
+  "appendix": "B",
+  "description": "Genesis ledger entry hash over JCS(E).",
+  "input": {
+    "entry": {
+      "seq": 1,
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "approval": "ap_TEST0001",
+      "event": "approved",
+      "snapshot_hash": "21f3edb0f6cd98a6d81501b15366af7d52b60b6444b86cc4f94ce6be59a7ac49",
+      "credential_id": "Y3JlZC0x",
+      "rule_version": "recheck-v1",
+      "recorded_at": "2026-10-03T12:05:00Z"
+    }
+  },
+  "expected": {
+    "entry_hash": "da66f0d35b6b4aac1ce54a0945d104a5a8db003cebd072c478a10c020f076d4e"
+  }
+}

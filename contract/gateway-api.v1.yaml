@@ -1,0 +1,1162 @@
+openapi: 3.1.0
+info:
+  title: Intent Cloud Gateway API
+  version: 1.5.0
+  summary: The API the intent gateway uses to reach Intent Cloud for offers, carts and approvals.
+  description: |
+    Normative. The public subset of the Intent Cloud contract, for the intent gateway.
+
+    - **Request signatures.** Every request is signed with HTTP Message Signatures (RFC 9421) using
+      a self-certifying session key: keyid `gw-` + base64url of the raw Ed25519 public key, tag
+      `intent-gateway-v1` (Appendix C). There is no bearer token and no account. A shopping session
+      owns the carts and approvals it creates; another session gets 404 for them.
+    - **Receipts.** Every response the edge returns carries `Intent-Contract-Version`,
+      `Intent-Receipt` and `Intent-Receipt-Signature` (Appendix D): Intent Cloud's signed statement
+      of the request it received. A receipt means "received at Intent Cloud's edge" and nothing more.
+      Responses made by the network in front of the edge carry neither header.
+    - **Approvals.** A buyer approves a purchase with a passkey on the confirm page. The approval
+      status then carries an approval proof (Appendix E) that the gateway verifies itself.
+    - **Key statement.** Receipt and approval keys are listed in a statement signed by the host's
+      offline root key (Appendix F), served at `GET /v1/key-statement`.
+    - **Formats.** Money is integer minor units. The purchase snapshot is Appendix A, the approval
+      ledger entry Appendix B. JSON canonicalisation is RFC 8785 (JCS) with integers only.
+    - **Limits.** The edge accepts bodies up to 16 KiB (413 above) and rate-limits per IPv4 address
+      or IPv6 /64 (429). Items marked `x-provisional: true` may still change in a minor version.
+
+    Test vectors: `vectors/`. File sums: `SHA256SUMS`; `GET /v1/meta` reports the sha256 of that
+    file as `contract_sums_sha256`.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: https://staging-api.intentai.shop
+    description: Staging
+security:
+  - gatewaySignature: []
+tags:
+  - name: meta
+    description: Contract version, sums, limits and keys.
+  - name: catalog
+    description: Offers for a ready intent.
+  - name: carts
+    description: Carts and the approvals created from them.
+  - name: approvals
+    description: Approval status and proof, read by the session that created the approval.
+paths:
+  /v1/meta:
+    get:
+      operationId: getMeta
+      summary: Contract metadata
+      description: Cache for 5 minutes.
+      tags: [meta]
+      responses:
+        "200":
+          description: Contract metadata.
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Meta"
+              example:
+                contract_version: 1.5.0
+                contract_sums_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+                rule_versions: [recheck-v1]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/signature-keys:
+    get:
+      operationId: getSignatureKeys
+      summary: Intent Cloud's current signing keys
+      description: |
+        The current receipt and approval public keys (Ed25519, `kty=OKP`), for information. The
+        gateway trusts a key only when the root-signed key statement (Appendix F) lists it.
+      tags: [meta]
+      security: []
+      responses:
+        "200":
+          description: JWKS.
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Jwks"
+              example:
+                keys:
+                  - kty: OKP
+                    crv: Ed25519
+                    kid: cloud-receipt-202610
+                    x: A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg
+                    use: sig
+                    alg: EdDSA
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/key-statement:
+    get:
+      operationId: getKeyStatement
+      summary: The root-signed key statement
+      description: |
+        Served by the edge itself (Appendix F). Unsigned requests are accepted. The gateway verifies
+        the statement against the root key it pins for this host and fails closed after
+        `expires_at`.
+      tags: [meta]
+      security: []
+      responses:
+        "200":
+          description: The current key statement.
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KeyStatement"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/catalog/search:
+    post:
+      operationId: searchCatalog
+      summary: Search offers for an intent
+      description: |
+        Returns offers in allowed categories only; items in excluded categories are never returned.
+        Ranking is the caller's job. Each `offer_handle` is opaque and valid for 30 minutes.
+      tags: [catalog]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+            example:
+              category: running-shoes
+              must_haves: [trail]
+              budget_max: {amount_minor: 15000, currency: USD}
+              ship_to: {country: US, postal_code: "94110"}
+      responses:
+        "200":
+          description: Matching offers (possibly none).
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+              example:
+                offers:
+                  - offer_handle: of_EXAMPLE0001
+                    merchant: {name: Trail Supply Co, domain: shop.example}
+                    title: Trail Runner 3
+                    variant: US 10 / Blue
+                    price: {amount_minor: 8999, currency: USD}
+                    shipping: {amount_minor: 500, currency: USD}
+                    total_kind: exact
+                    availability: in_stock
+                    image_url: https://images.example/p01.webp
+                    delivery: {min_days: 3, max_days: 5}
+                    rating: {stars_x10: 46, count: 1240}
+                    returns: {free: true, days: 30}
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/carts:
+    post:
+      operationId: createCart
+      summary: Create a cart from an offer
+      description: |
+        The cart belongs to the signing session. There is no `continue_url` input; Intent Cloud sets
+        the merchant checkout. **Replay window (10 minutes):** the same session repeating the same
+        request (`offer_handle`, `quantity` and the ZIP's first 3 digits) gets the same cart again
+        while it is unexpired and its approval, if any, is still `pending`.
+      tags: [carts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CartRequest"
+            example:
+              offer_handle: of_EXAMPLE0001
+              quantity: 1
+              ship_to: {country: US, postal_code: "94110"}
+      responses:
+        "201":
+          description: The cart.
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cart"
+              example:
+                cart_handle: ct_EXAMPLE0001
+                merchant: {name: Trail Supply Co, domain: shop.example}
+                item: {title: Trail Runner 3, variant: US 10 / Blue}
+                quantity: 1
+                unit_price: {amount_minor: 8999, currency: USD}
+                shipping: {amount_minor: 500, currency: USD}
+                total: {amount_minor: 9499, currency: USD}
+                total_kind: exact
+                expires_at: "2026-10-03T12:15:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/carts/{cart_handle}/approvals:
+    post:
+      operationId: createApproval
+      summary: Create an approval for a cart
+      description: |
+        Same session as the cart. Creates a `pending` approval with its purchase snapshot
+        (Appendix A). Within 10 minutes of the cart's last new approval, a repeated request returns
+        that approval again while it is `pending`. Otherwise a new approval for the same cart
+        supersedes any earlier pending one, which becomes `expired`. The buyer approves it on the
+        confirm page at the key statement's `confirm_origin` + `approval_link_path`.
+      tags: [carts]
+      parameters:
+        - $ref: "#/components/parameters/CartHandle"
+      responses:
+        "201":
+          description: The pending approval.
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/approvals/{approval_handle}:
+    get:
+      operationId: getApproval
+      summary: Approval status and proof
+      description: |
+        Only the session that created the approval sees it; any other session gets 404. Once the
+        approval is `approved`, `handed_off` or `ordered`, the response carries `proof`
+        (Appendix E). `ordered` is what Intent Cloud reported, as the merchant told it.
+      tags: [approvals]
+      parameters:
+        - $ref: "#/components/parameters/ApprovalHandle"
+      responses:
+        "200":
+          description: The approval status.
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+components:
+  securitySchemes:
+    gatewaySignature:
+      type: apiKey
+      in: header
+      name: Signature
+      description: RFC 9421 signature with a `gw-` session key (Appendix C), sent with `Signature-Input` and `Content-Digest`.
+  headers:
+    IntentContractVersion:
+      description: The contract version Intent Cloud implements (semver). On every edge response.
+      required: true
+      schema:
+        type: string
+        pattern: ^\d+\.\d+\.\d+$
+      example: 1.5.0
+    IntentReceipt:
+      description: base64url (no padding) of JCS(`Receipt`) (Appendix D). On every edge response.
+      required: true
+      schema:
+        type: string
+        pattern: ^[A-Za-z0-9_-]+$
+        maxLength: 8192
+    IntentReceiptSignature:
+      description: base64url (no padding) Ed25519 signature over `"intent-receipt-v1\n" + JCS(Receipt)` (Appendix D).
+      required: true
+      schema:
+        $ref: "#/components/schemas/Ed25519Signature"
+    RetryAfter:
+      description: Seconds until the limit resets.
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+  parameters:
+    CartHandle:
+      name: cart_handle
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/CartHandle"
+    ApprovalHandle:
+      name: approval_handle
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/ApprovalHandle"
+  responses:
+    BadRequest:
+      description: Malformed request, schema violation or body digest mismatch.
+      headers:
+        Intent-Contract-Version:
+          $ref: "#/components/headers/IntentContractVersion"
+        Intent-Receipt:
+          $ref: "#/components/headers/IntentReceipt"
+        Intent-Receipt-Signature:
+          $ref: "#/components/headers/IntentReceiptSignature"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or invalid request signature (Appendix C).
+      headers:
+        Intent-Contract-Version:
+          $ref: "#/components/headers/IntentContractVersion"
+        Intent-Receipt:
+          $ref: "#/components/headers/IntentReceipt"
+        Intent-Receipt-Signature:
+          $ref: "#/components/headers/IntentReceiptSignature"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Unknown handle, or a handle owned by another session.
+      headers:
+        Intent-Contract-Version:
+          $ref: "#/components/headers/IntentContractVersion"
+        Intent-Receipt:
+          $ref: "#/components/headers/IntentReceipt"
+        Intent-Receipt-Signature:
+          $ref: "#/components/headers/IntentReceiptSignature"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Not enough stock, or the request conflicts with the current state.
+      headers:
+        Intent-Contract-Version:
+          $ref: "#/components/headers/IntentContractVersion"
+        Intent-Receipt:
+          $ref: "#/components/headers/IntentReceipt"
+        Intent-Receipt-Signature:
+          $ref: "#/components/headers/IntentReceiptSignature"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Gone:
+      description: The handle has expired.
+      headers:
+        Intent-Contract-Version:
+          $ref: "#/components/headers/IntentContractVersion"
+        Intent-Receipt:
+          $ref: "#/components/headers/IntentReceipt"
+        Intent-Receipt-Signature:
+          $ref: "#/components/headers/IntentReceiptSignature"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PayloadTooLarge:
+      description: The request body is over 16 KiB. Answered by the edge.
+      headers:
+        Intent-Contract-Version:
+          $ref: "#/components/headers/IntentContractVersion"
+        Intent-Receipt:
+          $ref: "#/components/headers/IntentReceipt"
+        Intent-Receipt-Signature:
+          $ref: "#/components/headers/IntentReceiptSignature"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooManyRequests:
+      description: A rate limit or quota is used up (`limit` names which).
+      x-provisional: true
+      headers:
+        Intent-Contract-Version:
+          $ref: "#/components/headers/IntentContractVersion"
+        Intent-Receipt:
+          $ref: "#/components/headers/IntentReceipt"
+        Intent-Receipt-Signature:
+          $ref: "#/components/headers/IntentReceiptSignature"
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RateLimited"
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          enum: [bad_request, digest_mismatch, unauthorized, forbidden, not_found, conflict, gone, too_large]
+        message:
+          type: string
+          maxLength: 200
+    RateLimited:
+      description: The body of a 429.
+      x-provisional: true
+      type: object
+      additionalProperties: false
+      required: [error, message, limit, retry_after_seconds]
+      properties:
+        error:
+          type: string
+          const: rate_limited
+        message:
+          type: string
+          maxLength: 200
+        limit:
+          description: Which limit was reached.
+          type: string
+          enum: [requests, carts, approvals, enrolments]
+        retry_after_seconds:
+          type: integer
+          minimum: 1
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount_minor, currency]
+      properties:
+        amount_minor:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        currency:
+          type: string
+          const: USD
+    ShipTo:
+      description: A US destination. Non-US is refused by the schema.
+      type: object
+      additionalProperties: false
+      required: [country, postal_code]
+      properties:
+        country:
+          type: string
+          const: US
+        postal_code:
+          type: string
+          pattern: ^[0-9]{5}$
+    ShipToArea:
+      type: object
+      additionalProperties: false
+      required: [country, postal_prefix]
+      properties:
+        country:
+          type: string
+          const: US
+        postal_prefix:
+          type: string
+          pattern: ^[0-9]{3}$
+    Merchant:
+      type: object
+      additionalProperties: false
+      required: [name, domain]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        domain:
+          type: string
+          minLength: 1
+          maxLength: 253
+    Item:
+      type: object
+      additionalProperties: false
+      required: [title, variant]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        variant:
+          type: string
+          minLength: 1
+          maxLength: 80
+    TotalKind:
+      type: string
+      enum: [exact, max]
+    ApprovalState:
+      type: string
+      enum: [pending, approved, rejected, expired, handed_off, ordered]
+    Timestamp:
+      description: RFC 3339 UTC with seconds and `Z`.
+      type: string
+      pattern: ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$
+    OfferHandle:
+      type: string
+      pattern: ^of_[A-Za-z0-9_-]{4,64}$
+    CartHandle:
+      type: string
+      pattern: ^ct_[A-Za-z0-9_-]{4,64}$
+    ApprovalHandle:
+      type: string
+      pattern: ^ap_[A-Za-z0-9_-]{4,64}$
+    ImageUrl:
+      description: Optional product image, https. Display only; not in the snapshot.
+      type: string
+      maxLength: 512
+      pattern: ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9._~/-]*$
+    ContractSums:
+      description: sha256 (64 lowercase hex) of the `SHA256SUMS` file of this contract.
+      type: string
+      pattern: ^[0-9a-f]{64}$
+    Meta:
+      description: |
+        Contract metadata for the gateway. The confirm origin and the passkey rp_id come from the
+        key statement (Appendix F), not from here.
+      type: object
+      additionalProperties: false
+      required: [contract_version, contract_sums_sha256, rule_versions]
+      properties:
+        contract_version:
+          type: string
+          pattern: ^\d+\.\d+\.\d+$
+        contract_sums_sha256:
+          $ref: "#/components/schemas/ContractSums"
+        rule_versions:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            minLength: 1
+        limits:
+          $ref: "#/components/schemas/GatewayLimits"
+        enrol_origin:
+          description: Origin of the passkey enrolment page for buyers who use the gateway.
+          x-provisional: true
+          type: string
+          pattern: ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$
+    GatewayLimits:
+      description: The limits that apply to gateway sessions, for display. Intent Cloud enforces them.
+      x-provisional: true
+      type: object
+      additionalProperties: false
+      required: [requests_per_minute, carts_per_hour, carts_per_hour_passkey, approvals_per_day]
+      properties:
+        requests_per_minute:
+          description: Edge requests per IPv4 address, or per IPv6 /64.
+          type: integer
+          minimum: 1
+        carts_per_hour:
+          description: Carts per address key without a passkey-approved approval in the last 24 h.
+          type: integer
+          minimum: 1
+        carts_per_hour_passkey:
+          description: Carts per address key with a passkey-approved approval in the last 24 h.
+          type: integer
+          minimum: 1
+        approvals_per_day:
+          description: Approvals per approving buyer.
+          type: integer
+          minimum: 1
+    Jwk:
+      type: object
+      additionalProperties: false
+      required: [kty, crv, kid, x]
+      properties:
+        kty:
+          type: string
+          const: OKP
+        crv:
+          type: string
+          const: Ed25519
+        kid:
+          type: string
+          minLength: 1
+        x:
+          description: Raw public key, base64url without padding.
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
+        use:
+          type: string
+          const: sig
+        alg:
+          type: string
+          const: EdDSA
+    Jwks:
+      type: object
+      additionalProperties: false
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/Jwk"
+    SearchRequest:
+      type: object
+      additionalProperties: false
+      required: [ship_to]
+      properties:
+        category:
+          description: Slug, lower-case, whitespace runs as one hyphen, max 60 (running-shoes).
+          type: string
+          minLength: 1
+          maxLength: 60
+        product:
+          description: Exact product (brand + model / variant) or a GTIN.
+          type: string
+          minLength: 1
+          maxLength: 200
+        must_haves:
+          description: Feature slugs, all must match. A size (size-10) matches the variant.
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            minLength: 1
+            maxLength: 60
+        budget_max:
+          $ref: "#/components/schemas/Money"
+        ship_to:
+          $ref: "#/components/schemas/ShipTo"
+    Offer:
+      type: object
+      additionalProperties: false
+      required: [offer_handle, merchant, title, variant, price, shipping, total_kind, availability]
+      properties:
+        offer_handle:
+          $ref: "#/components/schemas/OfferHandle"
+        merchant:
+          $ref: "#/components/schemas/Merchant"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        variant:
+          type: string
+          minLength: 1
+          maxLength: 80
+        price:
+          $ref: "#/components/schemas/Money"
+        shipping:
+          $ref: "#/components/schemas/Money"
+        total_kind:
+          $ref: "#/components/schemas/TotalKind"
+        availability:
+          description: Both values are purchasable; low_stock means 3 or fewer left.
+          type: string
+          enum: [in_stock, low_stock]
+        image_url:
+          $ref: "#/components/schemas/ImageUrl"
+        delivery:
+          $ref: "#/components/schemas/DeliveryEstimate"
+        rating:
+          $ref: "#/components/schemas/Rating"
+        returns:
+          $ref: "#/components/schemas/ReturnsPolicy"
+    DeliveryEstimate:
+      x-provisional: true
+      description: |
+        Optional delivery estimate: calendar days from the order to delivery, as a window;
+        min_days <= max_days. Display only: not in the snapshot. Absent when unknown.
+      type: object
+      additionalProperties: false
+      required: [min_days, max_days]
+      properties:
+        min_days:
+          type: integer
+          minimum: 0
+          maximum: 90
+        max_days:
+          type: integer
+          minimum: 0
+          maximum: 90
+    Rating:
+      x-provisional: true
+      description: |
+        Optional product rating: the average star rating times ten (46 is 4.6 of 5 stars) and the
+        number of reviews behind it. Display only: not in the snapshot. Absent when there are none.
+      type: object
+      additionalProperties: false
+      required: [stars_x10, count]
+      properties:
+        stars_x10:
+          type: integer
+          minimum: 10
+          maximum: 50
+        count:
+          type: integer
+          minimum: 1
+          maximum: 100000000
+    ReturnsPolicy:
+      x-provisional: true
+      description: |
+        Optional returns policy: returns are accepted within `days` of delivery; `free` means the
+        buyer pays no return shipping. Display only: not in the snapshot. Absent when unknown.
+      type: object
+      additionalProperties: false
+      required: [free, days]
+      properties:
+        free:
+          type: boolean
+        days:
+          type: integer
+          minimum: 1
+          maximum: 365
+    SearchResponse:
+      type: object
+      additionalProperties: false
+      required: [offers]
+      properties:
+        offers:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/Offer"
+    CartRequest:
+      type: object
+      additionalProperties: false
+      required: [offer_handle, quantity, ship_to]
+      properties:
+        offer_handle:
+          $ref: "#/components/schemas/OfferHandle"
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 3
+        ship_to:
+          $ref: "#/components/schemas/ShipTo"
+    Cart:
+      type: object
+      additionalProperties: false
+      required: [cart_handle, merchant, item, quantity, unit_price, shipping, total, total_kind, expires_at]
+      properties:
+        cart_handle:
+          $ref: "#/components/schemas/CartHandle"
+        merchant:
+          $ref: "#/components/schemas/Merchant"
+        item:
+          $ref: "#/components/schemas/Item"
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 3
+        unit_price:
+          $ref: "#/components/schemas/Money"
+        shipping:
+          $ref: "#/components/schemas/Money"
+        total:
+          $ref: "#/components/schemas/Money"
+        total_kind:
+          $ref: "#/components/schemas/TotalKind"
+        expires_at:
+          $ref: "#/components/schemas/Timestamp"
+        image_url:
+          $ref: "#/components/schemas/ImageUrl"
+    Snapshot:
+      description: The purchase snapshot, exactly as Appendix A defines it.
+      type: object
+      additionalProperties: false
+      required:
+        [v, approval, nonce, merchant, item, quantity, unit_price, shipping, total, total_kind, ship_to, continue_url_hash, rule_version, expires_at]
+      properties:
+        v:
+          type: integer
+          const: 1
+        approval:
+          type: string
+          minLength: 1
+        nonce:
+          description: Snapshot salt, 16 bytes base64url without padding.
+          type: string
+          pattern: ^[A-Za-z0-9_-]{21}[AQgw]$
+        merchant:
+          $ref: "#/components/schemas/Merchant"
+        item:
+          $ref: "#/components/schemas/Item"
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 3
+        unit_price:
+          $ref: "#/components/schemas/Money"
+        shipping:
+          $ref: "#/components/schemas/Money"
+        total:
+          $ref: "#/components/schemas/Money"
+        total_kind:
+          $ref: "#/components/schemas/TotalKind"
+        ship_to:
+          $ref: "#/components/schemas/ShipToArea"
+        continue_url_hash:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+        rule_version:
+          type: string
+          minLength: 1
+        expires_at:
+          $ref: "#/components/schemas/Timestamp"
+    ApprovalCreated:
+      type: object
+      additionalProperties: false
+      required: [approval_handle, approval_link_path, snapshot, snapshot_hash, check_code, state, expires_at]
+      properties:
+        approval_handle:
+          $ref: "#/components/schemas/ApprovalHandle"
+        approval_link_path:
+          description: Path of the approval link on the confirm origin. It grants nothing by itself.
+          type: string
+          pattern: ^/c/[A-Za-z0-9_-]{16,64}$
+        snapshot:
+          $ref: "#/components/schemas/Snapshot"
+        snapshot_hash:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        check_code:
+          description: First 8 characters of the snapshot hash. A visual cross-check only.
+          type: string
+          pattern: ^[0-9a-f]{8}$
+        state:
+          $ref: "#/components/schemas/ApprovalState"
+        expires_at:
+          $ref: "#/components/schemas/Timestamp"
+    ApprovalDisplay:
+      type: object
+      additionalProperties: false
+      required: [merchant, title, total]
+      properties:
+        merchant:
+          type: string
+          minLength: 1
+          maxLength: 80
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        total:
+          $ref: "#/components/schemas/Money"
+        image_url:
+          $ref: "#/components/schemas/ImageUrl"
+    ApprovalStatus:
+      type: object
+      additionalProperties: false
+      required: [state, display]
+      properties:
+        state:
+          $ref: "#/components/schemas/ApprovalState"
+        display:
+          $ref: "#/components/schemas/ApprovalDisplay"
+        order_number:
+          description: Present once the approval is `ordered`.
+          type: string
+          minLength: 1
+          maxLength: 40
+        proof:
+          $ref: "#/components/schemas/ApprovalProof"
+    Base64Url:
+      description: Base64url without padding.
+      type: string
+      pattern: ^[A-Za-z0-9_-]+$
+      minLength: 1
+      maxLength: 8192
+    Ed25519Signature:
+      description: An Ed25519 signature (64 bytes), base64url without padding.
+      type: string
+      pattern: ^[A-Za-z0-9_-]{85}[AQgw]$
+    GatewayKeyId:
+      description: A session keyid, `gw-` + base64url without padding of the raw 32-byte Ed25519 public key.
+      type: string
+      pattern: ^gw-[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$
+    Receipt:
+      description: |
+        What Intent Cloud's edge received (Appendix D). Sent as the `Intent-Receipt` header and
+        signed in `Intent-Receipt-Signature`.
+      type: object
+      additionalProperties: false
+      required: [v, kid, request, status, received_at]
+      properties:
+        v:
+          type: integer
+          const: 1
+        kid:
+          description: The receipt key, listed in the key statement (Appendix F).
+          type: string
+          pattern: ^cloud-receipt-[0-9]{6}$
+        request:
+          $ref: "#/components/schemas/ReceiptRequest"
+        status:
+          description: The HTTP status of the response that carries this receipt.
+          type: integer
+          minimum: 100
+          maximum: 599
+        received_at:
+          $ref: "#/components/schemas/Timestamp"
+    ReceiptRequest:
+      description: |
+        The request as the edge received it. `content_digest` is computed by the edge over the body
+        bytes it received. `keyid`, `nonce` and `created` are present together, exactly when the
+        request's `Signature-Input` parses under the gateway profile (Appendix C), with the values as
+        sent; the signature itself may still be invalid.
+      type: object
+      additionalProperties: false
+      required: [method, path, content_digest]
+      properties:
+        method:
+          type: string
+          pattern: ^[A-Z]{1,16}$
+        path:
+          description: The `@path` received, without query or fragment.
+          type: string
+          maxLength: 2048
+          pattern: ^/[^?#\s]*$
+        content_digest:
+          description: RFC 9530 `sha-256` Content-Digest value of the received body (also when empty).
+          type: string
+          pattern: ^sha-256=:[A-Za-z0-9+/]{43}=:$
+        keyid:
+          $ref: "#/components/schemas/GatewayKeyId"
+        nonce:
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[A-Za-z0-9+/_=-]+$
+        created:
+          type: integer
+          minimum: 0
+          maximum: 999999999999
+    ApprovalProof:
+      description: |
+        Evidence of the buyer's passkey approval (Appendix E), signed by Intent Cloud over
+        `"intent-approval-v1\n" + JCS(proof without cloud_signature)`. The gateway re-verifies the
+        passkey assertion itself. It never names the buyer.
+      type: object
+      additionalProperties: false
+      required: [v, approval_handle, snapshot, snapshot_hash, assertion, credential_public_key, ledger, issued_at, kid, cloud_signature]
+      properties:
+        v:
+          type: integer
+          const: 1
+        approval_handle:
+          $ref: "#/components/schemas/ApprovalHandle"
+        snapshot:
+          $ref: "#/components/schemas/Snapshot"
+        snapshot_hash:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        assertion:
+          $ref: "#/components/schemas/WebAuthnAssertion"
+        credential_public_key:
+          $ref: "#/components/schemas/CredentialPublicKey"
+        ledger:
+          $ref: "#/components/schemas/LedgerRef"
+        issued_at:
+          $ref: "#/components/schemas/Timestamp"
+        kid:
+          description: The approval key, listed in the key statement (Appendix F).
+          type: string
+          pattern: ^cloud-approval-[0-9]{6}$
+        cloud_signature:
+          $ref: "#/components/schemas/Ed25519Signature"
+    WebAuthnAssertion:
+      description: The passkey assertion as the authenticator returned it, base64url without padding.
+      type: object
+      additionalProperties: false
+      required: [credential_id, authenticator_data, client_data_json, signature]
+      properties:
+        credential_id:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{1,1024}$
+        authenticator_data:
+          $ref: "#/components/schemas/Base64Url"
+        client_data_json:
+          $ref: "#/components/schemas/Base64Url"
+        signature:
+          $ref: "#/components/schemas/Base64Url"
+    CredentialPublicKey:
+      description: The passkey's public key as a JWK (ES256 or RS256, the only algorithms accepted).
+      oneOf:
+        - $ref: "#/components/schemas/Es256Jwk"
+        - $ref: "#/components/schemas/Rs256Jwk"
+    Es256Jwk:
+      type: object
+      additionalProperties: false
+      required: [kty, crv, x, y, alg]
+      properties:
+        kty:
+          type: string
+          const: EC
+        crv:
+          type: string
+          const: P-256
+        x:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
+        y:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
+        alg:
+          type: string
+          const: ES256
+    Rs256Jwk:
+      type: object
+      additionalProperties: false
+      required: [kty, n, e, alg]
+      properties:
+        kty:
+          type: string
+          const: RSA
+        n:
+          description: Modulus, 2048 to 4096 bits.
+          type: string
+          pattern: ^[A-Za-z0-9_-]{342,683}$
+        e:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{1,8}$
+        alg:
+          type: string
+          const: RS256
+    LedgerRef:
+      description: The approval's `approved` entry in Intent Cloud's approval ledger (Appendix B).
+      type: object
+      additionalProperties: false
+      required: [seq, entry_hash]
+      properties:
+        seq:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        entry_hash:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+    KeyStatement:
+      description: |
+        The root-signed list of Intent Cloud's receipt and approval keys for one host (Appendix F).
+        Signed with the offline root key over `"intent-statement-v1\n" + JCS(statement without
+        signature)`.
+      type: object
+      additionalProperties: false
+      required: [v, kid, keys, confirm_origin, rp_id, issued_at, expires_at, signature]
+      properties:
+        v:
+          type: integer
+          const: 1
+        kid:
+          description: The root key that signed this statement, pinned by the gateway per host.
+          type: string
+          pattern: ^cloud-root-[0-9]{1,4}$
+        keys:
+          type: array
+          minItems: 2
+          maxItems: 4
+          items:
+            $ref: "#/components/schemas/StatementKey"
+        confirm_origin:
+          description: The origin of the confirm page whose passkey assertions the gateway accepts.
+          type: string
+          pattern: ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$
+        rp_id:
+          description: The WebAuthn relying-party id of those passkeys.
+          type: string
+          pattern: ^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$
+        issued_at:
+          $ref: "#/components/schemas/Timestamp"
+        expires_at:
+          $ref: "#/components/schemas/Timestamp"
+        signature:
+          $ref: "#/components/schemas/Ed25519Signature"
+    StatementKey:
+      description: A receipt or approval key; its use is the kid's prefix.
+      type: object
+      additionalProperties: false
+      required: [kid, kty, crv, x]
+      properties:
+        kid:
+          type: string
+          pattern: ^cloud-(receipt|approval)-[0-9]{6}$
+        kty:
+          type: string
+          const: OKP
+        crv:
+          type: string
+          const: Ed25519
+        x:
+          description: Raw public key, base64url without padding.
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$

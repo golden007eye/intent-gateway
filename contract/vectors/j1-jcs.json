@@ -1,0 +1,102 @@
+{
+  "id": "J1",
+  "appendix": "A",
+  "description": "RFC 8785 (JCS) edge cases under the integer-only profile. Each `value` is canonicalised to `canonical` (UTF-8 bytes in `canonical_utf8_hex`); each refusal must be refused.",
+  "cases": [
+    {
+      "name": "keys sorted by UTF-16 code units",
+      "value": {
+        "\ud83d\ude00": 1,
+        "\ufb33": 2,
+        "\u20ac": 3,
+        "\u0080": 4,
+        "a": 5,
+        "B": 6
+      },
+      "canonical": "{\"B\":6,\"a\":5,\"\u0080\":4,\"\u20ac\":3,\"\ud83d\ude00\":1,\"\ufb33\":2}",
+      "canonical_utf8_hex": "7b2242223a362c2261223a352c22c280223a342c22e282ac223a332c22f09f9880223a312c22efacb3223a327d"
+    },
+    {
+      "name": "control characters",
+      "value": "\u0000\u0001\b\t\n\u000b\f\r\u001f",
+      "canonical": "\"\\u0000\\u0001\\b\\t\\n\\u000b\\f\\r\\u001f\"",
+      "canonical_utf8_hex": "225c75303030305c75303030315c625c745c6e5c75303030625c665c725c753030316622"
+    },
+    {
+      "name": "quote, backslash, slash",
+      "value": "\"\\/",
+      "canonical": "\"\\\"\\\\/\"",
+      "canonical_utf8_hex": "225c225c5c2f22"
+    },
+    {
+      "name": "DEL, U+2028, U+2029 and astral characters are not escaped",
+      "value": "\u007f\u2028\u2029\ud834\udd1e",
+      "canonical": "\"\u007f\u2028\u2029\ud834\udd1e\"",
+      "canonical_utf8_hex": "227fe280a8e280a9f09d849e22"
+    },
+    {
+      "name": "nested arrays and objects",
+      "value": {
+        "b": [
+          1,
+          true,
+          null,
+          "x",
+          [],
+          {}
+        ],
+        "a": false,
+        "c": {
+          "z": {},
+          "y": []
+        }
+      },
+      "canonical": "{\"a\":false,\"b\":[1,true,null,\"x\",[],{}],\"c\":{\"y\":[],\"z\":{}}}",
+      "canonical_utf8_hex": "7b2261223a66616c73652c2262223a5b312c747275652c6e756c6c2c2278222c5b5d2c7b7d5d2c2263223a7b2279223a5b5d2c227a223a7b7d7d7d"
+    },
+    {
+      "name": "safe integer limits",
+      "value": [
+        9007199254740991,
+        -9007199254740991,
+        0,
+        0
+      ],
+      "canonical": "[9007199254740991,-9007199254740991,0,0]",
+      "canonical_utf8_hex": "5b393030373139393235343734303939312c2d393030373139393235343734303939312c302c305d"
+    },
+    {
+      "name": "empty containers",
+      "value": {
+        "": [],
+        "e": {}
+      },
+      "canonical": "{\"\":[],\"e\":{}}",
+      "canonical_utf8_hex": "7b22223a5b5d2c2265223a7b7d7d"
+    }
+  ],
+  "refusals": [
+    {
+      "name": "non-integer number",
+      "value": 1.5
+    },
+    {
+      "name": "integer above 2^53 - 1",
+      "value": 9007199254740992
+    },
+    {
+      "name": "integer below -(2^53 - 1)",
+      "value": -9007199254740992
+    },
+    {
+      "name": "lone surrogate in a string",
+      "value": "\ud800"
+    },
+    {
+      "name": "lone surrogate in a key",
+      "value": {
+        "\udc00": 1
+      }
+    }
+  ]
+}

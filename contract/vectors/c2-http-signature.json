@@ -1,0 +1,94 @@
+{
+  "id": "C2",
+  "appendix": "C",
+  "description": "Gateway profile: RFC 9421 Ed25519 signature with a self-certifying gw- session keyid and tag intent-gateway-v1, frozen clock. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "input": {
+    "ed25519_seed_hex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "method": "POST",
+    "path": "/v1/carts",
+    "body": "{\"offer_handle\":\"of_TEST0001\",\"quantity\":1,\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"}}",
+    "created": 1790251200,
+    "nonce": "bm9uY2UtdGVzdC0wMDAwMg=="
+  },
+  "expected": {
+    "public_key_b64url": "Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc",
+    "keyid": "gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc",
+    "content_digest": "sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:",
+    "signature_params": "(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+    "signature_base": "\"@method\": POST\n\"@path\": /v1/carts\n\"content-digest\": sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:\n\"@signature-params\": (\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+    "signature_input_header": "sig1=(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+    "signature_header": "sig1=:u3IUXVI4a4ABktvreV4U0oh3rzG0WcMhMB6H5Qk7+nCdP0xF52UwK2Is5yNPB2NAPkmB9tmISOgvwVoDuHiZCA==:",
+    "replay": {
+      "now": 1790251230,
+      "status": 401
+    }
+  },
+  "refusals": [
+    {
+      "name": "another tag (intent-gateway-v0), correctly signed",
+      "headers": {
+        "Content-Digest": "sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:",
+        "Signature-Input": "sig1=(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v0\"",
+        "Signature": "sig1=:l0bSSlNIISdxQCLCWsZVXBAdRjsxHaqMMUvFaoE3aA4S2Mwk3tc+ZBGx1a9Q7nMRDN4nXf/e+223LZr2Ys9iBw==:"
+      },
+      "body": "{\"offer_handle\":\"of_TEST0001\",\"quantity\":1,\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"}}",
+      "now": 1790251200,
+      "status": 401
+    },
+    {
+      "name": "body changed after signing",
+      "headers": {
+        "Content-Digest": "sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:",
+        "Signature-Input": "sig1=(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+        "Signature": "sig1=:u3IUXVI4a4ABktvreV4U0oh3rzG0WcMhMB6H5Qk7+nCdP0xF52UwK2Is5yNPB2NAPkmB9tmISOgvwVoDuHiZCA==:"
+      },
+      "body": "{\"offer_handle\":\"of_TEST0001\",\"quantity\":3,\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"}}",
+      "now": 1790251200,
+      "status": 400
+    },
+    {
+      "name": "created older than 60 s",
+      "headers": {
+        "Content-Digest": "sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:",
+        "Signature-Input": "sig1=(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+        "Signature": "sig1=:u3IUXVI4a4ABktvreV4U0oh3rzG0WcMhMB6H5Qk7+nCdP0xF52UwK2Is5yNPB2NAPkmB9tmISOgvwVoDuHiZCA==:"
+      },
+      "body": "{\"offer_handle\":\"of_TEST0001\",\"quantity\":1,\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"}}",
+      "now": 1790251261,
+      "status": 401
+    },
+    {
+      "name": "created more than 5 s ahead",
+      "headers": {
+        "Content-Digest": "sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:",
+        "Signature-Input": "sig1=(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+        "Signature": "sig1=:u3IUXVI4a4ABktvreV4U0oh3rzG0WcMhMB6H5Qk7+nCdP0xF52UwK2Is5yNPB2NAPkmB9tmISOgvwVoDuHiZCA==:"
+      },
+      "body": "{\"offer_handle\":\"of_TEST0001\",\"quantity\":1,\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"}}",
+      "now": 1790251194,
+      "status": 401
+    },
+    {
+      "name": "keyid with non-zero padding bits (not canonical)",
+      "headers": {
+        "Content-Digest": "sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:",
+        "Signature-Input": "sig1=(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdB\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+        "Signature": "sig1=:u3IUXVI4a4ABktvreV4U0oh3rzG0WcMhMB6H5Qk7+nCdP0xF52UwK2Is5yNPB2NAPkmB9tmISOgvwVoDuHiZCA==:"
+      },
+      "body": "{\"offer_handle\":\"of_TEST0001\",\"quantity\":1,\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"}}",
+      "now": 1790251200,
+      "status": 401
+    },
+    {
+      "name": "signature by another key under this keyid",
+      "headers": {
+        "Content-Digest": "sha-256=:eDQw/VfNieIb0qcU8n2RwQluGU9FYtcOrwNRU6KP9/k=:",
+        "Signature-Input": "sig1=(\"@method\" \"@path\" \"content-digest\");created=1790251200;nonce=\"bm9uY2UtdGVzdC0wMDAwMg==\";keyid=\"gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc\";alg=\"ed25519\";tag=\"intent-gateway-v1\"",
+        "Signature": "sig1=:YT0wy+4iuRAh2qhdUs8wgPbhyAuK8nRRuJ3ZEwtE6hRuIfYtrLG/iIlMlb6J/O8S9FkuZaOp4QLgpmgKjFHwCQ==:"
+      },
+      "body": "{\"offer_handle\":\"of_TEST0001\",\"quantity\":1,\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"}}",
+      "now": 1790251200,
+      "status": 401
+    }
+  ]
+}
