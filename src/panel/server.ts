@@ -1,4 +1,5 @@
-// The read-only panel: a GET-only HTTP server on 127.0.0.1 that serves three static assets and the chain.
+// The read-only panel: a GET-only HTTP server on 127.0.0.1 that serves the page (rendered from the chain on each
+// request), its stylesheet and script, and the chain as JSON.
 //
 // It never writes: there is no route that takes input, every non-GET is 405, and the store is read with readChain,
 // which opens no lease. The Host check (421) stops a DNS-rebinding page from reading the log through the browser.
@@ -8,13 +9,16 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import type { Config } from "../config/index.ts";
 import { readChain } from "../store/index.ts";
-import { APP_CSS, APP_JS, INDEX_HTML } from "./assets.ts";
+import { APP_CSS, APP_JS } from "./assets.ts";
+import { buildModel, type Mode, type PolicyInfo, type VerifyResult } from "./model.ts";
+import { renderPage } from "./render.ts";
 import { buildView } from "./view.ts";
 
 export const PANEL_HOST = "127.0.0.1";
 
+/** No inline script or style, no image (the logo and icons are inline SVG), no form, no frame, nothing from elsewhere. */
 export const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; " +
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'self'; " +
   "base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 const HEADERS = {
@@ -22,14 +26,14 @@ const HEADERS = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
   "cache-control": "no-store",
+  "x-frame-options": "DENY",
 } as const;
 
 const STATIC: Readonly<Record<string, readonly [type: string, body: string]>> = {
-  "/": ["text/html; charset=utf-8", INDEX_HTML],
   "/app.js": ["text/javascript; charset=utf-8", APP_JS],
   "/app.css": ["text/css; charset=utf-8", APP_CSS],
 };
-const ROUTES = new Set([...Object.keys(STATIC), "/entries.json"]);
+const ROUTES = new Set([...Object.keys(STATIC), "/", "/entries.json"]);
 
 export interface PanelOptions {
   /** 0 picks a free port. */
@@ -38,6 +42,17 @@ export interface PanelOptions {
   host?: string;
   /** The command that runs this gateway (config's INTENT), so the page's hints paste as is. Defaults to `intent`. */
   intent?: string;
+  /** Which chain this is: `panel --demo` reads the demo chain (DEMO pill), otherwise REAL. Defaults to what the chain says. */
+  mode?: Mode;
+  /** Reads the active policy for the Policy view and the daily limit; absent, those say no policy was given. */
+  policy?: () => Promise<PolicyInfo>;
+  /**
+   * Runs `intent verify`'s chain checks (read-only, offline) for the Verify view. The panel runs it again only when
+   * the chain's head changes.
+   */
+  verify?: () => Promise<VerifyResult>;
+  /** Milliseconds since the epoch; defaults to Date.now. */
+  now?: () => number;
 }
 
 export interface Panel {
@@ -58,10 +73,13 @@ export async function startPanel(source: string | Pick<Config, "dataDir">, opts:
   }
   assertPrivate(dataDir);
   const intent = opts.intent ?? "intent";
+  const context: Context = { dataDir, intent, opts, verified: null };
 
   let allowedHosts: ReadonlySet<string> = new Set();
   const server = createServer((req, res) => {
-    handle(req, res, dataDir, allowedHosts, intent);
+    handle(req, res, context, allowedHosts).catch(() => {
+      if (!res.headersSent) send(res, 500, "text/plain; charset=utf-8", "the panel failed\n");
+    });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -113,7 +131,15 @@ function mode(value: number): string {
   return (value & 0o777).toString(8).padStart(4, "0");
 }
 
-function handle(req: IncomingMessage, res: ServerResponse, dataDir: string, allowedHosts: ReadonlySet<string>, intent: string): void {
+interface Context {
+  readonly dataDir: string;
+  readonly intent: string;
+  readonly opts: PanelOptions;
+  /** The last verify result and the chain head it was run for. */
+  verified: { key: string; result: Promise<VerifyResult> } | null;
+}
+
+async function handle(req: IncomingMessage, res: ServerResponse, ctx: Context, allowedHosts: ReadonlySet<string>): Promise<void> {
   if (!allowedHosts.has((req.headers.host ?? "").toLowerCase())) {
     send(res, 421, "text/plain; charset=utf-8", "misdirected request: use the panel's own address\n");
     return;
@@ -135,7 +161,7 @@ function handle(req: IncomingMessage, res: ServerResponse, dataDir: string, allo
   }
   let items: unknown[];
   try {
-    items = readChain(dataDir);
+    items = readChain(ctx.dataDir);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       send(res, 500, "text/plain; charset=utf-8", "could not read the log\n");
@@ -143,8 +169,40 @@ function handle(req: IncomingMessage, res: ServerResponse, dataDir: string, allo
     }
     items = [];
   }
-  const view = buildView(items);
-  send(res, 200, "application/json; charset=utf-8", JSON.stringify({ chain: view.chain, entries: items, view, intent }));
+  if (path === "/entries.json") {
+    const view = buildView(items);
+    send(res, 200, "application/json; charset=utf-8", JSON.stringify({ chain: view.chain, entries: items, view, intent: ctx.intent }));
+    return;
+  }
+  send(res, 200, "text/html; charset=utf-8", renderPage(await model(ctx, items)));
+}
+
+async function model(ctx: Context, items: readonly unknown[]): Promise<ReturnType<typeof buildModel>> {
+  const { opts } = ctx;
+  let policy: PolicyInfo | null = null;
+  let policyError: string | undefined;
+  if (opts.policy === undefined) policyError = "no policy was given to the panel";
+  else {
+    try {
+      policy = await opts.policy();
+    } catch (error) {
+      policyError = `the active policy could not be read: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  let verify: VerifyResult | null = null;
+  if (opts.verify !== undefined) {
+    const last = items.at(-1) as { hash?: unknown } | undefined;
+    const key = `${String(items.length)}:${typeof last?.hash === "string" ? last.hash : ""}`;
+    if (ctx.verified?.key !== key) ctx.verified = { key, result: opts.verify() };
+    try {
+      verify = await ctx.verified.result;
+    } catch {
+      ctx.verified = null;
+    }
+  }
+  const first = items[0] as { kind?: unknown; body?: { mode?: unknown } } | undefined;
+  const mode: Mode = opts.mode ?? (first?.kind === "session" && first.body?.mode === "demo" ? "demo" : "real");
+  return buildModel({ items, now: (opts.now ?? Date.now)(), mode, intent: ctx.intent, policy, ...(policyError === undefined ? {} : { policyError }), verify });
 }
 
 function send(res: ServerResponse, status: number, type: string, body: string): void {

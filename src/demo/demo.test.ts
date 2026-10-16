@@ -150,6 +150,8 @@ describe("demo flow", () => {
     expect(page.body).toContain("ZIP 941xx");
     expect(page.body).toContain(DEMO_BANNER);
     expect(page.body).toContain(`cat ${demo.codeFile}`);
+    // The read-the-code hint is folded away behind a disclosure, so it does not clutter the card.
+    expect(page.body).toMatch(/<details class="hint more"><summary>Can't see the code\?<\/summary><p>If your agent started the gateway, read the code with <code class="cmd">cat [^<]+<\/code><\/p><\/details>/);
     const done = await post(link, { csrf: csrfOf(page.body), action: "approve", code: demo.code }, { origin: new URL(link).origin, "sec-fetch-site": "same-origin" });
     expect(done.status).toBe(200);
     expect(done.body).toContain("<h1>Approved</h1><p>Approved with the demo passkey. Nothing is bought in demo mode.</p>");
@@ -161,7 +163,10 @@ describe("demo flow", () => {
     expect(status).toContain("Approver passkey fingerprint:");
     // The demo code reaches the person through the gateway's stderr and its file, never through a tool result.
     for (const text of [offers, cart, status]) expect(text).not.toContain(demo.code);
-    expect(cart).toContain("click Approve with demo passkey (enter the code shown in the gateway's terminal)");
+    // The cart message names the button exactly as the confirm page labels it.
+    const label = /click "(Approve \$[0-9,]+\.[0-9]{2} with demo passkey)" \(enter the code shown in the gateway's terminal\)/.exec(cart)?.[1] ?? "";
+    expect(label).not.toBe("");
+    expect(page.body).toContain(`>${label}<`);
     expect(cart).not.toMatch(/phone/);
     expect(store.entries().map((e) => e.kind)).toContain("approval");
 
@@ -642,7 +647,7 @@ describe("next steps", () => {
     expect(lines[0]).toBe("DEMO: test keys, sample catalog, nothing can be bought.");
     // Under vitest this process is not the gateway's own script, so the command is the bare `intent`.
     expect(lines).toContain("  claude mcp add intent -- intent demo");
-    expect(lines.join("\n")).toContain("open the approval link, enter the demo code and click Approve with demo passkey");
+    expect(lines.join("\n")).toContain("open the approval link, enter the demo code and click \"Approve $… with demo passkey\"");
     expect(lines).toContain("Demo code for the confirm page: 123456 (new on every start; also in /d/demo/approval-code; never sent to the agent)");
     expect(lines).toContain("Re-check what was sent afterwards with: intent verify --demo");
   });

@@ -81,7 +81,7 @@ In demo mode the confirm page is a local stand-in for the passkey step: it signs
 
 ## Local panel
 
-The [panel](panel.md) binds to `127.0.0.1` only, serves GET only (405 otherwise), checks `Host` (421 otherwise), loads nothing from outside under a strict Content-Security-Policy, writes chain values as text, never as HTML, and never writes the chain. It refuses to start when the data dir or a file in it can be read by other users. It shows field names, never values.
+The [panel](panel.md) binds to `127.0.0.1` only, serves GET only (405 otherwise), checks `Host` (421 otherwise), loads nothing from outside under a strict Content-Security-Policy, writes chain values as text, never as HTML, and never writes the chain. It refuses to start when the data dir or a file in it can be read by other users. It shows the values each request sent, as logged: what already left the machine, never buyer identity, which the gateway does not hold.
 
 ## Supply chain
 
