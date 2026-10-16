@@ -216,7 +216,7 @@ async function demo(): Promise<void> {
     const page = await fetch(link);
     const html = await page.text();
     const csrf = /name="csrf" value="([A-Za-z0-9_-]+)"/.exec(html)?.[1] ?? "";
-    check(page.status === 200 && html.includes("Approve with demo passkey"), "the host's browser reaches the confirm page");
+    check(page.status === 200 && html.includes(" with demo passkey</button>"), "the host's browser reaches the confirm page");
     check(html.includes(`docker exec ${short} cat /data/demo/approval-code`), "the confirm page says how to read the demo code from this container", html);
     const code = docker("exec", id, "cat", "/data/demo/approval-code").trim();
     check(/^[0-9]{6}$/.test(code) && logs(id).includes(`Demo code for the confirm page: ${code} `), "the demo code is in the container log and its file");

@@ -62,7 +62,7 @@ export async function demoFirstRun(main: string): Promise<void> {
     expect(offers + cart).not.toContain(code);
 
     const page = await http(link, "GET");
-    expect(page.body).toContain("Approve with demo passkey");
+    expect(page.body).toContain(" with demo passkey</button>");
     const csrf = /name="csrf" value="([A-Za-z0-9_-]+)"/.exec(page.body)?.[1] ?? "";
     const form = { "content-type": "application/x-www-form-urlencoded", origin: new URL(link).origin, "sec-fetch-site": "same-origin" };
     // A local script that scraped the page but has no code is refused (review 2, finding 2).
