@@ -2,13 +2,13 @@
 // approval back. Invariants 1 (policy narrows), 3 (no buyer identity) and 4 (one verified, pinned approval per
 // purchase) are enforced here; invariant 2 by the disclosed cloud it is given.
 export {
-  type ApprovalStatusInput,
+  ApprovalStatusInput,
   type ApprovalStatusResult,
   contractSums,
   createGateway,
-  type CreateCartInput,
+  CreateCartInput,
   type CreateCartResult,
-  type FindOffersInput,
+  FindOffersInput,
   type FindOffersResult,
   type Gateway,
   type GatewayLogger,
