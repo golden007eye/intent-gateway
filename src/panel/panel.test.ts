@@ -243,3 +243,22 @@ describe("buildView", () => {
     ]);
   });
 });
+
+describe("the command the page names", () => {
+  it("serves the approver accept command for this install, as the CLI passes it in, and app.js prints it", async () => {
+    panel = await startPanel(dir, { port: 0, intent: "npx -y intent-gateway@next" });
+    const data = JSON.parse((await call(panel.url, "/entries.json")).body) as { intent: string };
+    expect(data.intent).toBe("npx -y intent-gateway@next");
+    expect((await call(panel.url, "/app.js")).body).toContain('Accept it only with " + data.intent + " approver accept at a terminal."');
+  });
+
+  it("defaults to intent when no command is passed in", async () => {
+    const { url } = await start();
+    expect((JSON.parse((await call(url, "/entries.json")).body) as { intent: string }).intent).toBe("intent");
+  });
+
+  it("app.js hard-codes no command: every hint takes the passed-in one", async () => {
+    const { url } = await start();
+    expect((await call(url, "/app.js")).body).not.toMatch(/intent (approver|verify|log|panel|serve|demo)/);
+  });
+});

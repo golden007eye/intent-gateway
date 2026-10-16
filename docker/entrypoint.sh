@@ -13,6 +13,14 @@ token_file="$data/http-token"
 
 say() { printf 'intent-gateway: %s\n' "$*" >&2; }
 
+# `docker exec` takes the container's short id, which Docker sets as HOSTNAME (12 hex digits). Any other HOSTNAME
+# (--hostname, --network host) is not an id, so the commands then say <container>. Mirrors dockerExec() in src/config.
+h='[0-9a-f]'
+case "${HOSTNAME:-}" in
+  $h$h$h$h$h$h$h$h$h$h$h$h) exec_cmd="docker exec $HOSTNAME" ;;
+  *) exec_cmd="docker exec <container>" ;;
+esac
+
 # Flags alone (`docker run <image> --trust-keys /keys.json`) mean the default command with those flags.
 case "${1:-}" in
   -h | --help | --version) ;;
@@ -36,7 +44,7 @@ esac
 
 if [ "${INTENT_DEMO:-}" = 1 ]; then
   say "demo: the approval links open the confirm page on port 8788; publish it with -p 127.0.0.1:8788:8788"
-  say "demo: re-check what was sent with: docker exec <container> intent verify --demo"
+  say "demo: re-check what was sent with: $exec_cmd intent verify --demo"
 fi
 
 if [ -z "${INTENT_HTTP_TOKEN:-}" ]; then
@@ -52,7 +60,7 @@ if [ -z "${INTENT_HTTP_TOKEN:-}" ]; then
   fi
   if [ -f "$token_file" ]; then
     INTENT_HTTP_TOKEN="$(cat "$token_file")"
-    say "using the HTTP token in $token_file; read it with: docker exec <container> cat $token_file"
+    say "using the HTTP token in $token_file; read it with: $exec_cmd cat $token_file"
   else
     # 32 random bytes as unpadded base64url: 43 characters.
     INTENT_HTTP_TOKEN="$(head -c 32 /dev/urandom | base64 -w 0 | tr '+/' '-_' | tr -d '=')"
@@ -60,15 +68,28 @@ if [ -z "${INTENT_HTTP_TOKEN:-}" ]; then
     (umask 077 && printf '%s\n' "$INTENT_HTTP_TOKEN" >"$tmp")
     mv "$tmp" "$token_file"
     if [ "${INTENT_QUIET_TOKEN:-}" = 1 ]; then
-      say "made an HTTP token and saved it in $token_file (not printed: INTENT_QUIET_TOKEN=1); read it with: docker exec <container> cat $token_file"
+      say "made an HTTP token and saved it in $token_file (not printed: INTENT_QUIET_TOKEN=1); read it with: $exec_cmd cat $token_file"
     else
       say "made an HTTP token and saved it in $token_file. Later starts reuse it and do not print it again."
-      say "The line below holds the token, so it is also kept in this container's log (docker logs); set INTENT_QUIET_TOKEN=1 to never print it."
-      say "Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787):"
-      printf '  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer %s"\n' "$INTENT_HTTP_TOKEN" >&2
+      say "The connect line below holds the token, so it is also kept in this container's log (docker logs); set INTENT_QUIET_TOKEN=1 to never print it."
+      made_token=1
     fi
   fi
   export INTENT_HTTP_TOKEN
+fi
+
+# The one connect line (the gateway prints none in the container, so a pasted line never carries a placeholder).
+# Only the start that made the token prints it; otherwise the line reads it from the container when pasted.
+connect() { printf '  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer %s"\n' "$1" >&2; }
+if [ -n "${made_token:-}" ]; then
+  say "Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787):"
+  connect "$INTENT_HTTP_TOKEN"
+elif [ -f "$token_file" ] && [ "$(cat "$token_file")" = "$INTENT_HTTP_TOKEN" ]; then
+  say "Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787; the line reads the token from the container):"
+  connect "\$($exec_cmd cat $token_file)"
+else
+  say "Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787; the line reads your INTENT_HTTP_TOKEN from the container):"
+  connect "\$($exec_cmd printenv INTENT_HTTP_TOKEN)"
 fi
 
 exec node /app/dist/main.js "$@"

@@ -21,7 +21,7 @@ const SELF = new Set(["main.js", "main.ts", "intent", "intent-gateway"]);
 
 /**
  * The prefix to print before a subcommand, e.g. `${invocation(...)} verify --demo`:
- * - in the Docker image: `docker exec <container> intent`;
+ * - in the Docker image: `docker exec <container id> intent` (see dockerExec);
  * - under npx: `npx -y <the package spec npx was given>`, e.g. `npx -y intent-gateway@next` or
  *   `npx -y file:/abs/intent-gateway.tgz`;
  * - from a bin on PATH (a global install): `intent` or `intent-gateway`;
@@ -32,12 +32,22 @@ export function invocation(input: InvocationInput): string {
   const { argv1, env } = input;
   const realpath = input.realpath ?? realOrSame;
   if (argv1 === undefined || !SELF.has(basename(argv1))) return "intent";
-  if (env.INTENT_RUNTIME === "container") return "docker exec <container> intent";
+  if (env.INTENT_RUNTIME === "container") return `${dockerExec(env)} intent`;
   const spec = npxSpec(input.packageRoot, input.readText ?? readOrNull);
   if (spec !== null) return `npx -y ${quote(spec)}`;
   const name = basename(argv1);
   if ((name === "intent" || name === "intent-gateway") && onPath(dirname(argv1), env.PATH)) return name;
   return `node ${quote(realpath(argv1))}`;
+}
+
+/**
+ * `docker exec <id>` for this container: Docker sets HOSTNAME to the container's short id (12 hex digits), which
+ * `docker exec` accepts. A HOSTNAME of any other shape (`--hostname`, `--network host`) is not an id, so the
+ * placeholder `<container>` is printed instead of a name that would not work.
+ */
+export function dockerExec(env: Readonly<Record<string, string | undefined>>): string {
+  const id = env.HOSTNAME ?? "";
+  return `docker exec ${/^[0-9a-f]{12}$/.test(id) ? id : "<container>"}`;
 }
 
 /**

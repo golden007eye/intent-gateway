@@ -61,7 +61,7 @@ export const APP_JS = `"use strict";
       ? "Fingerprint " + view.pin.fingerprint + " (pinned at #" + view.pin.seq + ", " + view.pin.ts + ")"
       : "No approver pinned yet. The first verified Approval sets the pin.";
     fill(byId("flags"), view.flags, "No flagged passkeys.", function (flag) {
-      return el("li", "Flagged passkey " + flag.fingerprint + " (#" + flag.seq + "). Accept it only with intent approver accept at a terminal.", "bad");
+      return el("li", "Flagged passkey " + flag.fingerprint + " (#" + flag.seq + "). Accept it only with " + data.intent + " approver accept at a terminal.", "bad");
     });
     fill(byId("pending"), view.pending, "No pending approvals.", function (p) {
       var li = el("li");
