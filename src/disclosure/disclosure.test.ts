@@ -24,6 +24,7 @@ import {
   DisclosureKeysExpiredError,
   DisclosureNoKeysError,
   type DisclosureOptions,
+  DisclosureStoppedError,
   type IntentCloud,
 } from "./index.ts";
 
@@ -170,7 +171,9 @@ async function setup(handler: StubHandler = reply(), fs?: StoreFs, clock?: () =>
   return connectCloud({ baseUrl: stub.baseUrl, session, now: () => NOW_MS }, store, options);
 }
 
-const kinds = () => store.entries().map((e) => e.kind);
+// The chain without its `session` entries: each disclosed cloud starts its gateway session with one, at seq 0 here.
+const logged = () => store.entries().filter((e) => e.kind !== "session");
+const kinds = () => logged().map((e) => e.kind);
 const bodyOf = (entry: Entry | undefined) => entry?.body as Json;
 const logPath = () => join(dir, "audit.jsonl");
 const errno = (code: string) => Object.assign(new Error(code), { code });
@@ -194,7 +197,7 @@ describe("invariant 2: log before send", () => {
     expect(result.ok).toBe(true);
     expect(stub.connections).toHaveLength(1);
 
-    const [disclosure, receipt] = store.entries();
+    const [disclosure, receipt] = logged();
     expect(kinds()).toEqual(["disclosure", "receipt"]);
     const body = bodyOf(disclosure);
     const headers = body["headers"] as [string, string][];
@@ -234,7 +237,7 @@ describe("invariant 2: log before send", () => {
     const cloud = await setup();
     const seen: number[] = [];
     stub.handler = (req) => {
-      seen.push(store.entries().length);
+      seen.push(logged().length);
       return reply()(req);
     };
     const results = [
@@ -249,7 +252,7 @@ describe("invariant 2: log before send", () => {
     expect(results.map((r) => r.ok)).toEqual(Array(7).fill(true));
     // When request n arrives, its disclosure (entry 2n) is already on disk.
     expect(seen).toEqual([1, 3, 5, 7, 9, 11, 13]);
-    const disclosures = store.entries().filter((e) => e.kind === "disclosure").map(bodyOf);
+    const disclosures = logged().filter((e) => e.kind === "disclosure").map(bodyOf);
     expect(disclosures.map((b) => b["endpoint"])).toEqual([
       "getMeta", "getSignatureKeys", "getKeyStatement", "searchCatalog", "createCart", "createApproval", "getApproval",
     ]);
@@ -294,9 +297,9 @@ describe("invariant 2: log before send", () => {
     let now = NOW_MS;
     const cloud = await setup(reply(), undefined, () => (now += 60_000));
     await expect(cloud.search(SEARCH)).rejects.toThrow(StoreFencedError);
-    await expect(cloud.meta()).rejects.toThrow(StoreFencedError);
+    await expect(cloud.meta()).rejects.toThrow(DisclosureStoppedError);
     expect(stub.connections).toHaveLength(0);
-    expect(kinds()).toEqual([]);
+    expect(store.entries()).toEqual([]);
   });
 
   it("a request refused by the adapter before beforeSend logs nothing and sends nothing", async () => {
@@ -319,7 +322,7 @@ describe("invariant 3: identity in an outbound body", () => {
     ]);
     expect(stub.connections).toHaveLength(0);
     expect(kinds()).toEqual(["block"]);
-    expect(bodyOf(store.entries()[0])).toEqual({
+    expect(bodyOf(logged()[0])).toEqual({
       endpoint: "searchCatalog",
       fields: ["product", "ship_to", "ship_to.country", "ship_to.postal_code"],
       blocked: ["card at $.product", "email at $.product"],
@@ -343,16 +346,16 @@ describe("what came back (ADR-0006)", () => {
     const cloud = await setup(reply([VERSION, JSON_TYPE]));
     const error: unknown = await cloud.search(SEARCH).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(DisclosureDiscardedError);
-    expect(error).toMatchObject({ disclosureSeq: 0, status: 200 });
+    expect(error).toMatchObject({ disclosureSeq: 1, status: 200 });
     expect(JSON.stringify(error)).not.toContain(SKU_TITLE);
     expect(kinds()).toEqual(["disclosure", "discarded"]);
-    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "200 without a receipt" });
+    expect(bodyOf(logged()[1])).toEqual({ disclosure_seq: 1, reason: "200 without a receipt" });
   });
 
   it("a 2xx without a receipt or version header is discarded too", async () => {
     const cloud = await setup(reply([JSON_TYPE]));
     await expect(cloud.createCart(CART_REQUEST)).rejects.toThrow(DisclosureDiscardedError);
-    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "201 without a receipt" });
+    expect(bodyOf(logged()[1])).toEqual({ disclosure_seq: 1, reason: "201 without a receipt" });
   });
 
   it("no HTTP response is unacknowledged", async () => {
@@ -360,7 +363,7 @@ describe("what came back (ADR-0006)", () => {
     await expect(cloud.search(SEARCH)).rejects.toThrow(CloudNetworkError);
     expect(stub.connections).toHaveLength(1);
     expect(kinds()).toEqual(["disclosure", "unacknowledged"]);
-    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "CloudNetworkError: network" });
+    expect(bodyOf(logged()[1])).toEqual({ disclosure_seq: 1, reason: "CloudNetworkError: network" });
   });
 
   it("a refused connection: still logged before the send (invariant 2), then recorded as never sent", async () => {
@@ -368,8 +371,8 @@ describe("what came back (ADR-0006)", () => {
     const cloud = connectCloud({ baseUrl: "http://127.0.0.1:9", session, now: () => NOW_MS }, store, trusted);
     await expect(cloud.search(SEARCH)).rejects.toMatchObject({ name: "CloudNetworkError", neverLeft: true });
     expect(kinds()).toEqual(["disclosure", "unacknowledged"]);
-    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "CloudNetworkError: not sent (connection refused)" });
-    expect(neverLeft(store.entries()[1]?.body)).toBe(true);
+    expect(bodyOf(logged()[1])).toEqual({ disclosure_seq: 1, reason: "CloudNetworkError: not sent (connection refused)" });
+    expect(neverLeft(logged()[1]?.body)).toBe(true);
   });
 
   it("a 503 without the version header is unacknowledged, and returned", async () => {
@@ -377,7 +380,7 @@ describe("what came back (ADR-0006)", () => {
     const result = await cloud.search(SEARCH);
     expect(result).toMatchObject({ ok: false, status: 503, body: null });
     expect(kinds()).toEqual(["disclosure", "unacknowledged"]);
-    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "503 without Intent-Contract-Version" });
+    expect(bodyOf(logged()[1])).toEqual({ disclosure_seq: 1, reason: "503 without Intent-Contract-Version" });
   });
 
   it("a 4xx with the version header and no receipt is discarded (verify fails), and the error is returned", async () => {
@@ -385,8 +388,8 @@ describe("what came back (ADR-0006)", () => {
     const result = await cloud.search(SEARCH);
     expect(result).toMatchObject({ ok: false, status: 400, body: { error: "bad_request" } });
     expect(kinds()).toEqual(["disclosure", "discarded"]);
-    expect(bodyOf(store.entries()[1])).toEqual({
-      disclosure_seq: 0,
+    expect(bodyOf(logged()[1])).toEqual({
+      disclosure_seq: 1,
       reason: "400 with Intent-Contract-Version but without a receipt",
     });
   });
@@ -396,7 +399,7 @@ describe("what came back (ADR-0006)", () => {
     const result = await cloud.meta();
     expect(result).toMatchObject({ ok: false, status: 401 });
     expect(kinds()).toEqual(["disclosure", "receipt"]);
-    expect(bodyOf(store.entries()[1])).toMatchObject({ disclosure_seq: 0, status: 401, contract_version: "1.5.0" });
+    expect(bodyOf(logged()[1])).toMatchObject({ disclosure_seq: 1, status: 401, contract_version: "1.5.0" });
   });
 
   it("an unusable response follows the same rules and rethrows the adapter's error", async () => {
@@ -405,7 +408,7 @@ describe("what came back (ADR-0006)", () => {
     stub.handler = reply([JSON_TYPE], { body: "not json" });
     await expect(cloud.meta()).rejects.toThrow(CloudResponseError);
     expect(kinds()).toEqual(["disclosure", "receipt", "disclosure", "discarded"]);
-    expect(bodyOf(store.entries()[3])).toEqual({ disclosure_seq: 2, reason: "200 without a receipt" });
+    expect(bodyOf(logged()[3])).toEqual({ disclosure_seq: 3, reason: "200 without a receipt" });
   });
 
   it("a failed append after the response fails the call: the content is not returned", async () => {
@@ -424,24 +427,24 @@ describe("receipt verification (trust)", () => {
     const cloud = await setup(reply([VERSION, ...FOREIGN_HEADERS, JSON_TYPE]));
     await expect(cloud.search(SEARCH)).rejects.toThrow(DisclosureDiscardedError);
     expect(kinds()).toEqual(["disclosure", "discarded"]);
-    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "200 with an invalid receipt (step 4: path_mismatch)" });
+    expect(bodyOf(logged()[1])).toEqual({ disclosure_seq: 1, reason: "200 with an invalid receipt (step 4: path_mismatch)" });
   });
 
   it("a receipt for another status, or under an expired key set, is discarded", async () => {
     const cloud = await setup((req) => ({ ...(reply()(req) as StubReply), headers: [VERSION, ...edgeReceipt(req, 201)] }));
     await expect(cloud.meta()).rejects.toThrow(DisclosureDiscardedError);
-    expect(bodyOf(store.entries()[1])).toMatchObject({ reason: "200 with an invalid receipt (step 5: status_mismatch)" });
+    expect(bodyOf(logged()[1])).toMatchObject({ reason: "200 with an invalid receipt (step 5: status_mismatch)" });
 
     const late = createDisclosedCloud(createLateCloud(), store, { keySet: () => KEYS, now: () => Date.UTC(2099, 0, 1) });
     await expect(late.meta()).rejects.toThrow(DisclosureDiscardedError);
-    expect(bodyOf(store.entries()[3])).toMatchObject({ reason: "200 with an invalid receipt (step 3: statement_expired)" });
+    expect(bodyOf(logged()[3])).toMatchObject({ reason: "200 with an invalid receipt (step 3: statement_expired)" });
   });
 
   it("a non-2xx with an invalid receipt is discarded even without the version header, and returned", async () => {
     const cloud = await setup(reply(FOREIGN_HEADERS, { status: 503, body: "" }));
     const result = await cloud.search(SEARCH);
     expect(result).toMatchObject({ ok: false, status: 503 });
-    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "503 with an invalid receipt (step 4: path_mismatch)" });
+    expect(bodyOf(logged()[1])).toEqual({ disclosure_seq: 1, reason: "503 with an invalid receipt (step 4: path_mismatch)" });
   });
 
   it("before a verified key statement only the bootstrap reads are sent; their receipts are logged unverified", async () => {
@@ -459,7 +462,7 @@ describe("receipt verification (trust)", () => {
 
     expect((await cloud.keyStatement()).ok).toBe(true);
     expect(kinds()).toEqual(["disclosure", "receipt"]);
-    expect(bodyOf(store.entries()[1])).toMatchObject({ disclosure_seq: 0, verified: false });
+    expect(bodyOf(logged()[1])).toMatchObject({ disclosure_seq: 1, verified: false });
   });
 });
 
@@ -530,7 +533,7 @@ describe("an adapter that misbehaves", () => {
       CloudRequestError,
     );
     await expect(createDisclosedCloud(throwingCloud("not an error"), store, trusted).meta()).rejects.toBe("not an error");
-    expect(store.entries().map((e) => [e.kind, (e.body as Json)["reason"]])).toEqual([
+    expect(logged().map((e) => [e.kind, (e.body as Json)["reason"]])).toEqual([
       ["disclosure", undefined],
       ["unacknowledged", "CloudRequestError"],
       ["disclosure", undefined],
@@ -542,5 +545,122 @@ describe("an adapter that misbehaves", () => {
     stub = await startStubCloud(reply());
     store = await openStore(dir);
     await expect(createDisclosedCloud(throwingCloud(null, false), store, { keySet: () => KEYS }).meta()).rejects.toThrow("without calling beforeSend");
+  });
+});
+
+describe("a failed follow-up append stops every later send (attack: no answer lost mid-session)", () => {
+  /** The real fs, except that once `arm()` is called the next append-mode open of the log fails with EMFILE. */
+  function emfileOnce(): StoreFs & { arm: () => void } {
+    let armed = false;
+    return {
+      ...fsp,
+      open: (async (...args: Parameters<typeof fsp.open>) => {
+        if (armed && args[0] === logPath() && typeof args[1] === "number" && (args[1] & fsp.constants.O_APPEND) !== 0) {
+          armed = false;
+          throw errno("EMFILE");
+        }
+        return fsp.open(...args);
+      }),
+      arm: () => {
+        armed = true;
+      },
+    };
+  }
+
+  it("a 2xx with an invalid receipt whose discarded entry cannot be appended: stopped, and nothing more reaches the cloud", async () => {
+    const fs = emfileOnce();
+    const invalid = reply([VERSION, ...FOREIGN_HEADERS, JSON_TYPE]);
+    const cloud = await setup(invalid, fs);
+    stub.handler = (req) => {
+      fs.arm();
+      return invalid(req);
+    };
+    const error: unknown = await cloud.search(SEARCH).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DisclosureStoppedError);
+    expect((error as Error).message).toMatch(/the answer to disclosure #1 could not be logged: EMFILE/);
+    expect(stub.connections).toHaveLength(1);
+
+    // The open() failure was transient, but the gateway stays stopped: no later call is logged or sent.
+    stub.handler = reply();
+    for (const next of [() => cloud.search(SEARCH), () => cloud.meta(), () => cloud.getApproval("ap_TEST0001")]) {
+      await expect(next()).rejects.toThrow(DisclosureStoppedError);
+    }
+    expect(stub.connections).toHaveLength(1);
+    expect(store.entries().map((e) => e.kind)).toEqual(["session", "disclosure"]);
+  });
+
+  it("an unacknowledged entry that cannot be appended stops the gateway the same way", async () => {
+    const fs = emfileOnce();
+    const cloud = await setup(reply(), fs);
+    stub.handler = () => {
+      fs.arm();
+      return "reset";
+    };
+    await expect(cloud.search(SEARCH)).rejects.toThrow(DisclosureStoppedError);
+    stub.handler = reply();
+    await expect(cloud.search(SEARCH)).rejects.toThrow(DisclosureStoppedError);
+    expect(stub.connections).toHaveLength(1);
+    expect(kinds()).toEqual(["disclosure"]);
+  });
+});
+
+describe("gateway session marks (local only)", () => {
+  it("starts with one session entry and numbers its disclosures, listing the ones still open", async () => {
+    stub = await startStubCloud(reply());
+    store = await openStore(dir);
+    const http = createHttpCloud({ baseUrl: stub.baseUrl, session, now: () => NOW_MS });
+    // The search is held after it is logged, so another call is logged while it is still open.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let logged: () => void = () => undefined;
+    const searchLogged = new Promise<void>((resolve) => {
+      logged = resolve;
+    });
+    const holding: IntentCloud = {
+      ...http,
+      search: (request, options) =>
+        http.search(request, {
+          beforeSend: async (prepared) => {
+            await options?.beforeSend?.(prepared);
+            logged();
+            await held;
+          },
+        }),
+    };
+    const cloud = createDisclosedCloud(holding, store, trusted);
+    await cloud.meta();
+    const slow = cloud.search(SEARCH);
+    await searchLogged;
+    await cloud.signatureKeys();
+    release();
+    await slow;
+    await cloud.getApproval("ap_TEST0001");
+
+    const [first, ...rest] = store.entries();
+    expect(first?.kind).toBe("session");
+    const id = bodyOf(first)["id"] as string;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(rest.some((e) => e.kind === "session")).toBe(false);
+    const marks = rest.filter((e) => e.kind === "disclosure").map((e) => [bodyOf(e)["endpoint"], bodyOf(e)["session"]]);
+    expect(marks).toEqual([
+      ["getMeta", { id, n: 0, open: [] }],
+      ["searchCatalog", { id, n: 1, open: [] }],
+      ["getSignatureKeys", { id, n: 2, open: [1] }],
+      ["getApproval", { id, n: 3, open: [] }],
+    ]);
+    // The id is local: it is in no byte the stub received.
+    for (const bytes of stub.connections) expect(bytes.toString("latin1")).not.toContain(id);
+  });
+
+  it("each disclosed cloud has its own session id", async () => {
+    const cloud = await setup();
+    await cloud.meta();
+    const other = connectCloud({ baseUrl: stub.baseUrl, session, now: () => NOW_MS }, store, trusted);
+    await other.meta();
+    const ids = store.entries().filter((e) => e.kind === "session").map((e) => bodyOf(e)["id"]);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
   });
 });

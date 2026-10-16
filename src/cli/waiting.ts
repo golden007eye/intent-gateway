@@ -1,7 +1,6 @@
 // What a command prints while it waits, so a first run never hangs silently: on the data dir's lease, held by a
 // gateway that is writing or one that stopped mid-write, and on an Intent Cloud host that took the connection but
 // has not answered yet. Each says what it waits for and when the wait ends; the final message stays the caller's.
-import { DEFAULT_TIMEOUT_MS } from "../disclosure/index.ts";
 import type { LeaseWait } from "../store/index.ts";
 
 /** How long a call to Intent Cloud runs before the progress line. */
@@ -21,21 +20,22 @@ export function leaseNotice(say: (text: string) => void, now: () => number = Dat
 
 /**
  * The HTTP adapter's `slow` option for a command: once a request to Intent Cloud has gone `afterMs` without an
- * answer, says once that the command is still waiting for it, while `active()` holds (serve: only while starting).
- * The adapter's own deadline and the command's final message are unchanged.
+ * answer, says once that the command is still waiting for it and when the adapter gives up (its own deadline), while
+ * `active()` holds (serve: only while starting). The deadline and the command's final message are unchanged.
  */
 export function slowCloudNotice(
   say: (text: string) => void,
   afterMs = CLOUD_NOTICE_MS,
   active: () => boolean = () => true,
-): { afterMs: number; notify: (host: string) => void } {
+): { afterMs: number; notify: (host: string, timeoutMs: number) => void } {
   let said = false;
   return {
     afterMs,
-    notify: (host) => {
+    notify: (host, timeoutMs) => {
       if (said || !active()) return;
       said = true;
-      say(`still waiting for Intent Cloud at ${host}: no answer yet (it gives up after ${String(DEFAULT_TIMEOUT_MS / 1000)} s)`);
+      const within = timeoutMs % 1000 === 0 ? `${String(timeoutMs / 1000)} s` : `${String(timeoutMs)} ms`;
+      say(`still waiting for Intent Cloud at ${host}: no answer yet (it gives up after ${within})`);
     },
   };
 }

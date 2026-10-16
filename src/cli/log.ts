@@ -126,7 +126,7 @@ function describe(item: Item, demo: boolean): [string, string] {
         ? ["FLAGGED", `${text(b.fingerprint)} signed with a signature counter that did not go up; the passkey may have been copied`]
         : ["FLAGGED", `${text(b.fingerprint)} is not the pinned approver; if it is your passkey, run ${INTENT} approver accept`];
     case "session":
-      return ["session", text(b.keyid)];
+      return ["session", b.mode === "demo" ? "demo chain (test keys, sample catalog)" : `gateway session ${text(b.id)} started (a local id, never sent)`];
     default:
       return [item.kind, ""];
   }

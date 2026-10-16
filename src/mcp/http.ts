@@ -134,7 +134,6 @@ export async function runHttp(options: HttpOptions): Promise<HttpHandle> {
   const { port } = server.address() as AddressInfo;
   allowedHosts = allowedHostsFor(host, port);
   const url = `http://${host.includes(":") ? `[${host}]` : host}:${String(port)}${MCP_PATH}`;
-  log(`intent-gateway: MCP over HTTP at ${url}${token === null ? "" : " (bearer token required)"}`);
   return {
     url,
     port,

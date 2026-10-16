@@ -410,7 +410,8 @@ describe("demo and real chains never mix", () => {
     const { gateway, store } = await gatewayOver(demo, { demoMode: false });
     await expect(gateway.start()).rejects.toThrow(GatewayStartError);
     await expect(gateway.start()).rejects.toThrow(/holds a demo chain/);
-    expect(store.entries().map((e) => e.kind)).toEqual(["session", "disclosure", "receipt", "disclosure", "receipt", "keys"]);
+    // The demo session entry, then the first run's gateway session entry and its start.
+    expect(store.entries().map((e) => e.kind)).toEqual(["session", "session", "disclosure", "receipt", "disclosure", "receipt", "keys"]);
   });
 
   it("a second demo run keeps one demo session entry", async () => {
@@ -421,7 +422,11 @@ describe("demo and real chains never mix", () => {
     cleanup.pop();
     const second = await gatewayOver(demo);
     await second.gateway.start();
-    expect(second.store.entries().filter((e) => e.kind === "session")).toHaveLength(1);
+    const sessions = second.store.entries().filter((e) => e.kind === "session").map((e) => e.body as { mode?: string; id?: string });
+    expect(sessions[0]).toEqual({ mode: "demo" });
+    expect(sessions.filter((b) => b.mode === "demo")).toHaveLength(1);
+    // Each run starts its own gateway session.
+    expect(sessions.slice(1).map((b) => typeof b.id)).toEqual(["string", "string"]);
   });
 
   it("demo mode refuses a pinned root other than the published test root (a real host's links are never redirected)", async () => {

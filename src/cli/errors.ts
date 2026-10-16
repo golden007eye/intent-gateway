@@ -8,6 +8,7 @@ import {
   DisclosureBlockedError,
   DisclosureDiscardedError,
   DisclosureNoKeysError,
+  DisclosureStoppedError,
 } from "../disclosure/index.ts";
 import { GatewayNotStartedError, GatewayStartError } from "../gateway/index.ts";
 import { LibraryError, type LibraryErrorCode } from "../library/index.ts";
@@ -91,6 +92,12 @@ function worded(error: unknown, ctx: ErrorContext): string {
   }
   if (error instanceof StoreCorruptError) {
     return `local hash chain in ${dataDir}: ${message}; run ${INTENT} verify to see where it breaks, then move audit.jsonl aside to start a new chain`;
+  }
+  if (error instanceof DisclosureStoppedError) {
+    return `${message}; check the disk and the permissions of ${dataDir}, restart the gateway, then run ${INTENT} verify`;
+  }
+  if (error instanceof StoreFencedError && /\b(write|append) failed: /.test(message)) {
+    return `local hash chain in ${dataDir}: ${message}; check the disk and the permissions of the data dir, then restart the gateway`;
   }
   if (error instanceof StoreFencedError) {
     return `local hash chain in ${dataDir}: ${message}; another gateway is writing to it, so stop that one or set INTENT_DATA_DIR`;

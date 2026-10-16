@@ -37,6 +37,7 @@ import {
   DisclosureDiscardedError,
   DisclosureKeysExpiredError,
   DisclosureNoKeysError,
+  DisclosureStoppedError,
 } from "../disclosure/index.ts";
 import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
@@ -224,6 +225,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   let keySet: KeySet | null = null;
   const cloud = options.cloud(() => keySet);
   const offers = new Map<string, RememberedOffer>();
+  let stopReported = false;
 
   // One call at a time: the spend caps and the replay check read the chain and then append to it.
   let tail: Promise<unknown> = Promise.resolve();
@@ -279,6 +281,12 @@ export function createGateway(options: GatewayOptions): Gateway {
       result = await run();
     } catch (error) {
       if (error instanceof DisclosureBlockedError) return refuse("blocked", "Not sent: the request body looked like buyer identity.");
+      if (error instanceof DisclosureStoppedError) {
+        // Said once on the terminal too: the developer must restart the gateway, the agent cannot fix it.
+        if (!stopReported) logger.warn(`intent-gateway: ${error.message}. Restart the gateway, then run ${INTENT} verify.`);
+        stopReported = true;
+        return refuse("error", `Not sent: ${error.message}. The developer must restart the gateway.`);
+      }
       if (error instanceof DisclosureDiscardedError) {
         return refuse("error", "Intent Cloud's answer carried no valid receipt, so the gateway discarded it.");
       }

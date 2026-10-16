@@ -6,7 +6,7 @@
 // - receipt, unacknowledged, discarded: `disclosure_seq` (number), `reason` (string).
 // - approval_pending, approval: `handle` (string); approval_pending also `approval_url` (string).
 // - approver_pin, approver_flag: `fingerprint` (string).
-import { type ChainResult, type Entry, verifyChain } from "../store/index.ts";
+import { type ChainResult, type Entry, neverLeft, verifyChain } from "../store/index.ts";
 
 export interface Row {
   seq: number;
@@ -46,6 +46,10 @@ export interface View {
 }
 
 const ROW_KINDS = new Set(["disclosure", "block", "receipt", "unacknowledged", "discarded"]);
+const FOLLOW_UPS = new Set(["receipt", "unacknowledged", "discarded"]);
+/** The note on a disclosure no entry answers, in the words `intent log` uses: never "sent" (invariant 5). */
+const UNANSWERED_NOTE = "logged, maybe sent; no answer recorded";
+const NOT_SENT_NOTE = "logged, not sent: no connection was made";
 
 export function buildView(items: readonly unknown[]): View {
   const rows: Row[] = [];
@@ -53,6 +57,15 @@ export function buildView(items: readonly unknown[]): View {
   const flagged: Fingerprint[] = [];
   const unreadable: number[] = [];
   let pin: Fingerprint | null = null;
+  // Disclosures some entry answers, and those whose request never left.
+  const answered = new Set<unknown>();
+  const notSent = new Set<unknown>();
+  for (const item of items) {
+    if (!isEntry(item) || !FOLLOW_UPS.has(item.kind)) continue;
+    const ref = record(item.body).disclosure_seq;
+    answered.add(ref);
+    if (item.kind === "unacknowledged" && neverLeft(item.body)) notSent.add(ref);
+  }
 
   for (const [index, item] of items.entries()) {
     if (!isEntry(item)) {
@@ -70,7 +83,14 @@ export function buildView(items: readonly unknown[]): View {
         endpoint: text(body.endpoint),
         fields: strings(body.fields),
         blocked: strings(body.blocked),
-        note: [typeof ref === "number" ? `for #${String(ref)}` : "", text(body.reason)].filter(Boolean).join(" "),
+        note:
+          kind !== "disclosure"
+            ? [typeof ref === "number" ? `for #${String(ref)}` : "", text(body.reason)].filter(Boolean).join(" ")
+            : notSent.has(seq)
+              ? NOT_SENT_NOTE
+              : answered.has(seq)
+                ? ""
+                : UNANSWERED_NOTE,
       });
     } else if (kind === "approval_pending") {
       pending.set(text(body.handle), { seq, ts, handle: text(body.handle), approvalUrl: text(body.approval_url) });

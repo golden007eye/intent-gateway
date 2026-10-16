@@ -13,7 +13,8 @@
 // Fencing: before each write the handle checks that the lock still holds its token, unexpired, and that the file's
 // tail is the head it last saw; after the write it checks that the tail is its own entry. Any mismatch throws
 // StoreFencedError and the handle refuses every later append, so a holder that was paused past its expiry cannot
-// write after its successor.
+// write after its successor. Any other failure inside an append (an open, read, write or lease-file error) fences
+// the handle the same way: once one append failed, no later one succeeds.
 //
 // Verify on acquire: each time the handle takes the lease it verifies every entry appended since the head it last
 // verified, which on its first acquire is the whole file. A broken chain throws StoreCorruptError and the handle
@@ -242,6 +243,19 @@ class FileStore implements Store {
   async #appendOne(kind: EntryKind, body: unknown): Promise<Entry> {
     if (this.#broken !== null) throw new StoreCorruptError(`handle refused after: ${this.#broken}`);
     if (this.#fenced !== null) throw new StoreFencedError(`handle refused after: ${this.#fenced}`);
+    try {
+      return await this.#appendChecked(kind, body);
+    } catch (error) {
+      // Any failure fences the handle, whatever threw it (an open() refused with EMFILE, a lease file that cannot be
+      // read): a caller that saw one append fail must not see a later one succeed, or a disclosure whose answer was
+      // never recorded would sit inside the chain with later sends after it.
+      // A broken chain already refuses the handle (StoreCorruptError) and keeps its own reason.
+      if (!(error instanceof StoreCorruptError)) this.#fenced ??= `append failed: ${(error as Error).message}`;
+      throw error;
+    }
+  }
+
+  async #appendChecked(kind: EntryKind, body: unknown): Promise<Entry> {
     if (this.#lease === null) await this.#acquire();
     else if (this.#lease.expires_at - this.#clock() < this.#leaseMs / 2) await this.#renew();
     await this.#checkFence();
@@ -262,6 +276,8 @@ class FileStore implements Store {
 
   /** One write plus fdatasync. On failure the file is cut back to `size`, the handle is fenced, and the error rethrown. */
   async #write(line: Buffer, size: number): Promise<void> {
+    // Opened outside the try: when open() fails nothing was written, so there is nothing to cut back; the caller
+    // (#appendOne) fences the handle.
     const handle = await noFollow(this.#fs.open(this.#file, APPEND, 0o600), this.#file);
     try {
       const { bytesWritten } = await handle.write(line);

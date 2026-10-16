@@ -29,6 +29,7 @@ import { PolicyError } from "../policy/index.ts";
 import { type Entry, openStore, readChain, StoreCorruptError, StoreFencedError, StoreUnsafeError } from "../store/index.ts";
 import { approverFingerprint } from "../trust/index.ts";
 import { CliError, describeError, formatLog, help, type Io, main } from "./index.ts";
+import { slowCloudNotice } from "./waiting.ts";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
@@ -627,8 +628,8 @@ describe("intent doctor", () => {
     expect(result).toMatchObject({ code: 0 });
     // Its requests are in the disclosure log like any other, and the chain now reports its head.
     const kinds = (readChain(s.dir) as Entry[]).map((e) => e.kind);
-    expect(kinds).toEqual(["disclosure", "receipt", "disclosure", "receipt", "keys"]);
-    expect((await s.run(["doctor", "--trust-keys", trustFile(fake)])).out).toMatch(/^ok {4}chain: 5 entries, every hash links; head seq 4 hash [0-9a-f]{64}$/m);
+    expect(kinds).toEqual(["session", "disclosure", "receipt", "disclosure", "receipt", "keys"]);
+    expect((await s.run(["doctor", "--trust-keys", trustFile(fake)])).out).toMatch(/^ok {4}chain: 6 entries, every hash links; head seq 5 hash [0-9a-f]{64}$/m);
   });
 
   it("names the fix for an unpinned host, an unreachable host and a readable data dir", async () => {
@@ -659,8 +660,8 @@ describe("intent doctor", () => {
     expect(result.code).toBe(1);
     // Logged before the send, which never left: the log says so instead of "sent" (invariant 5).
     const log = formatLog(readChain(s.dir));
-    expect(log).toMatch(/^#0 {4}\S+ {2}logged {9}getMeta: no body fields \(not sent: no connection was made\)$/m);
-    expect(log).toMatch(/^#1 {4}\S+ {2}not sent {7}#0: CloudNetworkError: not sent \(DNS: not found\); it never left this machine$/m);
+    expect(log).toMatch(/^#1 {4}\S+ {2}logged {9}getMeta: no body fields \(not sent: no connection was made\)$/m);
+    expect(log).toMatch(/^#2 {4}\S+ {2}not sent {7}#1: CloudNetworkError: not sent \(DNS: not found\); it never left this machine$/m);
     const verify = await s.run(["verify", "--skip-install-check"]);
     expect(verify.out).toContain("  sent: 0\n  logged but not sent (no connection was made): 1\n");
     expect(verify.out).toContain("  sent, not acknowledged: 0\n");
@@ -697,7 +698,7 @@ describe("intent doctor", () => {
         `\nFAIL  Intent Cloud at 127.0.0.1:${port} cannot be reached (no complete response within 200 ms); the request may have reached it ` +
           "(logged as sent, not acknowledged). Check your connection and INTENT_CLOUD_URL, or try everything locally with intent demo\n",
       );
-      expect(formatLog(readChain(s.dir))).toMatch(/^#1 {4}\S+ {2}no receipt {5}#0: CloudNetworkError: timeout; it may or may not have arrived$/m);
+      expect(formatLog(readChain(s.dir))).toMatch(/^#2 {4}\S+ {2}no receipt {5}#1: CloudNetworkError: timeout; it may or may not have arrived$/m);
     } finally {
       await silent.close();
     }
@@ -709,7 +710,7 @@ describe("intent doctor", () => {
       fake = await startFakeCloud({});
       const port = new URL(silent.url).port;
       const io: Partial<Io> = { connect: (http, store, options) => connectCloud({ ...http, timeoutMs: 400 }, store, options), cloudNoticeMs: 50 };
-      const waiting = `still waiting for Intent Cloud at 127.0.0.1:${port}: no answer yet (it gives up after 30 s)`;
+      const waiting = `still waiting for Intent Cloud at 127.0.0.1:${port}: no answer yet (it gives up after 400 ms)`;
       const serve = await setup({ INTENT_CLOUD_URL: silent.url }).run(["serve", "--trust-keys", trustFile(fake)], { input: "", io });
       expect(serve.code).toBe(1);
       expect(serve.err).toMatch(new RegExp(`^intent-gateway: ${waiting.replace(/[().]/g, "\\$&")}\\nintent: .*no complete response within 400 ms.*\\n$`));
@@ -821,6 +822,7 @@ describe("serve failures", () => {
     expect(result.out).toBe("");
     // The meta request was logged before the send and is recorded as never having left.
     expect((readChain(s.dir) as Entry[]).map((e) => [e.kind, (e.body as { reason?: string }).reason])).toEqual([
+      ["session", undefined],
       ["disclosure", undefined],
       ["unacknowledged", "CloudNetworkError: not sent (DNS: not found)"],
     ]);
@@ -965,6 +967,9 @@ describe("serve failures", () => {
       const result = await s.run(["serve", "--http", "--trust-keys", trustFile(fake)]);
       expect(result.code).toBe(0);
       expect(result.err).toContain(`MCP over HTTP at http://127.0.0.1:${port}/mcp\n`);
+      // Once, with the address to connect to: never the 0.0.0.0 the container listens on.
+      expect(result.err.split("MCP over HTTP at").length - 1).toBe(1);
+      expect(result.err).not.toContain("0.0.0.0");
       expect(result.err).toContain("connect an agent with the claude mcp add line above\n");
       expect(result.err).not.toContain("claude mcp add --transport");
       expect(result.err).not.toContain(token);
@@ -1095,5 +1100,29 @@ describe("doctor checks the Node version (devrun F-a)", () => {
       );
     }
     expect(result.code).toBe(0);
+  });
+});
+
+describe("slowCloudNotice", () => {
+  it("names the adapter's own deadline, once", () => {
+    const said: string[] = [];
+    const slow = slowCloudNotice((t) => said.push(t), 10);
+    slow.notify("cloud.example", 5000);
+    slow.notify("cloud.example", 5000);
+    const other = slowCloudNotice((t) => said.push(t), 10);
+    other.notify("cloud.example", 1500);
+    expect(said).toEqual([
+      "still waiting for Intent Cloud at cloud.example: no answer yet (it gives up after 5 s)",
+      "still waiting for Intent Cloud at cloud.example: no answer yet (it gives up after 1500 ms)",
+    ]);
+  });
+});
+
+describe("formatLog: session entries", () => {
+  it("names the demo chain and each gateway session by its local id", () => {
+    const entry = (seq: number, body: unknown) => ({ seq, prev: "", ts: "t", kind: "session", body, hash: "" });
+    const text = formatLog([entry(0, { mode: "demo" }), entry(1, { id: "abc" })]);
+    expect(text).toContain("session        demo chain (test keys, sample catalog)");
+    expect(text).toContain("session        gateway session abc started (a local id, never sent)");
   });
 });

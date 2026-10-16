@@ -519,7 +519,11 @@ describe("failures without a usable response", () => {
     const hosts: string[] = [];
     let sentAt = 0;
     let notifiedAfter = -1;
-    const slow = { afterMs: 50, notify: (host: string) => ((notifiedAfter = Date.now() - sentAt), hosts.push(host)) };
+    const deadlines: number[] = [];
+    const slow = {
+      afterMs: 50,
+      notify: (host: string, timeoutMs: number) => ((notifiedAfter = Date.now() - sentAt), hosts.push(host), deadlines.push(timeoutMs)),
+    };
     const beforeSend = async (): Promise<void> => {
       // Time spent before the send (logging it) does not count towards afterMs.
       await new Promise((resolve) => setTimeout(resolve, 120));
@@ -527,6 +531,8 @@ describe("failures without a usable response", () => {
     };
     await expect(cloudFor(stub, { timeoutMs: 300, slow }).meta({ beforeSend })).rejects.toMatchObject({ reason: "timeout" });
     expect(hosts).toEqual([`127.0.0.1:${String(stub.port)}`]);
+    // The adapter's own deadline, not the default, so the notice says when this wait ends.
+    expect(deadlines).toEqual([300]);
     expect(notifiedAfter).toBeGreaterThanOrEqual(40);
   });
 

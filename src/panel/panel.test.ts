@@ -235,6 +235,21 @@ describe("buildView", () => {
     expect(view.flags).toEqual([]);
   });
 
+  it("labels a disclosure no entry answers as `intent log` does, never as sent; one that never left as not sent", () => {
+    const view = buildView([
+      entry(0, "disclosure", { endpoint: "searchCatalog", fields: ["zip"] }),
+      entry(1, "receipt", { disclosure_seq: 0 }),
+      entry(2, "disclosure", { endpoint: "searchCatalog", fields: ["zip"] }),
+      entry(3, "disclosure", { endpoint: "getMeta", fields: [] }),
+      entry(4, "unacknowledged", { disclosure_seq: 3, reason: "CloudNetworkError: not sent (connection refused)" }),
+    ]);
+    expect(view.rows.filter((r) => r.kind === "disclosure").map((r) => [r.seq, r.note])).toEqual([
+      [0, ""],
+      [2, "logged, maybe sent; no answer recorded"],
+      [3, "logged, not sent: no connection was made"],
+    ]);
+  });
+
   it("lists entries with unexpected bodies instead of hiding them", () => {
     const view = buildView([entry(0, "disclosure", "not an object"), entry(1, "block", { fields: [1, "x"] })]);
     expect(view.rows.map((r) => [r.endpoint, r.fields])).toEqual([

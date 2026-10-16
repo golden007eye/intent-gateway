@@ -5,7 +5,7 @@ The gateway is built so you can check what left your machine instead of taking o
 ```console
 $ intent verify --demo
 chain: ok
-  17 entries, every hash links
+  18 entries, every hash links
 key statements: ok
   1 recorded, checked offline against the pinned root key
 disclosures: ok
@@ -18,7 +18,7 @@ approvals: ok
 approver flags: ok
   flagged: 0
 self-check: skipped on request (demo mode); npm provenance and the image signature were not checked
-head: seq 16 hash 96e8d697…fa40
+head: seq 17 hash 96e8d697…fa40
   Compare this head with a copy of the chain taken earlier, or with your receipts.
 verify: ok
 ```
@@ -37,7 +37,7 @@ Before each request to Intent Cloud, the gateway appends the exact request to th
 |---|---|---|
 | `chain` | Every entry links to the one before by its hash: no entry inside the chain was changed, removed or reordered. | That entries were not dropped from the end (see below). |
 | `key statements` | Each key statement recorded in the chain was signed by the pinned root key and was valid when it was recorded. | Anything about keys the chain never recorded. |
-| `disclosures` | Each send has at most one follow-up. Each receipt is signed by a receipt key from the statement and covers the digest of the bytes the log says were sent, with the same keyid, nonce and time. | What Intent Cloud did with the data after it received it. |
+| `disclosures` | Each send has at most one follow-up, and a send with none is the last of its gateway session. Each receipt is signed by a receipt key from the statement and covers the digest of the bytes the log says were sent, with the same keyid, nonce and time. | What Intent Cloud did with the data after it received it. |
 | `approvals` | Each Approval carries a passkey assertion over the purchase snapshot that was pending, signed by a key from the statement, from the pinned approver passkey. | That the person who holds the passkey meant to buy (see the [threat model](threat-model.md#phone-hand-off-and-self-approval)). |
 | `approver flags` | Lists Approvals signed by a passkey other than the pinned approver; they were not counted as approved. | Flags do not fail verify; read them. |
 | `self-check` | The installed npm package matches its published provenance, or the image matches its signature and SBOM. | That the gateway is untampered: see below. |
@@ -47,7 +47,11 @@ Before each request to Intent Cloud, the gateway appends the exact request to th
 - **Acknowledged:** a receipt Intent Cloud signs at its public edge, over the digest of the bytes it received. A receipt means "received at Intent Cloud's public edge" and nothing more.
 - **Sent, not acknowledged:** the request went out and no receipt came back because there was no HTTP response, or an error page made by the network in front of Intent Cloud. Verify reports it and does not fail: the field was sent, and the log says so.
 - **Discarded:** a response that should have carried a valid receipt did not. The gateway did not use its content, and verify fails.
-- **No answer recorded:** the gateway logged the request, may have sent it, and stopped (killed, crashed, the machine lost power) before it recorded what came back, or it is still waiting for the answer. Verify lists it as "logged, maybe sent, no answer recorded" with its seq and does not fail: it is not counted as sent or as acknowledged. `intent log` shows its row as `logged … (maybe sent; no answer recorded …)`. An answer cannot be cut from inside the chain without breaking the links; cutting it from the end is caught only by the head check below.
+- **No answer recorded:** the gateway logged the request, may have sent it, and stopped (killed, crashed, the machine lost power, or it could not append the answer and so stopped sending) before it recorded what came back, or it is still waiting for the answer. Verify lists it as "logged, maybe sent, no answer recorded" with its seq and does not fail: it is not counted as sent or as acknowledged. `intent log`, the panel and the tool result's summary label it the same way, never as sent.
+
+  It is accepted only as the last request of its gateway session. Each start of the gateway writes a `session` entry with a random id, and each logged request carries that id, its number in the session and the numbers of the session's earlier requests still awaiting an answer. The id is local: it is in the chain, never in what is sent. A request with no answer is a failure when a later request of the same session counts it as answered, or when a number is missing from the session: its answer, or a whole request, was cut from the chain. A chain written before requests carried their session (before this check existed) has nothing to compare, and there a request with no answer is always listed apart.
+
+  The chain is linked by plain sha256 hashes, with no key, so anyone who can write the file can cut an answer or a request and re-hash every entry after it; verify then passes if the cut leaves the request last in its session. Such a cut changes every later hash, and so the head: compare the head with a saved copy (below).
 
 `intent verify` proves what the gateway sent and what Intent Cloud acknowledged receiving. It cannot show what happens to that data afterwards, and these docs do not claim otherwise.
 
