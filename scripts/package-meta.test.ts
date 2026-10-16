@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 const REPO = "https://github.com/golden007eye/intent-gateway";
 const read = (path: string): string => readFileSync(new URL(path, import.meta.url), "utf8");
 const pkg = JSON.parse(read("../package.json")) as {
+  description?: string;
+  keywords?: string[];
   repository?: { type?: string; url?: string };
   engines?: { node?: string };
   devEngines?: { runtime?: { name?: string; version?: string; onFail?: string } };
@@ -16,6 +18,28 @@ describe("package.json metadata npm provenance needs", () => {
     expect(pkg.repository?.type).toBe("git");
     const url = (pkg.repository?.url ?? "").replace(/^git\+/, "").replace(/\.git$/, "");
     expect(url).toBe(REPO);
+  });
+});
+
+// Without a description npm shows the README's first lines, which are the logo's HTML (R-2).
+describe("package.json metadata npmjs.com shows", () => {
+  it("has a one-line plain-text description that says it is pre-alpha", () => {
+    const description = pkg.description ?? "";
+    expect(description).toMatch(/^Self-hosted gateway .*\. Pre-alpha\.$/);
+    expect(description).not.toMatch(/[<>\n]/);
+    expect(description.length).toBeLessThanOrEqual(160);
+  });
+
+  // npmjs.com does not resolve repo-relative paths in the README's HTML, and the README ships in the tarball.
+  it("README links and images are absolute URLs, so they work on npmjs.com as on GitHub", () => {
+    const readme = read("../README.md");
+    const targets = [...readme.matchAll(/\]\(([^)\s]+)\)|\b(?:src|srcset|href)="([^"]+)"/g)].map((m) => m[1] ?? m[2] ?? "");
+    expect(targets.length).toBeGreaterThan(10);
+    expect(targets.filter((t) => !/^(https:\/\/|#)/.test(t))).toEqual([]);
+  });
+
+  it("has the search keywords", () => {
+    expect(pkg.keywords).toEqual(expect.arrayContaining(["mcp", "model-context-protocol", "ai-agents", "agentic-commerce", "privacy", "self-hosted"]));
   });
 });
 
