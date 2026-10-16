@@ -71,6 +71,7 @@ nav:
   - Gateway policy: policy.md
   - Policy library: policy-library.md
   - Verify: verify.md
+  - The log: log.md
   - Panel: panel.md
   - Threat model: threat-model.md
   - Security: security.md

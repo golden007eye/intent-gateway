@@ -10,7 +10,8 @@ import { doctor } from "./doctor.ts";
 import { describeError, errorContext, type ErrorContext } from "./errors.ts";
 import { help } from "./help.ts";
 import { CliError, type Io, line, type Outcome } from "./io.ts";
-import { formatLog, readLog } from "./log.ts";
+import { logCommand } from "./log.ts";
+import { logFlags } from "./log-flags.ts";
 import { policyAdd, policyShow, policyTest } from "./policy.ts";
 import { serve } from "./serve.ts";
 import type { Demo } from "../demo/index.ts";
@@ -28,7 +29,16 @@ const COMMON: Options = {
 const COMMANDS: Readonly<Record<string, Options>> = {
   serve: { http: { type: "boolean" } },
   demo: { http: { type: "boolean" } },
-  log: {},
+  log: {
+    verbose: { type: "boolean", short: "v" },
+    json: { type: "boolean" },
+    since: { type: "string" },
+    action: { type: "string" },
+    last: { type: "string" },
+    follow: { type: "boolean", short: "f" },
+    utc: { type: "boolean" },
+    "no-color": { type: "boolean" },
+  },
   verify: {
     install: { type: "string" },
     "pkg-dir": { type: "string" },
@@ -145,8 +155,7 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
         return serve(io, config, { http, demo });
       });
     case "log":
-      io.stdout.write(formatLog(readLog(config.dataDir)));
-      return { code: 0 };
+      return logCommand(io, config.dataDir, logFlags(io, values));
     case "verify": {
       const chosen = install(values, str);
       const report = await runVerify({
