@@ -12,6 +12,7 @@ export {
   connectCloud,
   createDisclosedCloud,
   type DisclosedCloud,
+  DisclosureKeysExpiredError,
   DisclosureNoKeysError,
   type DisclosureOptions,
   DisclosureBlockedError,

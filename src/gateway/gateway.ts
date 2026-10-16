@@ -3,7 +3,8 @@
 // to Intent Cloud goes through the disclosed cloud, which logs before it sends (invariant 2).
 //
 // - Readiness: a search needs a product or category, a budget and a US ZIP. Missing ones are listed back for the
-//   agent to ask about; the gateway never guesses one and calls nothing.
+//   agent to ask about; the gateway never guesses one and calls nothing. Under a policy that blocks categories, the
+//   category is required too: offers carry none of their own, so it is the only category the policy can check.
 // - Identity: every tool input is scanned with findIdentity before any request is built. A finding writes a `block`
 //   entry (kinds and paths, never values) and nothing is sent.
 // - Policy: each outbound request is mapped onto the policy module's own types and evaluated (which applies
@@ -21,6 +22,7 @@ import {
   type Cart,
   type CartRequest as CloudCartRequest,
   CONTRACT_VERSION,
+  type KeyStatement,
   type Offer as CloudOffer,
   OfferHandle,
   type SearchRequest as CloudSearchRequest,
@@ -33,6 +35,7 @@ import {
   type DisclosedCloud,
   DisclosureBlockedError,
   DisclosureDiscardedError,
+  DisclosureKeysExpiredError,
   DisclosureNoKeysError,
 } from "../disclosure/index.ts";
 import { INTENT } from "../config/index.ts";
@@ -43,6 +46,7 @@ import type { Entry, Store } from "../store/index.ts";
 import {
   approverFingerprint,
   checkApprover,
+  type FlagReason,
   type KeySet,
   onlyTestRoot,
   type PinnedRootKey,
@@ -140,7 +144,7 @@ export type ApprovalStatusInput = z.input<typeof ApprovalStatusInput>;
 
 /** A detail a search needs that the agent did not give. The agent asks the user for it; the gateway never guesses. */
 export interface MissingDetail {
-  readonly field: "product_or_category" | "budget_usd" | "zip";
+  readonly field: "product_or_category" | "category" | "budget_usd" | "zip";
   readonly ask: string;
 }
 
@@ -268,6 +272,9 @@ export function createGateway(options: GatewayOptions): Gateway {
       if (error instanceof DisclosureDiscardedError) {
         return refuse("error", "Intent Cloud's answer carried no valid receipt, so the gateway discarded it.");
       }
+      if (error instanceof DisclosureKeysExpiredError) {
+        return refuse("error", `Not sent: the key statement expired on ${error.expiresAt.toISOString()}; restart the gateway to fetch a fresh one.`);
+      }
       if (error instanceof DisclosureNoKeysError) return refuse("error", "No verified key statement: restart the gateway.");
       if (error instanceof CloudNetworkError) {
         return refuse("error", "Intent Cloud could not be reached; the request is logged as sent but not acknowledged.");
@@ -328,14 +335,56 @@ export function createGateway(options: GatewayOptions): Gateway {
 
     const statement = await cloud.keyStatement();
     if (!statement.ok) throw new GatewayStartError(`Intent Cloud key statement failed with status ${String(statement.status)}`);
-    const verified = verifyStatement(statement.body, pinnedRootKeys, new Date(now()));
+    const verified = await chainStatement(statement.body);
+    if (typeof verified === "string") throw new GatewayStartError(verified);
+    keySet = verified;
+  }
+
+  /** Verifies a served statement against the pin and chains it in a `keys` entry; a string says why it failed. */
+  async function chainStatement(statement: KeyStatement): Promise<KeySet | string> {
+    const verified = verifyStatement(statement, pinnedRootKeys, new Date(now()));
     if (!verified.ok) {
-      throw new GatewayStartError(
-        `the key statement did not verify against the pinned root key (Appendix F step ${String(verified.step)}: ${verified.reason})`,
-      );
+      return `the key statement did not verify against the pinned root key (Appendix F step ${String(verified.step)}: ${verified.reason})`;
     }
-    await store.append("keys", { statement: statement.body });
-    keySet = verified.keySet;
+    await store.append("keys", { statement });
+    return verified.keySet;
+  }
+
+  /**
+   * The key set for the next signed call. Once the statement has expired no key of it is trusted, so the statement
+   * is fetched again through the same disclosed bootstrap read start() uses (its receipt is logged unverified, then
+   * checked by `intent verify` against the statement it delivered). A fresh valid one is chained and used; otherwise
+   * the call is refused before anything else is sent.
+   */
+  async function currentKeys(fromSeq: number): Promise<{ ok: true; keys: KeySet } | { ok: false; refused: Refused }> {
+    const current = started();
+    if (now() < current.expiresAt.getTime()) return { ok: true, keys: current };
+    const expiredOn = current.expiresAt.toISOString();
+    keySet = null;
+    let why: string;
+    try {
+      const fetched = await call(() => cloud.keyStatement(), fromSeq);
+      const verified = fetched.ok ? await chainStatement(fetched.body) : fetched.refused.message;
+      if (typeof verified !== "string") {
+        keySet = verified;
+        logger.warn(`intent-gateway: the key statement expired on ${expiredOn}; fetched and chained a fresh one.`);
+        return { ok: true, keys: verified };
+      }
+      why = verified;
+    } finally {
+      // Kept so the next call tries again; the disclosed cloud refuses every signed call under it meanwhile.
+      if (keySet === null) keySet = current;
+    }
+    return {
+      ok: false,
+      refused: {
+        status: "error",
+        message:
+          `Not sent: the key statement expired on ${expiredOn}, and the one Intent Cloud returns now is not a fresh valid one (${why}). ` +
+          "Restart the gateway to fetch a fresh one later.",
+        summary: summary(fromSeq),
+      },
+    };
   }
 
   // ---- find offers ----------------------------------------------------------------------------------------------
@@ -354,6 +403,14 @@ export function createGateway(options: GatewayOptions): Gateway {
     const missing: MissingDetail[] = [];
     if (product === undefined && category === undefined) {
       missing.push({ field: "product_or_category", ask: "What should I look for: an exact product, or a kind of product?" });
+    } else if (category === undefined && policy.categories.block.length > 0) {
+      // Offers carry no category of their own, so a product-only search would skip every category the policy
+      // blocks (invariant 1). Under such a policy a search must name its category; offers and carts are then checked
+      // against it.
+      missing.push({
+        field: "category",
+        ask: "What kind of product is it (for example running-shoes)? The gateway policy blocks some categories, so a search must name one.",
+      });
     }
     const budget = input.budget_usd;
     if (budget === undefined || !Number.isFinite(budget) || budget <= 0) {
@@ -403,6 +460,8 @@ export function createGateway(options: GatewayOptions): Gateway {
       );
     }
 
+    const keys = await currentKeys(fromSeq);
+    if (!keys.ok) return keys.refused;
     const sent = await call(() => cloud.search(request), fromSeq);
     if (!sent.ok) return sent.refused;
     const history = spendHistory(store.entries(), now());
@@ -441,7 +500,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   // ---- create cart ----------------------------------------------------------------------------------------------
 
   async function createCart(raw: unknown): Promise<CreateCartResult> {
-    const keys = started();
+    started();
     const fromSeq = head();
     const identity = await identityRefusal("createCart", raw, fromSeq);
     if (identity !== null) return identity;
@@ -466,6 +525,9 @@ export function createGateway(options: GatewayOptions): Gateway {
         `Not sent: the gateway policy refuses this cart (${before.map((b) => b.reason).join("; ")}).`);
     }
 
+    const fresh = await currentKeys(fromSeq);
+    if (!fresh.ok) return fresh.refused;
+    const keys = fresh.keys;
     const cartCall = await call(() => cloud.createCart(request), fromSeq);
     if (!cartCall.ok) return cartCall.refused;
     const cart = cartCall.body;
@@ -527,7 +589,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   // ---- approval status ------------------------------------------------------------------------------------------
 
   async function getApprovalStatus(raw: unknown): Promise<ApprovalStatusResult> {
-    const keys = started();
+    started();
     const fromSeq = head();
     const identity = await identityRefusal("getApproval", raw, fromSeq);
     if (identity !== null) return identity;
@@ -542,6 +604,9 @@ export function createGateway(options: GatewayOptions): Gateway {
     }
     const chained = chain.find((e) => e.kind === "approval" && bodyOf(e).handle === handle);
 
+    const fresh = await currentKeys(fromSeq);
+    if (!fresh.ok) return fresh.refused;
+    const keys = fresh.keys;
     const fetched = await call(() => cloud.getApproval(handle), fromSeq);
     if (chained !== undefined) return reportChained(chained, fetched.ok ? fetched.body : null, fromSeq);
     if (!fetched.ok) return fetched.refused;
@@ -577,10 +642,10 @@ export function createGateway(options: GatewayOptions): Gateway {
       const lastPin = chain.findLastIndex((e) => e.kind === "approver_pin");
       const alreadyFlagged = chain.some((e, i) => i > lastPin && e.kind === "approver_flag" && bodyOf(e).fingerprint === check.fingerprint);
       if (!alreadyFlagged) await store.append(check.entry.kind, check.entry.body);
-      return flagged(check.fingerprint, fromSeq);
+      return flagged(check.fingerprint, check.reason, fromSeq);
     }
     if (check.entry !== null) await store.append(check.entry.kind, check.entry.body);
-    await store.append("approval", { handle, proof: status.proof });
+    await store.append("approval", { handle, proof: status.proof, sign_count: verified.credential.signCount });
     if (check.decision === "pin") {
       logger.warn(`intent-gateway: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
     }
@@ -615,7 +680,18 @@ export function createGateway(options: GatewayOptions): Gateway {
     return { status: "approved", fingerprint, message: `${base} The buyer pays at the merchant checkout.`, summary: summary(fromSeq) };
   }
 
-  function flagged(fingerprint: string, fromSeq: number): ApprovalStatusResult {
+  function flagged(fingerprint: string, reason: FlagReason, fromSeq: number): ApprovalStatusResult {
+    if (reason === "sign_count") {
+      return {
+        status: "flagged",
+        fingerprint,
+        message:
+          `Not approved: the pinned passkey (fingerprint ${fingerprint}) signed with a signature counter that did not ` +
+          "go up since its last approval, as happens when a passkey has been copied. Check the passkey with its owner " +
+          "before creating a new cart.",
+        summary: summary(fromSeq),
+      };
+    }
     return {
       status: "flagged",
       fingerprint,

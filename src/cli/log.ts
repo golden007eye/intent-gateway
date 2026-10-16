@@ -79,7 +79,9 @@ function describe(item: Item): [string, string] {
     case "approver_pin":
       return ["approver pin", text(b.fingerprint)];
     case "approver_flag":
-      return ["FLAGGED", `${text(b.fingerprint)} is not the pinned approver; if it is your passkey, run ${INTENT} approver accept`];
+      return b.reason === "sign_count"
+        ? ["FLAGGED", `${text(b.fingerprint)} signed with a signature counter that did not go up; the passkey may have been copied`]
+        : ["FLAGGED", `${text(b.fingerprint)} is not the pinned approver; if it is your passkey, run ${INTENT} approver accept`];
     case "session":
       return ["session", text(b.keyid)];
     default:

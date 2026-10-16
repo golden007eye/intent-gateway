@@ -290,6 +290,34 @@ describe("the fixed header set, as raw bytes", () => {
     await expect(cloudFor(stub, { agentFactory: () => new Agent({ keepAlive: true }) }).meta()).rejects.toThrow(CloudRequestError);
     expect(stub.requests).toHaveLength(1);
   });
+
+  it("refuses a keep-alive agent before beforeSend, so a request that never leaves is never logged as sent", async () => {
+    const stub = await startStub();
+    let logged = 0;
+    const cloud = cloudFor(stub, { agentFactory: () => new Agent({ keepAlive: true }) });
+    await expect(cloud.search(SEARCH, {
+        beforeSend: () => {
+          logged++;
+        },
+      })).rejects.toThrow(CloudRequestError);
+    expect(logged).toBe(0);
+    expect(stub.connections).toHaveLength(0);
+  });
+
+  it("destroys the caller's agent when beforeSend throws", async () => {
+    const stub = await startStub();
+    const agent = new Agent({ keepAlive: false });
+    let destroyed = 0;
+    const destroy = agent.destroy.bind(agent);
+    agent.destroy = () => {
+      destroyed++;
+      destroy();
+    };
+    const cloud = cloudFor(stub, { agentFactory: () => agent });
+    await expect(cloud.meta({ beforeSend: () => Promise.reject(new Error("log append failed")) })).rejects.toThrow("log append failed");
+    expect(destroyed).toBe(1);
+    expect(stub.connections).toHaveLength(0);
+  });
 });
 
 describe("beforeSend", () => {

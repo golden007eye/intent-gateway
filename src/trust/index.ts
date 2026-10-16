@@ -7,10 +7,12 @@
 //
 // Chain bodies the caller writes, so the others can rely on them:
 // - approval_pending: `{handle, approval_url, snapshot_hash}`; verifyApprovalProof reads `handle` and `snapshot_hash`.
-// - approval: `{handle, …}`; a handle with an approval entry is a replay.
-// - approver_pin, approver_flag: the `entry.body` checkApprover returns, `{fingerprint, credential_id, credential_public_key}`.
+// - approval: `{handle, sign_count, …}`; a handle with an approval entry is a replay. `sign_count` is the verified
+//   credential's `signCount`; checkApprover compares the next approval's counter with it (absent = unknown).
+// - approver_pin, approver_flag: the `entry.body` checkApprover returns, `{fingerprint, credential_id,
+//   credential_public_key, sign_count, handle}`, plus `reason` on a flag.
 export { approvalChallenge, type ApprovalFailure, type ApprovalResult, type ChainEntry, verifyApprovalProof, type VerifiedApproval, type VerifiedCredential } from "./approval.ts";
-export { type ApproverBody, type ApproverCheck, checkApprover } from "./approver.ts";
+export { type ApproverBody, type ApproverCheck, checkApprover, type FlagReason } from "./approver.ts";
 export { approverFingerprint } from "./fingerprint.ts";
 export { type ReceiptFailure, type ReceiptResponse, type ReceiptResult, type SentRequest, verifyReceipt } from "./receipt.ts";
 export { isTestRoot, onlyTestRoot, TEST_ROOT_KEY } from "./test-root.ts";

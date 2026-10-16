@@ -114,9 +114,10 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       keyFailures.push(`seq ${String(entry.seq)}: the recorded key statement does not verify against the pinned root (${why})`);
     }
   }
-  // The key-bootstrap reads are sent before any statement is recorded; their receipts are checked against the first.
-  const [first] = statements;
-  const bootstrap: RecordedKeys | null = first === undefined ? null : { seq: first[0], keySet: first[1] };
+  // The key-bootstrap reads (at start, and again when the statement has expired) are sent while no key set is
+  // trusted; their receipts, logged `verified: false`, are checked against the next statement recorded after them.
+  const recorded = [...statements].map(([seq, keySet]): RecordedKeys => ({ seq, keySet }));
+  const nextKeys = (seq: number): RecordedKeys | null => recorded.find((k) => k.seq > seq) ?? null;
   // The latest statement recorded before the entry being checked.
   let keys: RecordedKeys | null = null;
 
@@ -149,7 +150,7 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
         if (entry.kind === "discarded") {
           disclosureFailures.push(`${at}: discarded: a response to ${of} came without a valid receipt (${String(body.reason)})`);
         } else if (entry.kind === "receipt") {
-          const problem = receiptProblem(body, target.entry, keys ?? bootstrap, ts);
+          const problem = receiptProblem(body, target.entry, body.verified === false ? (nextKeys(entry.seq) ?? keys) : keys, ts);
           if (problem !== null) disclosureFailures.push(`${at}: the receipt for ${of} ${problem}`);
         }
         break;
@@ -165,7 +166,11 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       }
       case "approver_flag":
         counts.flags += 1;
-        flags.push(`${at}: a passkey other than the pinned approver signed an approval, not counted as approved (fingerprint ${String(body.fingerprint)})`);
+        flags.push(
+          body.reason === "sign_count"
+            ? `${at}: the pinned approver's passkey signed an approval with a signature counter that did not go up, not counted as approved (fingerprint ${String(body.fingerprint)})`
+            : `${at}: a passkey other than the pinned approver signed an approval, not counted as approved (fingerprint ${String(body.fingerprint)})`,
+        );
         break;
       default:
         break;
@@ -239,6 +244,9 @@ function approvalProblem(
   const verified = verifyApprovalProof({ state: "approved", proof: body.proof }, pendingEntry, keys.keySet, before, ts);
   if (!verified.ok) return `does not verify (step ${String(verified.step)}: ${verified.reason})`;
   const approver = checkApprover(verified.credential, before);
+  if (approver.decision === "flag" && approver.reason === "sign_count") {
+    return `is counted as approved, but its passkey's signature counter did not go up since the last approval (fingerprint ${approver.fingerprint})`;
+  }
   if (approver.decision === "flag") return `is counted as approved, but its passkey is not the pinned approver (fingerprint ${approver.fingerprint})`;
   if (approver.decision === "pin") return "was chained before any approver pin";
   return null;

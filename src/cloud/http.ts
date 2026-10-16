@@ -239,13 +239,18 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
     return { operation, method: endpoint.method, path, headers, body };
   }
 
-  function send(request: PreparedRequest): Promise<Exchange> {
+  /** The caller's agent for one request, refused when it keeps connections alive. Called before beforeSend. */
+  function requestAgent(): Agent | undefined {
     const agent = options.agentFactory?.();
     // Node sets Agent#keepAlive at runtime; @types/node does not declare it.
     if (agent !== undefined && (agent as Agent & { keepAlive?: boolean }).keepAlive === true) {
       agent.destroy();
       throw new CloudRequestError("agentFactory returned a keep-alive agent");
     }
+    return agent;
+  }
+
+  function send(request: PreparedRequest, agent: Agent | undefined): Promise<Exchange> {
     const requestOptions: RequestOptions = {
       method: request.method,
       hostname: target.hostname,
@@ -306,8 +311,15 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
 
   async function call<T>(operation: OperationId, path: string, payload: unknown, callOptions?: CallOptions): Promise<CloudResult<T>> {
     const request = prepare(operation, path, payload);
-    await callOptions?.beforeSend?.(request);
-    const exchange = await send(request);
+    // Every refusal comes before beforeSend, so a request that never leaves is never logged as sent.
+    const agent = requestAgent();
+    try {
+      await callOptions?.beforeSend?.(request);
+    } catch (error) {
+      agent?.destroy();
+      throw error;
+    }
+    const exchange = await send(request, agent);
     const { status, headers } = exchange;
     const meta = readHeaders(status, headers);
     const raw: RawExchange = { request, responseHeaders: headers, responseBytes: exchange.body ?? new Uint8Array(0) };

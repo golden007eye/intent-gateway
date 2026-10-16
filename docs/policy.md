@@ -40,6 +40,8 @@ categories:
   block: [electronics]        # a category blocks its subcategories (electronics/headphones)
 ```
 
+The offers Intent Cloud returns carry no category of their own, so the gateway checks each offer and cart against the category of the search that found it. When `categories.block` lists anything, a search must therefore name a category. A search for a product alone is not sent; `find_offers` asks the agent for the category.
+
 The **baseline** is the loosest policy the gateway will run, and every loaded policy is combined with it: passkey approval, at most 3 items per cart, a 5-digit US ZIP as the only ship-to detail, and the categories excluded under the rules Intent Cloud enforces (health and medical; alcohol, tobacco, cannabis, adult and weapons; gift cards, crypto, subscriptions and digital goods).
 
 ## What is refused at load time
