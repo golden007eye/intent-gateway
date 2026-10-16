@@ -21,7 +21,7 @@ export interface Io {
   /** The Node version doctor checks (process.versions.node by default). */
   nodeVersion?: string;
   /** Test seams: the library's commit and fetch, and the disclosed cloud doctor and serve connect through. */
-  library?: Pick<AddOptions, "buildCommit" | "fetch" | "bundledRoot">;
+  library?: Pick<AddOptions, "buildCommit" | "dirty" | "fetch" | "bundledRoot">;
   connect?: (http: HttpCloudOptions, store: Store, options: DisclosureOptions) => DisclosedCloud;
 }
 

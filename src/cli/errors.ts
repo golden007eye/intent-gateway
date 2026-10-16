@@ -29,7 +29,7 @@ const LIBRARY_FIX: Readonly<Record<LibraryErrorCode, string>> = {
   INDEX_INVALID: "reinstall the gateway (npx -y intent-gateway@latest), or pass --commit <sha> to take the library from GitHub",
   HASH_MISMATCH: "nothing was written; reinstall the gateway, or pass --commit <sha> of a signed commit on main",
   NO_BUILD_COMMIT: "pass --commit <sha> of a signed commit on main to take the policy from GitHub",
-  BAD_COMMIT: "pass the full 40-character hash of a commit on main",
+  BAD_COMMIT: "copy the full hash of a commit on main from git log",
   COMMIT_UNSIGNED: "pass --commit <sha> of a signed commit on main",
   COMMIT_NOT_ON_MAIN: "pass --commit <sha> of a commit on main",
   GITHUB_RATE_LIMITED: "try again later, or drop --commit to use the policy bundled with the gateway",

@@ -4,6 +4,7 @@ export {
   addPolicy,
   LibraryError,
   LIBRARY_REPO,
+  lockOrigin,
   planPolicy,
   type PolicyPlan,
   MAX_GITHUB_BODY_BYTES,

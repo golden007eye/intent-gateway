@@ -1,8 +1,8 @@
 // `intent policy test | add | show`. A policy can only narrow (invariant 1): `add` writes meet(current, library),
 // shows the change as a diff first, and asks before writing (or needs --yes when no one is at the terminal).
 import { readFile } from "node:fs/promises";
-import { BUILD, type Config, describeBuild, INTENT } from "../config/index.ts";
-import { LibraryError, type Lock, planPolicy, readLock } from "../library/index.ts";
+import { BUILD, type Config, containerRef, describeBuild, INTENT } from "../config/index.ts";
+import { LibraryError, lockOrigin, planPolicy, readLock } from "../library/index.ts";
 import { loadPolicy, type Policy, PolicyError, runCases } from "../policy/index.ts";
 import { describeError } from "./errors.ts";
 import { CliError, type Io, line } from "./io.ts";
@@ -92,7 +92,7 @@ export async function policyAdd(io: Io, config: Config, name: string, flags: Add
     ...(flags.commit === undefined ? {} : { commit: flags.commit }),
     ...io.library,
   });
-  line(io.stdout, `policy add ${name}, from ${origin(plan.lock)}, into ${policyPath}:`);
+  line(io.stdout, `policy add ${name}, from ${lockOrigin(plan.lock)}, into ${policyPath}:`);
   if (plan.before === plan.after) {
     line(io.stdout, `no change: ${policyPath} is already at least as strict as ${name}; recording it in policy.lock`);
   } else {
@@ -114,13 +114,11 @@ export async function policyAdd(io: Io, config: Config, name: string, flags: Add
     }
   }
   const lock = await plan.apply();
-  line(io.stdout, `applied: ${policyPath} now includes ${name}; policy.lock records ${origin(lock)}`);
-  line(io.stdout, `a running gateway reads its policy at start: restart ${INTENT} serve to use it`);
+  line(io.stdout, `applied: ${policyPath} now includes ${name}; policy.lock records ${lockOrigin(lock)}`);
+  // In the image the gateway is the container's own process, so the restart is the container's, not a command in it.
+  const restart = config.runtime === "container" ? `run docker restart ${containerRef(io.env)}` : `restart ${INTENT} serve`;
+  line(io.stdout, `a running gateway reads its policy at start: ${restart} to use it`);
   return 0;
-}
-
-function origin(lock: Lock): string {
-  return lock.source === "bundled" ? `the library bundled with this gateway (commit ${lock.commit})` : `GitHub commit ${lock.commit}`;
 }
 
 /** The active policy and its lock. Exit 1 when the lock does not describe the policy file. */
@@ -138,7 +136,7 @@ export async function policyShow(io: Io, config: Config): Promise<number> {
       if (lock === undefined) {
         line(io.stdout, `lock: none (this policy.yaml was not written by ${INTENT} policy add)`);
       } else {
-        line(io.stdout, `lock: ${lock.name} from ${origin(lock)}`);
+        line(io.stdout, `lock: ${lock.name} from ${lockOrigin(lock)}`);
         line(io.stdout, `  library policy sha256 ${lock.sha256}`);
         line(io.stdout, `  policy.yaml sha256 ${lock.policy_sha256} (matches the file)`);
       }

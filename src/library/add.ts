@@ -21,6 +21,8 @@ const SHA256 = /^[0-9a-f]{64}$/;
  * What `policy.lock` records: which library policy was applied, from which commit, the sha256 of the library's
  * policy.yaml (`sha256`), and the sha256 of the policy.yaml addPolicy wrote, which is meet(current, library)
  * (`policy_sha256`). A lock whose `policy_sha256` does not match the policy file does not describe it.
+ * `commit` is a full SHA, except for a bundled policy from a build that knows no commit: then it is a key of
+ * NO_COMMIT, never something that looks like a commit (invariant 5).
  */
 export interface Lock {
   name: string;
@@ -30,6 +32,22 @@ export interface Lock {
   policy_sha256: string;
 }
 
+/**
+ * The `commit` a bundled lock records when the build knows no commit, and why. The bundled index's sha256 still
+ * vouches for the policy file; only the commit it came from is not known. A GitHub lock never carries these.
+ */
+export const NO_COMMIT = {
+  unknown: "a local build without BUILD_COMMIT",
+  uncommitted: "built from a tree with uncommitted changes",
+} as const;
+
+/** Where a lock says its policy came from, for `policy add`, `policy show` and doctor; never names a commit it lacks. */
+export function lockOrigin(lock: Pick<Lock, "commit" | "source">): string {
+  if (lock.source === "github") return `GitHub commit ${lock.commit}`;
+  const why = Object.hasOwn(NO_COMMIT, lock.commit) ? NO_COMMIT[lock.commit as keyof typeof NO_COMMIT] : undefined;
+  return `the library bundled with this gateway (${why === undefined ? `commit ${lock.commit}` : `commit unknown: ${why}`})`;
+}
+
 export interface AddOptions {
   /** The configured policy path (`Config.policyPath`); `policy.lock` is written beside it. */
   policyPath: string;
@@ -37,6 +55,8 @@ export interface AddOptions {
   commit?: string;
   /** Overrides `BUILD.buildCommit` for the bundled source (tests; a build from source has none). */
   buildCommit?: string | null;
+  /** Overrides `BUILD.dirty` alongside buildCommit (tests); buildCommit given without it means false (from source). */
+  dirty?: Build["dirty"];
   /** Overrides the bundled `policies/` folder (tests). */
   bundledRoot?: URL;
   /** Overrides the global fetch (tests). */
@@ -171,7 +191,7 @@ function isLock(value: unknown): value is Lock {
     Object.keys(l).sort().join() === "commit,name,policy_sha256,sha256,source" &&
     typeof l.name === "string" &&
     typeof l.commit === "string" &&
-    FULL_SHA.test(l.commit) &&
+    (FULL_SHA.test(l.commit) || (l.source === "bundled" && Object.hasOwn(NO_COMMIT, l.commit))) &&
     typeof l.sha256 === "string" &&
     SHA256.test(l.sha256) &&
     typeof l.policy_sha256 === "string" &&
@@ -204,11 +224,16 @@ export function noCommitReason(build: Pick<Build, "dirty">): string {
 }
 
 async function readBundled(name: string, opts: AddOptions): Promise<Fetched> {
-  const commit = opts.buildCommit === undefined ? BUILD.buildCommit : opts.buildCommit;
-  if (commit === null) {
-    const why = opts.buildCommit === undefined ? noCommitReason(BUILD) : "this gateway runs from source";
-    throw new LibraryError("NO_BUILD_COMMIT", `${why}, so its bundled policies have no build commit to record; use --commit <sha>`);
-  }
+  const build: Pick<Build, "buildCommit" | "dirty"> =
+    opts.buildCommit === undefined ? BUILD : { buildCommit: opts.buildCommit, dirty: opts.dirty === undefined ? false : opts.dirty };
+  // A built gateway that knows no commit (a plain docker build, or a dirty tree) still ships the policies its
+  // bundled index vouches for, so they apply and the lock says the commit is unknown. Only running from source,
+  // where policies/ is the working tree being edited, refuses.
+  let commit: string;
+  if (build.buildCommit !== null) commit = build.buildCommit;
+  else if (build.dirty === null) commit = "unknown";
+  else if (build.dirty) commit = "uncommitted";
+  else throw new LibraryError("NO_BUILD_COMMIT", `${noCommitReason(build)}, so its bundled policies have no build commit to record`);
   const root = opts.bundledRoot ?? BUNDLED_ROOT;
   const expected = indexHash(name, await readFile(new URL("index.json", root), "utf8"), "the bundled index");
   const bytes = await readFile(new URL(`${name}/policy.yaml`, root));
