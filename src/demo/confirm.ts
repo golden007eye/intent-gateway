@@ -42,6 +42,12 @@ export interface ConfirmPageOptions {
   passkey: SoftPasskey;
   /** 0 picks a free port. */
   port: number;
+  /**
+   * The address to listen on; defaults to CONFIRM_HOST. Only the Docker image passes 0.0.0.0, so that the host's
+   * `-p 127.0.0.1:<port>:<port>` mapping reaches the page. The page still answers only to `Host: 127.0.0.1:<port>`
+   * and its links still say 127.0.0.1, so the port must be mapped to the same number on the host.
+   */
+  bind?: string;
   /** Milliseconds since the epoch, for token expiry. Defaults to Date.now. */
   now?: () => number;
 }
@@ -151,7 +157,7 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(options.port, CONFIRM_HOST, () => {
+    server.listen(options.port, options.bind ?? CONFIRM_HOST, () => {
       resolve();
     });
   });

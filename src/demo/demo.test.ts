@@ -237,6 +237,20 @@ describe("confirm page", () => {
   });
 });
 
+describe("the confirm page in the Docker image (bind 0.0.0.0)", () => {
+  it("still links to 127.0.0.1 and still answers only to that Host", async () => {
+    const demo = await startDemo({ dataDir: await tmpData(), bind: "0.0.0.0" });
+    cleanup.push(() => demo.close());
+    expect(demo.confirmBaseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/confirm$/);
+    const unknown = `${demo.confirmBaseUrl}/c/unknown`;
+    expect((await raw(unknown)).status).toBe(404);
+    // A request reaching the wildcard bind under another name (a rebinding page, another container) is refused.
+    expect((await raw(unknown, { headers: { host: "evil.example" } })).status).toBe(421);
+    const port = new URL(demo.confirmBaseUrl).port;
+    expect((await raw(unknown, { headers: { host: `0.0.0.0:${port}` } })).status).toBe(421);
+  });
+});
+
 describe("demo and real chains never mix", () => {
   it("demo mode refuses a data dir holding a real chain", async () => {
     const demo = await demoAt(await tmpData());
