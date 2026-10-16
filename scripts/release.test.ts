@@ -7,6 +7,7 @@ import {
   release,
   selectVersion,
   Stop,
+  withImageTag,
   withVersion,
   type Flags,
   type Io,
@@ -18,6 +19,7 @@ const DIGEST = `sha256:${"b".repeat(64)}`;
 const CI_URL = "https://github.com/golden007eye/intent-gateway/actions/runs/1";
 const RELEASE_URL = "https://github.com/golden007eye/intent-gateway/actions/runs/2";
 const GH_RELEASES = "https://github.com/golden007eye/intent-gateway/releases";
+const DOC = (v: string): string => `$ docker pull ghcr.io/golden007eye/intent-gateway:${v}\nor ghcr.io/golden007eye/intent-gateway:latest\n`;
 const PKG = (v: string): string => `{\n  "name": "intent-gateway",\n  "version": "${v}",\n  "license": "Apache-2.0"\n}\n`;
 
 // Commands that change the repository, GitHub or npm, or follow a run that only a real release starts. A dry run
@@ -45,6 +47,7 @@ function world(overrides: Responder[] = [], opts: { version?: string; tty?: bool
   const writes: { path: string; text: string }[] = [];
   const asked: string[] = [];
   let pkg = PKG(opts.version ?? "0.1.0-preview.1");
+  const docs: Record<string, string> = { "README.md": DOC("0.1.0-preview.1"), "docs/quickstart.md": DOC("0.0.9-preview.7") };
   const base: Responder = (line) => {
     if (line === "git rev-parse --abbrev-ref HEAD") return ok("main\n");
     if (line.startsWith("git status")) return ok("");
@@ -87,10 +90,11 @@ function world(overrides: Responder[] = [], opts: { version?: string; tty?: bool
       }
       throw new Error(`unexpected command: ${line}`);
     },
-    readFile: () => pkg,
+    readFile: (path) => (path === "package.json" ? pkg : (docs[path] ?? "")),
     writeFile(path, text) {
       writes.push({ path, text });
-      pkg = text;
+      if (path === "package.json") pkg = text;
+      else docs[path] = text;
     },
     ask(question) {
       asked.push(question);
@@ -395,7 +399,12 @@ describe("release", () => {
         l.startsWith("gh run list") && l.includes("release.yml") ? ok(JSON.stringify([{ databaseId: 2, headBranch: "v0.1.0-preview.2", headSha: merged, url: RELEASE_URL }])) : undefined,
     ]);
     await release(flags({ yes: true }), w.io);
-    expect(w.writes).toEqual([{ path: "package.json", text: PKG("0.1.0-preview.2") }]);
+    // The docs' image pins follow the new version, a stale pin included; `latest` stays.
+    expect(w.writes).toEqual([
+      { path: "package.json", text: PKG("0.1.0-preview.2") },
+      { path: "README.md", text: DOC("0.1.0-preview.2") },
+      { path: "docs/quickstart.md", text: DOC("0.1.0-preview.2") },
+    ]);
     expect(w.calls.filter(isMutating)).toEqual([
       "git switch -c release/0.1.0-preview.2",
       "git commit --all --message release: 0.1.0-preview.2",
@@ -450,6 +459,10 @@ describe("helpers", () => {
   it("withVersion changes only the version field", () => {
     expect(withVersion(PKG("0.1.0-preview.1"), "0.1.0-preview.1", "0.1.0-preview.2")).toBe(PKG("0.1.0-preview.2"));
     expect(() => withVersion(PKG("0.1.0"), "0.2.0", "0.3.0")).toThrow(Stop);
+  });
+
+  it("withImageTag sets every pinned tag and leaves latest", () => {
+    expect(withImageTag(DOC("0.1.0-preview.2") + DOC("0.1.0"), "0.1.0-preview.3")).toBe(DOC("0.1.0-preview.3") + DOC("0.1.0-preview.3"));
   });
 
   it("parseFlags", () => {
