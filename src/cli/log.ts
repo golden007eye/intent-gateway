@@ -3,7 +3,7 @@
 // the approvals and approver pins. It says what the gateway sent and what came back, nothing more (invariant 5).
 // formatLog is pure; the golden test pins its output.
 import { INTENT } from "../config/index.ts";
-import { readChain, verifyChain } from "../store/index.ts";
+import { neverLeft, readChain, verifyChain } from "../store/index.ts";
 
 type Body = Record<string, unknown>;
 
@@ -20,13 +20,19 @@ export function formatLog(items: readonly unknown[]): string {
   }
   const lines: string[] = [];
   const demo = demoChain(items);
+  // Logged requests that never left (no connection was made): listed as logged, not as sent (invariant 5).
+  const notSent = new Set<unknown>();
+  for (const raw of items) {
+    const item = asItem(raw);
+    if (item?.kind === "unacknowledged" && neverLeft(item.body)) notSent.add(item.body.disclosure_seq);
+  }
   for (const [index, raw] of items.entries()) {
     const item = asItem(raw);
     if (item === null) {
       lines.push(`line ${String(index + 1)}: not an entry (a torn or edited line); run ${INTENT} verify`);
       continue;
     }
-    const [label, detail] = describe(item, demo);
+    const [label, detail] = item.kind === "disclosure" && notSent.has(item.seq) ? notSentRow(item) : describe(item, demo);
     lines.push(`#${String(item.seq).padEnd(4)} ${item.ts}  ${label.padEnd(14)} ${detail}`);
   }
   const chain = verifyChain(items);
@@ -57,6 +63,11 @@ function demoChain(items: readonly unknown[]): boolean {
   return first?.kind === "session" && first.body.mode === "demo";
 }
 
+/** A disclosure whose request never left: logged before the send, which then failed to connect. */
+function notSentRow(item: Item): [string, string] {
+  return ["logged", `${text(item.body.endpoint)}: ${list(leafFields(strings(item.body.fields)), "no body fields")} (not sent: no connection was made)`];
+}
+
 function describe(item: Item, demo: boolean): [string, string] {
   const b = item.body;
   const ref = typeof b.disclosure_seq === "number" ? `#${String(b.disclosure_seq)}` : "#?";
@@ -71,7 +82,9 @@ function describe(item: Item, demo: boolean): [string, string] {
       return ["receipt", `${ref}: ${who} (status ${typeof b.status === "number" ? String(b.status) : "?"}, ${how})`];
     }
     case "unacknowledged":
-      return ["no receipt", `${ref}: ${text(b.reason)}; it may or may not have arrived`];
+      return neverLeft(b)
+        ? ["not sent", `${ref}: ${text(b.reason)}; it never left this machine`]
+        : ["no receipt", `${ref}: ${text(b.reason)}; it may or may not have arrived`];
     case "discarded":
       return ["discarded", `${ref}: ${text(b.reason)}; the response was not used`];
     case "keys": {

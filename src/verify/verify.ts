@@ -7,7 +7,7 @@
 import { INTENT } from "../config/index.ts";
 import { ReceiptRequest } from "../contract/index.ts";
 import { contentDigest } from "../signing/index.ts";
-import { type Entry, GENESIS, readChain, verifyChain } from "../store/index.ts";
+import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
 import { checkApprover, type KeySet, type PinnedRootKey, type ReceiptResponse, type SentRequest, verifyApprovalProof, verifyReceipt, verifyStatement } from "../trust/index.ts";
 
@@ -109,6 +109,8 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
   const flags: string[] = [];
   const disclosures = new Map<number, Disclosure>();
   const pending = new Map<string, Entry>();
+  // Logged requests that never left (no connection was made): reported as not sent, not as sent (invariant 5).
+  let notSent = 0;
   // Every recorded statement, checked at the time it was recorded: its KeySet, or null when it did not verify.
   const statements = new Map<number, KeySet | null>();
   for (const entry of entries) {
@@ -147,6 +149,7 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       case "unacknowledged":
       case "discarded": {
         counts[entry.kind === "receipt" ? "receipts" : entry.kind] += 1;
+        if (entry.kind === "unacknowledged" && neverLeft(entry.body)) notSent += 1;
         const target = typeof body.disclosure_seq === "number" ? disclosures.get(body.disclosure_seq) : undefined;
         if (target === undefined) {
           disclosureFailures.push(`${at}: ${entry.kind} names disclosure_seq ${String(body.disclosure_seq)}, which is not an earlier disclosure`);
@@ -202,11 +205,12 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       name: "disclosures",
       ok: disclosureFailures.length === 0,
       details: [
-        `sent: ${String(counts.disclosures)}`,
+        `sent: ${String(counts.disclosures - notSent)}`,
+        ...(notSent === 0 ? [] : [`logged but not sent (no connection was made): ${String(notSent)}`]),
         demoChain(entries)
           ? `acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): ${String(counts.receipts)}`
           : `acknowledged by a receipt from Intent Cloud's public edge: ${String(counts.receipts)}`,
-        `sent, not acknowledged: ${String(counts.unacknowledged)}`,
+        `sent, not acknowledged: ${String(counts.unacknowledged - notSent)}`,
         `discarded: ${String(counts.discarded)}`,
         ...disclosureFailures,
       ],

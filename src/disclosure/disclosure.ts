@@ -11,10 +11,13 @@
 //      logged with `verified: false`. Once the key set has expired, the other calls are refused before anything is
 //      logged (DisclosureKeysExpiredError).
 //    - unacknowledged: no HTTP response, or a non-2xx response without Intent-Contract-Version and without a receipt.
+//      When no connection was ever made (DNS failure, refused), its reason starts with NOT_SENT_REASON: the logged
+//      request never left the machine, and `intent log` and `intent verify` report it as not sent.
 //    - discarded: a 2xx without a valid receipt (its content is never returned: DisclosureDiscardedError), any
 //      response with Intent-Contract-Version and no receipt, or any invalid receipt.
 // Inbound bodies are never scanned: an offer title is Cloud's content, not the buyer's.
 import {
+  CloudNetworkError,
   CloudResponseError,
   type CloudResult,
   createHttpCloud,
@@ -25,7 +28,7 @@ import {
 } from "../cloud/index.ts";
 import type { ApprovalCreated, ApprovalStatus, Cart, CartRequest, Jwks, KeyStatement, Meta, SearchRequest, SearchResponse } from "../contract/index.ts";
 import { type Finding, findIdentity } from "../privacy/index.ts";
-import type { Store } from "../store/index.ts";
+import { NOT_SENT_REASON, type Store } from "../store/index.ts";
 import { type KeySet, type SentRequest, verifyReceipt } from "../trust/index.ts";
 
 /** The same operations as IntentCloud; each call is logged before it is sent. */
@@ -202,6 +205,7 @@ function describe(finding: Finding): string {
 }
 
 function noResponseReason(error: unknown): string {
+  if (error instanceof CloudNetworkError && error.neverLeft) return `${NOT_SENT_REASON} (${error.failure})`;
   if (error instanceof Error) {
     const reason = (error as { reason?: unknown }).reason;
     return typeof reason === "string" ? `${error.name}: ${reason}` : error.name;

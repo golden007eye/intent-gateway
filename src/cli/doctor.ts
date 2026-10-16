@@ -3,14 +3,14 @@
 // contract version and key statement. Its two requests to Intent Cloud go through the disclosure log like any other.
 import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type Config, INTENT, type RootKey } from "../config/index.ts";
+import { type Config, INTENT, type RootKey, UPDATE_COMMAND } from "../config/index.ts";
 import { CONTRACT_VERSION } from "../contract/index.ts";
 import { chainMode, contractSums } from "../gateway/index.ts";
 import { LibraryError, lockOrigin, readLock } from "../library/index.ts";
 import { PolicyError } from "../policy/index.ts";
 import { type Entry, openStore, verifyChain } from "../store/index.ts";
 import { verifyStatement } from "../trust/index.ts";
-import { describeError } from "./errors.ts";
+import { describeError, errorContext, metaRefused } from "./errors.ts";
 import { type Io, line } from "./io.ts";
 import { readLog } from "./log.ts";
 import { noShipToNote, shipToFix } from "./policy.ts";
@@ -189,7 +189,7 @@ async function checkCloud(io: Io, config: Config, cloudUrl: string, pins: readon
     const cloud = cloudFor(io, store, cloudUrl, { keySet: () => null, now });
     const meta = await cloud.meta();
     if (!meta.ok) {
-      report("fail", `Intent Cloud ${cloudUrl}: meta answered ${String(meta.status)}; check INTENT_CLOUD_URL, or try later`);
+      report("fail", metaRefused(meta.status, { ...errorContext(config, io.env), cloudUrl }));
       return;
     }
     const sums = contractSums();
@@ -199,7 +199,7 @@ async function checkCloud(io: Io, config: Config, cloudUrl: string, pins: readon
       report(
         "fail",
         `contract mismatch: ${cloudUrl} serves contract ${served} (header ${header ?? "missing"}, SHA256SUMS sha256 ${meta.body.contract_sums_sha256}), ` +
-          `this gateway implements ${CONTRACT_VERSION} (SHA256SUMS sha256 ${sums}); update the gateway (npx -y intent-gateway@latest), ` +
+          `this gateway implements ${CONTRACT_VERSION} (SHA256SUMS sha256 ${sums}); update the gateway (${UPDATE_COMMAND}), ` +
           `or set INTENT_CLOUD_URL to a host that serves ${CONTRACT_VERSION}`,
       );
       return;
@@ -216,7 +216,9 @@ async function checkCloud(io: Io, config: Config, cloudUrl: string, pins: readon
       report(
         "fail",
         `key statement: does not verify against the root key (Appendix F step ${String(verified.step)}: ${verified.reason}); ` +
-          `check that --trust-keys holds the root key of ${new URL(cloudUrl).host}`,
+          (config.cloud.trust.kind === "file"
+            ? `check that --trust-keys holds the root key of ${new URL(cloudUrl).host}`
+            : `update the gateway (${UPDATE_COMMAND}), whose pinned root key may be newer`),
       );
       return;
     }
@@ -229,7 +231,7 @@ async function checkCloud(io: Io, config: Config, cloudUrl: string, pins: readon
       report("ok", text);
     }
   } catch (error) {
-    report("fail", describeError(error, { cloudUrl }));
+    report("fail", describeError(error, { ...errorContext(config, io.env), cloudUrl }));
   } finally {
     await store.close();
   }

@@ -11,7 +11,7 @@ import { PINNED, S1, signReceipt, STATEMENT_VALID_AT } from "../../test/support/
 import type { CartRequest, SearchRequest } from "../contract/index.ts";
 import { createHttpCloud } from "../cloud/index.ts";
 import { createSession } from "../signing/index.ts";
-import { type Entry, openStore, type Store, StoreFencedError, type StoreFs, verifyChain } from "../store/index.ts";
+import { type Entry, neverLeft, openStore, type Store, StoreFencedError, type StoreFs, verifyChain } from "../store/index.ts";
 import { type KeySet, verifyStatement } from "../trust/index.ts";
 import {
   CloudNetworkError,
@@ -361,6 +361,15 @@ describe("what came back (ADR-0006)", () => {
     expect(stub.connections).toHaveLength(1);
     expect(kinds()).toEqual(["disclosure", "unacknowledged"]);
     expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "CloudNetworkError: network" });
+  });
+
+  it("a refused connection: still logged before the send (invariant 2), then recorded as never sent", async () => {
+    store = await openStore(dir);
+    const cloud = connectCloud({ baseUrl: "http://127.0.0.1:9", session, now: () => NOW_MS }, store, trusted);
+    await expect(cloud.search(SEARCH)).rejects.toMatchObject({ name: "CloudNetworkError", neverLeft: true });
+    expect(kinds()).toEqual(["disclosure", "unacknowledged"]);
+    expect(bodyOf(store.entries()[1])).toEqual({ disclosure_seq: 0, reason: "CloudNetworkError: not sent (connection refused)" });
+    expect(neverLeft(store.entries()[1]?.body)).toBe(true);
   });
 
   it("a 503 without the version header is unacknowledged, and returned", async () => {

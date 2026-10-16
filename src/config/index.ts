@@ -40,12 +40,25 @@ export interface RootKey {
  * time, so this map holds root public keys and nothing more.
  */
 export const PINNED_HOSTS: Readonly<Record<string, { readonly rootKeys: readonly RootKey[] }>> = {
-  // Empty until the release task commits the real `cloud-root-1` public key. With no root key, loadConfig
-  // refuses this host unless `--trust-keys` names a key file, so the gateway never trusts an empty pin.
-  "staging-api.intentai.shop": { rootKeys: [] },
+  // Intent Cloud staging's root public key, pinned by the 0.1.0-preview.1 release (docs/release.md). A host whose
+  // pin lists no root key is refused unless `--trust-keys` names a key file, so the gateway never trusts an empty pin.
+  "staging-api.intentai.shop": {
+    rootKeys: [{ kid: "cloud-root-1", jwk: { kty: "OKP", crv: "Ed25519", x: "7-sDUcgqFgaDKZvWfEjmnhcntLrcrnNVlM1VFyGHFoI" } }],
+  },
 };
 
 export const DEFAULT_CLOUD_URL = "https://staging-api.intentai.shop";
+
+/** The command that installs the newest release of this channel: `@next` for a preview (a version with a `-`), else `@latest`. */
+export const UPDATE_COMMAND = `npx -y intent-gateway@${BUILD.version.includes("-") ? "next" : "latest"}`;
+
+/**
+ * The next step when Intent Cloud cannot be used: run the demo. On a host, `<INTENT> demo`; in the Docker image,
+ * re-run the container in demo mode (a container that failed to start has exited, so there is nothing to exec into).
+ */
+export function tryLocally(runtime: Config["runtime"], env: Readonly<Record<string, string | undefined>>): string {
+  return runtime === "container" ? `try everything locally: ${containerDemo(env)}` : `try everything locally with ${INTENT} demo`;
+}
 export const DEFAULT_HTTP_HOST = "127.0.0.1";
 export const DEFAULT_HTTP_PORT = 8787;
 const MIN_TOKEN_LENGTH = 32;
@@ -243,7 +256,7 @@ function cloudConfig(raw: string, trustKeys: string | undefined, requireTrust: b
   if (trustKeys !== undefined) return { url: url.origin, trust: { kind: "file", path: trustKeys } };
   const rootKeys = Object.hasOwn(PINNED_HOSTS, url.host) ? PINNED_HOSTS[url.host]?.rootKeys : undefined;
   if (rootKeys === undefined || rootKeys.length === 0) {
-    const staging = `this build has no trusted root key for ${url.host} yet; staging opens with the first preview release. `;
+    const staging = `this build has no trusted root key for ${url.host} yet. `;
     const reason =
       container !== null
         ? rootKeys === undefined

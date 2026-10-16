@@ -68,9 +68,10 @@ describe("intent as a process", () => {
     }
   });
 
-  it("with no root key pinned, an MCP client's initialize fails with the reason and the next steps", { timeout: 30_000 }, async () => {
-    const dataDir = join(mkdtempSync(join(tmpdir(), "cli-unpinned-")), "data");
-    const transport = new StdioClientTransport({ command: process.execPath, args: [MAIN], env: env({ INTENT_DATA_DIR: dataDir }), stderr: "pipe" });
+  /** Starts the gateway as an MCP client would and returns the initialize failure and stderr. */
+  async function failedStart(args: string[], extra: Record<string, string>): Promise<{ message: string; stderr: string }> {
+    const dataDir = join(mkdtempSync(join(tmpdir(), "cli-nostart-")), "data");
+    const transport = new StdioClientTransport({ command: process.execPath, args: [MAIN, ...args], env: env({ INTENT_DATA_DIR: dataDir, ...extra }), stderr: "pipe" });
     let stderr = "";
     transport.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
     const client = new Client({ name: "cli-test", version: "0" });
@@ -80,11 +81,26 @@ describe("intent as a process", () => {
     );
     await client.close();
     expect(failure).toBeInstanceOf(Error);
-    const message = (failure as Error).message;
-    expect(message).toContain("intent-gateway could not start: configuration: this build has no trusted root key for staging-api.intentai.shop");
+    return { message: (failure as Error).message, stderr };
+  }
+
+  it("with an Intent Cloud host that refuses, an MCP client's initialize fails with the reason and the next steps", { timeout: 30_000 }, async () => {
+    // A loopback port with nothing listening: the real process, and no network beyond this machine.
+    const { message, stderr } = await failedStart(["--trust-keys", keys], { INTENT_CLOUD_URL: "http://127.0.0.1:9" });
     // Run as `node src/main.ts`, the next step names that invocation, not a bare `intent` that is not on PATH.
-    expect(message).toContain(`staging opens with the first preview release. Try everything locally now with node ${realpathSync(MAIN)} demo, or pass --trust-keys <file> for a self-hosted Intent Cloud`);
-    expect(stderr).toContain("intent: configuration: this build has no trusted root key");
+    const reason =
+      "Intent Cloud at 127.0.0.1:9 cannot be reached (connection refused); nothing was sent. " +
+      `Check your connection and INTENT_CLOUD_URL, or try everything locally with node ${realpathSync(MAIN)} demo`;
+    expect(message).toContain(`intent-gateway could not start: ${reason}`);
+    expect(stderr).toContain(`intent: ${reason}\n`);
+    expect(stderr).not.toMatch(/ECONNREFUSED|\bat .+:\d+:\d+/);
+  });
+
+  it("with an unpinned host and no --trust-keys, initialize fails naming --trust-keys and the demo", { timeout: 30_000 }, async () => {
+    const { message } = await failedStart([], { INTENT_CLOUD_URL: "https://cloud.example" });
+    expect(message).toContain(
+      `intent-gateway could not start: configuration: cloud.example is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key; or run node ${realpathSync(MAIN)} demo to try the gateway with no setup`,
+    );
   });
 
   it("approver accept with pipes for stdin and stdout refuses (exit 2)", { timeout: 30_000 }, async () => {

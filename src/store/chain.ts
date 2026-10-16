@@ -17,6 +17,18 @@ export const ENTRY_KINDS = [
 ] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
 
+/**
+ * How an `unacknowledged` entry's reason starts when no connection was ever made (DNS failure, connection refused):
+ * the logged request never left the machine, so `intent log` and `intent verify` report it as not sent.
+ */
+export const NOT_SENT_REASON = "CloudNetworkError: not sent";
+
+/** Whether an `unacknowledged` entry's body records a request that never left the machine (see NOT_SENT_REASON). */
+export function neverLeft(body: unknown): boolean {
+  const reason = typeof body === "object" && body !== null ? (body as { reason?: unknown }).reason : undefined;
+  return typeof reason === "string" && reason.startsWith(NOT_SENT_REASON);
+}
+
 /** One line of `audit.jsonl`. `hash` is the sha256 of the canonical JSON of the other five fields. */
 export interface Entry {
   readonly seq: number;

@@ -2,6 +2,7 @@
 // set (plan §3.1) is compared as the raw header block, not as Node's parsed view of it.
 import { readFileSync } from "node:fs";
 import { Agent, createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
 import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,6 +17,7 @@ import {
   type HttpCloudOptions,
   type PreparedRequest,
 } from "./index.ts";
+import { networkFailure } from "./http.ts";
 
 type Json = Record<string, unknown>;
 const vector = (name: string): Json =>
@@ -508,6 +510,36 @@ describe("failures without a usable response", () => {
     expect(error).toBeInstanceOf(CloudNetworkError);
     expect((error as CloudNetworkError).reason).toBe("timeout");
     expect((error as CloudNetworkError).request.path).toBe("/v1/catalog/search");
+    // A connection was made, so the request may have arrived: never reported as not sent.
+    expect(error).toMatchObject({ neverLeft: false, message: `Intent Cloud at 127.0.0.1:${String(stub.port)} cannot be reached (no complete response within 100 ms)` });
+  });
+
+  it("a host name with no DNS record: plain words, no error code, and nothing left (attack: never claims more)", async () => {
+    const looked: string[] = [];
+    const lookup = (hostname: string, _options: unknown, callback: (error: Error) => void): void => {
+      looked.push(hostname);
+      callback(Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" }));
+    };
+    const error: unknown = await createHttpCloud({ baseUrl: "https://no-dns-record.example", session, agentFactory: () => new HttpsAgent({ lookup } as never) })
+      .meta()
+      .catch((e: unknown) => e);
+    expect(looked).toEqual(["no-dns-record.example"]);
+    expect(error).toMatchObject({ name: "CloudNetworkError", reason: "network", neverLeft: true, failure: "DNS: not found" });
+    expect((error as Error).message).toBe("Intent Cloud at no-dns-record.example cannot be reached (DNS: not found)");
+  });
+
+  it.each([
+    ["ENOTFOUND", "DNS: not found", true],
+    ["EAI_AGAIN", "DNS: lookup failed", true],
+    ["ECONNREFUSED", "connection refused", true],
+    ["ENETUNREACH", "network unreachable", true],
+    ["ETIMEDOUT", "connection timed out", false],
+    ["ECONNRESET", "connection reset", false],
+    ["UNABLE_TO_VERIFY_LEAF_SIGNATURE", "TLS: the certificate is not trusted or the handshake failed", false],
+    ["EWHATEVER", "network error", false],
+    [undefined, "network error", false],
+  ])("error code %s reads %j; never left: %s", (code, words, left) => {
+    expect(networkFailure(code)).toEqual({ words, neverLeft: left });
   });
 
   it("times out when the body stalls after the headers", async () => {
@@ -559,6 +591,8 @@ describe("failures without a usable response", () => {
     await expect(createHttpCloud({ baseUrl: `http://127.0.0.1:${String(port)}`, session }).meta()).rejects.toMatchObject({
       name: "CloudNetworkError",
       reason: "network",
+      neverLeft: true,
+      message: `Intent Cloud at 127.0.0.1:${String(port)} cannot be reached (connection refused)`,
     });
 
     const reset = await startStub((req, _body, res) => {
@@ -567,7 +601,7 @@ describe("failures without a usable response", () => {
       setImmediate(() => req.socket.destroy());
       return "handled";
     });
-    await expect(cloudFor(reset).meta()).rejects.toMatchObject({ name: "CloudNetworkError", reason: "network" });
+    await expect(cloudFor(reset).meta()).rejects.toMatchObject({ name: "CloudNetworkError", reason: "network", neverLeft: false });
   });
 
   it("an https base URL speaks TLS (node:https), never plain HTTP", async () => {

@@ -20,7 +20,7 @@ docs/adr/0011-approver-pin.md | The first purchase still trusts Intent Cloud | s
 src/cli/doctor.ts | Intent Cloud: the demo gateway runs its own | doctor's label for the demo's local stand-in
 src/config/index.ts | for a self-hosted Intent Cloud | names a deployment the --trust-keys option is for; configuration, not data handling
 src/cli/doctor.ts | Intent Cloud not checked | doctor's label for a check it skipped
-src/cli/doctor.ts | meta answered | reports the status a response came back with
+src/cli/errors.ts | Intent Cloud at | names the host whose answer (an HTTP status) the line reports
 src/cli/doctor.ts | Intent Cloud publishes the next one before then | the key statement's renewal, which the contract specifies
 src/cli/help.ts | the gateway between your agent and Intent Cloud | says where the gateway sits, not what Intent Cloud does
 src/config/index.ts | is not a pinned Intent Cloud host | names a configuration error
@@ -28,6 +28,7 @@ src/gateway/gateway.ts | Intent Cloud's answer carried no valid receipt | report
 src/gateway/gateway.ts | Intent Cloud's answer was malformed | reports a response the gateway refused
 src/gateway/gateway.ts | Intent Cloud answered | reports the status a response came back with
 src/gateway/gateway.ts | Intent Cloud meta failed with status | reports the status a response came back with
+src/cloud/http.ts | cannot be reached | reports that no complete response came back (DNS, connection or timeout)
 src/gateway/gateway.ts | Intent Cloud key statement failed with status | reports the status a response came back with
 src/gateway/gateway.ts | the cart Intent Cloud created does not match | reports a mismatch between the cart returned and the one asked for
 src/policy/policy.ts | never allow ones Intent Cloud excludes | a policy load error naming the baseline's excluded categories

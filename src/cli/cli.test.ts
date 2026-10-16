@@ -8,13 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type FakeCloud, startFakeCloud } from "../cloud-fake/index.ts";
-import { BUILD, ConfigError } from "../config/index.ts";
+import { type FakeCloud, noDnsAgent, startFakeCloud, startSilentHost } from "../cloud-fake/index.ts";
+import { BUILD, ConfigError, PINNED_HOSTS } from "../config/index.ts";
 import { CONTRACT_VERSION, type CredentialPublicKey } from "../contract/index.ts";
 import { CONTAINER_CONFIRM_PORT } from "../demo/index.ts";
 import {
   CloudNetworkError,
   CloudRequestError,
+  connectCloud,
   type DisclosedCloud,
   DisclosureBlockedError,
   DisclosureDiscardedError,
@@ -123,6 +124,33 @@ function trustFile(fake: FakeCloud): string {
   return path;
 }
 
+/**
+ * The real disclosed cloud, with a host-name lookup that answers as for a host with no DNS record (ENOTFOUND), as
+ * the staging host has before it opens. So no test needs the real host, or any network.
+ */
+const noDns: Partial<Io> = { connect: (http, store, options) => connectCloud({ ...http, agentFactory: noDnsAgent }, store, options) };
+
+/** The real disclosed cloud with a 200 ms timeout, for a host that accepts a connection and never answers. */
+const impatient: Partial<Io> = { connect: (http, store, options) => connectCloud({ ...http, timeoutMs: 200 }, store, options) };
+
+/** A host pinned with no root key, as a host is before its release commits one; added only for `run`. */
+async function withEmptyPin<T>(run: () => Promise<T>): Promise<T> {
+  const pins = PINNED_HOSTS as Record<string, { rootKeys: unknown[] }>;
+  pins["empty-pin.example"] = { rootKeys: [] };
+  try {
+    return await run();
+  } finally {
+    delete pins["empty-pin.example"];
+  }
+}
+
+const EMPTY_PIN_HINT =
+  "configuration: this build has no trusted root key for empty-pin.example yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud";
+const STAGING_DNS =
+  "Intent Cloud at staging-api.intentai.shop cannot be reached (DNS: not found); nothing was sent. Staging may not be open yet; try everything locally with intent demo";
+/** What a one-line error must never carry: an error code, a syscall name or a stack frame. */
+const RAW = /ENOTFOUND|ECONNREFUSED|getaddrinfo|EAI_|\bat .+:\d+:\d+/;
+
 describe("--version and --help", () => {
   it("prints the build version", async () => {
     expect(await setup().run(["--version"])).toMatchObject({ code: 0, out: `${BUILD.version}\n`, err: "" });
@@ -195,9 +223,12 @@ describe("intent verify with no chain yet (F-h)", () => {
     expect(result.out).toMatch(/^usage: FAILED\n {2}cannot read the chain in /);
   });
 
-  it("without --demo the root-key check is unchanged", async () => {
-    const result = await setup().run(["verify"]);
-    expect(result.code).not.toBe(0);
+  it("without --demo it checks the real chain against the pinned root key, offline", async () => {
+    const result = await setup().run(["verify", "--skip-install-check"]);
+    expect(result.out).toMatch(/^key statements: ok\n {2}0 recorded, checked offline against the pinned root key\n/m);
+    expect(result.code).toBe(0);
+    // A host with no root key pinned still needs one.
+    expect((await withEmptyPin(() => setup({ INTENT_CLOUD_URL: "https://empty-pin.example" }).run(["verify"]))).code).not.toBe(0);
   });
 });
 
@@ -566,7 +597,8 @@ describe("intent doctor", () => {
     const result = await s.run(["doctor", "--trust-keys", trustFile(fake)], { io: { connect: () => stub } });
     expect(result.code).toBe(1);
     expect(result.out).toMatch(
-      new RegExp(`^FAIL {2}contract mismatch: .+ serves contract 1\\.4\\.0 .+this gateway implements ${CONTRACT_VERSION.replaceAll(".", "\\.")} .+; update the gateway \\(npx -y intent-gateway@latest\\)`, "m"),
+      // A preview version: the update command names the `next` dist-tag the release publishes it under.
+      new RegExp(`^FAIL {2}contract mismatch: .+ serves contract 1\\.4\\.0 .+this gateway implements ${CONTRACT_VERSION.replaceAll(".", "\\.")} .+; update the gateway \\(npx -y intent-gateway@next\\)`, "m"),
     );
     expect(result.out).toMatch(/^doctor: 1 problem; each line above says the fix\n$/m);
   });
@@ -593,13 +625,68 @@ describe("intent doctor", () => {
     expect(unpinned.out).toMatch(/^FAIL {2}root key: configuration: 127\.0\.0\.1:9 is not a pinned Intent Cloud host; pass --trust-keys <path>.+; or run intent demo/m);
 
     fake = await startFakeCloud({});
-    const unreachable = await s.run(["doctor", "--trust-keys", trustFile(fake)]);
-    expect(unreachable.out).toMatch(/^FAIL {2}could not reach http:\/\/127\.0\.0\.1:9: .+; check your connection or INTENT_CLOUD_URL/m);
+    const refused = await s.run(["doctor", "--trust-keys", trustFile(fake)]);
+    expect(refused.out).toContain(
+      "\nFAIL  Intent Cloud at 127.0.0.1:9 cannot be reached (connection refused); nothing was sent. Check your connection and INTENT_CLOUD_URL, or try everything locally with intent demo\n",
+    );
+    expect(refused.out).not.toMatch(RAW);
 
     const { chmodSync } = await import("node:fs");
     chmodSync(s.dir, 0o755);
     const readable = await s.run(["doctor", "--trust-keys", trustFile(fake)]);
     expect(readable.out).toMatch(new RegExp(`^FAIL {2}data dir: other users can read it \\(mode 755\\); run chmod 700 ${s.dir}$`, "m"));
+  });
+
+  it("with no configuration and no DNS record for staging, the pinned key is ok and the Intent Cloud line says what to do", async () => {
+    const s = setup();
+    const result = await s.run(["doctor"], { io: noDns });
+    expect(result.out).toMatch(/^ok {4}root key: cloud-root-1 \(pinned in this build\)$/m);
+    expect(result.out).toContain(`\nFAIL  ${STAGING_DNS}\n`);
+    expect(result.out).not.toMatch(RAW);
+    expect(result.code).toBe(1);
+    // Logged before the send, which never left: the log says so instead of "sent" (invariant 5).
+    const log = formatLog(readChain(s.dir));
+    expect(log).toMatch(/^#0 {4}\S+ {2}logged {9}getMeta: no body fields \(not sent: no connection was made\)$/m);
+    expect(log).toMatch(/^#1 {4}\S+ {2}not sent {7}#0: CloudNetworkError: not sent \(DNS: not found\); it never left this machine$/m);
+    const verify = await s.run(["verify", "--skip-install-check"]);
+    expect(verify.out).toContain("  sent: 0\n  logged but not sent (no connection was made): 1\n");
+    expect(verify.out).toContain("  sent, not acknowledged: 0\n");
+  });
+
+  it("staging that answers its first request with an HTTP error (an edge with no Intent Cloud behind it) says so plainly", async () => {
+    const stub = { meta: () => Promise.resolve({ ok: false, status: 503, body: null, contractVersion: null, retryAfter: null }) } as unknown as DisclosedCloud;
+    const line = "Intent Cloud at staging-api.intentai.shop answered HTTP 503 to the gateway's first request (meta, no body fields). Staging may not be open yet; try everything locally with intent demo";
+    const doctor = await setup().run(["doctor"], { io: { connect: () => stub } });
+    expect(doctor.out).toContain(`\nFAIL  ${line}\n`);
+    const serve = await setup().run(["serve"], { input: "", io: { connect: () => stub } });
+    expect(serve.code).toBe(1);
+    expect(serve.err).toMatch(new RegExp(`\\nintent: ${line.replace(/[().]/g, "\\$&")}\\n$`));
+  });
+
+  it("in the container, an unreachable staging host's next step re-runs the container in demo mode (F-h)", async () => {
+    const result = await setup({ INTENT_RUNTIME: "container", HOSTNAME: "d3394f0ffd41" }).run(["doctor"], { io: noDns });
+    expect(result.out).toContain(
+      "\nFAIL  Intent Cloud at staging-api.intentai.shop cannot be reached (DNS: not found); nothing was sent. Staging may not be open yet; " +
+        "try everything locally: re-run the container in demo mode: docker rm d3394f0ffd41 && " +
+        "docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 -v intent-data:/data intent-gateway\n",
+    );
+  });
+
+  it("a host that accepts and never answers: the request may have reached it, and the log keeps it as sent", async () => {
+    const silent = await startSilentHost();
+    try {
+      fake = await startFakeCloud({});
+      const port = new URL(silent.url).port;
+      const s = setup({ INTENT_CLOUD_URL: silent.url });
+      const result = await s.run(["doctor", "--trust-keys", trustFile(fake)], { io: impatient });
+      expect(result.out).toContain(
+        `\nFAIL  Intent Cloud at 127.0.0.1:${port} cannot be reached (no complete response within 200 ms); the request may have reached it ` +
+          "(logged as sent, not acknowledged). Check your connection and INTENT_CLOUD_URL, or try everything locally with intent demo\n",
+      );
+      expect(formatLog(readChain(s.dir))).toMatch(/^#1 {4}\S+ {2}no receipt {5}#0: CloudNetworkError: timeout; it may or may not have arrived$/m);
+    } finally {
+      await silent.close();
+    }
   });
 });
 
@@ -623,9 +710,9 @@ describe("intent verify and intent panel", () => {
   });
 
   it("verify without a root key is a usage error naming --trust-keys", async () => {
-    const result = await setup().run(["verify"]);
+    const result = await withEmptyPin(() => setup({ INTENT_CLOUD_URL: "https://empty-pin.example" }).run(["verify"]));
     expect(result.code).toBe(1);
-    expect(result.err).toMatch(/^intent: configuration: this build has no trusted root key for .+ yet; staging opens with the first preview release\. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n$/);
+    expect(result.err).toBe(`intent: ${EMPTY_PIN_HINT}\n`);
   });
 
   it("verify --image needs --version, and --install takes only npm (exit 2)", async () => {
@@ -662,25 +749,50 @@ describe("intent verify and intent panel", () => {
 });
 
 describe("serve failures", () => {
-  it("with no configuration, refuses the unpinned default host, says why and points at intent demo and --trust-keys", async () => {
-    const result = await setup().run([], { tty: true });
+  const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } };
+
+  it("with no configuration and no DNS record for staging, says so in one line, names intent demo, and sent nothing", async () => {
+    const s = setup();
+    const result = await s.run([], { tty: true, io: noDns });
     expect(result.code).toBe(1);
-    expect(result.err).toBe("intent: configuration: this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n");
+    expect(result.err.split("\n").at(-2)).toBe(`intent: ${STAGING_DNS}`);
+    expect(result.err).not.toMatch(RAW);
     expect(result.out).toBe("");
+    // The meta request was logged before the send and is recorded as never having left.
+    expect((readChain(s.dir) as Entry[]).map((e) => [e.kind, (e.body as { reason?: string }).reason])).toEqual([
+      ["disclosure", undefined],
+      ["unacknowledged", "CloudNetworkError: not sent (DNS: not found)"],
+    ]);
   });
 
   it("started by an MCP client (stdin not a terminal), answers initialize with the same reason as a JSON-RPC error", async () => {
-    const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } };
-    const result = await setup().run([], { input: `${JSON.stringify(initialize)}\n` });
+    const result = await setup().run([], { input: `${JSON.stringify(initialize)}\n`, io: noDns });
     expect(result.code).toBe(1);
-    expect(result.err).toBe("intent: configuration: this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud\n");
-    expect(JSON.parse(result.out)).toEqual({
-      jsonrpc: "2.0",
-      id: 1,
-      error: { code: -32000, message: "intent-gateway could not start: configuration: this build has no trusted root key for staging-api.intentai.shop yet; staging opens with the first preview release. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud" },
-    });
+    expect(result.err).toMatch(new RegExp(`\\nintent: ${STAGING_DNS.replace(/[().]/g, "\\$&")}\\n$`));
+    expect(JSON.parse(result.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent-gateway could not start: ${STAGING_DNS}` } });
     // --http and a terminal print to stderr only; stdout stays empty.
-    expect((await setup().run(["serve", "--http"], { input: `${JSON.stringify(initialize)}\n` })).out).toBe("");
+    expect((await setup().run(["serve", "--http"], { input: `${JSON.stringify(initialize)}\n`, io: noDns })).out).toBe("");
+  });
+
+  it("in the container, an unreachable staging host says to re-run it in demo mode, never docker exec into it (F-h)", async () => {
+    const result = await setup({ INTENT_RUNTIME: "container", HOSTNAME: "d3394f0ffd41" }).run(["serve", "--http"], { io: noDns });
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/\nintent: Intent Cloud at staging-api\.intentai\.shop cannot be reached \(DNS: not found\); nothing was sent\. Staging may not be open yet; try everything locally: re-run the container in demo mode: docker rm d3394f0ffd41 && docker run -d --name intent .+ -e INTENT_DEMO=1 .+\n$/);
+    expect(result.err).not.toContain("docker exec");
+    expect(result.err).not.toContain("claude mcp add");
+  });
+
+  it("refuses a host with no root key pinned before sending anything, says why and points at intent demo and --trust-keys", async () => {
+    await withEmptyPin(async () => {
+      const s = setup({ INTENT_CLOUD_URL: "https://empty-pin.example" });
+      const result = await s.run([], { tty: true });
+      expect(result.code).toBe(1);
+      expect(result.err).toBe(`intent: ${EMPTY_PIN_HINT}\n`);
+      expect(result.out).toBe("");
+      const mcp = await s.run([], { input: `${JSON.stringify(initialize)}\n` });
+      expect(JSON.parse(mcp.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent-gateway could not start: ${EMPTY_PIN_HINT}` } });
+      expect(existsSync(join(s.dir, "audit.jsonl"))).toBe(false);
+    });
   });
 
   it("a contract mismatch at start is one line naming intent doctor", async () => {
@@ -807,8 +919,8 @@ describe("serve failures", () => {
     mkdirSync(s.dir, { recursive: true });
     writeFileSync(join(s.dir, "http-token"), `${token}\n`);
     writeFileSync(join(s.dir, "http-token.unshown"), "");
-    // No root key and no demo: the start fails, prints no connect line, and keeps the token for the next start.
-    const failed = await s.run(["serve", "--http"]);
+    // Staging unreachable and no demo: the start fails, prints no connect line, and keeps the token for the next start.
+    const failed = await s.run(["serve", "--http"], { io: noDns });
     expect(failed.code).not.toBe(0);
     expect(failed.err).not.toContain("claude mcp add");
     expect(failed.err).not.toContain(token);
