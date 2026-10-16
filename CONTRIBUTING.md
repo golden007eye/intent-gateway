@@ -6,7 +6,7 @@ Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report c
 
 ## Set up
 
-1. Install Node 24 (see `.node-version`) and pnpm (`corepack enable`).
+1. Install Node (any recent release) and pnpm (`corepack enable`). The repo's pnpm scripts run on the Node 24 that `devEngines.runtime` in `package.json` pins: `pnpm install` downloads it into `node_modules` and `pnpm <script>` uses it, whatever `node` is first on your `PATH`. Calling `node` or `npx` yourself, outside `pnpm`, still uses your own Node.
 2. `pnpm install`
 3. `pre-commit install` (needs [pre-commit](https://pre-commit.com) and [gitleaks](https://github.com/gitleaks/gitleaks)).
 4. `pnpm check` runs everything CI runs. Done when it passes.

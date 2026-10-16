@@ -25,7 +25,8 @@ ARG PNPM_VERSION=12.9.1
 RUN npm install --global --ignore-scripts --no-audit --no-fund "pnpm@${PNPM_VERSION}"
 WORKDIR /src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile --ignore-scripts
+# --no-runtime: the build runs on this image's Node 24, not a second one fetched for devEngines.runtime.
+RUN pnpm install --frozen-lockfile --ignore-scripts --no-runtime
 COPY tsconfig.json tsconfig.build.json LICENSE NOTICE README.md ./
 COPY scripts/build-info.ts scripts/
 COPY src src
