@@ -43,7 +43,9 @@ To report a vulnerability, see [Security](security.md).
 
 **Threat.** The agent passes the buyer's name, address, email, phone or card number to a tool, in a field or hidden inside another one, and the gateway forwards it.
 
-**Controls.** The MCP tools take only search terms, a budget, a 5-digit ZIP and an offer handle. Every outbound body is scanned before it is logged: card numbers (Luhn, including split across fields), emails, phone numbers, street addresses and identity-named keys, after Unicode normalisation. A match blocks the send, and the log records what was blocked (field paths, never values). The gateway has no field for a name, address or card at all; the buyer gives those to the merchant. Tests: `src/privacy/privacy.test.ts` and the gateway's outbound privacy suite.
+**Controls.** The MCP tools take only search terms, a budget, a 5-digit ZIP and an offer handle. Every outbound body is scanned before it is logged: card numbers (Luhn, including split across fields), emails, phone numbers, street addresses and identity-named keys, after Unicode normalisation. A match blocks the send, and the log records what was blocked (field paths, never values). The tools have no field for a name, address or card; the buyer gives those to the merchant. Tests: `src/privacy/privacy.test.ts` and the gateway's outbound privacy suite.
+
+**Limit.** Patterns cannot detect everything. A name typed into the free text of `product` or `must_haves` (for example "a gift for Jane Doe") cannot be told apart from a product name, and neither can contact details written to dodge a pattern (for example `jane(at)example(dot)com`, or a card number spelled out in words). Such text is sent like any other search term, and the log records that it was sent. Keep identity out of what you ask the agent to search for.
 
 ## Invariant 4: one human approval per purchase
 
@@ -61,8 +63,8 @@ To report a vulnerability, see [Security](security.md).
 
 - `intent serve --http` binds to `127.0.0.1:8787` by default. Off loopback, it refuses to start without a bearer token of at least 32 characters (`INTENT_HTTP_TOKEN`). `localhost` is not treated as loopback, because it can resolve elsewhere.
 - With a token, a missing or wrong `Authorization: Bearer` gets 401; the comparison is constant-time. A `Host` or `Origin` that does not name the server gets 421, so a web page cannot rebind a DNS name to `127.0.0.1` and drive the tools through the developer's browser. Bodies over 256 KiB get 413.
-- On loopback without a token, any process of any user on the machine can call the tools, as with stdio for the agent's own user. The tools can search and prepare carts; they cannot approve or pay.
-- The Docker image runs the same package with no gateway code of its own, as uid 1000, which owns the `/data` volume. Inside the container it listens on `0.0.0.0:8787`, so a token is always set: the entrypoint makes a 43-character token on first start, saves it in `/data/http-token` (mode 600) and prints it once. The docs always publish the port as `-p 127.0.0.1:8787:8787`, so it stays on the host's loopback. In demo mode the confirm page listens on port 8788 and answers only `Host 127.0.0.1:8788` ([ADR-0005](adr/0005-packaging-npx-docker.md)).
+- On loopback without a token, any process of any user on the machine can call the tools, as with stdio for the agent's own user. The tools can search and prepare carts; they cannot approve or pay. In demo mode the local confirm page is different: see [Phone hand-off and self-approval](#phone-hand-off-and-self-approval).
+- The Docker image runs the same package with no gateway code of its own, as uid 1000, which owns the `/data` volume. Inside the container it listens on `0.0.0.0:8787`, so a token is always set: the entrypoint makes a 43-character token on first start, saves it in `/data/http-token` (mode 600) and prints it once, in the line to paste. That line is also kept in the container's log (`docker logs`), and the entrypoint says so; later starts print only how to read the file, and `INTENT_QUIET_TOKEN=1` never prints the token. The docs always publish the port as `-p 127.0.0.1:8787:8787`, so it stays on the host's loopback. In demo mode the confirm page listens on port 8788 and answers only `Host 127.0.0.1:8788` ([ADR-0005](adr/0005-packaging-npx-docker.md)).
 
 ## Phone hand-off and self-approval
 
@@ -74,7 +76,7 @@ The agent is not trusted, and an agent with shell access on the developer's mach
 - **The backstop.** The approval only lets the confirm page hand the buyer to the merchant's checkout; the gateway holds no card and cannot pay. Payment by hand at the merchant is the backstop against self-approval. A self-approved cart still cannot be paid for without the human entering their payment details.
 - **The hand-off.** The approval link and QR code open intent's confirm page, on the origin named in the signed key statement. The page shows the item, merchant, total, the ZIP prefix and the check code; the buyer checks them against what the agent showed before using their passkey.
 
-In demo mode the confirm page is local and signs with a software demo passkey; see [Demo mode](demo.md).
+In demo mode the confirm page is a local stand-in for the passkey step: it signs with a software demo passkey kept on disk. Any program that can reach `127.0.0.1` can press its buttons, so it does not prove that a person approved. As a speed bump, **Approve** also needs a 6-digit demo code that the gateway prints on its own stderr and keeps in `<data dir>/demo/approval-code` (mode 600), never in a tool result: an agent that only reads tool results cannot approve, but one that can read the gateway's output or files can. After five wrong codes the page refuses approvals until the demo restarts with a new code. Nothing can be bought in demo mode. Real approvals need the buyer's passkey on intent's confirm page; see [Demo mode](demo.md).
 
 ## Local panel
 

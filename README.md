@@ -18,7 +18,7 @@
 
 The demo runs the whole flow on your machine with no setup: a demo Intent Cloud on `127.0.0.1` with a sample catalog and the published test keys, and a local confirm page that stands in for the passkey step. Every tool result says `DEMO: test keys, sample catalog, nothing can be bought.`
 
-You need Node 24 or later, pnpm (`corepack enable`) and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way.
+You need Node 24 LTS (24.15 or later) or Node 26+, pnpm (`corepack enable`) and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way.
 
 **1 · Build the package** (until the first preview release is on npm):
 
@@ -40,7 +40,7 @@ $ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
 > Find running shoes to ZIP 94103, under $200, and prepare a cart for the cheapest.
 ```
 
-The agent calls `find_offers`, then `create_cart`, and shows an approval link such as `http://127.0.0.1:<port>/confirm/c/…`. Open it, check the item and total, and click **Approve with demo passkey**. Then ask the agent to check the approval status: it reports the purchase as approved, with the approver passkey's fingerprint. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started.
+The agent calls `find_offers`, then `create_cart`, and shows an approval link such as `http://127.0.0.1:<port>/confirm/c/…`. Open it, check the item and total, enter the demo code and click **Approve with demo passkey**. The code is six digits, new on every start and never shown to the agent; the page shows the command that reads it (`cat <data dir>/demo/approval-code`). Then ask the agent to check the approval status: it reports the purchase as approved, with the approver passkey's fingerprint. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started.
 
 **4 · Check what was sent**, in the cloned folder:
 
@@ -48,7 +48,7 @@ The agent calls `find_offers`, then `create_cart`, and shows an approval link su
 $ npx -y ./intent-gateway.tgz verify --demo
 ```
 
-It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` lists each send field by field. The [demo page](docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo` run in a terminal serves the demo over HTTP instead.
+It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` lists each send field by field. The [demo page](docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo --http` serves the demo over HTTP instead, printing the line to connect with and the demo code.
 
 ### From the first preview release
 
@@ -70,13 +70,13 @@ $ docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 \
 $ docker logs intent
 ```
 
-On its first start the container makes an HTTP token, saves it in `/data/http-token` and prints it once, inside the line to paste:
+On its first start the container makes an HTTP token, saves it in `/data/http-token` and prints it once, inside the line to paste. That line is also kept in the container's log (`docker logs`); add `-e INTENT_QUIET_TOKEN=1` to never print it.
 
 ```console
 $ claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"
 ```
 
-Later starts reuse the token; read it with `docker exec intent cat /data/http-token`. Port 8788 is the demo's confirm page and must be published on the same host port, as above. Check what was sent with `docker exec intent intent verify --demo`.
+Later starts reuse the token without printing it; read it with `docker exec intent cat /data/http-token`. Port 8788 is the demo's confirm page and must be published on the same host port, as above. The demo code is in `docker logs intent`, or read it with `docker exec intent cat /data/demo/approval-code`. Check what was sent with `docker exec intent intent verify --demo`.
 
 Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`. For a bind mount instead of a volume, add `--user "$(id -u):$(id -g)"`. Without `INTENT_DEMO=1` the container needs the root key pinned for the Intent Cloud host, which arrives with the first preview release.
 

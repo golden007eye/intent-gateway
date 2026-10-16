@@ -143,7 +143,7 @@ describe("tools (AC-R1)", () => {
     expect(text).toContain("Never guess a ZIP code or a budget");
     expect(text).toContain("ask the user only for those");
     expect(text).toContain("US delivery only");
-    expect(text).toContain("passkey on their phone");
+    expect(text).toContain("needs a person to approve it with a passkey");
   });
 
   it("find_offers → create_cart → get_approval_status, each result ending with the summary (AC-D1)", async () => {

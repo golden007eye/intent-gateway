@@ -2,6 +2,7 @@
 // at a terminal: it refuses unless stdin and stdout are both TTYs, and the person must type the fingerprint the
 // panel shows. The TTY check raises the bar for an agent with shell access; it is not a guarantee (an agent that
 // opens a pseudo-terminal passes it), which is why paying by hand at the merchant stays the backstop.
+import { INTENT } from "../config/index.ts";
 import { CredentialPublicKey } from "../contract/index.ts";
 import { type Entry, openStore, verifyChain } from "../store/index.ts";
 import { approverFingerprint } from "../trust/index.ts";
@@ -30,7 +31,7 @@ function chainEntries(dataDir: string): Entry[] {
   const items = readLog(dataDir);
   const chain = verifyChain(items);
   if (!chain.ok) {
-    throw new CliError(`the local hash chain breaks at seq ${String(chain.brokenSeq)} (${chain.reason}); run intent verify`);
+    throw new CliError(`the local hash chain breaks at seq ${String(chain.brokenSeq)} (${chain.reason}); run ${INTENT} verify`);
   }
   return items as Entry[];
 }
@@ -59,7 +60,7 @@ export function approverList(io: Io, dataDir: string): number {
   } else {
     line(io.stdout, "flagged passkeys (approved a purchase but are not the pin):");
     for (const f of flags) line(io.stdout, `  #${String(f.entry.seq)} ${f.entry.ts}  ${f.fingerprint}`);
-    line(io.stdout, "if one is your passkey, run intent approver accept at a terminal");
+    line(io.stdout, `if one is your passkey, run ${INTENT} approver accept at a terminal`);
   }
   return 0;
 }
@@ -80,20 +81,20 @@ export async function approverAccept(io: Io, dataDir: string): Promise<number> {
   const { pin, flags } = openFlags(chainEntries(dataDir));
   const flag = flags.at(-1);
   if (flag === undefined) {
-    line(io.stdout, "no flagged passkey to accept; intent approver list shows the pin and its history");
+    line(io.stdout, `no flagged passkey to accept; ${INTENT} approver list shows the pin and its history`);
     return 1;
   }
   const body = (flag.entry.body ?? {}) as Body;
   const key = CredentialPublicKey.safeParse(body.credential_public_key);
   if (!key.success || typeof body.credential_id !== "string") {
-    throw new CliError(`the approver_flag entry #${String(flag.entry.seq)} has no usable passkey public key; run intent verify`);
+    throw new CliError(`the approver_flag entry #${String(flag.entry.seq)} has no usable passkey public key; run ${INTENT} verify`);
   }
   const fingerprint = approverFingerprint(key.data);
 
   line(io.stdout, `A passkey that is not the approver pin approved a purchase (entry #${String(flag.entry.seq)}, ${flag.entry.ts}).`);
   line(io.stdout, `  flagged: ${fingerprint}`);
   line(io.stdout, `  pinned:  ${pin?.fingerprint ?? "(none)"}`);
-  line(io.stdout, "Accept it only if it is your own passkey: compare it with the panel (intent panel) and your passkey manager.");
+  line(io.stdout, `Accept it only if it is your own passkey: compare it with the panel (${INTENT} panel) and your passkey manager.`);
   const typed = await ask(io, "Type the flagged fingerprint to make it the approver pin: ");
   if (typed === null || normaliseFingerprint(typed) !== normaliseFingerprint(fingerprint)) {
     line(io.stdout, "the fingerprint does not match; nothing was written");

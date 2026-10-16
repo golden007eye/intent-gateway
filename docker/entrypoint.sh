@@ -4,7 +4,8 @@
 #
 # Off loopback the gateway refuses to serve without a bearer token. When INTENT_HTTP_TOKEN is not set, the token
 # lives in <data>/http-token (0600): made on the first start, when it is printed once with the line to paste into
-# Claude Code, and reused on later starts without printing it again.
+# Claude Code (so it is kept in the container log too), and reused on later starts, which print only how to read
+# it. INTENT_QUIET_TOKEN=1 never prints it.
 set -eu
 
 data="${INTENT_DATA_DIR:-/data}"
@@ -27,6 +28,11 @@ esac
 # Inside the container the server listens on every interface; the documented `-p 127.0.0.1:8787:8787` keeps it
 # on the host's loopback. Set only here, so other commands (`docker exec`) do not need the token.
 export INTENT_HTTP_HOST="${INTENT_HTTP_HOST:-0.0.0.0}"
+
+case "${INTENT_QUIET_TOKEN:-}" in
+  "" | 1) ;;
+  *) say "INTENT_QUIET_TOKEN must be 1 or unset, got \"$INTENT_QUIET_TOKEN\""; exit 1 ;;
+esac
 
 if [ "${INTENT_DEMO:-}" = 1 ]; then
   say "demo: the approval links open the confirm page on port 8788; publish it with -p 127.0.0.1:8788:8788"
@@ -53,9 +59,14 @@ if [ -z "${INTENT_HTTP_TOKEN:-}" ]; then
     tmp="$token_file.$$"
     (umask 077 && printf '%s\n' "$INTENT_HTTP_TOKEN" >"$tmp")
     mv "$tmp" "$token_file"
-    say "made an HTTP token and saved it in $token_file. It is shown this once; later starts reuse it."
-    say "Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787):"
-    printf '  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer %s"\n' "$INTENT_HTTP_TOKEN" >&2
+    if [ "${INTENT_QUIET_TOKEN:-}" = 1 ]; then
+      say "made an HTTP token and saved it in $token_file (not printed: INTENT_QUIET_TOKEN=1); read it with: docker exec <container> cat $token_file"
+    else
+      say "made an HTTP token and saved it in $token_file. Later starts reuse it and do not print it again."
+      say "The line below holds the token, so it is also kept in this container's log (docker logs); set INTENT_QUIET_TOKEN=1 to never print it."
+      say "Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787):"
+      printf '  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer %s"\n' "$INTENT_HTTP_TOKEN" >&2
+    fi
   fi
   export INTENT_HTTP_TOKEN
 fi

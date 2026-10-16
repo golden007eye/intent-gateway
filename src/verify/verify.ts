@@ -191,7 +191,9 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       ok: disclosureFailures.length === 0,
       details: [
         `sent: ${String(counts.disclosures)}`,
-        `acknowledged by a receipt from Intent Cloud's public edge: ${String(counts.receipts)}`,
+        demoChain(entries)
+          ? `acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): ${String(counts.receipts)}`
+          : `acknowledged by a receipt from Intent Cloud's public edge: ${String(counts.receipts)}`,
         `sent, not acknowledged: ${String(counts.unacknowledged)}`,
         `discarded: ${String(counts.discarded)}`,
         ...disclosureFailures,
@@ -200,6 +202,12 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
     { name: "approvals", ok: approvalFailures.length === 0, details: [`verified: ${String(counts.approvals)}`, ...approvalFailures] },
     { name: "approver flags", ok: true, details: [`flagged: ${String(counts.flags)}`, ...flags] },
   ];
+}
+
+/** Whether the chain was written in demo mode: its first entry is the demo `session` entry `{mode: "demo"}`. */
+function demoChain(entries: readonly Entry[]): boolean {
+  const [first] = entries;
+  return first?.kind === "session" && record(first.body).mode === "demo";
 }
 
 /** Why a `receipt` entry does not acknowledge its disclosure, or null when it does. */

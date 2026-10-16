@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HELP } from "../src/cli/index.ts";
+import { help } from "../src/cli/index.ts";
 
 // The docs must not drift from the gateway: the threat model keeps its required sections and statements (AC-D4),
 // and a feature is marked planned only while it does not exist (AC-D3). docs/feature-map.json lists the features
@@ -79,7 +79,7 @@ describe("docs/threat-model.md", () => {
 });
 
 describe("planned markers and docs/feature-map.json", () => {
-  const commands = helpCommands(HELP);
+  const commands = helpCommands(help());
 
   it("reads the subcommands from the CLI help", () => {
     expect(commands).toContain("verify");

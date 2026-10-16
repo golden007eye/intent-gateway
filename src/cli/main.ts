@@ -1,14 +1,14 @@
 // The `intent` / `intent-gateway` command line: parse, dispatch, and turn every failure into one line with its fix.
 import { fileURLToPath } from "node:url";
 import { parseArgs, type ParseArgsConfig } from "node:util";
-import { BUILD, type Config } from "../config/index.ts";
+import { BUILD, type Config, INTENT } from "../config/index.ts";
 import { startPanel } from "../panel/index.ts";
 import { answerStdioWithError } from "../mcp/index.ts";
 import { formatReport, type Install, runVerify } from "../verify/index.ts";
 import { approverAccept, approverList } from "./approver.ts";
 import { doctor } from "./doctor.ts";
 import { describeError, type ErrorContext } from "./errors.ts";
-import { HELP } from "./help.ts";
+import { help } from "./help.ts";
 import { CliError, type Io, line, type Outcome } from "./io.ts";
 import { formatLog, readLog } from "./log.ts";
 import { policyAdd, policyShow, policyTest } from "./policy.ts";
@@ -27,7 +27,7 @@ const COMMON: Options = {
 /** The options each command takes, beyond COMMON. The key is the command words joined by a space. */
 const COMMANDS: Readonly<Record<string, Options>> = {
   serve: { http: { type: "boolean" } },
-  demo: {},
+  demo: { http: { type: "boolean" } },
   log: {},
   verify: {
     install: { type: "string" },
@@ -62,7 +62,7 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
   try {
     const parsed = parse(argv);
     if (parsed === "help") {
-      io.stdout.write(HELP);
+      io.stdout.write(help());
       return { code: 0 };
     }
     const { command, args, values } = parsed;
@@ -77,7 +77,7 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
     const described = describeError(error, ctx);
     line(io.stderr, `intent: ${described}`);
     if (mcpOverStdio) await answerStdioWithError(`intent-gateway could not start: ${described}`, io);
-    if (error instanceof CliError && error.code === 2 && error.message.startsWith("unknown command")) io.stderr.write(`\n${HELP}`);
+    if (error instanceof CliError && error.code === 2 && error.message.startsWith("unknown command")) io.stderr.write(`\n${help()}`);
     const debug = config?.debug ?? io.env.INTENT_DEBUG === "1";
     if (debug && error instanceof Error && error.stack !== undefined) line(io.stderr, error.stack);
     return { code: error instanceof CliError ? error.code : 1 };
@@ -91,7 +91,7 @@ function parse(argv: readonly string[]): "help" | { command: string; args: strin
   try {
     parsed = parseArgs({ args: [...argv], options: all, allowPositionals: true, strict: true });
   } catch (error) {
-    throw new CliError(`${error instanceof Error ? error.message : String(error)}; run intent --help`, 2);
+    throw new CliError(`${error instanceof Error ? error.message : String(error)}; run ${INTENT} --help`, 2);
   }
   const values = parsed.values as Values;
   if (values.help === true || parsed.positionals[0] === "help") return "help";
@@ -100,18 +100,18 @@ function parse(argv: readonly string[]): "help" | { command: string; args: strin
   const command = first === undefined ? "serve" : first === "policy" || first === "approver" ? `${first} ${second ?? ""}`.trim() : first;
   if (!Object.hasOwn(COMMANDS, command)) {
     const what = first === "policy" || first === "approver" ? `${command} needs one of: ${subcommands(first).join(", ")}` : `unknown command "${command}"`;
-    throw new CliError(first === "policy" || first === "approver" ? `${what}; run intent --help` : what, 2);
+    throw new CliError(first === "policy" || first === "approver" ? `${what}; run ${INTENT} --help` : what, 2);
   }
   const words = command.split(" ").length;
   const args = parsed.positionals.slice(first === undefined ? 0 : words);
   const expected = ARGUMENTS[command] ?? [];
   if (args.length !== expected.length) {
-    const usage = [`intent ${command}`, ...expected].join(" ");
-    throw new CliError(`usage: ${usage}${args.length > expected.length ? ` (unexpected "${args[expected.length] ?? ""}")` : ""}; run intent --help`, 2);
+    const usage = [`${INTENT} ${command}`, ...expected].join(" ");
+    throw new CliError(`usage: ${usage}${args.length > expected.length ? ` (unexpected "${args[expected.length] ?? ""}")` : ""}; run ${INTENT} --help`, 2);
   }
   const allowed = { ...COMMON, ...COMMANDS[command] };
   for (const name of Object.keys(values)) {
-    if (!Object.hasOwn(allowed, name)) throw new CliError(`intent ${command} does not take --${name}; run intent --help`, 2);
+    if (!Object.hasOwn(allowed, name)) throw new CliError(`${INTENT} ${command} does not take --${name}; run ${INTENT} --help`, 2);
   }
   return { command, args, values };
 }
@@ -190,7 +190,7 @@ function install(values: Values, str: (name: string) => string | undefined): { i
   const kind = str("install");
   if (image !== undefined) {
     const version = str("version");
-    if (version === undefined) throw new CliError("--image needs --version <v>, the version the image should be; run intent --help", 2);
+    if (version === undefined) throw new CliError(`--image needs --version <v>, the version the image should be; run ${INTENT} --help`, 2);
     if (kind !== undefined || values["pkg-dir"] !== undefined) throw new CliError("give --image or --install npm, not both", 2);
     return { install: { kind: "image", ref: image, version } };
   }

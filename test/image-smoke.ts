@@ -102,6 +102,7 @@ async function tokenAndPolicy(): Promise<void> {
     const url = `http://127.0.0.1:${port}/mcp`;
     const token = await until("the token line", () => TOKEN_LINE.exec(logs(id))?.[1]);
     check(token.length === 43, "first start prints a 43-character token once, in the claude mcp add line");
+    check(logs(id).includes("so it is also kept in this container's log (docker logs); set INTENT_QUIET_TOKEN=1"), "the first start says the token stays in the container log");
     await until("the server", async () => ((await initialize(url, null)).status === 0 ? undefined : true));
     const ok = await initialize(url, `Bearer ${token}`);
     check(ok.status === 200 && ok.body.includes('"name":"intent-gateway"'), "initialize with the token: 200 from intent-gateway", ok.body);
@@ -156,6 +157,14 @@ function foreignDataDir(): Promise<void> {
   return Promise.resolve();
 }
 
+function quietToken(): Promise<void> {
+  const id = run(["-p", `127.0.0.1:${String(mcpPort + 20)}:8787`, "-e", "INTENT_DEMO=1", "-e", "INTENT_QUIET_TOKEN=1", image]);
+  return until("the quiet start", () => (logs(id).includes("not printed: INTENT_QUIET_TOKEN=1") ? true : undefined)).then(() => {
+    const token = docker("exec", id, "cat", "/data/http-token").trim();
+    check(token.length === 43 && !logs(id).includes(token), "INTENT_QUIET_TOKEN=1 never prints the token");
+  });
+}
+
 async function demo(): Promise<void> {
   const id = run(["-p", `127.0.0.1:${String(mcpPort)}:8787`, "-p", "127.0.0.1:8788:8788", "-e", "INTENT_DEMO=1", image]);
   const token = await until("the token line", () => TOKEN_LINE.exec(logs(id))?.[1]);
@@ -181,10 +190,13 @@ async function demo(): Promise<void> {
     const html = await page.text();
     const csrf = /name="csrf" value="([A-Za-z0-9_-]+)"/.exec(html)?.[1] ?? "";
     check(page.status === 200 && html.includes("Approve with demo passkey"), "the host's browser reaches the confirm page");
+    check(html.includes("docker exec &#60;container&#62; cat /data/demo/approval-code"), "the confirm page says how to read the demo code from the container");
+    const code = docker("exec", id, "cat", "/data/demo/approval-code").trim();
+    check(/^[0-9]{6}$/.test(code) && logs(id).includes(`Demo code for the confirm page: ${code} `), "the demo code is in the container log and its file");
     const approve = await fetch(link, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", origin: "http://127.0.0.1:8788", "sec-fetch-site": "same-origin" },
-      body: new URLSearchParams({ csrf, action: "approve" }).toString(),
+      body: new URLSearchParams({ csrf, action: "approve", code }).toString(),
     });
     check(approve.status === 200, "Approve (a POST from the host) succeeds", String(approve.status));
     const status = await call("get_approval_status", { approval_handle: handle });
@@ -197,7 +209,7 @@ async function demo(): Promise<void> {
 }
 
 try {
-  for (const step of [tokenAndPolicy, defaultPolicy, foreignDataDir, demo]) {
+  for (const step of [tokenAndPolicy, defaultPolicy, foreignDataDir, quietToken, demo]) {
     try {
       await step();
     } catch (error) {

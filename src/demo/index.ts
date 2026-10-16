@@ -7,5 +7,5 @@
 // and print `nextSteps()` on stderr. `--demo` on log/verify/panel/doctor reads `demoDataDir(dataDir)` with
 // `demoTrustKeys()` and starts nothing.
 export { DEMO_BANNER, nextSteps, type NextStepsOptions } from "./banner.ts";
-export { CONFIRM_CSP, CONFIRM_HOST, type ConfirmPage, startConfirmPage } from "./confirm.ts";
+export { CONFIRM_CSP, CONFIRM_HOST, type ConfirmPage, MAX_WRONG_CODES, startConfirmPage } from "./confirm.ts";
 export { CONTAINER_CONFIRM_PORT, type Demo, DEMO_DIR, demoDataDir, type DemoOptions, demoTrustKeys, startDemo } from "./demo.ts";

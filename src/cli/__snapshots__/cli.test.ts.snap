@@ -4,11 +4,11 @@ exports[`--version and --help > prints the short, example-led help 1`] = `
 "intent-gateway: the gateway between your agent and Intent Cloud.
 
 Try it now, with no setup (demo Intent Cloud on this machine, test keys, nothing can be bought):
-  npx -y intent-gateway@next demo
+  intent demo
 
 Connect an agent:
-  claude mcp add intent -- npx -y intent-gateway@next demo     the demo
-  claude mcp add intent -- npx -y intent-gateway@next --trust-keys <file>
+  claude mcp add intent -- intent demo     the demo
+  claude mcp add intent -- intent --trust-keys <file>
 
 Commands:
   intent serve [--http]             MCP server over stdio (the default), or Streamable HTTP
@@ -22,7 +22,7 @@ Commands:
   intent policy test <cases.yaml>   run test cases against the active policy
   intent approver list              approver pins and flagged passkeys
   intent approver accept            make a flagged passkey the approver (at a terminal)
-  intent demo                       run against a local demo Intent Cloud
+  intent demo [--http]              run against a local demo Intent Cloud (HTTP when typed in a terminal)
 
 Options for every command:
   --demo               use the demo Intent Cloud and the demo data dir (<data dir>/demo)

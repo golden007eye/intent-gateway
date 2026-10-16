@@ -27,7 +27,7 @@ import { PanelError } from "../panel/index.ts";
 import { PolicyError } from "../policy/index.ts";
 import { type Entry, openStore, readChain, StoreCorruptError, StoreFencedError, StoreUnsafeError } from "../store/index.ts";
 import { approverFingerprint } from "../trust/index.ts";
-import { CliError, describeError, formatLog, HELP, type Io, main } from "./index.ts";
+import { CliError, describeError, formatLog, help, type Io, main } from "./index.ts";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
@@ -124,9 +124,9 @@ describe("--version and --help", () => {
   it("prints the short, example-led help", async () => {
     const result = await setup().run(["--help"]);
     expect(result).toMatchObject({ code: 0, err: "" });
-    expect(result.out).toBe(HELP);
-    expect(HELP).toMatchSnapshot();
-    expect(HELP.split("\n").length).toBeLessThan(40);
+    expect(result.out).toBe(help());
+    expect(help()).toMatchSnapshot();
+    expect(help().split("\n").length).toBeLessThan(40);
   });
 
   it.each([[["frobnicate"]], [["policy"]], [["policy", "nope"]], [["approver"]]])("refuses %j with exit 2", async (argv) => {
@@ -138,7 +138,7 @@ describe("--version and --help", () => {
   it("an unknown command also prints the help", async () => {
     const result = await setup().run(["frobnicate"]);
     expect(result.err).toContain('intent: unknown command "frobnicate"');
-    expect(result.err).toContain(HELP);
+    expect(result.err).toContain(help());
   });
 
   it.each([[["log", "--bogus"]], [["log", "--http"]], [["log", "extra"]], [["policy", "add"]]])("refuses %j with one usage line and exit 2", async (argv) => {
@@ -639,5 +639,51 @@ describe("describeError: every error class is one line with a fix", () => {
     const text = describeError(error, { dataDir: "/d", policyPath: "/d/policy.yaml", cloudUrl: "https://cloud.example" });
     expect(text).not.toContain("\n");
     expect(text).toMatch(FIX);
+  });
+});
+
+describe("printed commands name the invocation that works for this install (devrun F-b, F-d)", () => {
+  it.each([["node /home/dev/intent-gateway/dist/main.js"], ["npx -y file:/home/dev/intent-gateway.tgz"], ["npx -y intent-gateway@next"]])("help for %s", (intent) => {
+    const text = help(intent);
+    expect(text).toContain(`\n  ${intent} demo\n`);
+    expect(text).toContain(`  claude mcp add intent -- ${intent} demo     the demo`);
+    expect(text).toContain(`\n  ${intent} verify `);
+    expect(text).not.toMatch(/^ {2}intent /m);
+  });
+});
+
+describe("intent demo --http (devrun F-c)", () => {
+  it("serves the demo over HTTP like serve --http --demo, with the code on stderr only", async () => {
+    const port = String(40_000 + Math.floor(Math.random() * 10_000));
+    const s = setup({ INTENT_HTTP_PORT: port });
+    const result = await s.run(["demo", "--http"]);
+    expect(result.code).toBe(0);
+    expect(result.out).toBe("");
+    expect(result.err).toContain(`  claude mcp add --transport http intent http://127.0.0.1:${port}/mcp`);
+    const code = /Demo code for the confirm page: ([0-9]{6}) /.exec(result.err)?.[1];
+    expect(code).toBeDefined();
+    expect(readFileSync(join(s.dir, "demo", "approval-code"), "utf8")).toBe(`${code ?? ""}\n`);
+    expect(help()).toContain("demo [--http]");
+  });
+});
+
+describe("doctor checks the Node version (devrun F-a)", () => {
+  it.each([
+    ["24.15.0", "ok"],
+    ["24.20.1", "ok"],
+    ["26.0.0", "ok"],
+    ["27.1.0", "ok"],
+    ["24.2.0", "WARN"],
+    ["25.8.0", "WARN"],
+    ["22.22.2", "WARN"],
+  ])("Node %s: %s", async (nodeVersion, level) => {
+    const result = await setup().run(["doctor", "--demo"], { io: { nodeVersion } });
+    if (level === "ok") expect(result.out).toContain(`ok    node: ${nodeVersion}\n`);
+    else {
+      expect(result.out).toContain(
+        `WARN  node: ${nodeVersion} is not supported; the gateway needs Node 24 LTS (24.15 or later) or 26+. Install Node 24 LTS (for example nvm install 24) and run it again\n`,
+      );
+    }
+    expect(result.code).toBe(0);
   });
 });

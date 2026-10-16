@@ -3,7 +3,7 @@
 // In demo mode (`intent demo`, `--demo`) the same gateway runs against the in-process demo Intent Cloud with the
 // published test root pinned, the store in `<data>/demo`, approval links on the local confirm page, and the demo
 // banner on stderr and on every tool result.
-import type { Config } from "../config/index.ts";
+import { type Config, INTENT } from "../config/index.ts";
 import { DEMO_BANNER, type Demo, nextSteps } from "../demo/index.ts";
 import { createGateway } from "../gateway/index.ts";
 import { runHttp, runStdio } from "../mcp/index.ts";
@@ -24,7 +24,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
   const dataDir = demo?.dataDir ?? config.dataDir;
   const { policy, bundled } = await activePolicy(config.policyPath);
   if (bundled !== null) {
-    say(`No policy file found; using the bundled ${bundled} policy: the only detail about you it sends is your ZIP code. Change it with \`intent policy add <name>\`.`);
+    say(`No policy file found; using the bundled ${bundled} policy: the only detail about you it sends is your ZIP code. Change it with \`${INTENT} policy add <name>\`.`);
   }
   const now = io.now === undefined ? {} : { now: io.now };
   const banner = demo === null ? {} : { banner: DEMO_BANNER };
@@ -56,13 +56,13 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
         const auth = shownToken === null ? "" : ` --header "Authorization: Bearer ${shownToken}"`;
         say(`connect an agent: claude mcp add --transport http intent ${url}${auth}`);
       } else {
-        for (const text of nextSteps({ http: { url, token: container ? shownToken : token } })) log(text);
+        for (const text of nextSteps({ http: { url, token: container ? shownToken : token }, code: { code: demo.code, file: demo.codeFile } })) log(text);
         say("serving until Ctrl-C");
       }
     } else {
       transport = await runStdio({ gateway, ...banner });
       if (demo === null) say(`MCP over stdio is ready; data dir ${dataDir}`);
-      else for (const text of nextSteps()) log(text);
+      else for (const text of nextSteps({ code: { code: demo.code, file: demo.codeFile } })) log(text);
     }
     const stop = async (): Promise<void> => {
       await transport.close();

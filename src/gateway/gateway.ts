@@ -35,6 +35,7 @@ import {
   DisclosureDiscardedError,
   DisclosureNoKeysError,
 } from "../disclosure/index.ts";
+import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { evaluate, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
 import { findIdentity } from "../privacy/index.ts";
@@ -289,7 +290,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (options.demo === undefined) {
       if (mode === "demo") {
         throw new GatewayStartError(
-          "this data dir holds a demo chain (test keys, sample catalog); run `intent demo`, or use another data dir",
+          `this data dir holds a demo chain (test keys, sample catalog); run \`${INTENT} demo\`, or use another data dir`,
         );
       }
       return;
@@ -507,8 +508,12 @@ export function createGateway(options: GatewayOptions): Gateway {
       qr: approvalQr(approvalUrl),
       cart,
       message:
-        `Ask the buyer to open ${approvalUrl} (or scan the QR code) and approve with their passkey; ` +
-        `the page shows check code ${created.check_code}. Then call get_approval_status.`,
+        options.demo === undefined
+          ? `Ask the buyer to open ${approvalUrl} (or scan the QR code) and approve with their passkey; ` +
+            `the page shows check code ${created.check_code}. Then call get_approval_status.`
+          : `Demo: ask the user to open the approval link ${approvalUrl} and click Approve with demo passkey ` +
+            `(enter the code shown in the gateway's terminal); the page shows check code ${created.check_code}. ` +
+            "Then call get_approval_status.",
       summary: summary(fromSeq),
     };
   }
@@ -545,7 +550,9 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (status.proof === undefined && !PROOF_STATES.has(status.state)) {
       const message =
         status.state === "pending"
-          ? "Waiting for the buyer to approve with their passkey."
+          ? options.demo === undefined
+            ? "Waiting for the buyer to approve with their passkey."
+            : "Waiting for the user to click Approve with demo passkey on the approval link (with the code shown in the gateway's terminal)."
           : status.state === "rejected"
             ? "The buyer rejected this purchase."
             : "This approval expired. Create a new cart to try again.";
@@ -583,7 +590,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   /** A handle already chained: its proof was verified, and its passkey was the pin, when it was chained. */
   function reportChained(chained: Entry, status: ApprovalStatus | null, fromSeq: number): ApprovalStatusResult {
     const proof = ApprovalProof.safeParse(bodyOf(chained).proof);
-    if (!proof.success) return { status: "not_verified", message: "The chained approval is malformed; run intent verify.", summary: summary(fromSeq) };
+    if (!proof.success) return { status: "not_verified", message: `The chained approval is malformed; run ${INTENT} verify.`, summary: summary(fromSeq) };
     return approved(approverFingerprint(proof.data.credential_public_key), status, fromSeq);
   }
 
@@ -614,7 +621,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       fingerprint,
       message:
         `Not approved: a passkey other than the pinned approver signed this purchase (fingerprint ${fingerprint}). ` +
-        "If that passkey is the buyer's, the developer runs `intent approver accept` at a terminal and types this " +
+        `If that passkey is the buyer's, the developer runs \`${INTENT} approver accept\` at a terminal and types this ` +
         "fingerprint; then ask again.",
       summary: summary(fromSeq),
     };

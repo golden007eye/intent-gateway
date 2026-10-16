@@ -4,4 +4,4 @@ export { main } from "./main.ts";
 export { CliError, type Io, type Outcome, type Writer } from "./io.ts";
 export { describeError, type ErrorContext } from "./errors.ts";
 export { formatLog } from "./log.ts";
-export { HELP } from "./help.ts";
+export { help } from "./help.ts";
