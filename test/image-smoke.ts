@@ -112,7 +112,7 @@ async function tokenAndPolicy(): Promise<void> {
     check(docker("exec", id, "cat", "/data/http-token").trim() === token, "docker exec <c> cat /data/http-token gives the token");
     const log = spawnSync("docker", ["exec", id, "intent", "log"], { encoding: "utf8" });
     check(log.status === 0 && log.stdout.includes("every hash links"), "docker exec <c> intent log reads the chain with no token", log.stdout + log.stderr);
-    check(!logs(id).includes("bundled"),"the mounted policy file is used, not a bundled default");
+    check(!logs(id).includes("bundled"), "the mounted policy file is used, not a bundled default");
     const health = await until("the healthcheck", () => {
       const s = docker("inspect", "-f", "{{.State.Health.Status}}", id).trim();
       return s === "starting" ? undefined : s;
@@ -143,7 +143,7 @@ async function defaultPolicy(): Promise<void> {
       const s = (await initialize(url, `Bearer ${token}`)).status;
       return s === 0 ? undefined : s;
     });
-    check(status === 200 && /no policy file at \/data\/policy\.yaml, so the bundled \S+ policy applies/.test(logs(id)), "with no policy file the bundled default applies and initialize works");
+    check(status === 200 && /No policy file found; using the bundled zip-only policy/.test(logs(id)), "with no policy file the bundled zip-only default applies and initialize works");
   } finally {
     await cloud.close();
   }
