@@ -8,10 +8,13 @@
 // - disclosure: endpoint, method, path, fields, body_b64, content_digest, keyid.
 // - receipt: disclosure_seq, status, verified, receipt_header (its `kid` member); unacknowledged, discarded:
 //   disclosure_seq, reason (and status inside the reason, when it starts with one).
-// - block: endpoint, fields, blocked.
+// - block: endpoint, fields, blocked, held (the values a policy block held back; absent on older chains).
+// - observed: what Intent Cloud returned for one acknowledged request (src/observation's ObservedBody), joined to
+//   that request's action. A chain written before observations existed has none, and its actions read as before.
 // - approval_pending: handle, approval_url, total_minor, expires_at; approval: handle.
 // - approver_pin, approver_flag: fingerprint, handle, reason. keys: statement.kid, statement.expires_at.
 // - session: mode ("demo" on the first entry of a demo chain) or id.
+import { ObservedBody, type ObservedOffer } from "../observation/index.ts";
 import { findIdentity } from "../privacy/index.ts";
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
@@ -28,7 +31,22 @@ export type ActionKind = (typeof ACTION_KINDS)[number];
 export type Delivery = "acknowledged" | "unacknowledged" | "not_sent" | "maybe_sent" | "discarded";
 
 /** An action's outcome: the worst delivery of its requests, or what the action itself recorded. */
-export type Outcome = Delivery | "blocked" | "refused" | "approval_asked" | "approved" | "pinned" | "flagged" | "recorded" | "unreadable";
+export type Outcome =
+  | Delivery
+  | "blocked"
+  | "refused"
+  | "approval_asked"
+  | "approved"
+  | "pinned"
+  | "flagged"
+  | "recorded"
+  | "unreadable"
+  /** A status check whose answer (an observation) said the approval was rejected, or had expired. */
+  | "rejected"
+  | "expired";
+
+/** What Intent Cloud returned for one request, as the `observed` entry at `seq` recorded it locally. */
+export type ActivityObserved = { readonly seq: number } & ObservedBody;
 
 export interface ActivityResponse {
   /** The follow-up entry's seq. */
@@ -62,6 +80,8 @@ export interface ActivityRequest {
   readonly delivery: Delivery;
   /** The follow-up entry; null when none is recorded. */
   readonly response: ActivityResponse | null;
+  /** What Intent Cloud returned, recorded locally after the receipt; null when no observation is recorded. */
+  observed: ActivityObserved | null;
 }
 
 /** The readable facts of an action; only the ones its entries hold are present. */
@@ -93,6 +113,17 @@ export interface ActivityFacts {
   field_names?: string[];
   /** unreadable: the line number in the chain file. */
   line?: number;
+  /** search, observed: how many offers Intent Cloud returned, how many the policy hid, and the first ones. */
+  offers_count?: number;
+  offers_hidden?: number;
+  offers?: ObservedOffer[];
+  /** cart or status, observed: the product title and merchant name Intent Cloud returned. */
+  title?: string;
+  merchant?: string;
+  /** cart or status, observed: the approval state Intent Cloud returned last (`rejected` after a rejection). */
+  approval_state?: string;
+  /** block: the values a policy block held back (never sent), e.g. {category: "alcohol"}. */
+  held?: Record<string, unknown>;
 }
 
 export interface Activity {
@@ -240,9 +271,21 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
           target.blocked.push(...blocked);
           target.outcome = "refused";
         } else {
-          const activity = open(item, "blocked", { endpoint, field_names: leafFields(strings(b.fields)) }, refusalOf === null ? "blocked" : "refused");
+          const held = record(b.held);
+          const facts: ActivityFacts = { endpoint, field_names: leafFields(strings(b.fields)), ...(Object.keys(held).length === 0 ? {} : { held }) };
+          const activity = open(item, "blocked", facts, refusalOf === null ? "blocked" : "refused");
           activity.blocked.push(...blocked);
         }
+        break;
+      }
+      case "observed": {
+        const parsed = ObservedBody.safeParse(b);
+        // A malformed observation, or one that names no request, is left out here; `intent verify` reports it.
+        const target = parsed.success ? requests.get(parsed.data.disclosure_seq) : undefined;
+        if (!parsed.success || target === undefined || target.request.observed !== null || target.request.endpoint !== parsed.data.endpoint || target.request.delivery !== "acknowledged") break;
+        join(target.activity, item);
+        target.request.observed = { seq: item.seq, ...parsed.data };
+        observe(target.activity, parsed.data, activities);
         break;
       }
       case "approval_pending": {
@@ -375,7 +418,31 @@ function toRequest(item: Item, answer: Item | null): ActivityRequest {
     keyid: typeof b.keyid === "string" ? b.keyid : null,
     delivery: answer === null ? "maybe_sent" : answer.kind === "receipt" ? "acknowledged" : answer.kind === "discarded" ? "discarded" : neverLeft(answer.body) ? "not_sent" : "unacknowledged",
     response: answer === null ? null : toResponse(answer),
+    observed: null,
   };
+}
+
+/** Adds what an observation says to its action's facts; a rejected or expired approval becomes the status's outcome. */
+function observe(activity: Activity, o: ObservedBody, activities: readonly Activity[]): void {
+  const f = activity.facts;
+  switch (o.endpoint) {
+    case "searchCatalog":
+      Object.assign(f, { offers_count: o.offers_count, offers_hidden: o.offers_hidden, offers: o.offers });
+      break;
+    case "createCart":
+      Object.assign(f, { title: o.title, merchant: o.merchant, quantity: o.quantity, total_minor: o.total_minor });
+      break;
+    case "createApproval":
+      Object.assign(f, { title: o.title, merchant: o.merchant, quantity: o.quantity, total_minor: o.total_minor, approval_state: o.state });
+      break;
+    case "getApproval": {
+      Object.assign(f, { title: o.title, merchant: o.merchant, total_minor: o.total_minor, approval_state: o.state });
+      if ((o.state === "rejected" || o.state === "expired") && activity.outcome === "acknowledged") activity.outcome = o.state;
+      const cart = activities.findLast((a) => a.action === "cart" && a.facts.approval_handle === o.approval_handle);
+      if (cart !== undefined) cart.facts.approval_state = o.state;
+      break;
+    }
+  }
 }
 
 function toResponse(item: Item): ActivityResponse {

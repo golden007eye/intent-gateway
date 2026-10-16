@@ -163,6 +163,46 @@ describe("buildModel: purchases", () => {
   });
 });
 
+describe("buildModel: observations (what came back) and held values; older chains keep their fallbacks", () => {
+  const observed = (seq: number, body: Record<string, unknown>): Spec => ["observed", { disclosure_seq: seq, ...(body.endpoint === "searchCatalog" ? {} : { currency: "USD" }), ...body }, at("10:31")];
+  // The same flow with an observation after each receipt (inserted at the end keeps every seq the fixture names), the
+  // block's held value, and the waiting sock cart rejected on the confirm page.
+  const specs: Spec[] = [
+    ...SPECS.map(([kind, body, ts]): Spec => (kind === "block" ? [kind, { ...body, held: { category: "alcohol" } }, ts] : [kind, body, ts])),
+    observed(3, { endpoint: "searchCatalog", offers_count: 3, offers_hidden: 0, offers: [] }),
+    observed(6, { endpoint: "createCart", title: "Budget Running Shoe", merchant: "Resale Hub", quantity: 1, total_minor: 4198 }),
+    observed(15, { endpoint: "createCart", title: "Trail Socks 3-pack", merchant: "Hydra Goods", quantity: 1, total_minor: 1800 }),
+    ["disclosure", { ...disclosure("getApproval", "/v1/approvals/ap_sock", null), method: "GET" }, at("10:32")],
+    ["receipt", receipt(24), at("10:32")],
+    observed(24, { endpoint: "getApproval", approval_handle: "ap_sock", state: "rejected", title: "Trail Socks 3-pack", merchant: "Hydra Goods", total_minor: 1800 }),
+  ];
+  const m = buildModel(input({ items: chain(specs), now: Date.parse(at("10:33")) }));
+
+  it("a purchase is titled with what came back: product, total, merchant; a rejected one says so", () => {
+    expect(m.purchases.map((p) => [p.title, p.state])).toEqual([
+      ["Trail Socks 3-pack · $18.00 · Hydra Goods", "Rejected"],
+      ["Budget Running Shoe · $41.98 · Resale Hub", "Approved"],
+      ["Purchase · $30.00", "Approved"],
+    ]);
+    expect(m.purchases[0]?.steps[2]).toMatchObject({ name: "Your approval", state: "failed", note: "rejected" });
+    expect(m.kpis.waiting).toBe(0);
+  });
+
+  it("the feed says how many offers came back, names the held-back category, and shows the rejection", () => {
+    const texts = m.feed.map((l) => [l.label, l.text]);
+    expect(texts).toContainEqual(["search", "Search · running shoes · under $120.00 · ZIP 94103 · 3 offers · receipt ✓"]);
+    expect(texts).toContainEqual(["refused", 'Search refused: category "alcohol" excluded · nothing sent']);
+    expect(texts).toContainEqual(["rejected", "Approval status checked · ap_sock · Trail Socks 3-pack · rejected · receipt ✓"]);
+    expect(m.kpis.refusedNote).toBe('last: category "alcohol" excluded, nothing sent');
+  });
+
+  it("without observations the same chain keeps the older words", () => {
+    const old = buildModel(input());
+    expect(old.feed.find((l) => l.label === "refused")?.text).toBe("Search refused before sending: excluded or blocked category · nothing sent");
+    expect(old.purchases[1]?.title).toBe("Running shoes · $41.98");
+  });
+});
+
 describe("buildModel: approvals, policy, log, verify", () => {
   const m = buildModel(input());
 
@@ -215,6 +255,12 @@ describe("renderPage", () => {
     }
     expect(html.match(/<h1 /g)).toHaveLength(VIEWS.length);
     expect(html).toContain('<span class="badge">1<span class="sr-only"> waiting for you</span></span>');
+  });
+
+  it("the Activity card's header has a real link to the purchase timeline, styled as a secondary button", () => {
+    expect(html).toContain(
+      '<div class="panel-head"><h2 id="h-activity">Activity</h2><a class="btn btn-secondary btn-inline" href="#/purchases">View purchase timeline →</a></div>',
+    );
   });
 
   it("DEMO for the demo chain, REAL otherwise", () => {

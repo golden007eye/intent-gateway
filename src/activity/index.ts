@@ -7,6 +7,7 @@ export {
   type ActivityFacts,
   type ActivityFilter,
   type ActivityLog,
+  type ActivityObserved,
   type ActivityRequest,
   type ActivityResponse,
   type ActivitySummary,

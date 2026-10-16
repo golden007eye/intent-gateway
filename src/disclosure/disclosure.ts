@@ -23,7 +23,10 @@
 // id before its first disclosure, and every disclosure body carries `session: {id, n, open}`: n counts the session's
 // disclosures from 0, and `open` lists the n of its earlier disclosures still awaiting their follow-up. The id is
 // local only: it is in the chain, never in the request (the logged body_b64 is what is sent).
-// Inbound bodies are never scanned: an offer title is Cloud's content, not the buyer's.
+// Each result carries `disclosureSeq`, the seq of the disclosure that logged its request, so the gateway can name it
+// in the `observed` entry it writes after a verified answer.
+// Inbound bodies are never scanned here: an offer title is Cloud's content, not the buyer's. The gateway's
+// observations of them are scanned (src/observation) before they are kept.
 import { randomUUID } from "node:crypto";
 import {
   CloudNetworkError,
@@ -40,15 +43,18 @@ import { type Finding, findIdentity } from "../privacy/index.ts";
 import { NOT_SENT_REASON, type Store } from "../store/index.ts";
 import { type KeySet, type SentRequest, verifyReceipt } from "../trust/index.ts";
 
+/** A result as the adapter returned it, plus the seq of the `disclosure` entry that logged its request. */
+export type DisclosedResult<T> = CloudResult<T> & { readonly disclosureSeq: number };
+
 /** The same operations as IntentCloud; each call is logged before it is sent. */
 export interface DisclosedCloud {
-  meta(): Promise<CloudResult<Meta>>;
-  signatureKeys(): Promise<CloudResult<Jwks>>;
-  keyStatement(): Promise<CloudResult<KeyStatement>>;
-  search(request: SearchRequest): Promise<CloudResult<SearchResponse>>;
-  createCart(request: CartRequest): Promise<CloudResult<Cart>>;
-  createApproval(cartHandle: string): Promise<CloudResult<ApprovalCreated>>;
-  getApproval(approvalHandle: string): Promise<CloudResult<ApprovalStatus>>;
+  meta(): Promise<DisclosedResult<Meta>>;
+  signatureKeys(): Promise<DisclosedResult<Jwks>>;
+  keyStatement(): Promise<DisclosedResult<KeyStatement>>;
+  search(request: SearchRequest): Promise<DisclosedResult<SearchResponse>>;
+  createCart(request: CartRequest): Promise<DisclosedResult<Cart>>;
+  createApproval(cartHandle: string): Promise<DisclosedResult<ApprovalCreated>>;
+  getApproval(approvalHandle: string): Promise<DisclosedResult<ApprovalStatus>>;
 }
 
 export interface DisclosureOptions {
@@ -139,7 +145,7 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
   async function disclosed<T>(
     needsKeys: boolean,
     run: (beforeSend: (request: PreparedRequest) => Promise<void>) => Promise<CloudResult<T>>,
-  ): Promise<CloudResult<T>> {
+  ): Promise<DisclosedResult<T>> {
     if (stopped !== null) throw stoppedError();
     if (needsKeys) {
       const keySet = options.keySet();
@@ -215,7 +221,7 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
     if (seq === null || sent === null) throw new Error("the cloud adapter returned without calling beforeSend");
     const discarded = await answer(seq, () => acknowledge(seq, sent, result));
     if (discarded !== null) throw new DisclosureDiscardedError(seq, result.status, discarded);
-    return result;
+    return { ...result, disclosureSeq: seq };
   }
 
   /** Appends the entry that answers disclosure `seq`; returns the reason when a 2xx's content must be discarded. */

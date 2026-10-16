@@ -119,7 +119,8 @@ function overview(m: PanelModel): string {
   return (
     `<p class="lede">What this gateway sent, what came back and what waits for you, read from its local log.</p>` +
     `<div class="kpis">${approved}${waiting}${sent}${refused}</div>` +
-    `<div class="split"><section class="panel feed-panel" aria-labelledby="h-activity"><h2 id="h-activity">Activity</h2>` +
+    `<div class="split"><section class="panel feed-panel" aria-labelledby="h-activity">` +
+    `<div class="panel-head"><h2 id="h-activity">Activity</h2><a class="btn btn-secondary btn-inline" href="#/purchases">View purchase timeline →</a></div>` +
     (feed.length === 0 ? `<p class="muted">No activity yet. Ask your agent to search for something.</p>` : `<ol class="feed">${feed.map(feedItem).join("")}</ol>`) +
     `<a class="more" href="#/purchases">Purchases timeline</a></section>` +
     `<section class="panel rules" aria-labelledby="h-rules"><h2 id="h-rules">Your rules</h2>${rules}` +

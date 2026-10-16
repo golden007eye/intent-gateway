@@ -5,10 +5,11 @@ import type { Activity, Delivery } from "./activity.ts";
 
 /**
  * Where a purchase stands, from the chain alone: `approved` (a verified Approval is chained), `waiting` (an approval
- * was asked for and has not expired), `expired` (asked for, expired, none chained), `refused` (the gateway refused what
- * came back), or the cart request's delivery when no approval was asked for.
+ * was asked for and has not expired), `expired` (asked for, expired, none chained, or a status check's observation
+ * says so), `rejected` (a status check's observation says Intent Cloud returned `rejected`), `refused` (the gateway
+ * refused what came back), or the cart request's delivery when no approval was asked for.
  */
-export type PurchaseState = "approved" | "waiting" | "expired" | "refused" | Delivery;
+export type PurchaseState = "approved" | "waiting" | "expired" | "rejected" | "refused" | Delivery;
 
 export interface Purchase {
   /** The cart action's first seq. */
@@ -44,6 +45,9 @@ export function buildPurchases(activities: readonly Activity[], now: number): Pu
 function stateOf(cart: Activity, approval: Activity | null, now: number): PurchaseState {
   if (cart.outcome === "refused") return "refused";
   if (approval !== null) return "approved";
+  // The latest approval state an observation recorded (src/activity's observe); absent on chains without observations.
+  if (cart.facts.approval_state === "rejected") return "rejected";
+  if (cart.facts.approval_state === "expired") return "expired";
   if (cart.facts.approval_handle !== undefined) {
     const expires = cart.facts.expires_at === undefined ? Number.NaN : Date.parse(cart.facts.expires_at);
     return expires <= now ? "expired" : "waiting";
