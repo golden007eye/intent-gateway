@@ -1003,7 +1003,9 @@ describe("serve failures", () => {
     expect(failed.err).not.toContain("policy add");
     expect(existsSync(join(s.dir, "http-token.unshown"))).toBe(true);
     // The next start serves (the demo, on the same data dir): the token is printed, once, after the server is up.
-    const served = await setup({ ...env, INTENT_DATA_DIR: s.dir, INTENT_DEMO: "1" }).run(["serve", "--http"]);
+    // A free confirm port, not the image's 8788: a demo running elsewhere on this machine must not fail this test.
+    const confirm = String(Number(port) + 1);
+    const served = await setup({ ...env, INTENT_DATA_DIR: s.dir, INTENT_DEMO: "1", INTENT_DEMO_CONFIRM_PORT: confirm }).run(["serve", "--http"]);
     expect(served.code).toBe(0);
     expect(served.err).toContain(`  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer ${token}"\n`);
     expect(served.err.split(token).length - 1).toBe(1);
