@@ -251,7 +251,7 @@ async function stagingUnreachable(): Promise<void> {
   check(exit === "exited 1", "with the staging host unreachable and no INTENT_DEMO the container exits 1", exit);
   check(!first.includes("claude mcp add"), "a container that cannot start prints no connect line (and no token)", first);
   check(
-    first.includes("intent: Intent Cloud at staging-api.intentai.shop cannot be reached (connection refused); nothing was sent. Staging may not be open yet;"),
+    first.includes("intent: Intent Cloud at staging-api.intentai.shop cannot be reached (connection refused); nothing was sent. Check your network, or"),
     "it says plainly that the staging host cannot be reached and that nothing was sent",
     first,
   );
