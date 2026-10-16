@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalize } from "../jcs/index.ts";
 import { PolicyError, loadPolicy, meet } from "../policy/index.ts";
-import { addPolicy, LibraryError, LIBRARY_REPO, MAX_GITHUB_BODY_BYTES, readLock, type AddOptions } from "./index.ts";
+import { addPolicy, LibraryError, LIBRARY_REPO, MAX_GITHUB_BODY_BYTES, planPolicy, readLock, type AddOptions } from "./index.ts";
 
 // Each add fsyncs three times (two temp files and the directory); on a busy disk that alone can pass the
 // default 5 s timeout, which is latency, not a hang.
@@ -343,5 +343,44 @@ describe("readLock", () => {
     mkdirSync(dirname(lockPath));
     writeFileSync(lockPath, text);
     expect((await refusal(readLock(policyPath))).code).toBe("LOCK_INVALID");
+  });
+});
+
+describe("planPolicy", () => {
+  it("shows the text before and after without writing, and apply() writes exactly the after text", async () => {
+    const { policyPath, lockPath } = workdir();
+    mkdirSync(dirname(policyPath), { recursive: true });
+    const before = "# mine\nversion: 1\napproval: passkey\nspend:\n  per_order_usd: 100\n";
+    writeFileSync(policyPath, before);
+    const plan = await planPolicy("per-order-60", { policyPath, buildCommit: BUILD_SHA });
+    expect(plan.before).toBe(before);
+    expect(plan.after).toMatch(/per_order_usd: 60/);
+    expect(readFileSync(policyPath, "utf8")).toBe(before);
+    expect(existsSync(lockPath)).toBe(false);
+    expect(await plan.apply()).toEqual(plan.lock);
+    expect(readFileSync(policyPath, "utf8")).toBe(plan.after);
+    expect(await readLock(policyPath)).toEqual(plan.lock);
+  });
+
+  it("has no before text when there is no policy yet", async () => {
+    const { policyPath } = workdir();
+    const plan = await planPolicy("no-history", { policyPath, buildCommit: BUILD_SHA });
+    expect(plan.before).toBeUndefined();
+  });
+
+  it.each([
+    ["edited", (p: string) => { writeFileSync(p, "version: 1\napproval: passkey\nquantity:\n  max: 1\n"); }],
+    ["created", (p: string) => { writeFileSync(p, "version: 1\napproval: passkey\n"); }],
+  ])("apply() refuses when policy.yaml was %s after the plan, and writes nothing", async (_label, change) => {
+    const { policyPath, lockPath } = workdir();
+    const created = _label === "created";
+    mkdirSync(dirname(policyPath), { recursive: true });
+    if (!created) writeFileSync(policyPath, "version: 1\napproval: passkey\n");
+    const plan = await planPolicy("no-history", { policyPath, buildCommit: BUILD_SHA });
+    change(policyPath);
+    const changed = readFileSync(policyPath, "utf8");
+    expect((await refusal(plan.apply())).code).toBe("POLICY_CHANGED");
+    expect(readFileSync(policyPath, "utf8")).toBe(changed);
+    expect(existsSync(lockPath)).toBe(false);
   });
 });

@@ -54,7 +54,8 @@ export type LibraryErrorCode =
   | "GITHUB_RATE_LIMITED"
   | "GITHUB_ERROR"
   | "LOCK_INVALID"
-  | "LOCK_STALE";
+  | "LOCK_STALE"
+  | "POLICY_CHANGED";
 
 /** A refused `policy add` (nothing was written), or a `policy.lock` that readLock cannot vouch for. */
 export class LibraryError extends Error {
@@ -72,11 +73,31 @@ export class LibraryError extends Error {
  * LibraryError (or PolicyError for a policy that does not load) and writes nothing on any refusal.
  */
 export async function addPolicy(name: string, opts: AddOptions): Promise<Lock> {
+  return (await planPolicy(name, opts)).apply();
+}
+
+/** What `policy add` would write, read and checked but not yet written, so a caller can show it first. */
+export interface PolicyPlan {
+  /** The policy.yaml there now, as its text; undefined when there is none. */
+  before: string | undefined;
+  /** The policy.yaml apply() writes: meet(current, library). */
+  after: string;
+  lock: Lock;
+  /**
+   * Writes policy.yaml and policy.lock. Refuses (LibraryError `POLICY_CHANGED`, nothing written) when policy.yaml
+   * changed since the plan was made, so the change shown is the change applied.
+   */
+  apply(): Promise<Lock>;
+}
+
+/** Everything addPolicy does short of writing: fetch, check against the index, load, meet with the current policy. */
+export async function planPolicy(name: string, opts: AddOptions): Promise<PolicyPlan> {
   if (!NAME.test(name)) throw new LibraryError("UNKNOWN_POLICY", `${JSON.stringify(name)} is not a library policy name`);
   const fetched = opts.commit === undefined ? await readBundled(name, opts) : await readGithub(name, opts.commit, opts);
   const library = loadPolicy(fetched.text);
-  const current = await readCurrent(opts.policyPath);
-  const result = current === undefined ? library : meet(current, library);
+  const currentBytes = await readOptional(opts.policyPath);
+  const before = currentBytes === undefined ? undefined : new TextDecoder().decode(currentBytes);
+  const result = before === undefined ? library : meet(loadPolicy(before), library);
   const yaml = policyYaml(result);
   const lock: Lock = {
     name,
@@ -85,26 +106,35 @@ export async function addPolicy(name: string, opts: AddOptions): Promise<Lock> {
     source: fetched.source,
     policy_sha256: sha256Hex(new TextEncoder().encode(yaml)),
   };
+  const apply = async (): Promise<Lock> => {
+    const now = await readOptional(opts.policyPath);
+    const same = now === undefined || currentBytes === undefined ? now === currentBytes : Buffer.from(now).equals(currentBytes);
+    if (!same) throw new LibraryError("POLICY_CHANGED", `${opts.policyPath} changed while policy add was running; run it again`);
+    await writePolicy(opts.policyPath, yaml, lock);
+    return lock;
+  };
+  return { before, after: yaml, lock, apply };
+}
 
-  const dir = dirname(opts.policyPath);
+async function writePolicy(policyPath: string, yaml: string, lock: Lock): Promise<void> {
+  const dir = dirname(policyPath);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   // Both files go to fresh temp files, fsynced, before either is renamed into place. The lock is renamed first:
   // a crash between the two renames leaves the new lock beside the old policy, and because the lock names the
   // hash of the policy it belongs to, readLock reports it stale instead of vouching for the wrong file.
   const temps: string[] = [];
   try {
-    temps.push(await writeTemp(lockPath(opts.policyPath), canonicalize(lock)));
-    temps.push(await writeTemp(opts.policyPath, yaml));
+    temps.push(await writeTemp(lockPath(policyPath), canonicalize(lock)));
+    temps.push(await writeTemp(policyPath, yaml));
     const [lockTmp, policyTmp] = temps as [string, string];
-    await rename(lockTmp, lockPath(opts.policyPath));
+    await rename(lockTmp, lockPath(policyPath));
     temps.shift();
-    await rename(policyTmp, opts.policyPath);
+    await rename(policyTmp, policyPath);
     temps.shift();
   } finally {
     await Promise.all(temps.map((tmp) => unlink(tmp).catch(() => undefined)));
   }
   await syncDir(dir);
-  return lock;
 }
 
 const lockPath = (policyPath: string): string => join(dirname(policyPath), "policy.lock");
@@ -277,11 +307,6 @@ function checked(name: string, bytes: Uint8Array, expected: string, where: strin
     throw new LibraryError("HASH_MISMATCH", `${name}/policy.yaml from ${where} has sha256 ${sha256}, but the index lists ${expected}`);
   }
   return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), sha256 };
-}
-
-async function readCurrent(path: string): Promise<Policy | undefined> {
-  const bytes = await readOptional(path);
-  return bytes === undefined ? undefined : loadPolicy(new TextDecoder().decode(bytes));
 }
 
 /** The policy as a v1 policy.yaml. Reloading it gives the same policy, which addPolicy checks before writing. */
