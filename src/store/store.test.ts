@@ -145,6 +145,47 @@ describe("openStore", () => {
   });
 });
 
+describe("directory fsync (a new audit.jsonl survives a crash)", () => {
+  /** `fast`, recording each datasync of the log and each open and sync of the data dir, in order. */
+  function recording(syncDir: () => Promise<void> = () => Promise.resolve()) {
+    const calls: string[] = [];
+    const fs: StoreFs = {
+      ...fast,
+      open: (async (...args: Parameters<typeof fsp.open>) => {
+        const handle = await fast.open(...args);
+        if (args[0] === dir) {
+          calls.push(isRead(args[1]) ? "open dir" : "open dir (not read-only)");
+          return Object.assign(handle, { sync: () => (calls.push("sync dir"), syncDir()) });
+        }
+        if (args[0] === logPath() && isAppend(args[1])) {
+          return Object.assign(handle, { datasync: () => (calls.push("datasync log"), Promise.resolve()) });
+        }
+        return handle;
+      }),
+    };
+    return { fs, calls };
+  }
+
+  it("fsyncs the data dir once, after the first entry is datasync'd, before the append resolves", async () => {
+    const { fs, calls } = recording();
+    const store = await openStore(dir, { clock, fs });
+    expect(calls).toEqual([]);
+    await store.append("session", { i: 0 });
+    expect(calls).toEqual(["datasync log", "open dir", "sync dir"]);
+    await store.append("session", { i: 1 });
+    expect(calls).toEqual(["datasync log", "open dir", "sync dir", "datasync log"]);
+    await store.close();
+  });
+
+  it("refuses the first append when the dir fsync fails, and leaves nothing in the file (attack: log before send)", async () => {
+    const { fs } = recording(() => Promise.reject(errno("EIO")));
+    const store = await openStore(dir, { clock, fs });
+    await expect(store.append("disclosure", { field: "zip" })).rejects.toThrow("EIO");
+    expect(logText()).toBe("");
+    await expect(store.append("disclosure", { field: "zip" })).rejects.toThrow(StoreFencedError);
+  });
+});
+
 describe("lease", () => {
   it("makes two stores on one dir take turns: 2×100 interleaved appends give one chain of 200", async () => {
     const a = await openStore(dir);

@@ -95,6 +95,8 @@ export interface ProofOptions {
   clientDataBytes?: Buffer;
   rpId?: string;
   flags?: number;
+  /** The authenticator's signature counter in authenticatorData; default 0. */
+  signCount?: number;
   authenticatorData?: Buffer;
   /** Sign these bytes instead of authenticatorData || SHA-256(clientDataJSON). */
   signOver?: Buffer;
@@ -117,8 +119,9 @@ export function makeProof(opts: ProofOptions = {}): Record<string, unknown> {
     ...opts.clientData,
   };
   const clientDataJson = opts.clientDataBytes ?? Buffer.from(opts.clientDataText ?? JSON.stringify(clientData), "utf8");
-  const authData =
-    opts.authenticatorData ?? Buffer.concat([sha256(opts.rpId ?? "example"), Buffer.from([opts.flags ?? 0x05]), Buffer.alloc(4)]);
+  const counter = Buffer.alloc(4);
+  counter.writeUInt32BE(opts.signCount ?? 0);
+  const authData = opts.authenticatorData ?? Buffer.concat([sha256(opts.rpId ?? "example"), Buffer.from([opts.flags ?? 0x05]), counter]);
   const signed = opts.signOver ?? Buffer.concat([authData, sha256(clientDataJson)]);
   const unsigned = {
     v: 1,

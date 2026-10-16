@@ -165,6 +165,39 @@ describe("verifyApprovalProof: attacks on the passkey assertion", () => {
     const offCurve = { ...passkey.jwk, y: Buffer.alloc(32, 7).toString("base64url") };
     expect(check(makeProof({ passkey, credentialPublicKey: offCurve }))).toEqual(refused(6, "bad_credential_key"));
   });
+  it("refuses an RSA passkey whose public exponent is not 65537, even when its assertion signature verifies", () => {
+    for (const publicExponent of [3, 17, 65539]) {
+      const pair = generateKeyPairSync("rsa", { modulusLength: 2048, publicExponent });
+      const jwk = pair.publicKey.export({ format: "jwk" });
+      const passkey = Object.assign(new TestPasskey("RS256"), { privateKey: pair.privateKey, jwk: { kty: "RSA", n: jwk.n ?? "", e: jwk.e ?? "", alg: "RS256" } });
+      expect(check(makeProof({ passkey }))).toEqual(refused(6, "bad_credential_key"));
+    }
+    // e = 1 makes s^e = s, so a "signature" equal to the padded message verifies under any modulus.
+    const rs = new TestPasskey("RS256").jwk;
+    for (const e of ["AQ", "AAEAAQ", "AQAA"]) {
+      expect(check(makeProof({ credentialPublicKey: { ...rs, e } }))).toEqual(refused(6, "bad_credential_key"));
+    }
+  });
+  it("refuses an RSA modulus under 2048 bits written with leading zero bytes to pass the schema's length", () => {
+    const n = Buffer.from(generateKeyPairSync("rsa", { modulusLength: 1024 }).publicKey.export({ format: "jwk" }).n ?? "", "base64url");
+    const padded = Buffer.concat([Buffer.alloc(256 - n.length), n]).toString("base64url");
+    expect(check(makeProof({ credentialPublicKey: { kty: "RSA", n: padded, e: "AQAB", alg: "RS256" } }))).toEqual(refused(6, "bad_credential_key"));
+  });
+  it("reads the signature counter from authenticatorData bytes 33-36", () => {
+    for (const signCount of [0, 1, 0x01020304, 2 ** 32 - 1]) {
+      const result = check(makeProof({ signCount }));
+      expect(result.ok && result.credential.signCount).toBe(signCount);
+    }
+  });
+  it("accepts a proof issued after the snapshot expired: Intent Cloud issues it at each read (Appendix E issued_at)", () => {
+    const expires = SNAPSHOT.expires_at as string;
+    const proof = makeProof();
+    const unsigned = { ...proof, issued_at: new Date(Date.parse(expires) + 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z") };
+    delete (unsigned as { cloud_signature?: unknown }).cloud_signature;
+    const cloud_signature = sign(null, Buffer.from(`intent-approval-v1\n${canonicalize(unsigned)}`, "utf8"), seedOf("cloud-approval-202610")).toString("base64url");
+    expect(Date.parse(unsigned.issued_at)).toBeGreaterThan(Date.parse(expires));
+    expect(check({ ...unsigned, cloud_signature }).ok).toBe(true);
+  });
   it("refuses every algorithm but ES256 and RS256, and any extra JWK member", () => {
     const ed = generateKeyPairSync("ed25519").publicKey.export({ format: "jwk" });
     const p384 = generateKeyPairSync("ec", { namedCurve: "P-384" }).publicKey.export({ format: "jwk" });
