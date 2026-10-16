@@ -5,10 +5,10 @@ import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config, RootKey } from "../config/index.ts";
 import { CONTRACT_VERSION } from "../contract/index.ts";
-import { contractSums } from "../gateway/index.ts";
+import { chainMode, contractSums } from "../gateway/index.ts";
 import { LibraryError, readLock } from "../library/index.ts";
 import { PolicyError } from "../policy/index.ts";
-import { openStore, verifyChain } from "../store/index.ts";
+import { type Entry, openStore, verifyChain } from "../store/index.ts";
 import { verifyStatement } from "../trust/index.ts";
 import { describeError } from "./errors.ts";
 import { type Io, line } from "./io.ts";
@@ -36,10 +36,16 @@ export async function doctor(io: Io, config: Config): Promise<number> {
   line(io.stdout, `intent doctor: data dir ${config.dataDir}`);
   await checkDataDir(config.dataDir, report);
   await checkPolicy(config.policyPath, report);
-  checkChain(config.dataDir, report);
+  const mode = checkChain(config.dataDir, report);
   await checkLease(config.dataDir, now(), report);
 
-  if (config.demo) {
+  // A demo chain and a real one never mix (as for serve): doctor writes a real `keys` entry, so it never does so into
+  // a demo chain, and demo mode refuses a real one.
+  if (mode === "demo" && !config.demo) {
+    report("fail", `Intent Cloud not checked: ${config.dataDir} holds a demo chain (test keys, sample catalog); run intent doctor --demo, or set INTENT_DATA_DIR to another folder`);
+  } else if (mode === "normal" && config.demo) {
+    report("fail", `chain mode: ${config.dataDir} holds a real chain; demo mode uses its own data dir (<data>/demo), so run intent doctor without --demo`);
+  } else if (config.demo) {
     // The demo Intent Cloud runs only inside intent demo, and its contract and keys are the ones this build ships.
     const kids = demoTrustKeys().rootKeys.map((k) => k.kid).join(", ");
     report("ok", `root key: ${kids} (the published test key; demo mode only)`);
@@ -107,25 +113,27 @@ async function checkPolicy(policyPath: string, report: Report): Promise<void> {
   }
 }
 
-function checkChain(dataDir: string, report: Report): void {
+/** Reports on the chain and returns its mode, or null when it could not be read or does not link. */
+function checkChain(dataDir: string, report: Report): ReturnType<typeof chainMode> | null {
   let items: unknown[];
   try {
     items = readLog(dataDir);
   } catch (error) {
     report("fail", `chain: ${describeError(error, { dataDir })}`);
-    return;
+    return null;
   }
   if (items.length === 0) {
     report("ok", "chain: empty; nothing has been sent yet");
-    return;
+    return "empty";
   }
   const chain = verifyChain(items);
   if (!chain.ok) {
     report("fail", `chain: breaks at seq ${String(chain.brokenSeq)} (${chain.reason}); run intent verify, then move audit.jsonl aside to start a new chain`);
-    return;
+    return null;
   }
   const head = items.at(-1) as { seq: number; hash: string };
   report("ok", `chain: ${String(items.length)} entries, every hash links; head seq ${String(head.seq)} hash ${head.hash}`);
+  return chainMode(items as Entry[]);
 }
 
 async function checkLease(dataDir: string, now: number, report: Report): Promise<void> {
