@@ -8,6 +8,7 @@ import { CONTRACT_VERSION } from "../contract/index.ts";
 import { chainMode, contractSums } from "../gateway/index.ts";
 import { LibraryError, lockOrigin, readLock } from "../library/index.ts";
 import { PolicyError } from "../policy/index.ts";
+import { SUPPORTED_NODE, nodeSupported } from "../runtime/index.ts";
 import { type Entry, openStore, verifyChain } from "../store/index.ts";
 import { verifyStatement } from "../trust/index.ts";
 import { describeError, errorContext, metaRefused } from "./errors.ts";
@@ -70,15 +71,6 @@ export async function doctor(io: Io, config: Config): Promise<number> {
 }
 
 type Report = (level: Level, text: string) => void;
-
-/** The Node releases the gateway and its sigstore dependencies support: package.json `engines`. */
-export const SUPPORTED_NODE = "Node 24 LTS (24.15 or later) or 26+";
-
-/** Whether Node `version` (as in process.versions.node) satisfies `^24.15.0 || >=26.0.0`. */
-export function nodeSupported(version: string): boolean {
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  return (major === 24 && minor >= 15) || major >= 26;
-}
 
 function checkNode(version: string, report: Report): void {
   if (nodeSupported(version)) report("ok", `node: ${version}`);
