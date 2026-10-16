@@ -1,6 +1,6 @@
 # Security policy
 
-intent is pre-alpha: there is no release and nothing here should run against real purchases yet. Security reports are still welcome, because the design is the part that has to be right.
+intent is pre-alpha: only preview releases exist (npm `next`, GHCR), and nothing here should run against real purchases yet. Security reports are still welcome, because the design is the part that has to be right.
 
 ## Reporting a vulnerability
 

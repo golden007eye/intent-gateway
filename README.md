@@ -10,33 +10,25 @@
 
 [![licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue)](https://github.com/golden007eye/intent-gateway/blob/main/LICENSE)
 [![ci](https://github.com/golden007eye/intent-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/golden007eye/intent-gateway/actions/workflows/ci.yml)
-<!-- Release and image-signature (cosign) badges are added once a first release exists. -->
+[![npm next](https://img.shields.io/npm/v/intent-gateway/next)](https://www.npmjs.com/package/intent-gateway)
 
-**Pre-alpha preview.** The gateway, the `intent` CLI and a demo mode work today, built from this repository. There is no release on npm or GHCR yet, and nothing can be bought: the first preview is built for the Intent Cloud staging host, and real purchases wait for the [launch gate](https://github.com/golden007eye/intent-gateway/blob/main/docs/adr/0004-public-pre-alpha.md).
+**Pre-alpha preview.** The gateway, the `intent` CLI and a demo mode work today. Preview releases are on npm (`intent-gateway@next`) and GHCR (`ghcr.io/golden007eye/intent-gateway`). Nothing can be bought: the preview is built for the Intent Cloud staging host, and real purchases wait for the [launch gate](https://github.com/golden007eye/intent-gateway/blob/main/docs/adr/0004-public-pre-alpha.md).
 
 ## Quickstart: the demo
 
 The demo runs the whole flow on your machine with no setup: a demo Intent Cloud on `127.0.0.1` with a sample catalog and the published test keys, and a local confirm page that stands in for the passkey step. Every tool result says `DEMO: test keys, sample catalog, nothing can be bought.`
 
-You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+, pnpm (`corepack enable`) and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way.
+You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+ and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way.
 
-**1 · Build the package** (until the first preview release is on npm):
-
-```console
-$ git clone https://github.com/golden007eye/intent-gateway.git
-$ cd intent-gateway
-$ pnpm install && pnpm build && npm pack && mv intent-gateway-*.tgz intent-gateway.tgz
-```
-
-**2 · Add the demo gateway to Claude Code**, from the same folder:
+**1 · Add the demo gateway to Claude Code:**
 
 ```console
-$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
+$ claude mcp add intent -- npx -y intent-gateway@next demo
 ```
 
 If Claude Code already has an MCP server named `intent` (for example a connector added in your Claude account), use another name, `claude mcp add intent-demo -- …`, so the agent cannot pick the wrong one.
 
-**3 · Ask for something.** Start `claude` and ask:
+**2 · Ask for something.** Start `claude` and ask:
 
 ```text
 > Find running shoes to ZIP 94103, under $200, and prepare a cart for the cheapest.
@@ -46,29 +38,33 @@ The agent calls `find_offers`, then `create_cart`, and shows an approval link su
 
 Working on a remote machine over SSH? Forward the confirm page to your laptop's browser with `ssh -L 8788:127.0.0.1:8788 <host>`. If port 8788 is taken, the demo uses another one and says so on startup; `INTENT_DEMO_CONFIRM_PORT` chooses it ([demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md#the-confirm-pages-port)).
 
-**4 · Check what was sent**, in the cloned folder:
+**3 · Check what was sent:**
 
 ```console
-$ npx -y ./intent-gateway.tgz verify --demo
+$ npx -y intent-gateway@next verify --demo
 ```
 
-It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` shows each action with the values it sent and its outcome; add `-v` for every entry, or `--json` for one action per line ([the log](https://github.com/golden007eye/intent-gateway/blob/main/docs/log.md)). The [demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo --http` serves the demo over HTTP instead, printing the line to connect with and the demo code.
+It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y intent-gateway@next log --demo` shows each action with the values it sent and its outcome; add `-v` for every entry, or `--json` for one action per line ([the log](https://github.com/golden007eye/intent-gateway/blob/main/docs/log.md)). The [demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md) has the details, and `npx -y intent-gateway@next demo --http` serves the demo over HTTP instead, printing the line to connect with and the demo code.
 
-### From the first preview release
+### From a clone
 
-Once `0.1.0-preview.1` is published, the build step goes away:
+To run the code on `main` instead of the preview release, build the package (this needs pnpm: `corepack enable`) and use it in place of `intent-gateway@next`:
 
 ```console
-$ claude mcp add intent -- npx -y intent-gateway@next demo
-$ npx -y intent-gateway@next verify --demo
+$ git clone https://github.com/golden007eye/intent-gateway.git
+$ cd intent-gateway
+$ pnpm install && pnpm build && npm pack && mv intent-gateway-*.tgz intent-gateway.tgz
+$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
+$ npx -y ./intent-gateway.tgz verify --demo
 ```
 
 ### With Docker
 
-The image runs the same package and serves MCP over HTTP. Until the first preview release puts it on GHCR, build it from the cloned folder:
+The image runs the same package and serves MCP over HTTP. Pull the preview from GHCR and name it `intent-gateway`, the name the commands below and the gateway's own hints use (or build it from a clone: `docker build -t intent-gateway .`):
 
 ```console
-$ docker build --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t intent-gateway .   # the build-arg is optional: it records the commit
+$ docker pull ghcr.io/golden007eye/intent-gateway:0.1.0-preview.2
+$ docker tag ghcr.io/golden007eye/intent-gateway:0.1.0-preview.2 intent-gateway
 $ docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 \
     -e INTENT_DEMO=1 -v intent-data:/data intent-gateway
 $ docker logs intent
@@ -82,11 +78,11 @@ $ claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Aut
 
 Later starts reuse the token without printing it; read it with `docker exec intent cat /data/http-token`. Port 8788 is the demo's confirm page and must be published on the same host port, as above. Over SSH, `ssh -L 8788:127.0.0.1:8788 <host>` is the only forward you need: the agent runs on the server and connects to 8787 there. The demo code is in `docker logs intent`, or read it with `docker exec intent cat /data/demo/approval-code`. Check what was sent with `docker exec intent intent verify --demo`.
 
-Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`. For a bind mount instead of a volume, add `--user "$(id -u):$(id -g)"`. Without `INTENT_DEMO=1` the container talks to the Intent Cloud staging host, whose root key this build pins; until that host is open, it exits with a line saying so and how to re-run it in demo mode.
+Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`. For a bind mount instead of a volume, add `--user "$(id -u):$(id -g)"`. Without `INTENT_DEMO=1` the container talks to the Intent Cloud staging host, whose root key this build pins; when it cannot reach that host, it exits with a line saying so and how to re-run it in demo mode.
 
 ## Real purchases
 
-Not yet. The preview gateway talks to Intent Cloud staging and pins its root key, but the staging host is not open yet: `intent serve` without `--demo` stops with a line saying it cannot reach the host and the next step to take. Real purchases wait for the [launch gate](https://github.com/golden007eye/intent-gateway/blob/main/docs/adr/0004-public-pre-alpha.md). When they arrive, the buyer still approves each purchase with their own passkey on intent's confirm page and pays on the merchant's checkout.
+Not yet. The preview gateway talks to Intent Cloud staging and pins its root key: `intent serve` without `--demo` serves against it, and when it cannot reach the host it stops with a line saying so and the next step to take. Real purchases wait for the [launch gate](https://github.com/golden007eye/intent-gateway/blob/main/docs/adr/0004-public-pre-alpha.md). When they arrive, the buyer still approves each purchase with their own passkey on intent's confirm page and pays on the merchant's checkout.
 
 ## How privacy is verified
 

@@ -34,7 +34,7 @@ The gateway itself is the same code as in a real run: the same policy, identity 
 | `INTENT_DEMO=1` | The same as `--demo`, for any command. |
 | `docker run … -e INTENT_DEMO=1 …` | The image in demo mode, with the confirm page on port 8788; see [Quickstart](quickstart.md#with-docker). |
 
-Here `intent` stands for the command that runs your gateway: `npx -y "file:$PWD/intent-gateway.tgz"` for a local build, `npx -y intent-gateway@next` once a preview is published. The gateway prints its own commands with the prefix that started it.
+Here `intent` stands for the command that runs your gateway: `npx -y "file:$PWD/intent-gateway.tgz"` for a local build, `npx -y intent-gateway@next` for the preview release. The gateway prints its own commands with the prefix that started it.
 
 Every other command takes `--demo` and then reads the demo data dir: `intent log --demo`, `intent verify --demo`, `intent panel --demo`, `intent doctor --demo`, `intent policy show --demo`, `intent approver list --demo`.
 
