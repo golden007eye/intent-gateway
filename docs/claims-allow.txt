@@ -18,6 +18,7 @@ docs/adr/0011-approver-pin.md | The first purchase still trusts Intent Cloud | s
 
 # CLI strings: status lines about a response the gateway received, or names of configuration.
 src/cli/doctor.ts | Intent Cloud: demo mode runs its own | doctor's label for the demo's local stand-in
+src/config/index.ts | for a self-hosted Intent Cloud | names a deployment the --trust-keys option is for; configuration, not data handling
 src/cli/doctor.ts | Intent Cloud not checked | doctor's label for a check it skipped
 src/cli/doctor.ts | meta answered | reports the status a response came back with
 src/cli/doctor.ts | Intent Cloud publishes the next one before then | the key statement's renewal, which the contract specifies

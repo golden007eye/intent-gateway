@@ -202,6 +202,24 @@ describe("verifyNpm", () => {
     expect(reasons(notJson)).toEqual(["registry-error"]);
   });
 
+  test("a name or version the registry does not know fails with not-published, and nothing else is fetched", async () => {
+    const { dir, opts } = await setup();
+    const unknown = routedFetch(new Map());
+    expect((await verifyNpm(dir, { ...opts, fetch: unknown })).failures).toEqual([
+      { reason: "not-published", detail: "the registry has no package intent-gateway (HTTP 404)" },
+    ]);
+    expect(unknown.calls).toHaveLength(1);
+    const other = routedFetch(new Map<string, Route>([[`${REGISTRY}/intent-gateway`, { versions: { "0.0.1": {} } }]]));
+    expect((await verifyNpm(dir, { ...opts, fetch: other })).failures).toEqual([
+      { reason: "not-published", detail: `the registry lists no intent-gateway@${VERSION}` },
+    ]);
+    // Reachable but inconsistent is not "unpublished".
+    const noDist = routedFetch(new Map<string, Route>([[`${REGISTRY}/intent-gateway`, { versions: { [VERSION]: {} } }]]));
+    expect(reasons(await verifyNpm(dir, { ...opts, fetch: noDist }))).toEqual(["registry-error"]);
+    const noVersions = routedFetch(new Map<string, Route>([[`${REGISTRY}/intent-gateway`, {}]]));
+    expect(reasons(await verifyNpm(dir, { ...opts, fetch: noVersions }))).toEqual(["registry-error"]);
+  });
+
   test("an unreadable or non-release package fails with package-unreadable", async () => {
     const { dir, opts } = await setup();
     await writeFile(join(dir, "package.json"), JSON.stringify({ name: "intent-gateway", version: "1.2.3; rm -rf" }));

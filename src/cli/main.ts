@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { BUILD, type Config } from "../config/index.ts";
 import { startPanel } from "../panel/index.ts";
+import { answerStdioWithError } from "../mcp/index.ts";
 import { formatReport, type Install, runVerify } from "../verify/index.ts";
 import { approverAccept, approverList } from "./approver.ts";
 import { doctor } from "./doctor.ts";
@@ -28,7 +29,13 @@ const COMMANDS: Readonly<Record<string, Options>> = {
   serve: { http: { type: "boolean" } },
   demo: {},
   log: {},
-  verify: { install: { type: "string" }, "pkg-dir": { type: "string" }, image: { type: "string" }, version: { type: "string" } },
+  verify: {
+    install: { type: "string" },
+    "pkg-dir": { type: "string" },
+    image: { type: "string" },
+    version: { type: "string" },
+    "skip-install-check": { type: "boolean" },
+  },
   panel: { port: { type: "string" } },
   doctor: {},
   "policy test": { policy: { type: "string" } },
@@ -51,6 +58,7 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
   }
   const ctx: ErrorContext = {};
   let config: Config | undefined;
+  let mcpOverStdio = false;
   try {
     const parsed = parse(argv);
     if (parsed === "help") {
@@ -59,12 +67,16 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
     }
     const { command, args, values } = parsed;
     const demoFlag = values.demo === true || command === "demo";
+    // An MCP client started this process (serve, or demo, over stdio): a startup failure must reach the agent too.
+    mcpOverStdio = (command === "serve" || command === "demo") && values.http !== true && !io.isTTY.stdin;
     // Only serve refuses an unpinned host up front; doctor reports it, and the offline commands never reach Cloud.
     config = cliConfig(io, argv, demoFlag, command === "serve");
     Object.assign(ctx, { dataDir: config.dataDir, policyPath: config.policyPath, cloudUrl: config.cloud.url });
     return await run(io, config, command, args, values);
   } catch (error) {
-    line(io.stderr, `intent: ${describeError(error, ctx)}`);
+    const described = describeError(error, ctx);
+    line(io.stderr, `intent: ${described}`);
+    if (mcpOverStdio) await answerStdioWithError(`intent-gateway could not start: ${described}`, io);
     if (error instanceof CliError && error.code === 2 && error.message.startsWith("unknown command")) io.stderr.write(`\n${HELP}`);
     const debug = config?.debug ?? io.env.INTENT_DEBUG === "1";
     if (debug && error instanceof Error && error.stack !== undefined) line(io.stderr, error.stack);
@@ -132,7 +144,8 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
         now: new Date((io.now ?? Date.now)()),
         ...chosen,
         // Demo mode checks the demo chain; the install's self-check runs only when asked for with --install/--image.
-        ...(config.demo && values.install === undefined && values.image === undefined ? { skipSupplyChain: true } : {}),
+        ...(config.demo && values.install === undefined && values.image === undefined ? { skipSupplyChain: true, skipReason: "demo mode" } : {}),
+        ...(values["skip-install-check"] === true ? { skipSupplyChain: true, skipReason: "--skip-install-check" } : {}),
       });
       io.stdout.write(formatReport(report));
       return { code: report.exitCode };

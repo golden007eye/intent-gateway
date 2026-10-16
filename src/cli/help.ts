@@ -12,6 +12,7 @@ Commands:
   intent serve [--http]             MCP server over stdio (the default), or Streamable HTTP
   intent log                        what was sent, blocked and approved, field by field
   intent verify                     re-check the chain, receipts, approvals and this install
+                                    (--skip-install-check: chain only, for offline use)
   intent panel [--port <n>]         read-only local page: pending approvals, approver pin
   intent doctor                     check the setup; each problem comes with its fix
   intent policy show                the active policy and its policy.lock

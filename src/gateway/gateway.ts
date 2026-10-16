@@ -414,13 +414,16 @@ export function createGateway(options: GatewayOptions): Gateway {
     }
     for (const offer of kept) remember(offer.offer_handle, { offer, category: category ?? "", zip });
     const hidden = sent.body.offers.length - kept.length;
-    const hiddenNote = hidden === 0 ? "" : ` ${String(hidden)} more hidden by the gateway policy (${[...hiddenBy].sort().join(", ")}).`;
+    // Rule names only (e.g. merchants.block), never the merchant, category or price that matched it.
+    const rules = [...hiddenBy].sort().join(", ");
+    const hiddenNote = hidden === 0 ? "" : ` ${String(hidden)} more hidden by the gateway policy (${rules}).`;
+    const hiddenBlocked = hidden === 0 ? [] : [`${String(hidden)} offer${hidden === 1 ? "" : "s"} (${rules})`];
     return {
       status: "offers",
       offers: kept,
       hidden,
       message: `${String(kept.length)} offer${kept.length === 1 ? "" : "s"}.${hiddenNote}`,
-      summary: summary(fromSeq),
+      summary: summary(fromSeq, hiddenBlocked),
     };
   }
 
