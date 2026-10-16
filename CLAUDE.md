@@ -36,4 +36,4 @@ A change that touches an invariant carries a test that fails if the invariant br
 2. Every change lands by pull request on a branch. When every required CI check is green, the author (agent or human) merges it with `gh pr merge --squash` (ADR-0003). The `main-protection` ruleset on GitHub (PR required, squash-only, signed commits, CI green) is the real control; `.claude/settings.json` only stops agents from trying anything else.
 3. Before opening a PR, run `pnpm check` and fill in the PR template, including the public-safe box. Done = `pnpm check` passes, template complete, CI green.
 
-Tooling gotchas: dependency-cruiser refuses odd-numbered Node releases, so run `pnpm boundaries` under Node 24 (`.node-version`). Run `pre-commit install` once per clone.
+Tooling gotchas: pnpm scripts run on the Node 24 that `devEngines.runtime` pins, whatever `node` is on `PATH`; a bare `node` or `npx` does not, and dependency-cruiser refuses odd-numbered Node releases, so call it through `pnpm boundaries`. Run `pre-commit install` once per clone.

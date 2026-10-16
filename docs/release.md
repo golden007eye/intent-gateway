@@ -39,7 +39,7 @@ These steps need the maintainer's accounts. The workflow cannot succeed until th
 
 Before `pnpm release`, the [outsider e2e](https://github.com/golden007eye/intent-gateway/blob/main/CONTRIBUTING.md#outsider-e2e) must pass on the release commit: `scripts/e2e-outsider.sh --tarball` and `scripts/e2e-outsider.sh --docker`. It needs a logged-in Claude Code, so a maintainer runs it; CI does not.
 
-From a clean, up-to-date `main` checkout, with Node 24 and `gh` logged in:
+From a clean, up-to-date `main` checkout, with `gh` logged in (`pnpm release` runs on the Node 24 that `devEngines.runtime` pins, whatever `node` is on `PATH`):
 
 ```console
 $ pnpm release --dry-run
