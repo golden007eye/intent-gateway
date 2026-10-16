@@ -6,8 +6,11 @@
 //   MAX_WRONG_CODES), which is kept 0600, new on every start and never in a tool result.
 // - Separation: a demo chain and a real chain never mix (both ways); demo mode refuses any root but the published
 //   test root; the test root is never in PINNED_HOSTS; the demo passkey is stable per data dir.
+// - Port: the confirm page listens on the port asked for, falls back to a free one only when told to, and the next
+//   steps name its address with the ssh -L forward (and the taken port, after a fallback).
 import * as fsp from "node:fs/promises";
 import { request as httpRequest } from "node:http";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -390,6 +393,48 @@ describe("the confirm page in the Docker image (bind 0.0.0.0)", () => {
   });
 });
 
+describe("the confirm page's port (F-n)", () => {
+  /** A port some other program holds, on 127.0.0.1, released after the test. */
+  async function takenPort(): Promise<number> {
+    const server = createNetServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanup.push(
+      () =>
+        new Promise<void>((resolve) => {
+          server.close(() => {
+            resolve();
+          });
+        }),
+    );
+    return (server.address() as AddressInfo).port;
+  }
+
+  it("listens on the port asked for, on 127.0.0.1", async () => {
+    const port = await takenPort();
+    await cleanup.pop()?.(); // released: free again
+    const demo = await startDemo({ dataDir: await tmpData(), port, portFallback: true });
+    cleanup.push(() => demo.close());
+    expect(demo.confirmBaseUrl).toBe(`http://127.0.0.1:${String(port)}/confirm`);
+    expect(demo.confirmPortBusy).toBeNull();
+  });
+
+  it("falls back to a free port when the port is taken and fallback is on, and says which port was taken", async () => {
+    const port = await takenPort();
+    const demo = await startDemo({ dataDir: await tmpData(), port, portFallback: true });
+    cleanup.push(() => demo.close());
+    expect(demo.confirmPortBusy).toBe(port);
+    const origin = new URL(demo.confirmBaseUrl);
+    expect(origin.hostname).toBe("127.0.0.1");
+    expect(origin.port).not.toBe(String(port));
+    expect((await raw(`${demo.confirmBaseUrl}/c/unknown`)).status).toBe(404);
+  });
+
+  it("fails on a taken port without fallback: a chosen port is never swapped for another", async () => {
+    const port = await takenPort();
+    await expect(startDemo({ dataDir: await tmpData(), port })).rejects.toMatchObject({ code: "EADDRINUSE" });
+  });
+});
+
 describe("demo and real chains never mix", () => {
   it("demo mode refuses a data dir holding a real chain", async () => {
     const demo = await demoAt(await tmpData());
@@ -512,6 +557,19 @@ describe("next steps", () => {
     expect(nextSteps({ http: { url: "http://127.0.0.1:8787/mcp", token: "t".repeat(32) } })).toContain(
       `  claude mcp add --transport http intent http://127.0.0.1:8787/mcp --header "Authorization: Bearer ${"t".repeat(32)}"`,
     );
+  });
+
+  it("names the confirm page's address and the ssh -L forward for it", () => {
+    const lines = nextSteps({ code: { code: "123456", file: "/d/demo/approval-code" }, confirm: { origin: "http://127.0.0.1:8788", busy: null } });
+    expect(lines).toContain("Approval links open the demo confirm page at http://127.0.0.1:8788 (over SSH, forward it: ssh -L 8788:127.0.0.1:8788 <host>)");
+    expect(lines.join("\n")).not.toContain("is taken");
+    expect(lines.indexOf("then ask the agent to check the approval status.")).toBeLessThan(lines.findIndex((l) => l.startsWith("Approval links")));
+  });
+
+  it("says when the default port was taken and which one the confirm page uses instead", () => {
+    const lines = nextSteps({ confirm: { origin: "http://127.0.0.1:41233", busy: 8788 } });
+    expect(lines).toContain("Port 8788 is taken (another demo running?), so the confirm page uses 41233; set INTENT_DEMO_CONFIRM_PORT to choose one.");
+    expect(lines).toContain("Approval links open the demo confirm page at http://127.0.0.1:41233 (over SSH, forward it: ssh -L 41233:127.0.0.1:41233 <host>)");
   });
 
   it("in the image, points at the entrypoint's connect line instead of printing a second one", () => {
