@@ -4,7 +4,9 @@
 export {
   ApprovalStatusInput,
   type ApprovalStatusResult,
+  chainMode,
   contractSums,
+  DEMO_SESSION,
   createGateway,
   CreateCartInput,
   type CreateCartResult,

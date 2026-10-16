@@ -13,4 +13,5 @@ export { approvalChallenge, type ApprovalFailure, type ApprovalResult, type Chai
 export { type ApproverBody, type ApproverCheck, checkApprover } from "./approver.ts";
 export { approverFingerprint } from "./fingerprint.ts";
 export { type ReceiptFailure, type ReceiptResponse, type ReceiptResult, type SentRequest, verifyReceipt } from "./receipt.ts";
+export { isTestRoot, onlyTestRoot, TEST_ROOT_KEY } from "./test-root.ts";
 export { type KeySet, MAX_CLOCK_SKEW_MS, type PinnedRootKey, type StatementFailure, type StatementResult, verifyStatement } from "./statement.ts";

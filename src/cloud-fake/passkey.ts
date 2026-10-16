@@ -1,5 +1,5 @@
 // A software passkey (ES256 or RS256) that answers a WebAuthn `get` the way a platform authenticator would, and the
-// check the confirm page runs on its assertion (appendix E steps 4–6). For tests only.
+// check the confirm page runs on its assertion (appendix E steps 4–6). For tests and the demo confirm page only.
 import { createHash, createPublicKey, generateKeyPairSync, type KeyObject, randomBytes, sign, verify } from "node:crypto";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import type { CredentialPublicKey, WebAuthnAssertion } from "../contract/index.ts";
@@ -35,6 +35,8 @@ export interface SoftPasskeyOptions {
   sub?: string;
   /** The authenticator's signature counter; default 0 (as platform passkeys and vector e1 report). */
   signCount?: number;
+  /** An existing P-256 private key (ES256), so a passkey can outlive one process (the demo keeps one per data dir). */
+  privateKey?: KeyObject;
 }
 
 /** A passkey held in memory. Its private key never leaves the instance. */
@@ -51,8 +53,15 @@ export class SoftPasskey {
     this.credentialId = options.credentialId ?? randomBytes(16).toString("base64url");
     this.sub = options.sub ?? `user-${randomBytes(8).toString("hex")}`;
     this.#signCount = options.signCount ?? 0;
+    if (options.privateKey !== undefined && (this.alg !== "ES256" || options.privateKey.asymmetricKeyDetails?.namedCurve !== "prime256v1")) {
+      throw new TypeError("a given passkey private key must be P-256 (ES256)");
+    }
     const pair =
-      this.alg === "ES256" ? generateKeyPairSync("ec", { namedCurve: "P-256" }) : generateKeyPairSync("rsa", { modulusLength: 2048 });
+      options.privateKey !== undefined
+        ? { privateKey: options.privateKey, publicKey: createPublicKey(options.privateKey) }
+        : this.alg === "ES256"
+          ? generateKeyPairSync("ec", { namedCurve: "P-256" })
+          : generateKeyPairSync("rsa", { modulusLength: 2048 });
     this.#privateKey = pair.privateKey;
     const jwk = pair.publicKey.export({ format: "jwk" });
     this.publicJwk =
