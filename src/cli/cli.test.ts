@@ -153,7 +153,7 @@ async function withEmptyPin<T>(run: () => Promise<T>): Promise<T> {
 const EMPTY_PIN_HINT =
   "configuration: this build has no trusted root key for empty-pin.example yet. Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud";
 const STAGING_DNS =
-  "Intent Cloud at staging-api.intentai.shop cannot be reached (DNS: not found); nothing was sent. Staging may not be open yet; try everything locally with intent demo";
+  "Intent Cloud at staging-api.intentai.shop cannot be reached (DNS: not found); nothing was sent. Check your network, or try everything locally with intent demo";
 /** What a one-line error must never carry: an error code, a syscall name or a stack frame. */
 const RAW = /ENOTFOUND|ECONNREFUSED|getaddrinfo|EAI_|\bat .+:\d+:\d+/;
 
@@ -693,7 +693,7 @@ describe("intent doctor", () => {
 
   it("staging that answers its first request with an HTTP error (an edge with no Intent Cloud behind it) says so plainly", async () => {
     const stub = { meta: () => Promise.resolve({ ok: false, status: 503, body: null, contractVersion: null, retryAfter: null }) } as unknown as DisclosedCloud;
-    const line = "Intent Cloud at staging-api.intentai.shop answered HTTP 503 to the gateway's first request (meta, no body fields). Staging may not be open yet; try everything locally with intent demo";
+    const line = "Intent Cloud at staging-api.intentai.shop answered HTTP 503 to the gateway's first request (meta, no body fields). Check your network, or try everything locally with intent demo";
     const doctor = await setup().run(["doctor"], { io: { connect: () => stub } });
     expect(doctor.out).toContain(`\nFAIL  ${line}\n`);
     const serve = await setup().run(["serve"], { input: "", io: { connect: () => stub } });
@@ -705,7 +705,7 @@ describe("intent doctor", () => {
   it("in the container, an unreachable staging host's next step re-runs the container in demo mode (F-h)", async () => {
     const result = await setup({ INTENT_RUNTIME: "container", HOSTNAME: "d3394f0ffd41" }).run(["doctor"], { io: noDns });
     expect(result.out).toContain(
-      "\nFAIL  Intent Cloud at staging-api.intentai.shop cannot be reached (DNS: not found); nothing was sent. Staging may not be open yet; " +
+      "\nFAIL  Intent Cloud at staging-api.intentai.shop cannot be reached (DNS: not found); nothing was sent. Check your network, or " +
         "try everything locally: re-run the container in demo mode: docker rm d3394f0ffd41 && " +
         "docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 -v intent-data:/data intent-gateway\n",
     );
@@ -866,7 +866,7 @@ describe("serve failures", () => {
     const result = await setup({ INTENT_RUNTIME: "container", HOSTNAME: "d3394f0ffd41" }).run(["serve", "--http"], { io: noDns });
     expect(result.code).toBe(1);
     // Only the error: the policy line ("Change it with docker exec …") waits until the gateway is serving (F-l).
-    expect(result.err).toMatch(/^intent: Intent Cloud at staging-api\.intentai\.shop cannot be reached \(DNS: not found\); nothing was sent\. Staging may not be open yet; try everything locally: re-run the container in demo mode: docker rm d3394f0ffd41 && docker run -d --name intent .+ -e INTENT_DEMO=1 .+\n$/);
+    expect(result.err).toMatch(/^intent: Intent Cloud at staging-api\.intentai\.shop cannot be reached \(DNS: not found\); nothing was sent\. Check your network, or try everything locally: re-run the container in demo mode: docker rm d3394f0ffd41 && docker run -d --name intent .+ -e INTENT_DEMO=1 .+\n$/);
     expect(result.err).not.toContain("policy add");
     expect(result.err).not.toContain("docker exec");
     expect(result.err).not.toContain("claude mcp add");

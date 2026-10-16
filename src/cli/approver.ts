@@ -9,6 +9,7 @@ import { approverFingerprint } from "../trust/index.ts";
 import { CliError, type Io, line } from "./io.ts";
 import { readLog } from "./log.ts";
 import { ask } from "./prompt.ts";
+import { printable } from "../ui/index.ts";
 import { leaseNotice } from "./waiting.ts";
 
 type Body = Record<string, unknown>;
@@ -54,13 +55,13 @@ export function approverList(io: Io, dataDir: string): number {
     line(io.stdout, "no approver pin yet: the first passkey whose Approval the gateway verifies becomes the pin");
   } else {
     line(io.stdout, "approver pins (the last one is current):");
-    for (const p of pins) line(io.stdout, `  #${String(p.entry.seq)} ${p.entry.ts}  ${p.fingerprint}`);
+    for (const p of pins) line(io.stdout, printable(`  #${String(p.entry.seq)} ${p.entry.ts}  ${p.fingerprint}`));
   }
   if (flags.length === 0) {
     line(io.stdout, "flagged passkeys: none");
   } else {
     line(io.stdout, "flagged passkeys (approved a purchase but are not the pin):");
-    for (const f of flags) line(io.stdout, `  #${String(f.entry.seq)} ${f.entry.ts}  ${f.fingerprint}`);
+    for (const f of flags) line(io.stdout, printable(`  #${String(f.entry.seq)} ${f.entry.ts}  ${f.fingerprint}`));
     line(io.stdout, `if one is your passkey, run ${INTENT} approver accept at a terminal`);
   }
   return 0;
@@ -92,9 +93,9 @@ export async function approverAccept(io: Io, dataDir: string): Promise<number> {
   }
   const fingerprint = approverFingerprint(key.data);
 
-  line(io.stdout, `A passkey that is not the approver pin approved a purchase (entry #${String(flag.entry.seq)}, ${flag.entry.ts}).`);
+  line(io.stdout, `A passkey that is not the approver pin approved a purchase (entry #${String(flag.entry.seq)}, ${printable(flag.entry.ts)}).`);
   line(io.stdout, `  flagged: ${fingerprint}`);
-  line(io.stdout, `  pinned:  ${pin?.fingerprint ?? "(none)"}`);
+  line(io.stdout, `  pinned:  ${printable(pin?.fingerprint ?? "(none)")}`);
   line(io.stdout, `Accept it only if it is your own passkey: compare it with the panel (${INTENT} panel) and your passkey manager.`);
   const typed = await ask(io, "Type the flagged fingerprint to make it the approver pin: ");
   if (typed === null || normaliseFingerprint(typed) !== normaliseFingerprint(fingerprint)) {

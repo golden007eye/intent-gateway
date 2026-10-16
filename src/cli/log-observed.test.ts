@@ -84,13 +84,13 @@ describe("intent log with observations (golden)", () => {
 
       Friday 16 October 2026 (UTC)
       17:26:45  keys      keys signed by cloud-root-1 · valid until 2027-01-14  ✓ recorded
-      17:26:49  search    running shoes · under $120 · ZIP 94103                → 3 offers  ✓ receipt
+      17:26:49  search    running shoes · under $120 · ZIP 94103                → 3 offers · ✓ receipt
       17:27:01  blocked   search for "alcohol": category excluded by your gateway policy  ✗ nothing sent
       17:27:05  cart      Budget Running Shoe ×1 · $41.98 · Resale Hub          → approval link  ✓ 2 receipts
-      17:27:33  status    approval ap_Jzpm…KSG1                                 → approved  ✓ receipt
+      17:27:33  status    approval ap_Jzpm…KSG1                                 → Intent Cloud says approved · ✓ receipt
       17:27:45  approved  $41.98 · passkey f502…8c9f (pinned now)               ✓ passkey proof checked
       17:27:53  cart      Road Runner 2 ×1 · $64.99 · Road Runners              → approval link  ✓ 2 receipts
-      17:28:21  rejected  $64.99 · Road Runner 2 · approval ap_po20…qmW2        → rejected  ✓ receipt
+      17:28:21  rejected  $64.99 · Road Runner 2 · approval ap_po20…qmW2        → Intent Cloud says rejected · ✓ receipt
 
       Sent to Intent Cloud only: category, budget, offer, quantity, ZIP code, country.
       Never sent: your name, postal address, card.

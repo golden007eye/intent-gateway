@@ -16,6 +16,7 @@ import { policyAdd, policyShow, policyTest } from "./policy.ts";
 import { serve } from "./serve.ts";
 import type { Demo } from "../demo/index.ts";
 import { activePolicy, cliConfig, PACKAGE_ROOT, startDemoFor, trustedKeys } from "./setup.ts";
+import { printable, printableLines } from "../ui/index.ts";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 
@@ -85,7 +86,7 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
     return await run(io, config, command, args, values);
   } catch (error) {
     const described = describeError(error, ctx);
-    line(io.stderr, `intent: ${described}`);
+    line(io.stderr, `intent: ${printable(described)}`);
     if (mcpOverStdio) await answerStdioWithError(`intent-gateway could not start: ${described}`, io);
     if (error instanceof CliError && error.code === 2 && error.message.startsWith("unknown command")) io.stderr.write(`\n${help()}`);
     const debug = config?.debug ?? io.env.INTENT_DEBUG === "1";
@@ -167,7 +168,7 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
         ...(config.demo && values.install === undefined && values.image === undefined ? { skipSupplyChain: true, skipReason: "demo mode" } : {}),
         ...(values["skip-install-check"] === true ? { skipSupplyChain: true, skipReason: "--skip-install-check" } : {}),
       });
-      io.stdout.write(formatReport(report));
+      io.stdout.write(printableLines(formatReport(report)));
       return { code: report.exitCode };
     }
     case "panel": {

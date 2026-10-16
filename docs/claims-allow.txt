@@ -27,6 +27,8 @@ src/config/index.ts | is not a pinned Intent Cloud host | names a configuration 
 src/gateway/gateway.ts | Intent Cloud's answer carried no valid receipt | reports a response the gateway discarded
 src/gateway/gateway.ts | Intent Cloud's answer was malformed | reports a response the gateway refused
 src/gateway/gateway.ts | Intent Cloud answered | reports the status a response came back with
+src/cli/log-timeline.ts | Intent Cloud says | quotes the approval state an observation recorded from a response, placed before the receipt tick, which covers only the request and its status
+src/panel/model.ts | Intent Cloud says | quotes the approval state an observation recorded from a response; not a claim about what Intent Cloud does next
 src/gateway/gateway.ts | Intent Cloud meta failed with status | reports the status a response came back with
 src/cloud/http.ts | cannot be reached | reports that no complete response came back (DNS, connection or timeout)
 src/gateway/gateway.ts | Intent Cloud key statement failed with status | reports the status a response came back with

@@ -45,7 +45,7 @@ To report a vulnerability, see [Security](security.md).
 
 **Controls.** The MCP tools take only search terms, a budget, a 5-digit ZIP and an offer handle. Every outbound body is scanned before it is logged: card numbers (Luhn, including split across fields), emails, phone numbers, street addresses and identity-named keys, after Unicode normalisation. A match blocks the send, and the log records what was blocked (field paths, never values). The tools have no field for a name, address or card; the buyer gives those to the merchant. Tests: `src/privacy/privacy.test.ts` and the gateway's outbound privacy suite.
 
-**Limit.** Patterns cannot detect everything. A name typed into the free text of `product` or `must_haves` (for example "a gift for Jane Doe") cannot be told apart from a product name, and neither can contact details written to dodge a pattern (for example `jane(at)example(dot)com`, or a card number spelled out in words). Such text is sent like any other search term, and the log records that it was sent. Keep identity out of what you ask the agent to search for.
+**Limit.** Patterns cannot detect everything. A name typed into the free text of `product` or `must_haves` (for example "a gift for Jane Doe") cannot be told apart from a product name, and neither can contact details written to dodge a pattern (for example `jane(at)example(dot)com`, or a card number spelled out in words). Such text is sent like any other search term, and the log records that it was sent. A blocked search keeps only its structured values (category, ZIP) in the local `block` entry, never the free text of `product`, for the same reason. Keep identity out of what you ask the agent to search for.
 
 ## Invariant 4: one human approval per purchase
 
@@ -80,6 +80,8 @@ The agent is not trusted, and an agent with shell access on the developer's mach
 In demo mode the confirm page is a local stand-in for the passkey step: it signs with a software demo passkey kept on disk. Any program that can reach `127.0.0.1` can press its buttons, so it does not prove that a person approved. As a speed bump, **Approve** also needs a 6-digit demo code that the gateway prints on its own stderr and keeps in `<data dir>/demo/approval-code` (mode 600), never in a tool result: an agent that only reads tool results cannot approve, but one that can read the gateway's output or files can. After five wrong codes the page refuses approvals until the demo restarts with a new code. Nothing can be bought in demo mode. Real approvals need the buyer's passkey on intent's confirm page; see [Demo mode](demo.md).
 
 ## Local panel
+
+**Merchant text in the terminal.** Titles and merchant names come from merchants, and the contract allows any character in them. Everything the CLI prints from the chain passes through one sanitiser (`src/ui/printable.ts`, which the panel uses too) that shows control, format and bidi characters as escapes and line breaks as `\n`, so a title cannot clear the screen, write the clipboard (OSC 52), hide a link (OSC 8) or forge a log line. Tests: `src/cli/terminal.test.ts`.
 
 The [panel](panel.md) binds to `127.0.0.1` only, serves GET only (405 otherwise), checks `Host` (421 otherwise), loads nothing from outside under a strict Content-Security-Policy, writes chain values as text, never as HTML, and never writes the chain. It refuses to start when the data dir or a file in it can be read by other users. It shows the values each request sent, as logged: what already left the machine, never buyer identity, which the gateway does not hold.
 

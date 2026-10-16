@@ -251,7 +251,7 @@ async function stagingUnreachable(): Promise<void> {
   check(exit === "exited 1", "with the staging host unreachable and no INTENT_DEMO the container exits 1", exit);
   check(!first.includes("claude mcp add"), "a container that cannot start prints no connect line (and no token)", first);
   check(
-    first.includes("intent: Intent Cloud at staging-api.intentai.shop cannot be reached (connection refused); nothing was sent. Staging may not be open yet;"),
+    first.includes("intent: Intent Cloud at staging-api.intentai.shop cannot be reached (connection refused); nothing was sent. Check your network, or"),
     "it says plainly that the staging host cannot be reached and that nothing was sent",
     first,
   );
@@ -269,7 +269,7 @@ function noNetwork(): Promise<void> {
   // No network at all: the host name cannot be looked up. The same plain line, with the DNS failure named.
   const r = spawnSync("docker", ["run", "--rm", "--network", "none", image], { encoding: "utf8", timeout: 90_000 });
   check(
-    r.status === 1 && /intent: Intent Cloud at staging-api\.intentai\.shop cannot be reached \(DNS: [a-z ]+\); nothing was sent\. Staging may not be open yet; try everything locally: re-run the container in demo mode: docker rm /.test(r.stderr),
+    r.status === 1 && /intent: Intent Cloud at staging-api\.intentai\.shop cannot be reached \(DNS: [a-z ]+\); nothing was sent\. Check your network, or try everything locally: re-run the container in demo mode: docker rm /.test(r.stderr),
     "with no network the container exits 1 naming the DNS failure and the demo re-run",
     r.stderr,
   );

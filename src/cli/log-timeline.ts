@@ -7,6 +7,7 @@
 // `intent verify` re-checks every signature. Pure; the golden test pins it.
 import { type Activity, type ActivitySummary, summarise } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
+import { printable } from "../ui/index.ts";
 
 export interface TimelineStyle {
   /** ANSI colour (a terminal, no NO_COLOR, no --no-color). */
@@ -147,7 +148,13 @@ interface Row {
   outcomeTone: Tone;
 }
 
+/** An action's line parts, every chain-derived value in them made printable (terminal.ts). */
 function row(a: Activity, g: Glyphs): Row {
+  const r = rawRow(a, g);
+  return { ...r, values: printable(r.values), outcome: printable(r.outcome) };
+}
+
+function rawRow(a: Activity, g: Glyphs): Row {
   const f = a.facts;
   const sep = ` ${g.dot} `;
   const receipts = a.requests.filter((r) => r.delivery === "acknowledged").length;
@@ -162,7 +169,8 @@ function row(a: Activity, g: Glyphs): Row {
         ...(f.zip === undefined ? [] : [`ZIP ${f.zip}`]),
       ];
       const [outcome, tone] = delivered();
-      const returned = f.offers_count === undefined || a.outcome !== "acknowledged" ? "" : `${g.arrow} ${offersWord(f.offers_count, f.offers_hidden ?? 0)}  `;
+      // What came back, then the receipt: the receipt covers the request and its status, not the offers returned.
+      const returned = f.offers_count === undefined || a.outcome !== "acknowledged" ? "" : `${g.arrow} ${offersWord(f.offers_count, f.offers_hidden ?? 0)} ${g.dot} `;
       return { verb: "search", verbTone: tone === "warn" ? "warn" : "bold", values: parts.length > 0 ? parts.join(sep) : names(a), outcome: returned + outcome, outcomeTone: tone };
     }
     case "cart": {
@@ -174,7 +182,7 @@ function row(a: Activity, g: Glyphs): Row {
               ...(f.total_minor === undefined ? [] : [`at most ${money(f.total_minor)}`]),
               ...(f.zip === undefined ? [] : [`ZIP ${f.zip}`]),
             ]
-          : [`${f.title} ${g.times}${String(f.quantity ?? 1)}`, ...(f.total_minor === undefined ? [] : [money(f.total_minor)]), ...(f.merchant === undefined ? [] : [f.merchant])];
+          : [`${f.title} ${g.times}${String(f.quantity ?? 1)}`, ...total(f), ...(f.merchant === undefined ? [] : [f.merchant])];
       const values = parts.length > 0 ? parts.join(sep) : names(a);
       if (a.outcome === "refused") return { verb: "cart", verbTone: "bad", values, outcome: `${g.bad} refused: ${a.blocked.join("; ")}`, outcomeTone: "bad" };
       if (a.outcome === "approval_asked") {
@@ -187,11 +195,11 @@ function row(a: Activity, g: Glyphs): Row {
       const handle = f.approval_handle === undefined ? "approval" : `approval ${short(f.approval_handle, g)}`;
       if (a.outcome === "refused") return { verb: "status", verbTone: "bad", values: handle, outcome: `${g.bad} proof refused: ${a.blocked.join("; ")}`, outcomeTone: "bad" };
       if (a.outcome === "rejected" || a.outcome === "expired") {
-        const values = [...(f.total_minor === undefined ? [] : [money(f.total_minor)]), ...(f.title === undefined ? [] : [f.title]), handle].join(sep);
-        return { verb: a.outcome, verbTone: "bad", values, outcome: `${g.arrow} ${a.outcome}  ${g.ok} ${receiptWord(receipts)}`, outcomeTone: "bad" };
+        const values = [...total(f), ...(f.title === undefined ? [] : [f.title]), handle].join(sep);
+        return { verb: a.outcome, verbTone: "bad", values, outcome: `${g.arrow} ${says(a.outcome)} ${g.dot} ${g.ok} ${receiptWord(receipts)}`, outcomeTone: "bad" };
       }
       const [outcome, tone] = delivered();
-      const state = f.approval_state === undefined || a.outcome !== "acknowledged" ? "" : `${g.arrow} ${f.approval_state.replace("_", " ")}  `;
+      const state = f.approval_state === undefined || a.outcome !== "acknowledged" ? "" : `${g.arrow} ${says(f.approval_state.replace("_", " "))} ${g.dot} `;
       return { verb: "status", verbTone: tone === "warn" ? "warn" : "bold", values: handle, outcome: state + outcome, outcomeTone: tone };
     }
     case "approval": {
@@ -232,6 +240,17 @@ function row(a: Activity, g: Glyphs): Row {
   }
 }
 
+/** A state an observation recorded, worded as what Intent Cloud returned: the receipt does not cover the body. */
+function says(state: string): string {
+  return `Intent Cloud says ${state}`;
+}
+
+/** The total an observation returned, `withheld` when it withheld it as possible buyer identity, or nothing. */
+function total(f: Activity["facts"]): string[] {
+  if (f.total_minor !== undefined) return [money(f.total_minor)];
+  return f.withheld?.includes("total_minor") === true ? ["total withheld"] : [];
+}
+
 /** The outcome of an action's requests, in verify's categories. */
 function delivery(a: Activity, receipts: number, g: Glyphs): [string, Tone] {
   switch (a.outcome) {
@@ -250,10 +269,10 @@ function delivery(a: Activity, receipts: number, g: Glyphs): [string, Tone] {
   }
 }
 
-/** `search for "alcohol"`, `cart for "Budget Running Shoe" ×1`: the values a policy block held back, when the chain has them. */
+/** `search for "alcohol"`, `cart for "Budget Running Shoe" ×1`: the structured values a policy block held back, when the chain has them (never free text). */
 function heldWords(endpoint: string, held: Readonly<Record<string, unknown>> | undefined, g: Glyphs): string | null {
   if (held === undefined) return null;
-  const what = typeof held.product === "string" ? held.product : typeof held.category === "string" ? held.category : typeof held.title === "string" ? held.title : null;
+  const what = typeof held.category === "string" ? held.category : typeof held.title === "string" ? held.title : null;
   if (what === null) return null;
   const word = ENDPOINT_WORDS[endpoint] ?? endpoint;
   return `${word} for "${what}"${typeof held.quantity === "number" ? ` ${g.times}${String(held.quantity)}` : ""}`;
@@ -398,7 +417,11 @@ function painter(style: TimelineStyle): (tone: Tone, s: string) => string {
     dim: "2",
     bold: "1",
   };
-  return (tone, s) => (style.color && tone !== null && s !== "" ? `\u001b[${codes[tone]}m${s}\u001b[0m` : s);
+  // Painted text is made printable first, so the only escape codes in a line are the ones added here.
+  return (tone, raw) => {
+    const s = printable(raw);
+    return style.color && tone !== null && s !== "" ? `\u001b[${codes[tone]}m${s}\u001b[0m` : s;
+  };
 }
 
 function parts(ts: string, style: TimelineStyle, options: Intl.DateTimeFormatOptions): Record<string, string> {

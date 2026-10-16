@@ -15,6 +15,7 @@ import { describeError, errorContext, metaRefused } from "./errors.ts";
 import { type Io, line } from "./io.ts";
 import { readLog } from "./log.ts";
 import { noShipToNote, shipToFix } from "./policy.ts";
+import { printable } from "../ui/index.ts";
 import { demoTrustKeys } from "../demo/index.ts";
 import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
 import { leaseNotice, slowCloudNotice } from "./waiting.ts";
@@ -33,7 +34,7 @@ export async function doctor(io: Io, config: Config): Promise<number> {
   const findings: Finding[] = [];
   const report = (level: Level, text: string): void => {
     findings.push({ level, text });
-    line(io.stdout, `${{ ok: "ok  ", warn: "WARN", fail: "FAIL" }[level]}  ${text}`);
+    line(io.stdout, `${{ ok: "ok  ", warn: "WARN", fail: "FAIL" }[level]}  ${printable(text)}`);
   };
 
   line(io.stdout, `intent doctor: data dir ${config.dataDir}`);
@@ -173,7 +174,7 @@ async function checkLease(dataDir: string, now: number, report: Report): Promise
 async function checkCloud(io: Io, config: Config, cloudUrl: string, pins: readonly RootKey[], now: () => number, report: Report): Promise<void> {
   // Progress goes to stderr: stdout holds only the report lines.
   const say = (text: string): void => {
-    line(io.stderr, `intent doctor: ${text}`);
+    line(io.stderr, `intent doctor: ${printable(text)}`);
   };
   let store;
   try {

@@ -15,13 +15,13 @@ intent log · DEMO chain (test keys) · ~/.local/share/intent-gateway/demo · 33
 
 Friday 16 October 2026
 16:09:11  start     gateway started · keys signed by cloud-root-1 · valid until 2027-01-14  ✓ 2 receipts
-16:09:11  search    running shoes · under $120 · ZIP 94103                → 6 offers  ✓ receipt
+16:09:11  search    running shoes · under $120 · ZIP 94103                → 6 offers · ✓ receipt
 16:09:11  blocked   search for "alcohol": category excluded by your gateway policy  ✗ nothing sent
 16:09:11  cart      Budget Running Shoe ×1 · $41.98 · Resale Hub          → approval link  ✓ 2 receipts
-16:09:11  status    approval ap_xyCp…lXmw                                 → approved  ✓ receipt
+16:09:11  status    approval ap_xyCp…lXmw                                 → Intent Cloud says approved · ✓ receipt
 16:09:11  approved  $41.98 · passkey a295…1de0 (pinned now)               ✓ passkey proof checked
 16:09:11  cart      Road Runner 2 ×1 · $64.99 · Road Runners              → approval link  ✓ 2 receipts
-16:09:11  rejected  $64.99 · Road Runner 2 · approval ap_po2-…IqmW        → rejected  ✓ receipt
+16:09:11  rejected  $64.99 · Road Runner 2 · approval ap_po2-…IqmW        → Intent Cloud says rejected · ✓ receipt
 
 Sent to Intent Cloud only: category, budget, offer, quantity, ZIP code, country.
 Never sent: your name, postal address, card.
@@ -32,13 +32,13 @@ Details: intent log --demo -v · Machine-readable: intent log --demo --json · I
 
 Each command in the last line starts with the invocation that runs this gateway (`intent`, `npx -y intent-gateway@next`, `node /abs/dist/main.js`); a long one is named once on a line of its own (`Run each as: … <command>`). That line is never cut to the terminal's width: on a terminal too narrow for it, each command gets a line of its own.
 
-What came back (`→ 6 offers`, the product title, total and merchant of a cart, `→ approved`, `rejected`) comes from the `observed` entries the gateway writes after each answer whose receipt it verified: a summary of what Intent Cloud returns for each request, kept on this machine and never sent (see [What came back](#what-came-back)). A chain written before observations existed shows the values sent instead (`offer of_5mOm…t4wK ×1 · at most $41.98 · ZIP 94103`) and no `→ offers` or state.
+What came back (`→ 6 offers`, the product title, total and merchant of a cart, `→ Intent Cloud says approved`, `rejected`) comes from the `observed` entries the gateway writes after each answer with a verified receipt: a summary of what Intent Cloud returns (the body is not covered by the receipt), kept on this machine and never sent (see [What came back](#what-came-back)). The `✓ receipt` after it is about the request: a receipt covers the request and the status it came back with, not the offers or the state in the body. A chain written before observations existed shows the values sent instead (`offer of_5mOm…t4wK ×1 · at most $41.98 · ZIP 94103`) and no `→ offers` or state.
 
 Each line's outcome is what the chain records for its requests: `✓ receipt` (a receipt came back), `⚠ sent, no receipt`, `⚠ not sent: no connection was made`, `⚠ maybe sent, no answer recorded` (the gateway stopped first, or is still waiting), `✗ answer discarded: no valid receipt`, `✗ nothing sent` (blocked), `✗ refused` (an answer that did not match what was asked). `✓ passkey proof checked` marks an Approval the gateway verified before it chained it; `intent verify` re-checks it. The line "Sent to Intent Cloud only" lists every field of the requests shown that left or may have left. "Never sent: your name, postal address, card" is printed only after the gateway's buyer-identity check finds none in their logged values; otherwise the line names the request where it found one, or says which requests it could not check.
 
 Times and date headers are in the local time zone; `--utc` shows UTC. On a terminal the lines are cut to its width with `…`, the values first so the outcome stays visible; piped, nothing is cut. Without a UTF-8 locale the symbols are plain ASCII (`ok`, `!`, `x`, `->`).
 
-The values are the developer's own record of what left the machine: the category, product, must-haves, budget and ZIP code of a search, the offer handle, quantity and ZIP code of a cart. A request the gateway policy blocked keeps, in its `block` entry, the values the policy held back (`held`, such as the category `alcohol`), so the line can name them; they never left the machine. A request blocked for buyer identity keeps no value at all: only its field names and the identity finding that held it back.
+The values are the developer's own record of what left the machine: the category, product, must-haves, budget and ZIP code of a search, the offer handle, quantity and ZIP code of a cart. A request the gateway policy blocked keeps, in its `block` entry, the structured values the policy held back (`held`: the category, such as `alcohol`, the ZIP code, or a cart's offer title and merchant), so the line can name them; they never left the machine. The free text of a search's `product` is never kept: the buyer-identity check cannot tell a name in free text from a product name. A request blocked for buyer identity keeps no value at all: only its field names and the identity finding that held it back.
 
 `-v` shows times in the local time zone too. `--json` keeps each entry's `ts`, which is UTC.
 
@@ -72,7 +72,7 @@ A cart or status check the gateway refused after an answer (the cart, snapshot o
 
 ## What came back
 
-After each answer whose receipt the gateway verified, it appends an `observed` entry: a small summary of what Intent Cloud returns for that request, which names it by `disclosure_seq`.
+After each answer with a receipt the gateway verified, it appends an `observed` entry: a small summary of what Intent Cloud returns for that request (the body is not covered by the receipt), which names it by `disclosure_seq`.
 
 | Request | What the observation keeps |
 |---|---|
@@ -81,7 +81,9 @@ After each answer whose receipt the gateway verified, it appends an `observed` e
 | `createApproval` | `approval_handle`, `state`, `title`, `merchant`, `quantity`, `total_minor`, `currency`. |
 | `getApproval` | `approval_handle`, `state` (`pending`, `approved`, `rejected`, `expired`, `handed_off`, `ordered`), `title`, `merchant`, `total_minor`, `currency`. |
 
-An observation is not a disclosure: nothing in it leaves the machine, and it never stands in for a receipt. It holds only what Intent Cloud returns, never the buyer's details: before it is written, the gateway runs its buyer-identity check over it and replaces any value that looks like an email, a phone number, a card or a street address with `[withheld]`, listing where in `withheld`. `intent verify` checks every observation: its shape, that it names an earlier request of the same endpoint whose verified receipt came first with a success status, that no other observation names that request, and that it holds no buyer identity ([verify](verify.md)).
+An observation is not a disclosure: nothing in it leaves the machine, and it never stands in for a receipt. It holds only what Intent Cloud returns, never the buyer's details: before it is written, the gateway runs its buyer-identity check over it and replaces any value that looks like an email, a phone number, a card or a street address with `[withheld]`, listing where in `withheld`. A withheld number (a price or total that looked like part of a card number) is stored as 0 with its path, or the offer holding it, in `withheld`; `intent log` and the panel show it as "withheld", never as $0.00, and `--json` lists it in `facts.withheld` (`total_minor`) and in `observed.withheld`. `intent verify` checks every observation: its shape, that it names an earlier request of the same endpoint whose verified receipt came first with a success status, that no other observation names that request, and that it holds no buyer identity ([verify](verify.md)).
+
+Titles and merchant names are the merchant's own text, recorded as Intent Cloud returns it. The public contract bounds only their length (its test vectors carry a tab, DEL and U+2028 in a title), so the gateway accepts any character there. `intent log`, `intent verify`, `intent doctor` and `intent approver list` print every value from the chain through one sanitiser: control characters (C0, DEL, C1), format characters such as bidi overrides and zero-width characters, and lone surrogates are shown as `\u{1b}`-style text, and each run of line breaks as a literal `\n`, so a value can neither move the cursor, set the clipboard, hide a link nor print a line of its own. `--json` escapes the same characters as `\uXXXX`. The panel shows the same characters the same way, and writes every value as text, never as HTML.
 
 The `observed` entry kind is new in this version: a gateway older than it reads a chain holding one as broken (unknown kind), so run `intent log` and `intent verify` with this version or a later one.
 

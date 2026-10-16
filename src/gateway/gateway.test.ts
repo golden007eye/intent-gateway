@@ -885,6 +885,15 @@ describe("observations: an `observed` entry after each acknowledged answer, neve
     expect((await h.gateway.findOffers({ ...SHOES, product: "mail jane.doe@mail.example" })).status).toBe("blocked");
     expect(bodies(h, "block").at(-1)).not.toHaveProperty("held");
   });
+
+  it("attack: a blocked search never keeps the free-text product, where a name cannot be detected", async () => {
+    const h = await setup();
+    const result = await h.gateway.findOffers({ category: "alcohol", product: "a gift for Jane Q Doe", budget_usd: 50, zip: "94103" });
+    expect(result.status).toBe("blocked");
+    expect(h.sends.search).toBe(0);
+    expect(bodies(h, "block").at(-1)?.held).toEqual({ category: "alcohol" });
+    expect(JSON.stringify(h.store.entries().map((e) => e.body))).not.toContain("Jane");
+  });
 });
 
 // ---- intent verify over a gateway chain ---------------------------------------------------------------------------
