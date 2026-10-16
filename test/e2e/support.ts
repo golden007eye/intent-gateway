@@ -20,16 +20,16 @@ import { type Entry, readChain } from "../../src/store/index.ts";
 
 const repo = join(import.meta.dirname, "../..");
 
-/** Compiles src/ with tsconfig.build.json into a fresh package folder and returns the path of its dist/main.js. */
+/**
+ * Bundles src/ as `pnpm build` does into a fresh package folder and returns the path of its dist/main.js. The
+ * folder has no node_modules, as an installed package has none: the bundle must run on its own.
+ */
 export function buildPackage(): string {
   const pkg = mkdtempSync(join(tmpdir(), "e2e-pkg-"));
-  const tsc = spawnSync(process.execPath, [join(repo, "node_modules/typescript/bin/tsc"), "-p", "tsconfig.build.json", "--outDir", join(pkg, "dist")], {
-    cwd: repo,
-    encoding: "utf8",
-  });
-  if (tsc.status !== 0) throw new Error(`tsc failed:\n${tsc.stdout}${tsc.stderr}`);
+  const bundle = spawnSync(process.execPath, [join(repo, "scripts/bundle.ts"), "--outdir", join(pkg, "dist")], { cwd: repo, encoding: "utf8" });
+  if (bundle.status !== 0) throw new Error(`bundle failed:\n${bundle.stdout}${bundle.stderr}`);
   cpSync(join(repo, "package.json"), join(pkg, "package.json"));
-  for (const dir of ["policies", "contract", "node_modules"]) symlinkSync(join(repo, dir), join(pkg, dir), "dir");
+  for (const dir of ["policies", "contract"]) symlinkSync(join(repo, dir), join(pkg, dir), "dir");
   return join(pkg, "dist/main.js");
 }
 

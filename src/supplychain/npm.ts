@@ -1,5 +1,6 @@
 // Self-check of an installed npm package: its SLSA provenance was signed by the gateway's release workflow, names
-// the tarball the registry serves, and every installed file is the file in that tarball.
+// the tarball the registry serves, and every installed file is the file in that tarball. The runtime dependencies
+// are compiled into the package's dist/ (ADR-0013), so that comparison covers their code too.
 import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
@@ -110,13 +111,13 @@ async function compareFiles(pkgDir: string, packed: Map<string, Buffer>): Promis
   return failures;
 }
 
-/** Every file under `dir`, relative and `/`-separated, skipping nested `node_modules` (dependencies, not this package). */
+/**
+ * Every file under `dir`, relative and `/`-separated. Nothing is skipped: the package has no dependencies (they are
+ * compiled into dist/, ADR-0013), so a `node_modules` folder inside it is not part of the release either.
+ */
 async function listFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { recursive: true, withFileTypes: true });
-  return entries
-    .filter((e) => !e.isDirectory())
-    .map((e) => relative(dir, join(e.parentPath, e.name)).split(sep).join("/"))
-    .filter((p) => !p.split("/").includes("node_modules"));
+  return entries.filter((e) => !e.isDirectory()).map((e) => relative(dir, join(e.parentPath, e.name)).split(sep).join("/"));
 }
 
 async function readManifest(pkgDir: string): Promise<{ name: string; version: string }> {
