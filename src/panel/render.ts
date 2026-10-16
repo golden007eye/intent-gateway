@@ -6,7 +6,7 @@
 // app.js the views become one-at-a-time tabs with aria-current, and the live regions (data-live, versioned by
 // data-v) refresh in place.
 import { createHash } from "node:crypto";
-import { ICONS, LOGO_SVG } from "../ui/index.ts";
+import { ICONS, LOGO_SVG, printable } from "../ui/index.ts";
 import { type Drawer, type Line, money, type PanelModel, type PurchaseView, type RequestDetail, type Step } from "./model.ts";
 
 export const VIEWS = [
@@ -327,6 +327,7 @@ function fp(fingerprint: string): string {
   return compact.length > 12 ? `${compact.slice(0, 4)}…${compact.slice(-4)}` : fingerprint;
 }
 
+/** A chain value as HTML text: made printable first (controls, bidi and line breaks shown as escapes), then escaped. */
 export function esc(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
+  return printable(text).replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
 }

@@ -1,5 +1,5 @@
 // Observations: the `observed` chain entry, a small local summary of what Intent Cloud returned for one request
-// whose receipt the gateway verified. The gateway writes it after the receipt; `intent log` and the panel read it to
+// with a verified receipt (the receipt covers the request and its status, not the body summarised here). The gateway writes it after the receipt; `intent log` and the panel read it to
 // show what came back (offers, the cart, the approval state); `intent verify` checks its shape and its reference.
 //
 // An observation is not a disclosure: nothing in it leaves the machine, and it never answers a request (only a

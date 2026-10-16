@@ -7,7 +7,7 @@
 // `intent verify` re-checks every signature. Pure; the golden test pins it.
 import { type Activity, type ActivitySummary, summarise } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
-import { printable } from "./terminal.ts";
+import { printable } from "../ui/index.ts";
 
 export interface TimelineStyle {
   /** ANSI colour (a terminal, no NO_COLOR, no --no-color). */
@@ -269,10 +269,10 @@ function delivery(a: Activity, receipts: number, g: Glyphs): [string, Tone] {
   }
 }
 
-/** `search for "alcohol"`, `cart for "Budget Running Shoe" ×1`: the values a policy block held back, when the chain has them. */
+/** `search for "alcohol"`, `cart for "Budget Running Shoe" ×1`: the structured values a policy block held back, when the chain has them (never free text). */
 function heldWords(endpoint: string, held: Readonly<Record<string, unknown>> | undefined, g: Glyphs): string | null {
   if (held === undefined) return null;
-  const what = typeof held.product === "string" ? held.product : typeof held.category === "string" ? held.category : typeof held.title === "string" ? held.title : null;
+  const what = typeof held.category === "string" ? held.category : typeof held.title === "string" ? held.title : null;
   if (what === null) return null;
   const word = ENDPOINT_WORDS[endpoint] ?? endpoint;
   return `${word} for "${what}"${typeof held.quantity === "number" ? ` ${g.times}${String(held.quantity)}` : ""}`;

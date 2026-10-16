@@ -5,9 +5,11 @@
 // signature. The formatters are pure; the golden tests pin their output.
 import { type Activity, type ActivityFilter, buildActivity, filterActivity, leafFields } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
+import { withheldAt } from "../observation/index.ts";
 import { neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { type Io, line, type Outcome } from "./io.ts";
 import { formatTimeline, timelineFollow, type TimelineStyle } from "./log-timeline.ts";
+import { printable, printableJson } from "../ui/index.ts";
 
 type Body = Record<string, unknown>;
 
@@ -37,7 +39,9 @@ const PLAIN: LogStyle = { color: false };
 type Tone = "good" | "warn" | "bad" | null;
 const TONES: Record<Exclude<Tone, null>, string> = { good: "32", warn: "33", bad: "31" };
 
-function paint(style: LogStyle, tone: Tone, s: string): string {
+/** Painted text is made printable first (terminal.ts), so the only escape codes in a line are the ones added here. */
+function paint(style: LogStyle, tone: Tone, raw: string): string {
+  const s = printable(raw);
   return style.color && tone !== null ? `\u001b[${TONES[tone]}m${s}\u001b[0m` : s;
 }
 
@@ -82,7 +86,7 @@ function chainLine(items: readonly unknown[]): string {
   const head = last === null ? "" : `, head seq ${String(last.seq)}`;
   return chain.ok
     ? `${String(items.length)} entries, every hash links${head}. ${INTENT} verify re-checks the receipts and approvals.`
-    : `the chain breaks at seq ${String(chain.brokenSeq)} (${chain.reason}); run ${INTENT} verify`;
+    : `the chain breaks at seq ${String(chain.brokenSeq)} (${printable(chain.reason)}); run ${INTENT} verify`;
 }
 
 function shown(kept: readonly Activity[], all: readonly Activity[]): string {
@@ -109,8 +113,12 @@ export function verboseLines(items: readonly unknown[], activity: Activity, styl
     return [`line ${String(activity.facts.line ?? "?")}: not an entry (a torn or edited line); run ${INTENT} verify`];
   }
   const seqs = activity.seqs.length === 1 ? `seq ${String(activity.seq)}` : `seq ${String(activity.seqs[0])}-${String(activity.seqs.at(-1))}`;
-  const head = `${clock(activity.time, style)}  ${activity.action}  ${seqs}  ${paint(style, outcomeTone(activity.outcome), activity.outcome.replace("_", " "))}`;
+  const head = `${printable(clock(activity.time, style))}  ${activity.action}  ${seqs}  ${paint(style, outcomeTone(activity.outcome), activity.outcome.replace("_", " "))}`;
   const lines = [head];
+  // Every line below but the entry row holds no colour: each is made printable whole (terminal.ts).
+  const push = (...more: string[]): void => {
+    lines.push(...more.map(printable));
+  };
   const demo = demoChain(items);
   const notSent = new Set<unknown>();
   const answered = new Set<unknown>();
@@ -123,26 +131,26 @@ export function verboseLines(items: readonly unknown[], activity: Activity, styl
     const item = bySeq.get(seq);
     if (item === undefined) continue;
     const [label, detail, tone] = entryRow(item, demo, notSent, answered);
-    lines.push(`  #${String(seq).padEnd(4)} ${paint(style, tone, label.padEnd(14))} ${detail}`);
-    if (item.kind === "observed") lines.push(...observedOffers(item.body).map((o) => `${" ".repeat(22)}${o}`));
+    lines.push(`  #${String(seq).padEnd(4)} ${paint(style, tone, label.padEnd(14))} ${printable(detail)}`);
+    if (item.kind === "observed") push(...observedOffers(item.body).map((o) => `${" ".repeat(22)}${o}`));
     const request = activity.requests.find((r) => r.seq === seq);
     if (request !== undefined) {
       const pad = " ".repeat(22);
-      lines.push(`${pad}${request.method ?? "?"} ${request.path ?? "?"}`);
+      push(`${pad}${request.method ?? "?"} ${request.path ?? "?"}`);
       if (request.fields === null) {
-        lines.push(`${pad}values: not in this entry (no body bytes logged)`);
+        push(`${pad}values: not in this entry (no body bytes logged)`);
       } else if (Object.keys(request.fields).length === 0) {
-        lines.push(`${pad}values: none (no body)`);
+        push(`${pad}values: none (no body)`);
       } else {
-        lines.push(`${pad}values in the logged request:`);
-        for (const [name, value] of Object.entries(request.fields)) lines.push(`${pad}  ${name} = ${JSON.stringify(value)}`);
+        push(`${pad}values in the logged request:`);
+        for (const [name, value] of Object.entries(request.fields)) push(`${pad}  ${name} = ${JSON.stringify(value)}`);
       }
-      if (request.content_digest !== null) lines.push(`${pad}content-digest ${request.content_digest}`);
-      lines.push(`${pad}keyid ${request.keyid ?? "none (unsigned request)"}`);
+      if (request.content_digest !== null) push(`${pad}content-digest ${request.content_digest}`);
+      push(`${pad}keyid ${request.keyid ?? "none (unsigned request)"}`);
       const response = request.response;
       if (response?.kind === "receipt") {
         const checked = response.signature_checked ? "signature checked when logged" : `signature not checked when logged; ${INTENT} verify checks it`;
-        lines.push(`${pad}receipt seq ${String(response.seq)}: status ${String(response.status ?? "?")}, receipt key ${response.receipt_kid ?? "?"}, ${checked}`);
+        push(`${pad}receipt seq ${String(response.seq)}: status ${String(response.status ?? "?")}, receipt key ${response.receipt_kid ?? "?"}, ${checked}`);
       }
     }
   }
@@ -158,7 +166,7 @@ export function formatJson(items: readonly unknown[], options: ActivityFilter = 
 
 export function jsonLine(activity: Activity): string {
   const { time, seq, seqs, action, outcome, facts, blocked, requests } = activity;
-  return JSON.stringify({ v: LOG_JSON_VERSION, time, seq, seqs, action, outcome, facts, blocked, requests });
+  return printableJson(JSON.stringify({ v: LOG_JSON_VERSION, time, seq, seqs, action, outcome, facts, blocked, requests }));
 }
 
 function outcomeTone(outcome: Activity["outcome"]): Tone {
@@ -284,7 +292,9 @@ function describe(item: Item, demo: boolean): [string, string, Tone] {
 
 /** One line for an `observed` entry: `3 offers (1 hidden by the policy)`, a cart, or an approval state. */
 function observedSummary(b: Body): string {
-  const total = typeof b.total_minor === "number" ? `$${(b.total_minor / 100).toFixed(2)}` : "?";
+  const w = strings(b.withheld);
+  // A withheld number is stored as 0: show that it was withheld, never the 0.
+  const total = withheldAt(w, "$.total_minor") ? "total withheld" : typeof b.total_minor === "number" ? `$${(b.total_minor / 100).toFixed(2)}` : "?";
   const withheld = strings(b.withheld).length === 0 ? "" : `; withheld as possible buyer identity: ${strings(b.withheld).join(", ")}`;
   switch (b.endpoint) {
     case "searchCatalog": {
@@ -306,10 +316,12 @@ function observedSummary(b: Body): string {
 /** The offers an `observed` search entry kept, one line each. */
 function observedOffers(b: Body): string[] {
   if (b.endpoint !== "searchCatalog" || !Array.isArray(b.offers)) return [];
-  const money = (v: unknown) => (typeof v === "number" ? `$${(v / 100).toFixed(2)}` : "?");
-  const kept = b.offers.map((raw) => {
+  const w = strings(b.withheld);
+  const money = (v: unknown, path: string) => (withheldAt(w, path) ? "withheld" : typeof v === "number" ? `$${(v / 100).toFixed(2)}` : "?");
+  const kept = b.offers.map((raw, i) => {
     const o = record(raw);
-    return `offer ${text(o.offer_handle)}: ${text(o.title)}, ${text(o.merchant)}, ${money(o.price_minor)} + ${money(o.shipping_minor)} shipping`;
+    const at = `$.offers[${String(i)}]`;
+    return `offer ${text(o.offer_handle)}: ${text(o.title)}, ${text(o.merchant)}, ${money(o.price_minor, `${at}.price_minor`)} + ${money(o.shipping_minor, `${at}.shipping_minor`)} shipping`;
   });
   const count = typeof b.offers_count === "number" ? b.offers_count : kept.length;
   return count > kept.length ? [...kept, `(${String(count - kept.length)} more not recorded)`] : kept;

@@ -9,8 +9,10 @@
 //   entry (kinds and paths, never values) and nothing is sent.
 // - Policy: each outbound request is mapped onto the policy module's own types and evaluated (which applies
 //   CLOUD_BASELINE). A refusal writes a `block` entry and nothing is sent. Offers that came back are filtered too.
-//   A policy block also keeps, locally, the values it held back (`held`, e.g. the category "alcohol"): they never left
-//   the machine, and the identity check above already passed on them. An identity block never keeps a value.
+//   A policy block also keeps, locally, the structured values it held back (`held`: the category "alcohol", the ZIP,
+//   a cart's offer title): they never left the machine, and the identity check above already passed on them. Free
+//   text the agent wrote (the search's `product`) is never kept: findIdentity finds emails, phones, cards and street
+//   addresses, not a person's name in free text. An identity block never keeps a value.
 // - Observations: after each answer whose receipt verified, an `observed` entry records a small summary of what Intent
 //   Cloud returned (offers, the cart, the approval state) with any identity-looking value withheld. It is written after
 //   the receipt, is never sent and answers no request, so log-before-send and `intent verify` are unchanged by it.
@@ -491,8 +493,8 @@ export function createGateway(options: GatewayOptions): Gateway {
         fromSeq,
         "blocked",
         `Not sent: the gateway policy refuses this search (${decision.blocked.map((b) => b.reason).join("; ")}).`,
+        // Structured values only: never the free-text product, whose words findIdentity cannot vet (a name is free text).
         {
-          ...(product === undefined ? {} : { product }),
           ...(category === undefined ? {} : { category }),
           ...(decision.blocked.some((b) => b.path === "ship_to_zip") ? { zip } : {}),
         },

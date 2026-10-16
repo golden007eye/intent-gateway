@@ -47,10 +47,10 @@ export function errorContext(config: Config, env: Readonly<Record<string, string
   return { dataDir: config.dataDir, policyPath: config.policyPath, cloudUrl: config.cloud.url, tryLocally: tryLocally(config.runtime, env) };
 }
 
-/** What to do when Intent Cloud cannot be used: wait for staging (the default host) or check the setting; or the demo. */
+/** What to do when Intent Cloud cannot be used: check the network (and the setting, for another host), or the demo. */
 function unavailableNext(ctx: ErrorContext): string {
   const local = ctx.tryLocally ?? `try everything locally with ${INTENT} demo`;
-  return ctx.cloudUrl === DEFAULT_CLOUD_URL ? `Staging may not be open yet; ${local}` : `Check your connection and INTENT_CLOUD_URL, or ${local}`;
+  return ctx.cloudUrl === DEFAULT_CLOUD_URL ? `Check your network, or ${local}` : `Check your connection and INTENT_CLOUD_URL, or ${local}`;
 }
 
 /**

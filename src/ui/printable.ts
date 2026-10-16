@@ -1,4 +1,4 @@
-// The one terminal-output sanitiser. Every value the CLI prints that it did not write itself (a chain entry's
+// The one output sanitiser. Every value the CLI prints, and the panel writes, that it did not write itself (a chain entry's
 // strings: a product title or merchant name Intent Cloud returned, a held-back category, a reason, a timestamp; an
 // error message carrying a server's words) passes through `printable` before it is printed. Merchant text reaches
 // the chain verbatim, so without this a title could clear the screen (ESC[2J), write the clipboard (OSC 52), hide a
@@ -7,9 +7,9 @@
 // `printable` makes each such character visible instead: C0 controls, DEL, C1 controls, format characters (Unicode
 // Cf: bidi controls, zero-width characters) and lone surrogates become `\u{1b}`-style text, and each run of line
 // breaks (CR, LF, VT, FF, NEL, U+2028, U+2029) becomes a single literal `\n`, so one value stays on one line. The
-// CLI's own colour codes are added after it, around text it already made printable. Pure.
+// CLI's own colour codes are added after it, around text it already made printable; the panel escapes the result
+// for HTML (a bidi override would reorder a page as it does a terminal). Pure.
 
-// eslint-disable-next-line no-control-regex
 const LINE_BREAKS = /[\r\n\v\f\u0085\u2028\u2029]+/gu;
 // eslint-disable-next-line no-control-regex
 const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\p{Cf}\p{Cs}]/gu;

@@ -184,7 +184,7 @@ describe("buildModel: observations (what came back) and held values; older chain
       ["Budget Running Shoe · $41.98 · Resale Hub", "Approved"],
       ["Purchase · $30.00", "Approved"],
     ]);
-    expect(m.purchases[0]?.steps[2]).toMatchObject({ name: "Your approval", state: "failed", note: "rejected" });
+    expect(m.purchases[0]?.steps[2]).toMatchObject({ name: "Your approval", state: "failed", note: "Intent Cloud says rejected" });
     expect(m.kpis.waiting).toBe(0);
   });
 

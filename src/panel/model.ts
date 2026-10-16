@@ -3,6 +3,7 @@
 // activity model; this file only words it. Wording follows `intent log` and invariant 5: what the gateway sent and
 // what came back (a receipt: Intent Cloud acknowledged receiving it), never what Intent Cloud does next.
 import { type Activity, type ActivityRequest, buildActivity, buildPurchases, type Delivery, leafFields, type Purchase } from "../activity/index.ts";
+import { withheldAt } from "../observation/index.ts";
 import { EXCLUDED_CATEGORIES, type Policy } from "../policy/index.ts";
 import type { ChainResult } from "../store/index.ts";
 
@@ -345,7 +346,7 @@ function cartWords(a: Activity, total = true): string {
   const f = a.facts;
   // With the cart's observation: what Intent Cloud returned (title, total, merchant); without one: the values sent.
   if (f.title !== undefined) {
-    return join([`${f.title}${(f.quantity ?? 1) > 1 ? ` ×${String(f.quantity)}` : ""}`, f.total_minor === undefined || !total ? "" : money(f.total_minor), f.merchant ?? ""]);
+    return join([`${f.title}${(f.quantity ?? 1) > 1 ? ` ×${String(f.quantity)}` : ""}`, total ? totalWords(a) : "", f.merchant ?? ""]);
   }
   return sentCartWords(a, total);
 }
@@ -365,7 +366,13 @@ function sentCartWords(a: Activity, total = false): string {
 function purchaseTitle(p: Purchase): string {
   if (p.cart.facts.title !== undefined) return cartWords(p.cart);
   const what = p.search?.facts.product ?? p.search?.facts.category ?? "Purchase";
-  return join([capitalise(what), p.cart.facts.total_minor === undefined ? "" : money(p.cart.facts.total_minor)]);
+  return join([capitalise(what), totalWords(p.cart)]);
+}
+
+/** The action's total, `total withheld` when an observation withheld it as possible buyer identity (never a 0), or "". */
+function totalWords(a: Activity): string {
+  if (a.facts.total_minor !== undefined) return money(a.facts.total_minor);
+  return a.facts.withheld?.includes("total_minor") === true ? "total withheld" : "";
 }
 
 const STATE: Record<Purchase["state"], readonly [string, Tone]> = {
@@ -404,7 +411,8 @@ function purchaseView(p: Purchase, time: Clock): PurchaseView {
       : p.state === "waiting"
         ? { n: 3, name: "Your approval", state: "waiting", note: "waiting for you", drawer: null, link: safeUrl(cart.facts.approval_url) }
         : p.state === "expired" || p.state === "rejected"
-          ? { n: 3, name: "Your approval", state: "failed", note: p.state, drawer: null, link: null }
+          ? // A rejection (or expiry) Intent Cloud returned is worded as its answer; a local expiry is the gateway's own.
+            { n: 3, name: "Your approval", state: "failed", note: cart.facts.approval_state === p.state ? `Intent Cloud says ${p.state}` : p.state, drawer: null, link: null }
           : { n: 3, name: "Your approval", state: "todo", note: "not asked", drawer: null, link: null };
   steps.push(approvalStep);
   const lastCheck = p.checks.at(-1);
@@ -529,7 +537,12 @@ function entrySummary(kind: string, b: Record<string, unknown>): string {
       const what =
         b.endpoint === "searchCatalog"
           ? `${String(b.offers_count)} offers`
-          : join([text(b.title), typeof b.total_minor === "number" ? money(b.total_minor) : "", text(b.merchant), text(b.state)]);
+          : join([
+              text(b.title),
+              withheldAt(strings(b.withheld), "$.total_minor") ? "total withheld" : typeof b.total_minor === "number" ? money(b.total_minor) : "",
+              text(b.merchant),
+              text(b.state),
+            ]);
       return join([`came back for #${String(b.disclosure_seq)}`, what]);
     }
     case "approval_pending":
