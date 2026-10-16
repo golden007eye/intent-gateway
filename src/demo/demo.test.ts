@@ -10,6 +10,7 @@
 //   test root; the test root is never in PINNED_HOSTS; the demo passkey is stable per data dir.
 // - Port: the confirm page listens on the port asked for, falls back to a free one only when told to, and the next
 //   steps name its address with the ssh -L forward (and the taken port, after a fallback).
+import { createHash } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
@@ -145,13 +146,14 @@ describe("demo flow", () => {
 
     const page = await raw(link);
     expect(page.status).toBe(200);
-    expect(page.body).toContain("Approve with demo passkey");
+    expect(page.body).toMatch(/>Approve \$\d+\.\d\d with demo passkey</);
     expect(page.body).toContain("ZIP 941xx");
     expect(page.body).toContain(DEMO_BANNER);
     expect(page.body).toContain(`cat ${demo.codeFile}`);
     const done = await post(link, { csrf: csrfOf(page.body), action: "approve", code: demo.code }, { origin: new URL(link).origin, "sec-fetch-site": "same-origin" });
     expect(done.status).toBe(200);
-    expect(done.body).toContain("<h1>Approved</h1><p>Approved with the demo passkey. Go back to your agent and ask it to check the approval status.</p>");
+    expect(done.body).toContain("<h1>Approved</h1><p>Approved with the demo passkey. Nothing is bought in demo mode.</p>");
+    expect(done.body).toContain("<strong>Next step</strong>Go back to your agent and ask it to check the approval status.");
     expect(done.body.split("Approved with the demo passkey").length - 1).toBe(1);
     expect(done.body).toContain(DEMO_BANNER);
 
@@ -179,13 +181,14 @@ describe("demo flow", () => {
     const { url, handle } = await pendingApproval(gateway);
     const page = await raw(url);
     const rejected = (await post(url, { csrf: csrfOf(page.body), action: "reject" })).body;
-    expect(rejected).toContain("<h1>Rejected</h1><p>You rejected this purchase. Go back to your agent and ask it to check the approval status.</p>");
+    expect(rejected).toContain("<h1>Rejected</h1><p>You rejected this purchase. Nothing was approved.</p>");
+    expect(rejected).toContain("<strong>Next step</strong>Go back to your agent and ask it to check the approval status.");
     expect(rejected.split("Rejected").length - 1).toBe(2); // the <title> and the heading, not the paragraph too
     expect(rejected).toContain(DEMO_BANNER);
     expect(demo.cloud.inspect(handle)?.state).toBe("rejected");
     const after = await raw(url);
     expect(after.body).not.toContain('name="csrf"');
-    expect(after.body).toContain("This approval is rejected.");
+    expect(after.body).toContain("This purchase was rejected.");
   });
 });
 
@@ -275,8 +278,14 @@ describe("confirm page", () => {
     expect(page.headers["referrer-policy"]).toBe("same-origin");
     expect(page.body).not.toMatch(/(src|href)="https?:/);
     expect(page.body).not.toMatch(/https?:\/\//);
-    expect(page.body).not.toContain("<script");
     expect(page.body).not.toMatch(/\son[a-z]+=|style=/i);
+    // One inline script, allowed by its hash only: no src, no 'unsafe-inline'.
+    const scripts = [...page.body.matchAll(/<script([^>]*)>([^<]*)<\/script>/g)];
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]?.[1]).toBe("");
+    const hash = createHash("sha256").update(scripts[0]?.[2] ?? "").digest("base64");
+    expect(CONFIRM_CSP).toContain(`script-src 'sha256-${hash}';`);
+    expect(CONFIRM_CSP).not.toMatch(/unsafe|script-src[^;]*'self'|font-src|connect-src/);
     const css = await raw(new URL("/confirm/style.css", url).href);
     expect(css.status).toBe(200);
     expect(css.headers["content-security-policy"]).toBe(CONFIRM_CSP);
@@ -384,11 +393,12 @@ describe("the demo code", () => {
     const wrong = String((Number(demo.code) + 1) % 1_000_000).padStart(6, "0");
     const first = await approve(url, wrong);
     expect(first.status).toBe(403);
-    expect(first.body).toContain('<p class="error" id="code-error" role="alert">That is not the demo code. 4 tries left.</p>');
+    expect(first.body).toMatch(/<p class="error" id="code-error" role="alert"><svg[^]*?<\/svg><span>That is not the demo code\. 4 tries left\.<\/span><\/p>/);
+    expect(first.body).toContain('<div class="code dash invalid">');
     expect(first.body).toMatch(/<input id="code"[^>]* aria-describedby="code-error code-hint" aria-invalid="true" autofocus>/);
     // The typed code is not echoed back.
     expect(first.body).not.toContain(`value="${wrong}"`);
-    expect(first.body).toContain("Approve with demo passkey");
+    expect(first.body).toContain('id="approve"');
     const short = await post(url, { csrf: csrfOf(first.body), action: "approve", code: "12" });
     expect(short.body).toContain("That is not the demo code (it has 6 digits; this had 2). 3 tries left.");
     let last = short;
@@ -420,8 +430,38 @@ describe("the demo code", () => {
     expect(locked.status).toBe(403);
     expect(locked.body).toContain("Too many wrong demo codes");
     expect(demo.cloud.inspect(handle)?.state).toBe("pending");
-    // Reject needs no code and still works.
-    expect((await post(url, { csrf: csrfOf((await raw(url)).body), action: "reject" })).status).toBe(200);
+    // The locked page has no code field, no Approve button and no script; Reject needs no code and still works.
+    const page = (await raw(url)).body;
+    expect(page).toContain("Too many wrong demo codes");
+    expect(page).not.toMatch(/id="code"|value="approve"|<script/);
+    const rejected = await post(url, { csrf: csrfOf(page), action: "reject" });
+    expect(rejected.status).toBe(200);
+    expect(rejected.body).toContain("<h1>Rejected</h1>");
+    expect(rejected.body).toContain("Go back to your agent and ask it to check the approval status.");
+  });
+
+  it("draws six aria-hidden boxes over one real input, and shows the receipt: total, lines, check code, approval", async () => {
+    const { demo, url, handle } = await pending();
+    const body = (await raw(url)).body;
+    const view = demo.cloud.inspect(handle);
+    if (view === undefined) throw new Error("no approval");
+    expect(body.match(/<input id="code"/g)).toHaveLength(1);
+    expect(body).toContain(`<div class="boxes" aria-hidden="true">${'<span class="box"></span>'.repeat(6)}</div>`);
+    expect(body).toContain('<label for="code">');
+    const total = `$${(view.snapshot.total.amount_minor / 100).toFixed(2)}`;
+    expect(body).toContain(`<span class="v">${total}</span>`);
+    expect(body).toContain(`>Approve ${total} with demo passkey</button>`);
+    expect(body).toContain(`${String(view.snapshot.quantity)} × ${view.snapshot.item.title}`);
+    const check = view.snapshot_hash.slice(0, 8);
+    expect(body).toContain(`<span>${check.slice(0, 4)}</span><span>${check.slice(4)}</span>`);
+    expect(body).toContain(`title="${handle}"`);
+    expect(body).toContain("DEMO · nothing can be bought");
+    // A settled approval shows its state and the next step, with no form.
+    await approve(url, demo.code);
+    const after = (await raw(url)).body;
+    expect(after).toContain("<h1>Already approved</h1>");
+    expect(after).toContain("<strong>Next step</strong>");
+    expect(after).not.toContain("<form");
   });
 
   it("is six digits, kept 0600 in <data>/demo/approval-code, and new on every start", async () => {

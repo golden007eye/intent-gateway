@@ -408,7 +408,8 @@ ask_claude() {
 # TARGET is npx (the stranger's gateway) or docker (the container CONTAINER).
 TARGET=npx
 CONTAINER=""
-t_log() { if [ "$TARGET" = docker ]; then docker exec "$CONTAINER" intent log --demo; else gw log --demo; fi; }
+# -v: every entry, with the approval link and one "sent" row per request.
+t_log() { if [ "$TARGET" = docker ]; then docker exec "$CONTAINER" intent log --demo -v; else gw log --demo -v; fi; }
 t_verify() { if [ "$TARGET" = docker ]; then docker exec "$CONTAINER" intent verify --demo; else gw verify --demo; fi; }
 t_code() {
   if [ "$TARGET" = docker ]; then docker exec "$CONTAINER" cat /data/demo/approval-code
@@ -528,7 +529,7 @@ scenario_b_stdio() {
   must_match "$REPORT" '^called: .*mcp__gw__create_cart' "Claude called create_cart over stdio" || return 1
   must_match "$REPORT" 'Approval link: http://127\.0\.0\.1:[0-9]+/confirm/c/' "create_cart returned an approval link" || return 1
   local f="$LOGS/b2-log.txt"
-  (cd "$cwd" && env -i HOME="$home" PATH="$OPATH" npx -y "$SPEC" log --demo) >"$f" 2>&1 || { WHY="log --demo failed; see $f"; return 1; }
+  (cd "$cwd" && env -i HOME="$home" PATH="$OPATH" npx -y "$SPEC" log --demo -v) >"$f" 2>&1 || { WHY="log --demo failed; see $f"; return 1; }
   must_match "$f" 'approval asked' "the chain records the approval request" || return 1
   f="$LOGS/b2-verify.txt"
   (cd "$cwd" && env -i HOME="$home" PATH="$OPATH" npx -y "$SPEC" verify --demo) >"$f" 2>&1 || { WHY="verify --demo exited non-zero; see $f"; return 1; }
@@ -536,7 +537,7 @@ scenario_b_stdio() {
   WHY="stdio: offers → cart with an approval link, log records it, verify: ok (approval not tried: the confirm page lives in the gateway Claude stops after each -p turn)"
 }
 
-sent_rows() { grep -Ec '^#[0-9]+ +[^ ]+ +sent ' "$1" || true; }
+sent_rows() { grep -Ec '^ +#[0-9]+ +sent ' "$1" || true; }
 scenario_d() {
   local before="$LOGS/d-log-before.txt" after="$LOGS/d-log-after.txt" n0 n1
   t_log >"$before" 2>&1

@@ -1,6 +1,6 @@
 # Panel
 
-The panel is a read-only local web page over the gateway's chain. It shows the same entries as `intent log`, with the approver pin and the pending approvals, and refreshes every 5 seconds.
+The panel is a read-only local web page over the gateway's chain. It shows the chain's entries, as `intent log -v` does, with the approver pin and the pending approvals, and refreshes every 5 seconds.
 
 ```console
 $ intent panel --demo

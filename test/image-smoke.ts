@@ -118,7 +118,7 @@ async function tokenAndPolicy(): Promise<void> {
     check(file === "600 1000 44", "/data/http-token is 0600, owned by uid 1000, the token and a newline", file);
     check(docker("exec", id, "cat", "/data/http-token").trim() === token, "docker exec <c> cat /data/http-token gives the token");
     const log = spawnSync("docker", ["exec", id, "intent", "log"], { encoding: "utf8" });
-    check(log.status === 0 && log.stdout.includes("every hash links"), "docker exec <c> intent log reads the chain with no token", log.stdout + log.stderr);
+    check(log.status === 0 && /^intent log · .+ · \d+ entries$/m.test(log.stdout), "docker exec <c> intent log reads the chain with no token", log.stdout + log.stderr);
     check(!logs(id).includes("bundled"), "the mounted policy file is used, not a bundled default");
     const health = await until("the healthcheck", () => {
       const s = docker("inspect", "-f", "{{.State.Health.Status}}", id).trim();
@@ -216,7 +216,7 @@ async function demo(): Promise<void> {
     const page = await fetch(link);
     const html = await page.text();
     const csrf = /name="csrf" value="([A-Za-z0-9_-]+)"/.exec(html)?.[1] ?? "";
-    check(page.status === 200 && html.includes("Approve with demo passkey"), "the host's browser reaches the confirm page");
+    check(page.status === 200 && html.includes(" with demo passkey</button>"), "the host's browser reaches the confirm page");
     check(html.includes(`docker exec ${short} cat /data/demo/approval-code`), "the confirm page says how to read the demo code from this container", html);
     const code = docker("exec", id, "cat", "/data/demo/approval-code").trim();
     check(/^[0-9]{6}$/.test(code) && logs(id).includes(`Demo code for the confirm page: ${code} `), "the demo code is in the container log and its file");

@@ -17,6 +17,7 @@ if (executable && !nodeSupported(process.versions.node)) {
     stdout: process.stdout,
     stderr: process.stderr,
     isTTY: { stdin: process.stdin.isTTY, stdout: process.stdout.isTTY },
+    ...(process.stdout.isTTY ? { columns: process.stdout.columns } : {}),
   });
   process.exitCode = outcome.code;
   const { stop } = outcome;

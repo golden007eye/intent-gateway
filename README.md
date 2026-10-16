@@ -42,7 +42,7 @@ If Claude Code already has an MCP server named `intent` (for example a connector
 > Find running shoes to ZIP 94103, under $200, and prepare a cart for the cheapest.
 ```
 
-The agent calls `find_offers`, then `create_cart`, and shows an approval link such as `http://127.0.0.1:8788/confirm/c/…`. Open it, check the item and total, enter the demo code and click **Approve with demo passkey**. The code is six digits, new on every start and never shown to the agent; the page shows the command that reads it (`cat <data dir>/demo/approval-code`). Then ask the agent to check the approval status: it reports the purchase as approved, with the approver passkey's fingerprint. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started.
+The agent calls `find_offers`, then `create_cart`, and shows an approval link such as `http://127.0.0.1:8788/confirm/c/…`. Open it, check the item and total, enter the demo code and click **Approve $<total> with demo passkey**. The code is six digits, new on every start and never shown to the agent; the page shows the command that reads it (`cat <data dir>/demo/approval-code`). Then ask the agent to check the approval status: it reports the purchase as approved, with the approver passkey's fingerprint. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started.
 
 Working on a remote machine over SSH? Forward the confirm page to your laptop's browser with `ssh -L 8788:127.0.0.1:8788 <host>`. If port 8788 is taken, the demo uses another one and says so on startup; `INTENT_DEMO_CONFIRM_PORT` chooses it ([demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md#the-confirm-pages-port)).
 
@@ -52,7 +52,7 @@ Working on a remote machine over SSH? Forward the confirm page to your laptop's 
 $ npx -y ./intent-gateway.tgz verify --demo
 ```
 
-It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` lists each send field by field; add `-v` for the values each request sent, or `--json` for one action per line ([the log](https://github.com/golden007eye/intent-gateway/blob/main/docs/log.md)). The [demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo --http` serves the demo over HTTP instead, printing the line to connect with and the demo code.
+It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` shows each action with the values it sent and its outcome; add `-v` for every entry, or `--json` for one action per line ([the log](https://github.com/golden007eye/intent-gateway/blob/main/docs/log.md)). The [demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo --http` serves the demo over HTTP instead, printing the line to connect with and the demo code.
 
 ### From the first preview release
 
