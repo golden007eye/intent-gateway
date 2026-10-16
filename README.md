@@ -52,7 +52,7 @@ Working on a remote machine over SSH? Forward the confirm page to your laptop's 
 $ npx -y ./intent-gateway.tgz verify --demo
 ```
 
-It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` lists each send field by field; add `-v` for the values each request sent, or `--json` for one action per line ([the log](https://github.com/golden007eye/intent-gateway/blob/main/docs/log.md)). The [demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo --http` serves the demo over HTTP instead, printing the line to connect with and the demo code.
+It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` shows each action with the values it sent and its outcome; add `-v` for every entry, or `--json` for one action per line ([the log](https://github.com/golden007eye/intent-gateway/blob/main/docs/log.md)). The [demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo --http` serves the demo over HTTP instead, printing the line to connect with and the demo code.
 
 ### From the first preview release
 

@@ -25,6 +25,8 @@ export interface Io {
   connect?: (http: HttpCloudOptions, store: Store, options: DisclosureOptions) => DisclosedCloud;
   /** Test seam: how long serve and doctor wait on Intent Cloud before saying they still wait (CLOUD_NOTICE_MS). */
   cloudNoticeMs?: number;
+  /** The terminal's width when stdout is one; `intent log` cuts its lines to it. */
+  columns?: number;
   /** Test seam: how often `log --follow` reads the chain (500 ms by default). */
   followMs?: number;
 }

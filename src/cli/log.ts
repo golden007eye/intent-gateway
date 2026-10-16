@@ -1,18 +1,15 @@
-// `intent log`: the local hash chain. By default one line per entry, field by field: what was sent (field names),
-// what was blocked, what Intent Cloud acknowledged receiving, what got no answer or was discarded, and the approvals
-// and approver pins. `--verbose` groups the entries by action (activity's model) with the values each request sent,
-// its endpoint, digest and keyid; `--json` prints that model, one action per line. It says what the gateway sent and
-// what came back, nothing more (invariant 5); `intent verify` re-checks the chain and every signature.
-// The formatters are pure; the golden tests pin their output.
+// `intent log`: the local hash chain. By default the action timeline (log-timeline.ts): one line per action with
+// the values it sent and its outcome. `--verbose` groups the entries by action with every entry, the values each
+// request sent, its endpoint, digest and keyid; `--json` prints the activity model, one action per line. It says what
+// the gateway sent and what came back, nothing more (invariant 5); `intent verify` re-checks the chain and every
+// signature. The formatters are pure; the golden tests pin their output.
 import { type Activity, type ActivityFilter, buildActivity, filterActivity, leafFields } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 import { neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { type Io, line, type Outcome } from "./io.ts";
+import { formatTimeline, timelineFollow, type TimelineStyle } from "./log-timeline.ts";
 
 type Body = Record<string, unknown>;
-
-/** The entry kinds that answer a disclosure, naming it by `disclosure_seq`. */
-const FOLLOW_UPS: ReadonlySet<string> = new Set(["receipt", "unacknowledged", "discarded"]);
 
 /** The version of the `--json` line format (docs/log.md). */
 export const LOG_JSON_VERSION = 1;
@@ -24,17 +21,13 @@ interface Item {
   body: Body;
 }
 
-export interface LogStyle {
-  /** ANSI colour (a terminal, no NO_COLOR, no --no-color). */
-  readonly color: boolean;
-  /** --utc: times in UTC; otherwise in `timeZone` (the local zone when absent). */
-  readonly utc?: boolean;
-  /** For tests: the zone local times are shown in. */
-  readonly timeZone?: string;
-}
+export type LogStyle = TimelineStyle;
 
 export interface LogOptions extends ActivityFilter {
   readonly style?: LogStyle;
+  /** The data dir the chain is in, and $HOME (shown as `~`), for the timeline's header. */
+  readonly dataDir?: string;
+  readonly home?: string;
 }
 
 const PLAIN: LogStyle = { color: false };
@@ -46,6 +39,8 @@ function paint(style: LogStyle, tone: Tone, s: string): string {
   return style.color && tone !== null ? `\u001b[${TONES[tone]}m${s}\u001b[0m` : s;
 }
 
+const EMPTY = `No entries yet: the gateway has sent nothing. Start it with ${INTENT} serve, or try ${INTENT} demo.\n`;
+
 /** The filter without --last, which only limits what is printed first. */
 function withoutLast(filter: ActivityFilter): ActivityFilter {
   return { ...(filter.since === undefined ? {} : { since: filter.since }), ...(filter.actions === undefined ? {} : { actions: filter.actions }) };
@@ -55,48 +50,16 @@ function filtering(options: ActivityFilter): boolean {
   return options.since !== undefined || options.actions !== undefined || options.last !== undefined;
 }
 
-/** The entries of the chain, one line each; with a filter, only the entries of the actions it keeps. */
+/** The default view: the action timeline (the actions a filter keeps, when one is given). */
 export function formatLog(items: readonly unknown[], options: LogOptions = {}): string {
-  if (items.length === 0) {
-    return `No entries yet: the gateway has sent nothing. Start it with ${INTENT} serve, or try ${INTENT} demo.\n`;
-  }
-  const style = options.style ?? PLAIN;
+  if (items.length === 0) return EMPTY;
   const all = buildActivity(items).activities;
-  const kept = filterActivity(all, options);
-  const keep = filtering(options) ? new Set(kept.flatMap((a) => a.seqs)) : null;
-  const lines: string[] = entryLines(items, style, keep);
-  if (keep !== null) lines.push("", shown(kept, all));
-  lines.push("", chainLine(items));
-  return lines.join("\n") + "\n";
+  const shown = filterActivity(all, options);
+  const context = { items, shown, total: all.length, dataDir: options.dataDir ?? "", ...(options.home === undefined ? {} : { home: options.home }) };
+  return formatTimeline(context, options.style ?? PLAIN);
 }
 
-/** Each entry from index `from` as one line (`keep` limits them to some seqs; unreadable lines are always listed). */
-function entryLines(items: readonly unknown[], style: LogStyle, keep: ReadonlySet<number> | null, from = 0): string[] {
-  const lines: string[] = [];
-  const demo = demoChain(items);
-  // Logged requests that never left (no connection was made): listed as logged, not as sent (invariant 5).
-  const notSent = new Set<unknown>();
-  // Disclosures some entry answers; one no entry answers is logged and maybe sent, with no answer recorded.
-  const answered = new Set<unknown>();
-  for (const raw of items) {
-    const item = asItem(raw);
-    if (item?.kind === "unacknowledged" && neverLeft(item.body)) notSent.add(item.body.disclosure_seq);
-    if (item !== null && FOLLOW_UPS.has(item.kind)) answered.add(item.body.disclosure_seq);
-  }
-  for (const [index, raw] of items.entries()) {
-    if (index < from) continue;
-    const item = asItem(raw);
-    if (item === null) {
-      lines.push(`line ${String(index + 1)}: not an entry (a torn or edited line); run ${INTENT} verify`);
-      continue;
-    }
-    if (keep !== null && !keep.has(item.seq)) continue;
-    const [label, detail, tone] = entryRow(item, demo, notSent, answered);
-    lines.push(`#${String(item.seq).padEnd(4)} ${item.ts}  ${paint(style, tone, label.padEnd(14))} ${detail}`);
-  }
-  return lines;
-}
-
+/** One `--verbose` row for an entry: label, detail, tone. */
 function entryRow(item: Item, demo: boolean, notSent: ReadonlySet<unknown>, answered: ReadonlySet<unknown>): [string, string, Tone] {
   if (item.kind !== "disclosure") return describe(item, demo);
   if (notSent.has(item.seq)) return notSentRow(item);
@@ -120,7 +83,7 @@ function shown(kept: readonly Activity[], all: readonly Activity[]): string {
 
 /** `--verbose`: each action, then every entry it covers, with the values each request sent. */
 export function formatVerbose(items: readonly unknown[], options: LogOptions = {}): string {
-  if (items.length === 0) return formatLog(items);
+  if (items.length === 0) return EMPTY;
   const style = options.style ?? PLAIN;
   const all = buildActivity(items).activities;
   const kept = filterActivity(all, options);
@@ -339,11 +302,11 @@ export interface LogFlags {
 /** `intent log [...]`: prints the chain once; with --follow, then prints what is appended until stopped. */
 export function logCommand(io: Io, dataDir: string, flags: LogFlags): Outcome {
   const items = readLog(dataDir);
-  const options: LogOptions = { ...flags.filter, style: flags.style };
+  const options: LogOptions = { ...flags.filter, style: flags.style, dataDir, ...(io.env.HOME === undefined ? {} : { home: io.env.HOME }) };
   io.stdout.write(flags.json ? formatJson(items, flags.filter) : flags.verbose ? formatVerbose(items, options) : formatLog(items, options));
   if (!flags.follow) return { code: 0 };
   line(io.stderr, `following ${dataDir}; Ctrl-C stops`);
-  const tail = flags.json || flags.verbose ? actionTail(items, flags) : entryTail(items, flags);
+  const tail = actionTail(items, flags);
   const timer = setInterval(() => {
     try {
       const now = readLog(dataDir);
@@ -364,31 +327,15 @@ export function logCommand(io: Io, dataDir: string, flags: LogFlags): Outcome {
   };
 }
 
-/** Default view: each new entry once, as one line, labelled by what the chain holds at the time it is printed. */
-function entryTail(start: readonly unknown[], flags: LogFlags): (items: readonly unknown[]) => string {
-  let printed = start.length;
-  return (items) => {
-    if (items.length <= printed) return "";
-    const fresh = new Set(items.slice(printed).flatMap((raw) => asItem(raw)?.seq ?? []));
-    let keep = fresh;
-    if (filtering(flags.filter)) {
-      const kept = filterActivity(buildActivity(items).activities, withoutLast(flags.filter)).flatMap((a) => a.seqs);
-      keep = new Set(kept.filter((s) => fresh.has(s)));
-    }
-    const lines = entryLines(items, flags.style, keep, printed);
-    printed = items.length;
-    return lines.map((l) => l + "\n").join("");
-  };
-}
-
 /**
- * --json and --verbose: an action is printed once it is not the last one, or once it has stayed the same for one
+ * An action is printed once it is not the last one, or once it has stayed the same for one
  * poll with every request answered. An action that grows after it was printed (a late answer) is printed again,
  * with the same seq.
  */
 function actionTail(start: readonly unknown[], flags: LogFlags): (items: readonly unknown[]) => string {
   const printed = new Map<number, number>(buildActivity(start).activities.map((a) => [a.seq, a.seqs.length]));
   let previousLast: string | null = null;
+  const follow = timelineFollow(flags.style, buildActivity(start).activities.at(-1)?.time ?? "");
   return (items) => {
     const activities = filterActivity(buildActivity(items).activities, withoutLast(flags.filter)).filter((a) => a.action !== "unreadable");
     const out: string[] = [];
@@ -400,7 +347,7 @@ function actionTail(start: readonly unknown[], flags: LogFlags): (items: readonl
       if (isLast) previousLast = key;
       if (!settled) continue;
       printed.set(activity.seq, activity.seqs.length);
-      out.push(flags.json ? jsonLine(activity) : [...verboseLines(items, activity, flags.style), ""].join("\n"));
+      out.push(flags.json ? jsonLine(activity) : flags.verbose ? [...verboseLines(items, activity, flags.style), ""].join("\n") : follow(activity));
     }
     return out.map((l) => l + "\n").join("");
   };
