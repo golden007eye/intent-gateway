@@ -17,7 +17,7 @@ DEMO: test keys, sample catalog, nothing can be bought.
 | Part | What it is |
 |---|---|
 | Demo Intent Cloud | A stand-in for Intent Cloud inside the gateway process, on `127.0.0.1`, following the public contract. It signs receipts, key statements and approvals with the published test keys. |
-| Sample catalog | A handful of items: running shoes, headphones, a mug, and items the gateway must refuse (a drop-shipper, an excluded category), so a policy has something to act on. |
+| Sample catalog | About seventy US offers from `*.example` merchants across everyday categories: running shoes, water bottles and mugs, coffee and kitchen gear, headphones and phone accessories, backpacks, books, toys and games, home basics, office supplies, camping gear, pet supplies, beauty basics and gifts under $30. Some exist so a seed policy has something to act on: electronics (`no-electronics`), drop-ship merchants (`block-dropship`) and items over $60 (`per-order-60`). See [Searching the sample catalog](#searching-the-sample-catalog). |
 | Local confirm page | `http://127.0.0.1:<port>/confirm/c/<link>`, with **Approve with demo passkey** and **Reject**. A click signs on the server with a demo passkey kept in `<data dir>/demo/demo-passkey.json`. Approve also needs the demo code (below). |
 | Demo code | Six digits, new on every start, printed on the gateway's stderr with the next steps and kept in `<data dir>/demo/approval-code` (mode 600). It never appears in a tool result. When your agent started the gateway, you do not see its stderr: the confirm page shows the command that reads the file. |
 | Demo data dir | `<data dir>/demo`. Its chain starts with a demo `session` entry, and the gateway refuses to mix a demo chain with a real one. |
@@ -39,6 +39,23 @@ Here `intent` stands for the command that runs your gateway: `npx -y "file:$PWD/
 Every other command takes `--demo` and then reads the demo data dir: `intent log --demo`, `intent verify --demo`, `intent panel --demo`, `intent doctor --demo`, `intent policy show --demo`, `intent approver list --demo`.
 
 In demo mode the policy file is `<data dir>/demo/policy.yaml`. With none, the bundled `zip-only` policy applies, as it does outside the demo. Try `intent policy add per-order-60 --demo` and then ask for something over $60.
+
+## Searching the sample catalog
+
+The demo Intent Cloud searches the way a shop's search box does, so the first thing you ask for should find something. For example, "a stainless water bottle around 1 liter, ZIP 10001, budget $40" returns several bottles.
+
+- Case, plurals and common synonyms do not matter: "Sneakers", "running shoe" and "running shoes" find the same shoes, and "earbuds" finds headphones.
+- A category matches at any level: "drinkware", "kitchen" and "water bottles" all find water bottles.
+- Each must-have has to match. A size matches within 20%, so "1 liter" also finds a 32 oz bottle, but not a 750 ml one.
+- The budget counts shipping.
+- Results are ranked by how many of your words match, then by price.
+
+When a search finds nothing, the result still has 0 offers. In demo mode the gateway adds one line, "The demo catalog has: running shoes, water bottles, …", so your agent can try something the catalog holds.
+
+The catalog also holds items in the excluded categories, such as alcohol, tobacco, weapons, health products and gift cards, so you can watch them being refused:
+
+- A search that names such a category is blocked by the gateway before anything is sent.
+- A search that names only the product is sent, but the demo Intent Cloud never returns the item, as Intent Cloud never does.
 
 ## What it proves, and what it does not
 

@@ -81,7 +81,11 @@ export interface GatewayOptions {
    * only when every pinned root key is the published test root, so a real Intent Cloud's approval links can never be
    * redirected. A demo chain and a real one never mix: each mode refuses the other's chain.
    */
-  demo?: { confirmBaseUrl: string };
+  demo?: {
+    confirmBaseUrl: string;
+    /** A line added to a search that finds no offer, naming what the sample catalog holds ("The demo catalog has: …"). */
+    catalogNote?: string;
+  };
 }
 
 /** The first entry of a demo chain. */
@@ -477,12 +481,15 @@ export function createGateway(options: GatewayOptions): Gateway {
     // Rule names only (e.g. merchants.block), never the merchant, category or price that matched it.
     const rules = [...hiddenBy].sort().join(", ");
     const hiddenNote = hidden === 0 ? "" : ` ${String(hidden)} more hidden by the gateway policy (${rules}).`;
+    // Demo mode: a search that found nothing says what the sample catalog holds, so the agent can adapt.
+    const note = options.demo?.catalogNote;
+    const emptyNote = sent.body.offers.length === 0 && note !== undefined ? ` ${note}` : "";
     const hiddenBlocked = hidden === 0 ? [] : [`${String(hidden)} offer${hidden === 1 ? "" : "s"} (${rules})`];
     return {
       status: "offers",
       offers: kept,
       hidden,
-      message: `${String(kept.length)} offer${kept.length === 1 ? "" : "s"}.${hiddenNote}`,
+      message: `${String(kept.length)} offer${kept.length === 1 ? "" : "s"}.${hiddenNote}${emptyNote}`,
       summary: summary(fromSeq, hiddenBlocked),
     };
   }

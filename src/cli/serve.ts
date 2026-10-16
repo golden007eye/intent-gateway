@@ -36,7 +36,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       policy,
       pinnedRootKeys,
       logger: { warn: log },
-      ...(demo === null ? {} : { demo: { confirmBaseUrl: demo.confirmBaseUrl } }),
+      ...(demo === null ? {} : { demo: { confirmBaseUrl: demo.confirmBaseUrl, catalogNote: demo.catalogNote } }),
       ...now,
     });
     await gateway.start();

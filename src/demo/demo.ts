@@ -6,7 +6,8 @@
 import { createPrivateKey, generateKeyPairSync, randomInt } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, type Stats, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
+import { catalogCategories, type FakeCloud, SAMPLE_CATALOG, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
+import { EXCLUDED_CATEGORIES } from "../policy/index.ts";
 import { type PinnedRootKey, TEST_ROOT_KEY } from "../trust/index.ts";
 import { CONFIRM_PATH, startConfirmPage } from "./confirm.ts";
 
@@ -48,6 +49,11 @@ export interface Demo {
   code: string;
   /** `<dataDir>/demo/approval-code`, which holds `code`. */
   codeFile: string;
+  /**
+   * Pass as GatewayOptions.demo.catalogNote: the line a search that finds nothing adds, "The demo catalog has: …",
+   * so the agent can try a kind of product the sample catalog holds.
+   */
+  catalogNote: string;
   /** For tests: the fake behind the demo. */
   cloud: FakeCloud;
   close(): Promise<void>;
@@ -70,7 +76,12 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   const codeFile = join(dataDir, CODE_FILE);
   writePrivate(codeFile, `${code}\n`);
-  const cloud = await startFakeCloud(options.now === undefined ? {} : { now: options.now });
+  const cloud = await startFakeCloud({
+    catalog: SAMPLE_CATALOG,
+    // As Intent Cloud does: an item in an excluded category is never returned, whatever the search says.
+    excludedCategories: EXCLUDED_CATEGORIES,
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
   try {
     const page = await startConfirmPage({
       fake: cloud,
@@ -89,6 +100,7 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
       passkey,
       code,
       codeFile,
+      catalogNote: demoCatalogNote(),
       cloud,
       close: async () => {
         await page.close();
@@ -99,6 +111,11 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
     await cloud.close();
     throw error;
   }
+}
+
+/** "The demo catalog has: running shoes, water bottles, …": the sample catalog's kinds of product, excluded ones left out. */
+export function demoCatalogNote(): string {
+  return `The demo catalog has: ${catalogCategories(SAMPLE_CATALOG, EXCLUDED_CATEGORIES).join(", ")}.`;
 }
 
 interface PasskeyFile {

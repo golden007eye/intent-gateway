@@ -29,7 +29,7 @@ import {
 } from "../contract/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { contentDigest, createNonceCache, verifyRequest } from "../signing/index.ts";
-import { type CatalogItem, DEFAULT_CATALOG, matches } from "./catalog.ts";
+import { type CatalogItem, DEFAULT_CATALOG, searchCatalog } from "./catalog.ts";
 import {
   APPROVAL_PREFIX,
   CONFIRM_ORIGIN,
@@ -75,6 +75,11 @@ export interface FakeCloudOptions {
   /** The fake's clock in milliseconds, like Date.now (the default). */
   now?: () => number;
   catalog?: readonly CatalogItem[];
+  /**
+   * Categories whose items search never returns, as Intent Cloud never returns excluded ones (demo mode passes the
+   * excluded categories). Default none, so tests can show the gateway's own baseline refusing such an item too.
+   */
+  excludedCategories?: readonly string[];
   quotas?: Partial<Quotas>;
 }
 
@@ -281,6 +286,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   let cloudflareStatus: number | null = null;
 
   const catalog = options.catalog ?? DEFAULT_CATALOG;
+  const excluded = options.excludedCategories ?? [];
   for (const item of catalog) if (item.offer_handle !== undefined) offers.set(item.offer_handle, { item, expiresAt: null });
 
   const faultOn = (fault: Fault, path?: string): boolean => {
@@ -346,7 +352,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   function search(body: Buffer, at: number): Reply {
     const parsed = SearchRequest.safeParse(parseJson(body));
     if (!parsed.success) return fail(400, "bad_request", "body does not match SearchRequest");
-    const found = catalog.filter((item) => matches(item, parsed.data)).slice(0, 20);
+    const found = searchCatalog(catalog, parsed.data, excluded).slice(0, 20);
     return {
       status: 200,
       body: {
