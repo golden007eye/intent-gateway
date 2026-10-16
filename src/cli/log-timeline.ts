@@ -2,7 +2,9 @@
 // per day, one line per action (time, verb, the values it sent in readable form, its outcome), what was sent and what
 // never was, the counts, and where the details are. It says what the gateway sent and what came back for each request
 // (invariant 5): "receipt" only for a receipt entry, "passkey proof checked" only for an approval the gateway chained
-// after verifying its proof. `intent verify` re-checks every signature. Pure; the golden test pins it.
+// after verifying its proof, and `→ 3 offers`, a product title or an approval state only from an `observed` entry,
+// which records what Intent Cloud returned. A chain without observations shows the values sent, as before.
+// `intent verify` re-checks every signature. Pure; the golden test pins it.
 import { type Activity, type ActivitySummary, summarise } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 
@@ -29,7 +31,12 @@ export interface TimelineContext {
   readonly dataDir: string;
   /** For `~` in the data dir. */
   readonly home?: string;
+  /** The invocation printed before each suggested command; config's INTENT when absent. */
+  readonly intent?: string;
 }
+
+/** The longest invocation still printed before every command of the footer (as in `--help`). */
+const INLINE_MAX = 30;
 
 type Tone = "good" | "warn" | "bad" | "sage" | "dim" | "bold" | null;
 
@@ -94,9 +101,19 @@ export function formatTimeline(context: TimelineContext, style: TimelineStyle): 
   if (!all.chain.ok) {
     lines.push(paint("bad", `${g.bad} the chain breaks at seq ${String(all.chain.brokenSeq)} (${all.chain.reason}); run ${INTENT} verify${all.demo ? " --demo" : ""}`));
   }
+  const body = lines.map((l) => (style.columns === undefined ? l : fit(l, style.columns, g)));
+  // The footer is never cut: a command cut short with an ellipsis cannot be pasted. A long invocation (a tarball or a
+  // source path) is named once on its own line, as `--help` does, so the commands stay readable; on a terminal too
+  // narrow for one line, each command gets its own.
+  const intent = context.intent ?? INTENT;
+  const inline = intent.length <= INLINE_MAX;
+  const run = (command: string): string => (inline ? `${intent} ${command}` : command);
   const demo = all.demo ? " --demo" : "";
-  lines.push(paint("dim", `Details: ${INTENT} log${demo} -v ${g.dot} Machine-readable: ${INTENT} log${demo} --json ${g.dot} Integrity: ${INTENT} verify${demo}`));
-  return lines.map((l) => (style.columns === undefined ? l : fit(l, style.columns, g))).join("\n") + "\n";
+  const footer = [`Details: ${run(`log${demo} -v`)}`, `Machine-readable: ${run(`log${demo} --json`)}`, `Integrity: ${run(`verify${demo}`)}`];
+  const one = footer.join(` ${g.dot} `);
+  for (const l of style.columns === undefined || one.length <= style.columns ? [one] : footer) body.push(paint("dim", l));
+  if (!inline) body.push(paint("dim", `Run each as: ${intent} <command>`));
+  return body.join("\n") + "\n";
 }
 
 /** `--follow`: each new action as its timeline line, after a date header when the day changes. */
@@ -145,27 +162,37 @@ function row(a: Activity, g: Glyphs): Row {
         ...(f.zip === undefined ? [] : [`ZIP ${f.zip}`]),
       ];
       const [outcome, tone] = delivered();
-      return { verb: "search", verbTone: tone === "warn" ? "warn" : "bold", values: parts.length > 0 ? parts.join(sep) : names(a), outcome, outcomeTone: tone };
+      const returned = f.offers_count === undefined || a.outcome !== "acknowledged" ? "" : `${g.arrow} ${offersWord(f.offers_count, f.offers_hidden ?? 0)}  `;
+      return { verb: "search", verbTone: tone === "warn" ? "warn" : "bold", values: parts.length > 0 ? parts.join(sep) : names(a), outcome: returned + outcome, outcomeTone: tone };
     }
     case "cart": {
-      const parts = [
-        ...(f.offer_handle === undefined ? [] : [`offer ${short(f.offer_handle, g)} ${g.times}${String(f.quantity ?? 1)}`]),
-        ...(f.total_minor === undefined ? [] : [`at most ${money(f.total_minor)}`]),
-        ...(f.zip === undefined ? [] : [`ZIP ${f.zip}`]),
-      ];
+      // With an observation: what Intent Cloud returned (title, total, merchant); without one: the values sent.
+      const parts =
+        f.title === undefined
+          ? [
+              ...(f.offer_handle === undefined ? [] : [`offer ${short(f.offer_handle, g)} ${g.times}${String(f.quantity ?? 1)}`]),
+              ...(f.total_minor === undefined ? [] : [`at most ${money(f.total_minor)}`]),
+              ...(f.zip === undefined ? [] : [`ZIP ${f.zip}`]),
+            ]
+          : [`${f.title} ${g.times}${String(f.quantity ?? 1)}`, ...(f.total_minor === undefined ? [] : [money(f.total_minor)]), ...(f.merchant === undefined ? [] : [f.merchant])];
       const values = parts.length > 0 ? parts.join(sep) : names(a);
       if (a.outcome === "refused") return { verb: "cart", verbTone: "bad", values, outcome: `${g.bad} refused: ${a.blocked.join("; ")}`, outcomeTone: "bad" };
       if (a.outcome === "approval_asked") {
-        return { verb: "cart", verbTone: "bold", values, outcome: `${g.arrow} approval link to the agent  ${g.ok} ${receiptWord(receipts)}`, outcomeTone: "good" };
+        return { verb: "cart", verbTone: "bold", values, outcome: `${g.arrow} approval link  ${g.ok} ${receiptWord(receipts)}`, outcomeTone: "good" };
       }
       const [outcome, tone] = delivered();
       return { verb: "cart", verbTone: tone === "warn" ? "warn" : "bold", values, outcome, outcomeTone: tone };
     }
     case "status": {
-      const values = f.approval_handle === undefined ? "approval" : `approval ${short(f.approval_handle, g)}`;
-      if (a.outcome === "refused") return { verb: "status", verbTone: "bad", values, outcome: `${g.bad} proof refused: ${a.blocked.join("; ")}`, outcomeTone: "bad" };
+      const handle = f.approval_handle === undefined ? "approval" : `approval ${short(f.approval_handle, g)}`;
+      if (a.outcome === "refused") return { verb: "status", verbTone: "bad", values: handle, outcome: `${g.bad} proof refused: ${a.blocked.join("; ")}`, outcomeTone: "bad" };
+      if (a.outcome === "rejected" || a.outcome === "expired") {
+        const values = [...(f.total_minor === undefined ? [] : [money(f.total_minor)]), ...(f.title === undefined ? [] : [f.title]), handle].join(sep);
+        return { verb: a.outcome, verbTone: "bad", values, outcome: `${g.arrow} ${a.outcome}  ${g.ok} ${receiptWord(receipts)}`, outcomeTone: "bad" };
+      }
       const [outcome, tone] = delivered();
-      return { verb: "status", verbTone: tone === "warn" ? "warn" : "bold", values, outcome, outcomeTone: tone };
+      const state = f.approval_state === undefined || a.outcome !== "acknowledged" ? "" : `${g.arrow} ${f.approval_state.replace("_", " ")}  `;
+      return { verb: "status", verbTone: tone === "warn" ? "warn" : "bold", values: handle, outcome: state + outcome, outcomeTone: tone };
     }
     case "approval": {
       const parts = [
@@ -175,7 +202,7 @@ function row(a: Activity, g: Glyphs): Row {
       return { verb: "approved", verbTone: "sage", values: parts.join(sep) || (f.approval_handle ?? ""), outcome: `${g.ok} passkey proof checked`, outcomeTone: "good" };
     }
     case "blocked": {
-      const what = ENDPOINT_WORDS[f.endpoint ?? ""] ?? f.endpoint ?? "request";
+      const what = heldWords(f.endpoint ?? "", f.held, g) ?? ENDPOINT_WORDS[f.endpoint ?? ""] ?? f.endpoint ?? "request";
       const why = a.blocked.map(reason).join("; ") || "no reason recorded";
       const refused = a.outcome === "refused";
       return { verb: "blocked", verbTone: "bad", values: `${what}: ${why}`, outcome: refused ? `${g.bad} refused` : `${g.bad} nothing sent`, outcomeTone: "bad" };
@@ -223,6 +250,19 @@ function delivery(a: Activity, receipts: number, g: Glyphs): [string, Tone] {
   }
 }
 
+/** `search for "alcohol"`, `cart for "Budget Running Shoe" ×1`: the values a policy block held back, when the chain has them. */
+function heldWords(endpoint: string, held: Readonly<Record<string, unknown>> | undefined, g: Glyphs): string | null {
+  if (held === undefined) return null;
+  const what = typeof held.product === "string" ? held.product : typeof held.category === "string" ? held.category : typeof held.title === "string" ? held.title : null;
+  if (what === null) return null;
+  const word = ENDPOINT_WORDS[endpoint] ?? endpoint;
+  return `${word} for "${what}"${typeof held.quantity === "number" ? ` ${g.times}${String(held.quantity)}` : ""}`;
+}
+
+function offersWord(count: number, hidden: number): string {
+  return `${plural(count, "offer", "offers")}${hidden === 0 ? "" : `, ${String(hidden)} hidden by your policy`}`;
+}
+
 const ENDPOINT_WORDS: Readonly<Record<string, string>> = { searchCatalog: "search", createCart: "cart", createApproval: "approval request", getApproval: "status check" };
 
 const IDENTITY_WORDS: Readonly<Record<string, string>> = {
@@ -233,7 +273,7 @@ const IDENTITY_WORDS: Readonly<Record<string, string>> = {
   banned_key: "an identity field",
 };
 
-/** `categories.block at category` → `category blocked by your gateway policy`; `email at $.note` → `an email address in note`. */
+/** `categories.block at category` → `category excluded by your gateway policy`; `email at $.note` → `an email address in note`. */
 function reason(text: string): string {
   const match = /^(.+?) at (.+)$/.exec(text);
   if (match === null) return text;
@@ -241,7 +281,7 @@ function reason(text: string): string {
   const where = path.replace(/^\$\.?/, "") || "the request";
   const identity = IDENTITY_WORDS[rule];
   if (identity !== undefined) return `${identity} in ${where}`;
-  if (rule === "categories.block") return "category blocked by your gateway policy";
+  if (rule === "categories.block") return "category excluded by your gateway policy";
   if (rule === "merchants.block" || rule === "merchants.allow") return "merchant not allowed by your gateway policy";
   return `${rule} (${where}) by your gateway policy`;
 }

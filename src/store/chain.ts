@@ -10,6 +10,7 @@ export const ENTRY_KINDS = [
   "unacknowledged",
   "discarded",
   "block",
+  "observed",
   "approval_pending",
   "approval",
   "approver_pin",

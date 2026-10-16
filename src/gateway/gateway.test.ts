@@ -782,6 +782,111 @@ describe("invariant 4: approved only when verified, chained and from the pinned 
   });
 });
 
+// ---- observations: what came back, recorded locally (F-y) ----------------------------------------------------------
+
+describe("observations: an `observed` entry after each acknowledged answer, never sent", () => {
+  const seqOf = (h: Harness, kind: string, n = -1): number => h.store.entries().filter((e) => e.kind === kind).at(n)?.seq ?? -1;
+
+  it("a search records the offer count and each offer's handle, title, merchant, price and shipping after its receipt", async () => {
+    const h = await setup();
+    const result = offersOf(await h.gateway.findOffers(SHOES));
+    const observed = bodies(h, "observed");
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toMatchObject({ disclosure_seq: seqOf(h, "disclosure"), endpoint: "searchCatalog", offers_count: result.offers.length, offers_hidden: 0 });
+    const first = result.offers[0];
+    expect((observed[0]?.offers as unknown[])[0]).toEqual({
+      offer_handle: first?.offer_handle,
+      title: first?.title,
+      merchant: first?.merchant.name,
+      price_minor: first?.price.amount_minor,
+      shipping_minor: first?.shipping.amount_minor,
+      currency: "USD",
+    });
+    // After the receipt, so it never stands in for one.
+    expect(h.kinds().slice(-3)).toEqual(["disclosure", "receipt", "observed"]);
+    // Nothing more was sent for it: the search is the only request since start.
+    expect(h.sends.search).toBe(1);
+    expect(h.totalSends()).toBe(1);
+  });
+
+  it("the offers the policy hid are counted, and the list is capped while the count is not", async () => {
+    const h = await setup({ policy: `${BASE_POLICY}spend:\n  per_order_usd: 60\n` });
+    const result = offersOf(await h.gateway.findOffers(SHOES));
+    expect(result.hidden).toBeGreaterThan(0);
+    expect(bodies(h, "observed")[0]).toMatchObject({ offers_count: result.offers.length + result.hidden, offers_hidden: result.hidden });
+
+    const many = await setup();
+    many.patch.search = async (r) => {
+      const res = await many.real.search(r);
+      if (res.ok) {
+        const offer = res.body.offers[0];
+        if (offer !== undefined) res.body.offers = Array.from({ length: 14 }, (_, i) => ({ ...offer, offer_handle: `${offer.offer_handle.slice(0, -2)}${String(10 + i)}` }));
+      }
+      return res;
+    };
+    await many.gateway.findOffers(SHOES);
+    const capped = bodies(many, "observed")[0];
+    expect(capped?.offers_count).toBe(14);
+    expect(capped?.offers).toHaveLength(10);
+  });
+
+  it("a cart records the title, merchant, quantity and total; the approval request its handle and state", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    const [, cart, created] = bodies(h, "observed");
+    expect(cart).toMatchObject({ endpoint: "createCart", title: "Trail Runner 3", quantity: 1, currency: "USD" });
+    expect(typeof cart?.merchant).toBe("string");
+    expect(created).toMatchObject({ endpoint: "createApproval", approval_handle: approval, state: "pending", title: "Trail Runner 3", total_minor: cart?.total_minor });
+  });
+
+  it("a status check records the state Intent Cloud returned: rejected after a rejection on the confirm page", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.reject(approval, new SoftPasskey());
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).status).toBe("rejected");
+    expect(bodies(h, "observed").at(-1)).toMatchObject({ endpoint: "getApproval", approval_handle: approval, state: "rejected", title: "Trail Runner 3" });
+  });
+
+  it("no observation when the answer was discarded or never came", async () => {
+    const h = await setup();
+    h.fake.tamper.dropReceipt();
+    expect((await h.gateway.findOffers(SHOES)).status).toBe("error");
+    expect(bodies(h, "observed")).toHaveLength(0);
+  });
+
+  it("invariant 3: a returned value that looks like buyer identity is withheld, and the chain still verifies", async () => {
+    const h = await setup();
+    h.patch.search = async (r) => {
+      const res = await h.real.search(r);
+      const offer = res.ok ? res.body.offers[0] : undefined;
+      if (offer !== undefined) offer.title = "Call 415-555-2671 or mail jane.doe@mail.example";
+      return res;
+    };
+    await h.gateway.findOffers(SHOES);
+    const observed = bodies(h, "observed")[0];
+    expect(observed?.withheld).toEqual(["$.offers[0].title"]);
+    expect((observed?.offers as { title: string }[])[0]?.title).toBe("[withheld]");
+    const chain = JSON.stringify(h.store.entries().map((e) => e.body));
+    for (const secret of ["555-2671", "jane.doe"]) expect(chain).not.toContain(secret);
+    const report = await runVerify({ dataDir: h.dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(h.now()), skipSupplyChain: true });
+    expect(report.exitCode).toBe(0);
+  });
+
+  it("a policy block keeps the value it held back (never sent); an identity block never does", async () => {
+    const h = await setup();
+    expect((await h.gateway.findOffers({ category: "alcohol", budget_usd: 50, zip: "94103" })).status).toBe("blocked");
+    expect(h.sends.search).toBe(0);
+    expect(bodies(h, "block").at(-1)).toEqual({
+      endpoint: "searchCatalog",
+      fields: ["budget_max", "budget_max.amount_minor", "budget_max.currency", "category", "ship_to", "ship_to.country", "ship_to.postal_code"],
+      blocked: ["categories.block at category"],
+      held: { category: "alcohol" },
+    });
+    expect((await h.gateway.findOffers({ ...SHOES, product: "mail jane.doe@mail.example" })).status).toBe("blocked");
+    expect(bodies(h, "block").at(-1)).not.toHaveProperty("held");
+  });
+});
+
 // ---- intent verify over a gateway chain ---------------------------------------------------------------------------
 
 describe("runVerify over a chain the gateway wrote", () => {

@@ -9,6 +9,9 @@
 //   (null when unsigned), which the receipt must match.
 // - receipt: `{disclosure_seq, status, receipt_header, receipt_signature, …}`; re-verified whatever its `verified`.
 // - unacknowledged, discarded: `{disclosure_seq, reason}`.
+// - observed: an observation (src/observation's ObservedBody): its shape, no buyer identity, and `disclosure_seq` naming
+//   an earlier disclosure of the same endpoint whose verified 2xx receipt came first; at most one per disclosure. It
+//   is never a follow-up. block: `held`, when present, holds no buyer identity.
 // - approval: `{handle, proof}`; `proof` is the `proof` member of the approval status that verified. The
 //   `approver_pin` for its passkey, when one is written, comes before it; a flagged approval has no approval entry.
 export { formatReport } from "./report.ts";

@@ -13,6 +13,7 @@ export {
   connectCloud,
   createDisclosedCloud,
   type DisclosedCloud,
+  type DisclosedResult,
   DisclosureKeysExpiredError,
   DisclosureNoKeysError,
   type DisclosureOptions,
