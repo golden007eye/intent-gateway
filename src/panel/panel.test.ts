@@ -1,24 +1,36 @@
 // The panel's done-when criteria (plan G19): loopback-only bind, read-only routes, the exact CSP, no external
 // URLs, the Host check, the private data dir, and entries.json reflecting a fixture chain and a tampered one.
+//
+// Under full-suite load a busy disk can stall fdatasync for seconds, so this file runs with a 20 s timeout, and the
+// fixture chain is written through `fast`, an fs whose datasync is a no-op: the panel only reads, so durability is
+// not under test here.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import * as fsp from "node:fs/promises";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openStore } from "../store/index.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openStore, type StoreFs } from "../store/index.ts";
 import { buildView, type Panel, PanelError, startPanel, type View } from "./index.ts";
 
 const EXPECTED_CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const ROUTES = ["/", "/app.js", "/app.css", "/entries.json"];
 
+vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
+
+const fast: StoreFs = {
+  ...fsp,
+  open: (async (...args: Parameters<typeof fsp.open>) =>
+    Object.assign(await fsp.open(...args), { datasync: () => Promise.resolve() })),
+};
+
 let dir: string;
 let panel: Panel | null = null;
 
 beforeEach(async () => {
-  dir = join(await mkdtemp(join(tmpdir(), "panel-")), "data");
-  const store = await openStore(dir);
+  dir = join(await fsp.mkdtemp(join(tmpdir(), "panel-")), "data");
+  const store = await openStore(dir, { fs: fast });
   await store.append("disclosure", { endpoint: "/v1/offers/search", fields: ["category", "zip"], blocked: ["name"] });
   await store.append("receipt", { disclosure_seq: 0 });
   await store.append("approval_pending", { handle: "h1", approval_url: "https://confirm.example/a/h1" });
@@ -202,7 +214,7 @@ describe("entries.json", () => {
   });
 
   it("a data dir with no log yet is an empty valid chain", async () => {
-    const empty = join(await mkdtemp(join(tmpdir(), "panel-")), "data");
+    const empty = join(await fsp.mkdtemp(join(tmpdir(), "panel-")), "data");
     mkdirSync(empty, { mode: 0o700 });
     panel = await startPanel(empty, { port: 0 });
     const data = JSON.parse((await call(panel.url, "/entries.json")).body) as { view: View };
