@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 // The `intent` and `intent-gateway` executables. Everything else lives in src/cli; this file only binds the process.
+// The Node check runs first and the CLI loads only after it, so an unsupported Node gets one line, not a stack trace.
 import { realpathSync } from "node:fs";
-import { main } from "./cli/index.ts";
+import { nodeSupported, unsupportedNodeLine } from "./runtime/index.ts";
 
-if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === import.meta.filename) {
+const executable = process.argv[1] !== undefined && realpathSync(process.argv[1]) === import.meta.filename;
+if (executable && !nodeSupported(process.versions.node)) {
+  // exitCode, not exit(): stderr may be an asynchronous pipe, and the line must get out.
+  process.stderr.write(`${unsupportedNodeLine(process.versions.node)}\n`);
+  process.exitCode = 1;
+} else if (executable) {
+  const { main } = await import("./cli/index.ts");
   const outcome = await main(process.argv.slice(2), {
     env: process.env,
     stdin: process.stdin,

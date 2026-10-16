@@ -18,7 +18,7 @@
 
 The demo runs the whole flow on your machine with no setup: a demo Intent Cloud on `127.0.0.1` with a sample catalog and the published test keys, and a local confirm page that stands in for the passkey step. Every tool result says `DEMO: test keys, sample catalog, nothing can be bought.`
 
-You need Node 24 LTS (24.15 or later) or Node 26+, pnpm (`corepack enable`) and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way.
+You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+, pnpm (`corepack enable`) and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way.
 
 **1 · Build the package** (until the first preview release is on npm):
 
@@ -52,7 +52,7 @@ Working on a remote machine over SSH? Forward the confirm page to your laptop's 
 $ npx -y ./intent-gateway.tgz verify --demo
 ```
 
-It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` lists each send field by field. The [demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo --http` serves the demo over HTTP instead, printing the line to connect with and the demo code.
+It re-checks the local hash chain, every receipt Intent Cloud returns and the approval, and ends with `verify: ok`. `npx -y ./intent-gateway.tgz log --demo` lists each send field by field; add `-v` for the values each request sent, or `--json` for one action per line ([the log](https://github.com/golden007eye/intent-gateway/blob/main/docs/log.md)). The [demo page](https://github.com/golden007eye/intent-gateway/blob/main/docs/demo.md) has the details, and `npx -y ./intent-gateway.tgz demo --http` serves the demo over HTTP instead, printing the line to connect with and the demo code.
 
 ### From the first preview release
 

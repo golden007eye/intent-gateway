@@ -25,6 +25,8 @@ export interface Io {
   connect?: (http: HttpCloudOptions, store: Store, options: DisclosureOptions) => DisclosedCloud;
   /** Test seam: how long serve and doctor wait on Intent Cloud before saying they still wait (CLOUD_NOTICE_MS). */
   cloudNoticeMs?: number;
+  /** Test seam: how often `log --follow` reads the chain (500 ms by default). */
+  followMs?: number;
 }
 
 /** What a command returns: its exit code, and for a long-running one (serve, panel) how to stop it. */

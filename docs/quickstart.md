@@ -2,7 +2,7 @@
 
 This runs the [demo](demo.md) end to end: an agent finds offers, prepares a cart, you approve it, and you check what was sent. It needs no account and no config. Nothing can be bought.
 
-You need Node 24 LTS (24.15 or later) or Node 26+, pnpm (`corepack enable`) and an MCP client. Claude Code is the example.
+You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+, pnpm (`corepack enable`) and an MCP client. Claude Code is the example.
 
 ## 1. Build the package
 

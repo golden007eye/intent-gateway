@@ -29,7 +29,7 @@ It exits 0 when every check passes, 1 when one fails, and 2 for a usage or confi
 
 Before each request to Intent Cloud, the gateway appends the exact request to the chain: the endpoint, the field names, the body bytes and their digest, and the signature parameters. A send whose append fails does not happen, so a send cannot be missing from the log (invariant 2). What came back is appended after it, and each Approval the gateway verified is appended to the same chain. The file is `<data dir>/audit.jsonl`, one JSON entry per line, each holding the hash of the one before.
 
-`intent log` prints it one line per entry, field names only, never values. The [panel](panel.md) shows the same in a browser.
+`intent log` prints it one line per entry, field names only; `intent log -v` groups the entries by action with the values each request sent, and `intent log --json` prints one action per line ([the log](log.md)). The [panel](panel.md) shows the entries in a browser.
 
 ## What each check proves
 

@@ -1164,19 +1164,21 @@ describe("the demo confirm page's port, for an ssh -L forward set up in advance 
 
 describe("doctor checks the Node version (devrun F-a)", () => {
   it.each([
+    ["22.22.2", "ok"],
+    ["22.23.3", "ok"],
     ["24.15.0", "ok"],
     ["24.20.1", "ok"],
     ["26.0.0", "ok"],
     ["27.1.0", "ok"],
+    ["22.17.1", "WARN"],
     ["24.2.0", "WARN"],
     ["25.8.0", "WARN"],
-    ["22.22.2", "WARN"],
   ])("Node %s: %s", async (nodeVersion, level) => {
     const result = await setup().run(["doctor", "--demo"], { io: { nodeVersion } });
     if (level === "ok") expect(result.out).toContain(`ok    node: ${nodeVersion}\n`);
     else {
       expect(result.out).toContain(
-        `WARN  node: ${nodeVersion} is not supported; the gateway needs Node 24 LTS (24.15 or later) or 26+. Install Node 24 LTS (for example nvm install 24) and run it again\n`,
+        `WARN  node: ${nodeVersion} is not supported; the gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+. Install Node 24 LTS (for example nvm install 24) and run it again\n`,
       );
     }
     expect(result.code).toBe(0);
