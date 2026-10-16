@@ -14,7 +14,7 @@
 // - approval_pending: handle, approval_url, total_minor, expires_at; approval: handle.
 // - approver_pin, approver_flag: fingerprint, handle, reason. keys: statement.kid, statement.expires_at.
 // - session: mode ("demo" on the first entry of a demo chain) or id.
-import { ObservedBody, type ObservedOffer } from "../observation/index.ts";
+import { ObservedBody, type ObservedOffer, withheldAt } from "../observation/index.ts";
 import { findIdentity } from "../privacy/index.ts";
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
@@ -124,6 +124,8 @@ export interface ActivityFacts {
   approval_state?: string;
   /** block: the values a policy block held back (never sent), e.g. {category: "alcohol"}. */
   held?: Record<string, unknown>;
+  /** observed: the number facts an observation withheld as possible buyer identity (`total_minor`); shown as "withheld", never as 0. */
+  withheld?: string[];
 }
 
 export interface Activity {
@@ -425,18 +427,21 @@ function toRequest(item: Item, answer: Item | null): ActivityRequest {
 /** Adds what an observation says to its action's facts; a rejected or expired approval becomes the status's outcome. */
 function observe(activity: Activity, o: ObservedBody, activities: readonly Activity[]): void {
   const f = activity.facts;
+  // A total the observation withheld is stored as 0: it is not a fact, so it is listed in `withheld` instead.
+  const total = (): Partial<ActivityFacts> =>
+    "total_minor" in o && withheldAt(o.withheld, "$.total_minor") ? { withheld: [...new Set([...(f.withheld ?? []), "total_minor"])] } : "total_minor" in o ? { total_minor: o.total_minor } : {};
   switch (o.endpoint) {
     case "searchCatalog":
       Object.assign(f, { offers_count: o.offers_count, offers_hidden: o.offers_hidden, offers: o.offers });
       break;
     case "createCart":
-      Object.assign(f, { title: o.title, merchant: o.merchant, quantity: o.quantity, total_minor: o.total_minor });
+      Object.assign(f, { title: o.title, merchant: o.merchant, quantity: o.quantity, ...total() });
       break;
     case "createApproval":
-      Object.assign(f, { title: o.title, merchant: o.merchant, quantity: o.quantity, total_minor: o.total_minor, approval_state: o.state });
+      Object.assign(f, { title: o.title, merchant: o.merchant, quantity: o.quantity, ...total(), approval_state: o.state });
       break;
     case "getApproval": {
-      Object.assign(f, { title: o.title, merchant: o.merchant, total_minor: o.total_minor, approval_state: o.state });
+      Object.assign(f, { title: o.title, merchant: o.merchant, ...total(), approval_state: o.state });
       if ((o.state === "rejected" || o.state === "expired") && activity.outcome === "acknowledged") activity.outcome = o.state;
       const cart = activities.findLast((a) => a.action === "cart" && a.facts.approval_handle === o.approval_handle);
       if (cart !== undefined) cart.facts.approval_state = o.state;

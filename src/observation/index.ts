@@ -10,5 +10,6 @@ export {
   observeCart,
   observeSearch,
   observeStatus,
+  withheldAt,
   WITHHELD,
 } from "./observation.ts";

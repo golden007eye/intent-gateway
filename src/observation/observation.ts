@@ -149,6 +149,15 @@ export function observationProblem(body: unknown): string | null {
   return null;
 }
 
+/**
+ * Whether the value at `path` (`$.total_minor`, `$.offers[0].price_minor`) was withheld: its path, or a container
+ * holding it (a split card across an offer's numbers withholds `$.offers[0]`), is listed in `withheld`. A withheld
+ * number is stored as 0, so a reader shows "withheld" for it, never the 0.
+ */
+export function withheldAt(withheld: readonly string[] | undefined, path: string): boolean {
+  return (withheld ?? []).some((w) => path === w || path.startsWith(`${w}.`) || path.startsWith(`${w}[`));
+}
+
 /** Replaces each value findIdentity flags with WITHHELD and lists its path; the keys are fixed, so only values can be. */
 function guarded(body: ObservedBody): ObservedBody {
   const findings = findIdentity(body);
@@ -166,7 +175,7 @@ function guarded(body: ObservedBody): ObservedBody {
   return result;
 }
 
-/** Sets the value at a findIdentity path (`$.offers[0].title`) to WITHHELD; a number becomes 0, a container is left. */
+/** Sets the value at a findIdentity path (`$.offers[0].title`) to WITHHELD; a number becomes 0 (readers check withheldAt), a container is left. */
 function replaceAt(root: Record<string, unknown>, path: string): void {
   const steps = [...path.slice(1).matchAll(/\.([A-Za-z_$][\w$]*)|\[(\d+)\]/g)].map((m): string | number => m[1] ?? Number(m[2]));
   const last = steps.pop();
