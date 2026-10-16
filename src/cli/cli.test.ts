@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type FakeCloud, noDnsAgent, startFakeCloud, startSilentHost } from "../cloud-fake/index.ts";
+import { type FakeCloud, freePort, noDnsAgent, startFakeCloud, startSilentHost } from "../cloud-fake/index.ts";
 import { BUILD, ConfigError, PINNED_HOSTS } from "../config/index.ts";
 import { CONTRACT_VERSION, type CredentialPublicKey } from "../contract/index.ts";
 import { DEMO_CONFIRM_PORT, startDemo } from "../demo/index.ts";
@@ -55,6 +55,10 @@ const stops: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const stop of stops.splice(0)) await stop();
 });
+
+// Every listener a test opens through INTENT_HTTP_PORT or INTENT_DEMO_CONFIRM_PORT gets a port the kernel picked, so a
+// process holding 8788 or any fixed port on this machine cannot fail a test.
+const freePortText = async (): Promise<string> => String(await freePort());
 
 function setup(env: Record<string, string> = {}): Setup {
   const dir = join(mkdtempSync(join(tmpdir(), "cli-")), "data");
@@ -950,10 +954,10 @@ describe("serve failures", () => {
   // (test/image-smoke.ts drives the confirm page through the real port mapping.)
   it("in the container, the demo prints no second connect line (the entrypoint's is the one) and never the token", async () => {
     const token = "t".repeat(43);
-    const port = String(40_000 + Math.floor(Math.random() * 10_000));
+    const port = await freePortText();
     // The image's default confirm port is 8788 (DEMO_CONFIRM_PORT, no fallback there); a free one here, so that a demo
     // another test file runs on 8788 at the same time cannot collide with this one.
-    const confirm = String(Number(port) + 1);
+    const confirm = await freePortText();
     const env = { INTENT_RUNTIME: "container", INTENT_DEMO: "1", INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token };
     const s = setup({ ...env, INTENT_DEMO_CONFIRM_PORT: confirm });
     const result = await s.run(["serve", "--http"]);
@@ -973,7 +977,7 @@ describe("serve failures", () => {
   it("outside the container, serve --http names $INTENT_HTTP_TOKEN and the address it is bound to", async () => {
     const fake = await startFakeCloud({});
     try {
-      const port = String(40_000 + Math.floor(Math.random() * 10_000));
+      const port = await freePortText();
       const token = "u".repeat(43);
       const s = setup({ INTENT_CLOUD_URL: fake.url, INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token });
       const result = await s.run(["serve", "--http", "--trust-keys", trustFile(fake)]);
@@ -988,7 +992,7 @@ describe("serve failures", () => {
   it("in the container, serve --http prints no connect line with a placeholder token: it points at the entrypoint's", async () => {
     const fake = await startFakeCloud({});
     try {
-      const port = String(40_000 + Math.floor(Math.random() * 10_000));
+      const port = await freePortText();
       const token = "v".repeat(43);
       const s = setup({ INTENT_RUNTIME: "container", INTENT_CLOUD_URL: fake.url, INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token });
       const result = await s.run(["serve", "--http", "--trust-keys", trustFile(fake)]);
@@ -1007,7 +1011,7 @@ describe("serve failures", () => {
 
   it("in the container, the token the entrypoint made is printed only once the gateway serves (F-h)", async () => {
     const token = "w".repeat(43);
-    const port = String(40_000 + Math.floor(Math.random() * 10_000));
+    const port = await freePortText();
     const env = { INTENT_RUNTIME: "container", INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token };
     const s = setup(env);
     mkdirSync(s.dir, { recursive: true });
@@ -1025,7 +1029,7 @@ describe("serve failures", () => {
     expect(existsSync(join(s.dir, "http-token.unshown"))).toBe(true);
     // The next start serves (the demo, on the same data dir): the token is printed, once, after the server is up.
     // A free confirm port, not the image's 8788: a demo running elsewhere on this machine must not fail this test.
-    const confirm = String(Number(port) + 1);
+    const confirm = await freePortText();
     const served = await setup({ ...env, INTENT_DATA_DIR: s.dir, INTENT_DEMO: "1", INTENT_DEMO_CONFIRM_PORT: confirm }).run(["serve", "--http"]);
     expect(served.code).toBe(0);
     expect(served.err).toContain(`  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer ${token}"\n`);
@@ -1096,8 +1100,8 @@ describe("printed commands name the invocation that works for this install (devr
 
 describe("intent demo --http (devrun F-c)", () => {
   it("serves the demo over HTTP like serve --http --demo, with the code on stderr only", async () => {
-    const port = String(40_000 + Math.floor(Math.random() * 10_000));
-    const s = setup({ INTENT_HTTP_PORT: port });
+    const port = await freePortText();
+    const s = setup({ INTENT_HTTP_PORT: port, INTENT_DEMO_CONFIRM_PORT: await freePortText() });
     const result = await s.run(["demo", "--http"]);
     expect(result.code).toBe(0);
     expect(result.out).toBe("");
@@ -1112,14 +1116,7 @@ describe("intent demo --http (devrun F-c)", () => {
 });
 
 describe("the demo confirm page's port, for an ssh -L forward set up in advance (F-n)", () => {
-  const mcpPort = (): string => String(40_000 + Math.floor(Math.random() * 10_000));
   const tmpData = (): string => join(mkdtempSync(join(tmpdir(), "cli-port-")), "data");
-  /** A port that was free a moment ago (the kernel's pick for a demo that is closed again). */
-  const freePort = async (): Promise<number> => {
-    const demo = await startDemo({ dataDir: tmpData() });
-    await demo.close();
-    return Number(new URL(demo.confirmBaseUrl).port);
-  };
   /** Holds 127.0.0.1:<port> with another demo until the test ends; when something else already holds it, it is taken all the same. */
   const hold = async (port: number): Promise<void> => {
     try {
@@ -1134,7 +1131,7 @@ describe("the demo confirm page's port, for an ssh -L forward set up in advance 
 
   it("defaults to 8788 and prints the address and the ssh -L line with the next steps", async () => {
     expect(DEMO_CONFIRM_PORT).toBe(8788);
-    const result = await setup({ INTENT_HTTP_PORT: mcpPort() }).run(["demo", "--http"]);
+    const result = await setup({ INTENT_HTTP_PORT: await freePortText() }).run(["demo", "--http"]);
     expect(result.code).toBe(0);
     // 8788 is the default; only when something else on this machine already holds it does the fallback line appear.
     if (result.err.includes("Port 8788 is taken")) expect(result.err).not.toContain(confirmLine(8788));
@@ -1144,7 +1141,7 @@ describe("the demo confirm page's port, for an ssh -L forward set up in advance 
 
   it("falls back to a free port when 8788 is taken (a second demo), and says so", async () => {
     await hold(8788);
-    const result = await setup({ INTENT_HTTP_PORT: mcpPort() }).run(["demo", "--http"]);
+    const result = await setup({ INTENT_HTTP_PORT: await freePortText() }).run(["demo", "--http"]);
     expect(result.code).toBe(0);
     const port = /^Port 8788 is taken \(another demo running\?\), so the confirm page uses ([0-9]+); set INTENT_DEMO_CONFIRM_PORT to choose one\.$/m.exec(result.err)?.[1];
     expect(port).toBeDefined();
@@ -1163,7 +1160,7 @@ describe("the demo confirm page's port, for an ssh -L forward set up in advance 
   it("a taken INTENT_DEMO_CONFIRM_PORT fails in one line naming it; it never falls back to another port", async () => {
     const port = await freePort();
     await hold(port);
-    const result = await setup({ INTENT_DEMO_CONFIRM_PORT: String(port), INTENT_HTTP_PORT: mcpPort() }).run(["demo", "--http"]);
+    const result = await setup({ INTENT_DEMO_CONFIRM_PORT: String(port), INTENT_HTTP_PORT: await freePortText() }).run(["demo", "--http"]);
     expect(result).toMatchObject({ code: 1, out: "" });
     expect(result.err).toBe(
       `intent: the demo confirm page cannot listen on port ${String(port)} (INTENT_DEMO_CONFIRM_PORT): that port is taken; stop what uses it or set INTENT_DEMO_CONFIRM_PORT to another port\n`,

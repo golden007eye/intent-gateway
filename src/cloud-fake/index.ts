@@ -17,4 +17,5 @@ export {
   startFakeCloud,
   type Tamper,
 } from "./server.ts";
+export { freePort } from "./ports.ts";
 export { noDnsAgent, type SilentHost, startSilentHost } from "./unreachable.ts";
