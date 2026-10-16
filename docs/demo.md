@@ -3,7 +3,7 @@
 Demo mode runs the whole gateway flow on your machine before you can reach an Intent Cloud host: search, cart, approval, and the checks afterwards. The [Quickstart](quickstart.md) walks through it.
 
 ```console
-$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway-0.0.0.tgz" demo
+$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
 ```
 
 Every tool result, the confirm page and the gateway's stderr say so:

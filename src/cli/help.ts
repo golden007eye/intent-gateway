@@ -1,12 +1,16 @@
 // `intent --help`: short and example-led. The test pins it as a snapshot.
+import { npxPackage } from "../config/index.ts";
+
+const NPX = npxPackage();
+
 export const HELP = `intent-gateway: the gateway between your agent and Intent Cloud.
 
 Try it now, with no setup (demo Intent Cloud on this machine, test keys, nothing can be bought):
-  npx -y intent-gateway demo
+  npx -y ${NPX} demo
 
 Connect an agent:
-  claude mcp add intent -- npx -y intent-gateway demo          the demo
-  claude mcp add intent -- npx -y intent-gateway --trust-keys <file>
+  claude mcp add intent -- npx -y ${NPX} demo     the demo
+  claude mcp add intent -- npx -y ${NPX} --trust-keys <file>
 
 Commands:
   intent serve [--http]             MCP server over stdio (the default), or Streamable HTTP

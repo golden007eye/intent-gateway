@@ -344,8 +344,17 @@ describe("next steps", () => {
   it("prints the banner and the exact claude mcp add line for stdio", () => {
     const lines = nextSteps();
     expect(lines[0]).toBe("DEMO: test keys, sample catalog, nothing can be bought.");
-    expect(lines).toContain("  claude mcp add intent -- npx -y intent-gateway demo");
+    // This build is unreleased (0.0.0) or a preview: only the `next` dist-tag exists.
+    expect(lines).toContain("  claude mcp add intent -- npx -y intent-gateway@next demo");
     expect(lines.join("\n")).toContain("open the approval link, click Approve");
+  });
+
+  it.each([
+    ["0.1.0-preview.1", "intent-gateway@next"],
+    ["0.0.0", "intent-gateway@next"],
+    ["1.0.0", "intent-gateway"],
+  ])("names the release line of version %s: npx -y %s", (version, spec) => {
+    expect(nextSteps({ version })).toContain(`  claude mcp add intent -- npx -y ${spec} demo`);
   });
 
   it("prints the HTTP form with --http, with the token header only when there is a token", () => {

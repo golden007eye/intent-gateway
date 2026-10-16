@@ -74,6 +74,7 @@ nav:
   - Panel: panel.md
   - Threat model: threat-model.md
   - Security: security.md
+  - Releasing: release.md
   - Decisions:
       - "ADR-0001: Public-safe harness": adr/0001-harness.md
       - "ADR-0002: TypeScript": adr/0002-typescript.md

@@ -1,0 +1,297 @@
+# Publishes a release from a version tag (ADR-0010, runbook in docs/release.md). Third-party actions are pinned by
+# full commit SHA and downloaded tools by sha256, as in ci.yml.
+#
+# The signing identity is this file at the tag: https://github.com/golden007eye/intent-gateway/.github/workflows/
+# release.yml@refs/tags/v<version>. `intent verify` (src/supplychain releaseIdentity) checks exactly that identity,
+# so renaming this file or publishing from anything but a version tag breaks every self-check.
+#
+# Jobs: gate → npm + image (the `release` environment) → post-publish and rebuild. Release jobs use no dependency
+# cache, so nothing a pull request wrote can reach a published artifact.
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/golden007eye/intent-gateway
+  OIDC_ISSUER: https://token.actions.githubusercontent.com
+  COSIGN_VERSION: "3.1.3"
+  COSIGN_SHA256: 4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
+  SYFT_VERSION: "1.54.1"
+  SYFT_SHA256: c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
+
+jobs:
+  gate:
+    name: gate (tag is the package version, clean tree on main, pnpm check)
+    if: ${{ github.repository == 'golden007eye/intent-gateway' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      dist_tag: ${{ steps.version.outputs.dist_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: tag is v<package.json version>, on main
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version package.json)"
+          # The same version shape src/supplychain accepts as a release.
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::package.json version $version is not a release version"; exit 1; }
+          [[ "$GITHUB_REF" == "refs/tags/v$version" ]] || { echo "::error::tag $GITHUB_REF_NAME is not v$version (package.json)"; exit 1; }
+          git merge-base --is-ancestor HEAD origin/main || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+          # Prereleases (v0.1.0-preview.N) go to the `next` dist-tag; only a plain version becomes `latest`.
+          if [[ "$version" == *-* ]]; then dist_tag=next; else dist_tag=latest; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$dist_tag" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm check
+        env:
+          PRIVATE_TERMS: ${{ secrets.PRIVATE_TERMS }}
+      - name: tree is clean after install, build and check
+        run: test -z "$(git status --porcelain --untracked-files=all)" || { git status --porcelain --untracked-files=all; exit 1; }
+
+  npm:
+    name: npm (trusted publishing with provenance)
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      DIST_TAG: ${{ needs.gate.outputs.dist_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: npm supports trusted publishing (11.5.1 or later)
+        run: |
+          npm --version
+          node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # build-info.json is what `intent verify` and bundled policies trust: it must name this commit, not dirty.
+      - name: the build records this tag's commit
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)" || { git status --porcelain --untracked-files=all; exit 1; }
+          jq -e --arg c "$GITHUB_SHA" --arg v "$VERSION" '.buildCommit == $c and .version == $v and .dirty == false' dist/build-info.json
+      # No NPM_TOKEN: npm exchanges this job's OIDC token for a short-lived publish token (K2 trusts this workflow
+      # in the `release` environment) and signs the SLSA provenance with the same identity.
+      - run: npm publish --provenance --access public --tag "$DIST_TAG" --ignore-scripts
+
+  image:
+    name: image (reproducible build, push by digest, cosign signature and CycloneDX SBOM)
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # BUILD_COMMIT vouches for the files in the build context, so the checkout must be exactly that commit.
+      - name: checkout is clean
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)" || { git status --porcelain --untracked-files=all; exit 1; }
+          echo "BUILD_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # The same build as ci.yml's package job and the rebuild job below. The OCI archive is pushed byte for byte
+      # (skopeo --preserve-digests), so the digest that is signed is the digest a rebuild must reproduce.
+      - name: build the image (G24 reproducible flags)
+        id: build
+        run: |
+          set -euo pipefail
+          docker buildx build --no-cache --platform linux/amd64 \
+            --build-arg BUILD_COMMIT --build-arg SOURCE_DATE_EPOCH \
+            --output "type=oci,dest=${RUNNER_TEMP}/image.tar,rewrite-timestamp=true" .
+          tar -xOf "${RUNNER_TEMP}/image.tar" index.json > "${RUNNER_TEMP}/index.json"
+          jq -e '.manifests | length == 1' "${RUNNER_TEMP}/index.json"
+          digest="$(jq -r '.manifests[0].digest' "${RUNNER_TEMP}/index.json")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "REF=${IMAGE}@${digest}" >> "$GITHUB_ENV"
+      - name: push by digest and as the version tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          skopeo --version
+          printf '%s' "$GH_TOKEN" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          skopeo copy --preserve-digests "oci-archive:${RUNNER_TEMP}/image.tar" "docker://${IMAGE}:${VERSION}"
+          pushed="sha256:$(skopeo inspect --raw "docker://${REF}" | sha256sum | cut -d' ' -f1)"
+          tagged="sha256:$(skopeo inspect --raw "docker://${IMAGE}:${VERSION}" | sha256sum | cut -d' ' -f1)"
+          echo "built ${REF#*@}, pushed ${pushed}, tag ${VERSION} is ${tagged}"
+          [[ "$pushed" == "${REF#*@}" && "$tagged" == "${REF#*@}" ]]
+          # cosign reads docker's credential file.
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: install syft and cosign (sha256-pinned release binaries)
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          cd "${RUNNER_TEMP}"
+          curl -sSfLo syft.tar.gz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  syft.tar.gz" | sha256sum -c -
+          tar -xzf syft.tar.gz -C bin syft
+          curl -sSfLo bin/cosign "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  bin/cosign" | sha256sum -c -
+          chmod +x bin/cosign
+          echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
+      # syft scans the archive that was pushed, so the SBOM describes exactly the signed digest.
+      - name: CycloneDX SBOM
+        run: |
+          set -euo pipefail
+          syft scan "oci-archive:${RUNNER_TEMP}/image.tar" --source-name "$IMAGE" --source-version "$VERSION" \
+            -o "cyclonedx-json=${RUNNER_TEMP}/sbom.cdx.json"
+          jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' "${RUNNER_TEMP}/sbom.cdx.json" > /dev/null
+      # Keyless: Fulcio certifies this job's OIDC identity (the workflow at the tag); the Sigstore bundles are stored
+      # as OCI referrers of the digest, where `intent verify --image` looks for them.
+      - name: cosign sign and attest (keyless)
+        run: |
+          set -euo pipefail
+          cosign sign --yes --new-bundle-format=true "$REF"
+          cosign attest --yes --new-bundle-format=true --type cyclonedx --predicate "${RUNNER_TEMP}/sbom.cdx.json" "$REF"
+      - name: summary
+        run: echo "Image ${REF} (tag ${VERSION}) signed by https://github.com/${GITHUB_WORKFLOW_REF}" >> "$GITHUB_STEP_SUMMARY"
+
+  # The checks a developer runs, run here against what was just published (AC-S1). Identity and issuer are the
+  # strings src/supplychain expects, not values read back from the artifacts.
+  post-publish:
+    name: post-publish (npm provenance, dist-tag, cosign verify, self-check)
+    needs: [gate, npm, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      DIST_TAG: ${{ needs.gate.outputs.dist_tag }}
+      REF: ghcr.io/golden007eye/intent-gateway@${{ needs.image.outputs.digest }}
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: release identity is this workflow at the tag
+        run: |
+          set -euo pipefail
+          identity="https://github.com/golden007eye/intent-gateway/.github/workflows/release.yml@refs/tags/v${VERSION}"
+          [[ "https://github.com/${GITHUB_WORKFLOW_REF}" == "$identity" ]] || { echo "::error::workflow ref ${GITHUB_WORKFLOW_REF} is not ${identity}"; exit 1; }
+          echo "IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: npm lists the version (waits for the registry)
+        run: |
+          set -euo pipefail
+          for _ in $(seq 30); do
+            [[ "$(npm view "intent-gateway@${VERSION}" version 2>/dev/null)" == "$VERSION" ]] && exit 0
+            sleep 10
+          done
+          echo "::error::the registry does not list intent-gateway@${VERSION}"; exit 1
+      - name: npm provenance (dist.attestations.provenance)
+        run: |
+          set -euo pipefail
+          npm view "intent-gateway@${VERSION}" dist.attestations --json | tee attestations.json
+          jq -e '.provenance.predicateType == "https://slsa.dev/provenance/v1"' attestations.json
+      - name: dist-tag
+        run: |
+          set -euo pipefail
+          npm dist-tag ls intent-gateway | tee dist-tags.txt
+          grep -qx "${DIST_TAG}: ${VERSION}" dist-tags.txt
+      - name: npm audit signatures
+        run: |
+          set -euo pipefail
+          mkdir audit && cd audit
+          npm init -y > /dev/null
+          npm install --ignore-scripts --no-fund "intent-gateway@${VERSION}"
+          npm audit signatures
+      - name: install cosign (sha256-pinned release binary)
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -sSfLo "${RUNNER_TEMP}/bin/cosign" "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  ${RUNNER_TEMP}/bin/cosign" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/bin/cosign"
+          echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
+      - name: cosign verify and verify-attestation (anonymous, as a developer would)
+        run: |
+          set -euo pipefail
+          cosign verify --new-bundle-format=true --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$OIDC_ISSUER" "$REF" > /dev/null
+          cosign verify-attestation --new-bundle-format=true --type cyclonedx \
+            --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$OIDC_ISSUER" "$REF" > /dev/null
+      # The gateway's own self-check on the published package and image. An empty demo chain keeps the chain checks
+      # trivial (no Intent Cloud root key is needed), so only the self-check is under test. Exit 0 is not enough:
+      # a build that thinks it is unpublished reports "not run", so the "ok" line itself is required.
+      - name: intent verify self-check (npm and image)
+        run: |
+          set -euo pipefail
+          export INTENT_DATA_DIR="${RUNNER_TEMP}/intent-data"
+          install -d -m 0700 "$INTENT_DATA_DIR" "$INTENT_DATA_DIR/demo"
+          : > "$INTENT_DATA_DIR/demo/audit.jsonl"
+          npx -y "intent-gateway@${VERSION}" verify --demo --install npm | tee npm-self-check.txt
+          grep -qxF "self-check: npm provenance of intent-gateway@${VERSION}: ok" npm-self-check.txt
+          npx -y "intent-gateway@${VERSION}" verify --demo --image "$REF" --version "$VERSION" | tee image-self-check.txt
+          grep -qxF "self-check: image signature and SBOM of ${REF}: ok" image-self-check.txt
+
+  # A second, independent build from the tag on a fresh runner must give the published digest (AC-S2).
+  rebuild:
+    name: rebuild (same digest from the tag)
+    needs: [gate, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PUBLISHED: ${{ needs.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: checkout is clean
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=all)" || { git status --porcelain --untracked-files=all; exit 1; }
+          echo "BUILD_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: rebuild and compare digests
+        run: |
+          set -euo pipefail
+          docker buildx build --no-cache --platform linux/amd64 \
+            --build-arg BUILD_COMMIT --build-arg SOURCE_DATE_EPOCH \
+            --output "type=oci,dest=${RUNNER_TEMP}/image.tar,rewrite-timestamp=true" .
+          rebuilt="$(tar -xOf "${RUNNER_TEMP}/image.tar" index.json | jq -r '.manifests[0].digest')"
+          echo "published ${PUBLISHED}, rebuilt ${rebuilt}"
+          [[ "$rebuilt" == "$PUBLISHED" ]] || { echo "::error::the rebuild from ${GITHUB_REF_NAME} gives ${rebuilt}, not the published ${PUBLISHED}"; exit 1; }
