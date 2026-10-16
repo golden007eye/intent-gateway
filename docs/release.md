@@ -23,6 +23,13 @@ issued by `https://token.actions.githubusercontent.com`. `intent verify` checks 
 
 The SBOM is made with [syft](https://github.com/anchore/syft) (Apache-2.0) from the pushed OCI archive, so it describes the signed digest. BuildKit's own SBOM option is not used: it writes SPDX, not CycloneDX, and it adds an attestation manifest to the image, which changes the digest a rebuild must reproduce.
 
+The gateway's runtime dependencies are compiled into `dist/` ([ADR-0013](adr/0013-bundled-dependencies.md)), so the package has no `dependencies` and the image has no `node_modules` for syft to read. `pnpm build` writes two files beside the bundle, and both ship in the npm package and the image:
+
+- `dist/sbom.cdx.json`: a CycloneDX 1.6 SBOM of every bundled package, with its version, licence and the SHA-512 the lockfile pins. It has no timestamp, so the image stays reproducible.
+- `dist/THIRD_PARTY_LICENSES`: every bundled package with the full text of its licence and notice files.
+
+syft runs with `--select-catalogers "+sbom-cataloger"`, which reads `dist/sbom.cdx.json` into the image SBOM; without it the scan lists `intent-gateway` and none of its bundled packages. The image job fails before signing when the SBOM does not list `@sigstore/verify`, a bundled package, and the CI package job runs the same scan with the same syft on every pull request. The image SBOM is about 1.1 MB, most of it the Node base image. `pnpm licence-check` reads the bundled packages from esbuild's metafile, not `package.json`.
+
 The CI package job, the image job and the rebuild job all build with one pinned BuildKit (the `driver-opts` image in `setup-buildx-action`). Change it in all three places together. The Dockerfile keeps the image's bytes independent of how the build ran: it holds no hard links, and every app file is dated `SOURCE_DATE_EPOCH`. The package job builds three times and compares the digests. When they differ, `scripts/image-diff.sh` prints the layers, tar entries and files that differ in the job log. Run it locally on two OCI archives in the same way.
 
 ## Before the first release (maintainer)
@@ -77,4 +84,4 @@ Approve the `release` deployment when GitHub asks.
 
 ## What the dry run before the first tag covered
 
-The workflow was checked with actionlint and shellcheck. Its build steps were run locally: two image builds with the release flags gave one digest, skopeo kept that digest when copying the archive, syft wrote a CycloneDX SBOM from it, and `npm publish --dry-run` packed the package. Nothing was signed or pushed. The keyless signing, trusted publishing, the GHCR push and the post-publish checks first run on the first tag. One open risk: the image SBOM is about 1.3 MB, and the transparency log may refuse an attestation that large. If `cosign attest` fails on size, the fix is a smaller SBOM (for example, syft limited to the app's own packages), not a skipped attestation.
+The workflow was checked with actionlint and shellcheck. Its build steps were run locally: two image builds with the release flags gave one digest, skopeo kept that digest when copying the archive, syft wrote a CycloneDX SBOM from it, and `npm publish --dry-run` packed the package. Nothing was signed or pushed. The keyless signing, trusted publishing, the GHCR push and the post-publish checks first run on the first tag. One open risk: the image SBOM is about 1.1 MB, and the transparency log may refuse an attestation that large. If `cosign attest` fails on size, the fix is a smaller SBOM (for example, syft limited to the app's own packages), not a skipped attestation.

@@ -12,6 +12,7 @@
 // - approval_pending: handle, approval_url, total_minor, expires_at; approval: handle.
 // - approver_pin, approver_flag: fingerprint, handle, reason. keys: statement.kid, statement.expires_at.
 // - session: mode ("demo" on the first entry of a demo chain) or id.
+import { findIdentity } from "../privacy/index.ts";
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
 /** What one action was. */
@@ -119,6 +120,18 @@ export interface ActivitySummary {
   /** Logged requests, in `intent verify`'s categories; `sent` excludes not_sent and maybe_sent. */
   readonly requests: { logged: number; sent: number } & Record<Delivery, number>;
   readonly refused: number;
+  /** The field paths every request that may have left carried (all but not_sent), sorted. */
+  readonly sent_fields: string[];
+  /**
+   * Buyer identity (findIdentity, the check the gateway runs before each send) in the values of the requests that may
+   * have left: `checked` requests with logged bytes, `unchecked` ones without, and each finding by seq.
+   */
+  readonly identity: { checked: number; unchecked: number; findings: IdentityFinding[] };
+}
+
+export interface IdentityFinding {
+  readonly seq: number;
+  readonly kinds: string[];
 }
 
 export interface ActivityLog {
@@ -245,7 +258,8 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
         } else {
           join(cart, item);
           Object.assign(cart.facts, facts);
-          if (cart.outcome !== "refused") cart.outcome = "approval_asked";
+          // A link asked for over a request without a receipt keeps that request's outcome: it is the one to see.
+          if (cart.outcome !== "refused" && worst(cart.requests) === "acknowledged") cart.outcome = "approval_asked";
         }
         break;
       }
@@ -307,21 +321,44 @@ export function filterActivity(activities: readonly Activity[], filter: Activity
   return filter.last === undefined ? kept : kept.slice(Math.max(0, kept.length - filter.last));
 }
 
-function summarise(items: readonly unknown[], activities: readonly Activity[]): ActivitySummary {
+/** The counts over `activities` (all of a chain's, or the ones a filter kept) of the chain `items`. */
+export function summarise(items: readonly unknown[], activities: readonly Activity[]): ActivitySummary {
   const actions = Object.fromEntries(ACTION_KINDS.map((k) => [k, 0])) as Record<ActionKind, number>;
   const counts = { logged: 0, sent: 0, acknowledged: 0, unacknowledged: 0, not_sent: 0, maybe_sent: 0, discarded: 0 };
   let refused = 0;
+  const sent = new Set<string>();
+  const findings: IdentityFinding[] = [];
+  let checked = 0;
+  let unchecked = 0;
   for (const a of activities) {
     actions[a.action] += 1;
     if (a.outcome === "refused") refused += 1;
     for (const r of a.requests) {
       counts.logged += 1;
       counts[r.delivery] += 1;
+      if (r.delivery === "not_sent") continue;
+      for (const f of r.field_names) sent.add(f);
+      if (r.fields === null) {
+        unchecked += 1;
+        continue;
+      }
+      checked += 1;
+      const found = findIdentity(r.fields);
+      if (found.length > 0) findings.push({ seq: r.seq, kinds: [...new Set(found.map((f) => f.kind))].sort() });
     }
   }
   counts.sent = counts.logged - counts.not_sent - counts.maybe_sent;
   const first = asItem(items[0]);
-  return { entries: items.length, demo: first?.kind === "session" && first.body.mode === "demo", chain: verifyChain(items), actions, requests: counts, refused };
+  return {
+    entries: items.length,
+    demo: first?.kind === "session" && first.body.mode === "demo",
+    chain: verifyChain(items),
+    actions,
+    requests: counts,
+    refused,
+    sent_fields: [...sent].sort(),
+    identity: { checked, unchecked, findings },
+  };
 }
 
 function toRequest(item: Item, answer: Item | null): ActivityRequest {

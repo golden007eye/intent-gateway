@@ -12,8 +12,8 @@ Connect an agent:
 
 Commands:
   intent serve [--http]             MCP server over stdio (the default), or Streamable HTTP
-  intent log                        what was sent, blocked and approved, field by field
-                                    (-v: by action, with the values sent; --json: one action per line;
+  intent log                        each action: the values it sent, what came back, what was blocked
+                                    (-v: every entry; --json: one action per line;
                                      --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
   intent verify                     re-check the chain, receipts, approvals and this install
                                     (--skip-install-check: chain only, for offline use)

@@ -13,7 +13,9 @@ export {
   buildActivity,
   type Delivery,
   filterActivity,
+  type IdentityFinding,
   leafFields,
   type Outcome,
+  summarise,
 } from "./activity.ts";
 export { buildPurchases, type Purchase, type PurchaseState } from "./purchases.ts";

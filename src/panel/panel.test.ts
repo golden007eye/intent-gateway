@@ -276,7 +276,7 @@ describe("the command the page names", () => {
     expect(data.intent).toBe("npx -y intent-gateway@next");
     const html = (await call(panel.url, "/")).body;
     expect(html).toContain('Accept a passkey only with <code class="cmd">npx -y intent-gateway@next approver accept</code> at a terminal');
-    expect(html).toContain('<code class="cmd">npx -y intent-gateway@next log</code>');
+    expect(html).toContain('<code class="cmd">npx -y intent-gateway@next log -v</code>');
   });
 
   it("defaults to intent when no command is passed in", async () => {

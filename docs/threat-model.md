@@ -87,7 +87,7 @@ The [panel](panel.md) binds to `127.0.0.1` only, serves GET only (405 otherwise)
 
 - Releases are published from GitHub Actions with npm provenance and a keyless cosign signature and CycloneDX SBOM on the image, and the image rebuilds to the same digest ([ADR-0010](adr/0010-release-supply-chain.md)). No release exists yet.
 - `intent verify` runs a **self-check** of the installed package or image. It runs inside the code it checks, so a tampered gateway could report anything; its output says so and names the outside checks to run with your own tools: `npm audit signatures`, `cosign verify` and `cosign verify-attestation`. See [Verify](verify.md#self-check-and-outside-checks).
-- Runtime dependencies are few, pinned by the lockfile, at least 7 days old when added, and licence-checked. Gateway code may not start processes or load code dynamically, and only the modules that need the network may use it; CI enforces both.
+- Runtime dependencies are few, pinned by the lockfile, at least 7 days old when added, and licence-checked. They are compiled into the package at build time ([ADR-0013](adr/0013-bundled-dependencies.md)), so an install fetches no other package and the package's provenance covers their code; a dependency fix reaches developers only with a gateway release. Gateway code may not start processes or load code dynamically, and only the modules that need the network may use it; CI enforces both.
 - The demo's test keys are public. The test root key is trusted only in demo mode, it may never be pinned for an Intent Cloud host, and a demo chain never mixes with a real one.
 
 ## Out of scope

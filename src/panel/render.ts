@@ -277,7 +277,7 @@ function serverLog(m: PanelModel): string {
   return (
     chain +
     (m.log.length === 0 ? `<p class="muted">No entries yet: the gateway has sent nothing.</p>` : `<ol class="log" id="log-rows">${rows}</ol>`) +
-    `<p class="small">The same entries as <code class="cmd">${esc(m.intent)} log</code>.</p>`
+    `<p class="small">The same chain as <code class="cmd">${esc(m.intent)} log -v</code>, which groups it by action.</p>`
   );
 }
 

@@ -27,8 +27,8 @@ WORKDIR /src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # --no-runtime: the build runs on this image's Node 24, not a second one fetched for devEngines.runtime.
 RUN pnpm install --frozen-lockfile --ignore-scripts --no-runtime
-COPY tsconfig.json tsconfig.build.json LICENSE NOTICE README.md ./
-COPY scripts/build-info.ts scripts/
+COPY tsconfig.json LICENSE NOTICE README.md ./
+COPY scripts/bundle.ts scripts/licence-check.ts scripts/build-info.ts scripts/
 COPY src src
 COPY policies policies
 COPY contract contract
@@ -36,20 +36,18 @@ ARG BUILD_COMMIT
 RUN { test -n "${BUILD_COMMIT}" || echo "warning: no BUILD_COMMIT, so this image records its commit as unknown; to record it, pass --build-arg BUILD_COMMIT=\$(git rev-parse HEAD)" >&2; } \
  && BUILD_COMMIT="${BUILD_COMMIT:-unknown}" pnpm build \
  && chmod 0755 dist/main.js
-# The runtime tree: what `npm pack` puts in the tarball, plus the production dependencies from the lockfile.
-# What the tree's bytes depend on is pinned here, not left to how the install ran (F-q):
-# - pnpm's bookkeeping files carry install times, so they go.
-# - The dependencies are copied, not hard-linked from pnpm's store: a hard link makes the layer record a file as
-#   a link to whichever path shares its inode, and that sharing comes from a parallel import of store files in a
-#   lower layer, so it is not a property of the lockfile. The image then holds no hard links at all (checked).
+# The runtime tree: exactly what `npm pack` puts in the tarball. The package has no dependencies: they are compiled
+# into dist/ (ADR-0013), so nothing is installed here and node_modules stays in the build stage. dist/sbom.cdx.json
+# lists the compiled-in packages, so the release SBOM made from the image still names them.
+# What the tree's bytes depend on is pinned here, not left to how the build ran (F-q):
+# - The files are copied, never hard-linked: the tree is checked to hold no hard link.
 # - Every mtime is set to SOURCE_DATE_EPOCH. The exporter's rewrite-timestamp only lowers times later than the
 #   epoch, so a file dated earlier (a clock behind the commit time) would keep its own time.
 ARG SOURCE_DATE_EPOCH
 RUN mkdir /out \
- && cp -R package.json pnpm-lock.yaml pnpm-workspace.yaml dist policies contract LICENSE NOTICE README.md /out/ \
+ && cp -R package.json dist policies contract LICENSE NOTICE README.md /out/ \
  && cd /out \
- && pnpm install --prod --frozen-lockfile --ignore-scripts --package-import-method=copy \
- && rm -f pnpm-lock.yaml pnpm-workspace.yaml node_modules/.modules.yaml node_modules/.pnpm-workspace-state*.json \
+ && test -f dist/THIRD_PARTY_LICENSES && test -f dist/sbom.cdx.json && test ! -e node_modules \
  && test -z "$(find dist -name '*.test.*')" \
  && test -z "$(find /out -type f -links +1)" \
  && { test -z "${SOURCE_DATE_EPOCH}" || find /out -exec touch --no-dereference --date="@${SOURCE_DATE_EPOCH}" {} +; }

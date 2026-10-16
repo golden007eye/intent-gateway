@@ -9,7 +9,7 @@ The gateway holds a developer's disclosure log and decides what leaves their mac
 ## Decision
 
 - **npm trusted publishing with provenance.** The release workflow publishes from GitHub Actions through npm trusted publishing (OIDC, no long-lived npm token), with a provenance attestation linking the package to the commit and the workflow run.
-- **Keyless cosign signatures and a CycloneDX SBOM.** The image is signed with cosign keyless signing. The signing identity is the release workflow at the release tag, issued by GitHub's OIDC provider. A CycloneDX SBOM is attached as a signed attestation.
+- **Keyless cosign signatures and a CycloneDX SBOM.** The image is signed with cosign keyless signing. The signing identity is the release workflow at the release tag, issued by GitHub's OIDC provider. A CycloneDX SBOM is attached as a signed attestation. Since the runtime dependencies are compiled into the package (ADR-0013), the scan reads them from the build's `dist/sbom.cdx.json`, which the package and the image both carry.
 - **A reproducible image.** Two builds of the same commit give the same image digest. The release job rebuilds after publishing and fails if the digest differs.
 - **Post-publish checks in CI.** After publishing, the release workflow checks the npm provenance, the `next` dist-tag, `cosign verify` against the expected identity and issuer, and `cosign verify-attestation --type cyclonedx`.
 - **`intent verify` is a self-check.** Its artifact check reads the npm provenance and the image signature, and labels its output "self-check", because a tampered gateway could report anything. The docs name the outside checks developers run with their own tools: `npm audit signatures`, `cosign verify` and `cosign verify-attestation`.

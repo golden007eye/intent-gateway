@@ -5,7 +5,8 @@
 !pnpm-lock.yaml
 !pnpm-workspace.yaml
 !tsconfig.json
-!tsconfig.build.json
+!scripts/bundle.ts
+!scripts/licence-check.ts
 !LICENSE
 !NOTICE
 !README.md
@@ -14,6 +15,6 @@
 !policies/
 !contract/
 !docker/entrypoint.sh
-# Tests are not built (tsconfig.build.json excludes them); keep them out of the context too.
+# Tests are not bundled (nothing the entry points import is a test); keep them out of the context too.
 src/**/*.test.ts
 src/**/__snapshots__

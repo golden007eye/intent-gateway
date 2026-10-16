@@ -29,7 +29,7 @@ It exits 0 when every check passes, 1 when one fails, and 2 for a usage or confi
 
 Before each request to Intent Cloud, the gateway appends the exact request to the chain: the endpoint, the field names, the body bytes and their digest, and the signature parameters. A send whose append fails does not happen, so a send cannot be missing from the log (invariant 2). What came back is appended after it, and each Approval the gateway verified is appended to the same chain. The file is `<data dir>/audit.jsonl`, one JSON entry per line, each holding the hash of the one before.
 
-`intent log` prints it one line per entry, field names only; `intent log -v` groups the entries by action with the values each request sent, and `intent log --json` prints one action per line ([the log](log.md)). The [panel](panel.md) shows the entries in a browser.
+`intent log` prints it as one line per action with the values it sent and its outcome; `intent log -v` lists every entry of each action, and `intent log --json` prints one action per line ([the log](log.md)). The [panel](panel.md) shows the entries in a browser.
 
 ## What each check proves
 
@@ -40,7 +40,7 @@ Before each request to Intent Cloud, the gateway appends the exact request to th
 | `disclosures` | Each send has at most one follow-up, and a send with none is the last of its gateway session. Each receipt is signed by a receipt key from the statement and covers the digest of the bytes the log says were sent, with the same keyid, nonce and time. | What Intent Cloud did with the data after it received it. |
 | `approvals` | Each Approval carries a passkey assertion over the purchase snapshot that was pending, signed by a key from the statement, from the pinned approver passkey. | That the person who holds the passkey meant to buy (see the [threat model](threat-model.md#phone-hand-off-and-self-approval)). |
 | `approver flags` | Lists Approvals signed by a passkey other than the pinned approver; they were not counted as approved. | Flags do not fail verify; read them. |
-| `self-check` | The installed npm package matches its published provenance, or the image matches its signature and SBOM. | That the gateway is untampered: see below. |
+| `self-check` | The installed npm package matches its published provenance file by file, or the image matches its signature and SBOM. The package's dependencies are compiled into its `dist/`, so the check covers their code too. | That the gateway is untampered: see below. |
 
 ### Sent, acknowledged, not acknowledged, discarded
 
@@ -79,6 +79,8 @@ $ cosign verify-attestation --type cyclonedx \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     ghcr.io/golden007eye/intent-gateway@sha256:<digest>
 ```
+
+The package has no `dependencies`: its runtime dependencies are compiled into `dist/` ([ADR-0013](adr/0013-bundled-dependencies.md)). So `npm audit signatures` checks one package, `intent-gateway`, and its provenance covers the bundled code with the gateway's own. The bundled packages, their versions and the SHA-512 the lockfile pins for each are listed in `dist/sbom.cdx.json`, and their licences in `dist/THIRD_PARTY_LICENSES`; both files ship in the package and in the image, and the image's signed SBOM attestation includes the same packages.
 
 <!-- feature: signed-releases -->
 !!! planned "Signed releases"

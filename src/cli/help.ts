@@ -21,8 +21,8 @@ Connect an agent:
 
 ${inline ? "Commands:" : `Commands (run each as: ${intent} <command>):`}
 ${pad("serve [--http]")}MCP server over stdio (the default), or Streamable HTTP
-${pad("log")}what was sent, blocked and approved, field by field
-${"".padEnd(width)}(-v: by action, with the values sent; --json: one action per line;
+${pad("log")}each action: the values it sent, what came back, what was blocked
+${"".padEnd(width)}(-v: every entry; --json: one action per line;
 ${"".padEnd(width)} --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
 ${pad("verify")}re-check the chain, receipts, approvals and this install
 ${"".padEnd(width)}(--skip-install-check: chain only, for offline use)

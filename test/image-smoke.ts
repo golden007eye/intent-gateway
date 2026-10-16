@@ -118,7 +118,7 @@ async function tokenAndPolicy(): Promise<void> {
     check(file === "600 1000 44", "/data/http-token is 0600, owned by uid 1000, the token and a newline", file);
     check(docker("exec", id, "cat", "/data/http-token").trim() === token, "docker exec <c> cat /data/http-token gives the token");
     const log = spawnSync("docker", ["exec", id, "intent", "log"], { encoding: "utf8" });
-    check(log.status === 0 && log.stdout.includes("every hash links"), "docker exec <c> intent log reads the chain with no token", log.stdout + log.stderr);
+    check(log.status === 0 && /^intent log · .+ · \d+ entries$/m.test(log.stdout), "docker exec <c> intent log reads the chain with no token", log.stdout + log.stderr);
     check(!logs(id).includes("bundled"), "the mounted policy file is used, not a bundled default");
     const health = await until("the healthcheck", () => {
       const s = docker("inspect", "-f", "{{.State.Health.Status}}", id).trim();

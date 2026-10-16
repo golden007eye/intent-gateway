@@ -6,13 +6,35 @@
 
 | Command | What it prints |
 |---|---|
-| `intent log` | One line per chain entry, field names only. |
+| `intent log` | The action timeline: one line per action with the values it sent and its outcome, then what was sent and what never was, and the counts. |
 | `intent log -v` | One block per action (a search, a cart, an approval-status check, an approval, a block), each entry of it, and the values each request sent, read from the exact bytes the chain holds, with its method and path, `content-digest`, signing keyid and the key that signed its receipt. |
 | `intent log --json` | One JSON object per action and per line, for scripts and `jq` (schema below). |
 
+```text
+intent log · DEMO chain (test keys) · ~/.local/share/intent-gateway/demo · 21 entries
+
+Friday 16 October 2026
+15:20:24  start     gateway started · keys signed by cloud-root-1 · valid until 2027-01-14  ✓ 2 receipts
+15:20:24  search    running shoes · must: road · under $120 · ZIP 94103   ✓ receipt
+15:20:25  blocked   search: category blocked by your gateway policy       ✗ nothing sent
+15:20:25  cart      offer of_5mOm…t4wK ×1 · at most $41.98 · ZIP 94103    → approval link to the agent  ✓ 2 receipts
+15:20:25  status    approval ap_i9Mz…g1r4                                 ✓ receipt
+15:20:25  approved  $41.98 · passkey 63e7…2240 (pinned now)               ✓ passkey proof checked
+
+Sent to Intent Cloud only: category, must-haves, budget, offer, quantity, ZIP code, country.
+Never sent: your name, postal address, card.
+
+6 actions · 1 search · 1 cart · 1 status check · 1 approval · 1 blocked · 6 receipts
+Details: intent log --demo -v · Machine-readable: intent log --demo --json · Integrity: intent verify --demo
+```
+
+Each line's outcome is what the chain records for its requests: `✓ receipt` (a receipt came back), `⚠ sent, no receipt`, `⚠ not sent: no connection was made`, `⚠ maybe sent, no answer recorded` (the gateway stopped first, or is still waiting), `✗ answer discarded: no valid receipt`, `✗ nothing sent` (blocked), `✗ refused` (an answer that did not match what was asked). `✓ passkey proof checked` marks an Approval the gateway verified before it chained it; `intent verify` re-checks it. The line "Sent to Intent Cloud only" lists every field of the requests shown that left or may have left. "Never sent: your name, postal address, card" is printed only after the gateway's buyer-identity check finds none in their logged values; otherwise the line names the request where it found one, or says which requests it could not check.
+
+Times and date headers are in the local time zone; `--utc` shows UTC. On a terminal the lines are cut to its width with `…`, the values first so the outcome stays visible; piped, nothing is cut. Without a UTF-8 locale the symbols are plain ASCII (`ok`, `!`, `x`, `->`).
+
 The values are the developer's own record of what left the machine: the category, product, must-haves, budget and ZIP code of a search, the offer handle, quantity and ZIP code of a cart. A blocked request's values are never logged: only its field names and the rule or identity finding that held it back.
 
-`-v` shows times in the local time zone; `--utc` shows them in UTC. `--json` keeps each entry's `ts`, which is UTC.
+`-v` shows times in the local time zone too. `--json` keeps each entry's `ts`, which is UTC.
 
 Colour is used only when the output is a terminal, and never with `NO_COLOR` set, `TERM=dumb` or `--no-color`. `--json` is never coloured.
 
@@ -24,9 +46,9 @@ Colour is used only when the output is a terminal, and never with `NO_COLOR` set
 | `--since 30m` | Actions from that long ago (`s`, `m`, `h`, `d`, `w`), or from a date (`2026-10-16`, local midnight; UTC with `--utc`) or time (`2026-10-16T09:00:00Z`). |
 | `--last 5` | The last N actions, after the other filters. |
 
-The plain view then lists only the entries of the kept actions and says how many it shows. A line that is not an entry (torn or edited) is always shown.
+The timeline then lists only the kept actions, counts only them and says how many of all it shows. A line that is not an entry (torn or edited) is always shown.
 
-`--follow` (`-f`) keeps reading the chain and prints what is appended, until Ctrl-C. In the plain view each new entry is printed once. With `-v` or `--json` an action is printed once it is complete: when a later action starts, or when every request of it has an answer and nothing changed for one read. An action that grows after it was printed (a late answer) is printed again with the same `seq`.
+`--follow` (`-f`) keeps reading the chain and prints what is appended, until Ctrl-C. An action is printed once it is complete: when a later action starts, or when every request of it has an answer and nothing changed for one read. An action that grows after it was printed (a late answer) is printed again with the same `seq`.
 
 ## Actions
 

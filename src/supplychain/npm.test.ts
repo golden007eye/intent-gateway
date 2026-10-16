@@ -73,7 +73,7 @@ async function setup(s: Setup = {}) {
 
   const dir = await mkdtemp(join(tmpdir(), "supplychain-npm-"));
   dirs.push(dir);
-  const installed = { ...PACKED, "node_modules/dep/index.js": "dependency, not part of the package\n", ...s.installed };
+  const installed = { ...PACKED, ...s.installed };
   for (const [path, content] of Object.entries(installed)) {
     await mkdir(dirname(join(dir, path)), { recursive: true });
     await writeFile(join(dir, path), content);
@@ -153,7 +153,14 @@ describe("verifyNpm", () => {
     expect(reasons(await verifyNpm(dir, opts))).toEqual(["tarball-integrity-mismatch"]);
   });
 
-  test("missing and extra installed files are named; nested node_modules is ignored", async () => {
+  // Attack: code planted in a node_modules folder inside the package. The package has no dependencies (ADR-0013),
+  // so nothing there was published and the check must not look away from it.
+  test("a node_modules folder inside the package is extra, not skipped", async () => {
+    const { dir, opts } = await setup({ installed: { "node_modules/dep/index.js": "planted\n" } });
+    expect((await verifyNpm(dir, opts)).failures).toEqual([{ reason: "file-extra", detail: "node_modules/dep/index.js" }]);
+  });
+
+  test("missing and extra installed files are named", async () => {
     const { dir, opts } = await setup({ installed: { "dist/extra.js": "added after install\n" } });
     await rm(join(dir, "README.md"));
     const result = await verifyNpm(dir, opts);

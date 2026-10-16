@@ -22,3 +22,4 @@ These are invariants in the repository's agent guide; each change that touches o
 - `intent log` and the [panel](panel.md) show every send field by field, and every block.
 - `intent doctor` checks the data dir's permissions, the policy, the chain, the root key and the Intent Cloud host, and gives the fix for each problem.
 - The release checks you run with your own tools, `npm audit signatures` and `cosign verify`, are on the [Verify](verify.md#self-check-and-outside-checks) page. They apply from the first preview release.
+- The package installs nothing but itself: its runtime dependencies are compiled into `dist/` ([ADR-0013](adr/0013-bundled-dependencies.md)), so its provenance covers their code. `dist/sbom.cdx.json` lists each bundled package with the SHA-512 the lockfile pins, and `dist/THIRD_PARTY_LICENSES` carries their licences.
