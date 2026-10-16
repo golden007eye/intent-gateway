@@ -2,6 +2,14 @@
   "name": "intent-gateway",
   "version": "0.1.0-preview.1",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/golden007eye/intent-gateway.git"
+  },
+  "homepage": "https://github.com/golden007eye/intent-gateway#readme",
+  "bugs": {
+    "url": "https://github.com/golden007eye/intent-gateway/issues"
+  },
   "type": "module",
   "bin": {
     "intent": "dist/main.js",
