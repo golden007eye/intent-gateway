@@ -22,9 +22,9 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
   const baseUrl = demo?.cloudUrl ?? config.cloud.url;
   const pinnedRootKeys = demo?.trustKeys.rootKeys ?? (await rootKeys(config));
   const dataDir = demo?.dataDir ?? config.dataDir;
-  const { policy, bundled } = await activePolicy(config.policyPath, config.demo);
+  const { policy, bundled } = await activePolicy(config.policyPath);
   if (bundled !== null) {
-    say(`no policy file at ${config.policyPath}, so the bundled ${bundled} policy applies (intent policy add <name> writes one)`);
+    say(`No policy file found; using the bundled ${bundled} policy: only your ZIP code leaves this machine. Change it with \`intent policy add <name>\`.`);
   }
   const now = io.now === undefined ? {} : { now: io.now };
   const banner = demo === null ? {} : { banner: DEMO_BANNER };

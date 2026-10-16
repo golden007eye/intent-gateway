@@ -78,6 +78,10 @@ describe(`flows (${TARGET})`, () => {
     const intruder = await target.connect().getApproval(approval.approval_handle);
     expect(intruder.status).toBe(404);
     expect(receiptProblem(intruder, keySet, target.now())).toBeNull();
+    // Attack: probing handles learns nothing, since another session's handle answers exactly like an unknown one.
+    const unknown = await target.connect().getApproval(`ap_${Buffer.alloc(12, 1).toString("base64url")}`);
+    expect(intruder.body).toEqual(unknown.body);
+    expect(intruder.body).toEqual({ error: "not_found", message: "unknown handle" });
   });
 
   it.runIf(IS_FAKE)("passkey approval: the proof verifies with src/trust and names the approving credential", async () => {

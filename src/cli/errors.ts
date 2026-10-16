@@ -16,6 +16,7 @@ import { PanelError } from "../panel/index.ts";
 import { PolicyError } from "../policy/index.ts";
 import { StoreCorruptError, StoreFencedError, StoreUnsafeError } from "../store/index.ts";
 import { CliError } from "./io.ts";
+import { DEFAULT_POLICY } from "./setup.ts";
 
 export interface ErrorContext {
   dataDir?: string;
@@ -58,7 +59,7 @@ function worded(error: unknown, ctx: ErrorContext): string {
   if (error instanceof GatewayNotStartedError) return `${message}; run intent doctor`;
   if (error instanceof PolicyError) {
     const where = ctx.policyPath ?? "the policy";
-    return `policy ${where}: ${message}; fix that line, or delete the file to use the bundled strict-default policy`;
+    return `policy ${where}: ${message}; fix that line, or delete the file to use the bundled ${DEFAULT_POLICY} policy`;
   }
   if (error instanceof LibraryError) return `policy library: ${message}; ${LIBRARY_FIX[error.code]}`;
   if (error instanceof StoreUnsafeError) {

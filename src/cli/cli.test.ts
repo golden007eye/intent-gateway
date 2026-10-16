@@ -201,26 +201,26 @@ describe("intent log (golden)", () => {
 describe("intent policy test", () => {
   const cases = (name: string): string => new URL(`${name}/cases.yaml`, POLICIES).pathname;
 
-  it("exit 0 when every case passes against the active policy (bundled strict-default without a file)", async () => {
-    const result = await setup().run(["policy", "test", cases("strict-default")]);
+  it("exit 0 when every case passes against the active policy (bundled zip-only without a file)", async () => {
+    const result = await setup().run(["policy", "test", cases("zip-only")]);
     expect(result.code).toBe(0);
-    expect(result.out).toMatch(/against the bundled strict-default policy/);
-    expect(result.out).toMatch(/^ok {4}a small cart is sent$/m);
-    expect(result.out).toMatch(/5 passed, 0 failed\n$/);
+    expect(result.out).toMatch(/against the bundled zip-only policy/);
   });
 
   it("exit 1 when a case fails, naming what was expected and what happened", async () => {
     // zip-only's cases expect a ZIP to be sent; strict-default sends no ship-to at all.
     const s = setup();
-    const result = await s.run(["policy", "test", cases("zip-only")]);
+    const result = await s.run(["policy", "test", cases("zip-only"), "--policy", new URL("strict-default/policy.yaml", POLICIES).pathname]);
     expect(result.code).toBe(1);
     expect(result.out).toMatch(/^FAIL {2}.+: expected send, got blocked by share\.ship_to$/m);
   });
 
   it("--policy tests another policy file", async () => {
     const s = setup();
-    const result = await s.run(["policy", "test", cases("zip-only"), "--policy", new URL("zip-only/policy.yaml", POLICIES).pathname]);
+    const result = await s.run(["policy", "test", cases("strict-default"), "--policy", new URL("strict-default/policy.yaml", POLICIES).pathname]);
     expect(result.code).toBe(0);
+    expect(result.out).toMatch(/^ok {4}a small cart is sent$/m);
+    expect(result.out).toMatch(/5 passed, 0 failed\n$/);
   });
 
   it("exit 2 for a cases file that is missing or not cases, and for a policy that does not load", async () => {
@@ -235,7 +235,7 @@ describe("intent policy test", () => {
 
     mkdirSync(s.dir, { recursive: true });
     writeFileSync(join(s.dir, "policy.yaml"), "version: 1\napproval: off\n");
-    const loosens = await s.run(["policy", "test", cases("strict-default")]);
+    const loosens = await s.run(["policy", "test", cases("zip-only")]);
     expect(loosens.code).toBe(2);
     expect(loosens.err).toMatch(/^intent: policy .+policy\.yaml: approval: .+; fix that line, or delete the file/);
   });
@@ -294,8 +294,8 @@ describe("intent policy show", () => {
   it("names the bundled default when there is no file", async () => {
     const result = await setup().run(["policy", "show"]);
     expect(result.code).toBe(0);
-    expect(result.out).toMatch(/^no policy file at .+: the gateway uses the bundled strict-default policy$/m);
-    expect(result.out).toContain("per_order_usd: 50");
+    expect(result.out).toMatch(/^no policy file at .+: the gateway uses the bundled zip-only policy$/m);
+    expect(result.out).toContain("ship_to: postcode_only");
   });
 
   it("shows the lock written by policy add, and exit 1 once policy.yaml was edited after it", async () => {
@@ -426,7 +426,7 @@ describe("intent doctor", () => {
     const result = await s.run(["doctor", "--trust-keys", trustFile(fake)]);
     expect(result.out).toMatch(/^ok {4}contract: .+ serves .+, and its SHA256SUMS matches this gateway's$/m);
     expect(result.out).toMatch(/^ok {4}key statement: signed by cloud-root-1, valid until .+ \(\d+ days\)$/m);
-    expect(result.out).toMatch(/^ok {4}policy: the bundled strict-default/m);
+    expect(result.out).toMatch(/^ok {4}policy: the bundled zip-only/m);
     expect(result.out).toMatch(/^ok {4}lease: /m);
     expect(result).toMatchObject({ code: 0 });
     // Its requests are in the disclosure log like any other, and the chain now reports its head.
@@ -524,7 +524,7 @@ describe("serve failures", () => {
       } as unknown as DisclosedCloud;
       const result = await s.run(["serve", "--trust-keys", trustFile(fake)], { io: { connect: () => stub } });
       expect(result.code).toBe(1);
-      expect(result.err).toMatch(/^intent-gateway: no policy file at .+, so the bundled strict-default policy applies/);
+      expect(result.err).toMatch(/^intent-gateway: No policy file found; using the bundled zip-only policy: only your ZIP code leaves this machine\. Change it with `intent policy add <name>`\.\n/);
       expect(result.err).toMatch(/\nintent: could not start: contract mismatch: .+; run intent doctor to see each check\n$/);
     } finally {
       await fake.close();
