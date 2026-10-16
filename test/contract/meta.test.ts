@@ -24,6 +24,9 @@ describe(`meta (${TARGET})`, () => {
     const meta = Meta.parse(result.body);
     expect(meta.contract_sums_sha256).toBe(sourceSums());
     expect(meta.contract_version).toBe(CONTRACT_VERSION);
+    expect(meta.rule_versions).toEqual(["recheck-v1"]);
+    expect(meta.limits).toEqual({ requests_per_minute: 120, carts_per_hour: 10, carts_per_hour_passkey: 50, approvals_per_day: 20 });
+    expect(meta).not.toHaveProperty("enrol_origin");
     expect(result.contractVersion).toBe(CONTRACT_VERSION);
     expect(receiptProblem(result, keySet, target.now())).toBeNull();
   });
@@ -45,12 +48,17 @@ describe("key statement", () => {
     expect(verifyStatement(result.body, other, target.now())).toMatchObject({ ok: false, step: 2 });
   });
 
-  it("serves at /v1/signature-keys only keys the verified statement lists", async () => {
+  it("serves at /v1/signature-keys only the approval key, as the verified statement lists it", async () => {
     const [statement, keys] = [await target.connect().keyStatement(), await target.connect().signatureKeys()];
     expect(keys.status).toBe(200);
     if (!statement.ok || !keys.ok) throw new Error("key reads failed");
     const listed = new Map(statement.body.keys.map((k) => [k.kid, k.x]));
-    for (const key of Jwks.parse(keys.body).keys) expect(listed.get(key.kid), key.kid).toBe(key.x);
+    const served = Jwks.parse(keys.body).keys;
+    expect(served.length).toBeGreaterThan(0);
+    for (const key of served) {
+      expect(key.kid).toMatch(/^cloud-approval-\d{6}$/);
+      expect(listed.get(key.kid), key.kid).toBe(key.x);
+    }
     expect(receiptProblem(keys, keySet, target.now())).toBeNull();
   });
 });

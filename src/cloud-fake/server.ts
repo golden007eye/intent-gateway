@@ -1,7 +1,8 @@
 // The fake Intent Cloud: an HTTP server on 127.0.0.1 that plays both the edge (body cap, request limit, appendix-C
 // signature check, receipts on every response) and the platform behind it (catalog, carts, approvals, proofs).
-// It follows contract/gateway-api.v1.yaml and appendices A–F; the confirm page is driven from the test through
-// `approveWithPasskey` and `reject`.
+// It follows contract/gateway-api.v1.yaml and appendices A–F, and the real platform's observable behaviour where the
+// contract leaves room (error codes and messages, 404/405, quotas per address key, idempotency, proof issue time),
+// so the fake, demo mode and staging answer alike. The confirm page is driven through `approveWithPasskey` and `reject`.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -13,6 +14,7 @@ import {
   type ApprovalStatus,
   type Cart,
   CartHandle,
+  type CredentialPublicKey,
   ApprovalHandle,
   CartRequest,
   CONTRACT_VERSION,
@@ -23,6 +25,7 @@ import {
   SearchRequest,
   type ShipTo,
   type Snapshot,
+  type WebAuthnAssertion,
 } from "../contract/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { contentDigest, createNonceCache, verifyRequest } from "../signing/index.ts";
@@ -45,16 +48,17 @@ const OFFER_TTL = 30 * 60;
 const CART_TTL = 15 * 60;
 const APPROVAL_TTL = 15 * 60;
 const REPLAY_WINDOW = 10 * 60;
+const PASSKEY_TIER_WINDOW = 86_400;
 const RULE_VERSION = "recheck-v1";
 
 export interface Quotas {
-  /** Edge requests per minute per client address (any endpoint). */
+  /** Edge requests per minute per address key (any endpoint). */
   requests_per_minute: number;
-  /** New carts per hour per client address. */
+  /** New carts per hour per address key (IPv4 address or IPv6 /64). */
   carts_per_hour: number;
-  /** Reported in `Meta.limits` only. */
+  /** New carts per hour per address key when a cart from that key got a passkey-approved approval in the last 24 h. */
   carts_per_hour_passkey: number;
-  /** New approvals per day per client address. */
+  /** New approvals per day per address key. */
   approvals_per_day: number;
 }
 
@@ -157,6 +161,8 @@ interface OfferRecord {
 interface CartRecord {
   handle: string;
   owner: string;
+  /** The address key the cart was created from: its approval by passkey raises that key's cart tier. */
+  addressKey: string;
   offerHandle: string;
   item: CatalogItem;
   quantity: number;
@@ -181,7 +187,8 @@ interface ApprovalRecord {
   created: ApprovalCreated;
   claimedBy?: string;
   ledger?: { seq: number; entry_hash: string };
-  proof?: ApprovalProof;
+  /** The approving passkey's assertion and key; the proof is signed from them at each read. */
+  approvedBy?: { assertion: WebAuthnAssertion; credentialPublicKey: CredentialPublicKey };
   orderNumber?: string;
 }
 
@@ -200,6 +207,31 @@ const PROFILE_INPUT =
 
 const handle = (prefix: string): string => `${prefix}_${randomBytes(12).toString("base64url")}`;
 const fail = (status: number, error: string, message: string): Reply => ({ status, body: { error, message } });
+
+// The platform's error replies. Every signature failure looks the same, so a caller learns nothing about which
+// check failed; an unknown handle and another session's handle look the same, so handles cannot be probed.
+const UNAUTHORIZED = (): Reply => fail(401, "unauthorized", "authentication failed");
+const DIGEST_MISMATCH = (): Reply => fail(400, "digest_mismatch", "content digest mismatch");
+const UNKNOWN_HANDLE = (): Reply => fail(404, "not_found", "unknown handle");
+
+/**
+ * The key a client address is counted under: an IPv4 address (also when IPv4-mapped) as is, an IPv6 address as its
+ * /64 prefix, so one host cannot escape a quota by rotating addresses inside its own /64.
+ */
+export function addressKey(address: string): string {
+  const bare = address.replace(/%.*$/, "").toLowerCase();
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(bare);
+  if (mapped?.[1] !== undefined) return mapped[1];
+  if (!bare.includes(":")) return bare;
+  const [head = "", tail] = bare.split("::");
+  const groups = (part: string): string[] => (part === "" ? [] : part.split(":"));
+  const left = groups(head);
+  const right = tail === undefined ? [] : groups(tail);
+  const zeros = Array<string>(Math.max(0, 8 - left.length - right.length)).fill("0");
+  const full = tail === undefined ? left : [...left, ...zeros, ...right];
+  const prefix = full.slice(0, 4).map((g) => (Number.parseInt(g, 16) || 0).toString(16));
+  return `${prefix.join(":")}::/64`;
+}
 
 function parseJson(body: Buffer): unknown {
   try {
@@ -241,6 +273,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   const carts = new Map<string, CartRecord>();
   const approvals = new Map<string, ApprovalRecord>();
   const buckets = new Map<string, number[]>();
+  /** Address key → when a cart created from it last got a passkey-approved approval. */
+  const passkeyApprovedAt = new Map<string, number>();
   const faults = new Map<Fault, string | undefined>();
   const ledger: { seq: number; entry_hash: string }[] = [];
   let orders = 0;
@@ -264,9 +298,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return null;
   }
 
+  // Retry-After is when the oldest counted item leaves the window, at least 1 s.
   const limited = (limit: string, retry: number): Reply => ({
     status: 429,
-    body: { error: "rate_limited", message: `${limit} limit reached`, limit, retry_after_seconds: retry },
+    body: { error: "rate_limited", message: `the ${limit} limit is used up; retry later`, limit, retry_after_seconds: retry },
     headers: { "retry-after": String(retry) },
   });
 
@@ -280,9 +315,21 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return statement;
   }
 
-  function servedProof(proof: ApprovalProof): ApprovalProof {
-    const unsigned: Omit<ApprovalProof, "cloud_signature"> & { cloud_signature?: string } = { ...proof };
-    delete unsigned.cloud_signature;
+  /** The proof as a read at `at` serves it: issued at the read, naming the ledger's `approved` entry. */
+  function servedProof(a: ApprovalRecord, approvedBy: NonNullable<ApprovalRecord["approvedBy"]>, at: number): ApprovalProof {
+    const ref = a.ledger;
+    if (ref === undefined) throw new Error("an approved approval without a ledger entry");
+    const unsigned: Omit<ApprovalProof, "cloud_signature"> = {
+      v: 1,
+      approval_handle: a.handle,
+      snapshot: a.snapshot,
+      snapshot_hash: a.snapshotHash,
+      assertion: approvedBy.assertion,
+      credential_public_key: approvedBy.credentialPublicKey,
+      ledger: ref,
+      issued_at: timestamp(at),
+      kid: keys.approval.kid,
+    };
     if (faults.has("proofHash")) {
       const changed = { ...unsigned, snapshot_hash: sha256Hex("not the snapshot") };
       return { ...changed, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(changed)) };
@@ -291,7 +338,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       const changed = { ...unsigned, kid: "cloud-approval-209912" };
       return { ...changed, cloud_signature: randomKey(changed.kid).sign(APPROVAL_PREFIX + canonicalize(changed)) };
     }
-    return proof;
+    return { ...unsigned, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(unsigned)) };
   }
 
   // ---- Platform handlers (behind the edge) -------------------------------------------------------------------
@@ -312,12 +359,12 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     };
   }
 
-  function createCart(body: Buffer, keyid: string, ip: string, at: number): Reply {
+  function createCart(body: Buffer, keyid: string, ipKey: string, at: number): Reply {
     const parsed = CartRequest.safeParse(parseJson(body));
     if (!parsed.success) return fail(400, "bad_request", "body does not match CartRequest");
     const request = parsed.data;
     const offer = offers.get(request.offer_handle);
-    if (offer === undefined) return fail(404, "not_found", "unknown offer");
+    if (offer === undefined) return UNKNOWN_HANDLE();
     if (offer.expiresAt !== null && at >= offer.expiresAt) return fail(410, "gone", "offer expired");
     const zip3 = request.ship_to.postal_code.slice(0, 3);
     for (const cart of carts.values()) {
@@ -330,7 +377,9 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       if (same && live && (cart.latest === undefined || cart.latest.state === "pending")) return { status: 201, body: cart.body };
     }
     if (request.quantity > offer.item.stock) return fail(409, "conflict", "not enough stock");
-    const retry = take(`carts:${ip}`, quotas.carts_per_hour, 3600, at);
+    const approvedAt = passkeyApprovedAt.get(ipKey);
+    const passkeyTier = approvedAt !== undefined && at - approvedAt < PASSKEY_TIER_WINDOW;
+    const retry = take(`carts:${ipKey}`, passkeyTier ? quotas.carts_per_hour_passkey : quotas.carts_per_hour, 3600, at);
     if (retry !== null) return limited("carts", retry);
 
     const item = offer.item;
@@ -350,6 +399,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     carts.set(cartHandle, {
       handle: cartHandle,
       owner: keyid,
+      addressKey: ipKey,
       offerHandle: request.offer_handle,
       item,
       quantity: request.quantity,
@@ -361,17 +411,17 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return { status: 201, body: cart };
   }
 
-  function createApproval(param: string, keyid: string, ip: string, at: number): Reply {
+  function createApproval(param: string, keyid: string, ipKey: string, at: number): Reply {
     if (!CartHandle.safeParse(param).success) return fail(400, "bad_request", "malformed cart handle");
     const cart = carts.get(param);
-    if (cart?.owner !== keyid) return fail(404, "not_found", "unknown cart");
+    if (cart?.owner !== keyid) return UNKNOWN_HANDLE();
     if (at >= cart.expiresAt) return fail(410, "gone", "cart expired");
     const latest = cart.latest;
     if (latest !== undefined) refresh(latest, at);
     if (latest?.state === "pending" && cart.lastNewApprovalAt !== undefined && at - cart.lastNewApprovalAt < REPLAY_WINDOW) {
       return { status: 201, body: latest.created };
     }
-    const retry = take(`approvals:${ip}`, quotas.approvals_per_day, 86_400, at);
+    const retry = take(`approvals:${ipKey}`, quotas.approvals_per_day, 86_400, at);
     if (retry !== null) return limited("approvals", retry);
     if (latest?.state === "pending") latest.state = "expired";
 
@@ -426,7 +476,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   function getApproval(param: string, keyid: string, at: number): Reply {
     if (!ApprovalHandle.safeParse(param).success) return fail(400, "bad_request", "malformed approval handle");
     const a = approvals.get(param);
-    if (a?.owner !== keyid) return fail(404, "not_found", "unknown approval");
+    if (a?.owner !== keyid) return UNKNOWN_HANDLE();
     refresh(a, at);
     const status: ApprovalStatus = {
       state: a.state,
@@ -435,34 +485,41 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (a.cart.body.image_url !== undefined) status.display.image_url = a.cart.body.image_url;
     if (a.orderNumber !== undefined) status.order_number = a.orderNumber;
     const withProof = a.state === "approved" || a.state === "handed_off" || a.state === "ordered";
-    if (withProof && a.proof !== undefined) status.proof = servedProof(a.proof);
+    if (withProof && a.approvedBy !== undefined) status.proof = servedProof(a, a.approvedBy, at);
     return { status: 200, body: status };
   }
 
   // ---- The edge -------------------------------------------------------------------------------------------------
 
-  function route(method: string, path: string, body: Buffer, req: IncomingMessage, ip: string, at: number): Reply {
+  // The edge's endpoints: path pattern and the one method it answers. Any other path is 404, another method 405.
+  const ENDPOINT_METHODS: readonly (readonly [RegExp, string])[] = [
+    [/^\/v1\/meta$/, "GET"],
+    [/^\/v1\/signature-keys$/, "GET"],
+    [/^\/v1\/key-statement$/, "GET"],
+    [/^\/v1\/catalog\/search$/, "POST"],
+    [/^\/v1\/carts$/, "POST"],
+    [/^\/v1\/carts\/[^/]+\/approvals$/, "POST"],
+    [/^\/v1\/approvals\/[^/]+$/, "GET"],
+  ];
+
+  function route(method: string, path: string, body: Buffer, req: IncomingMessage, ipKey: string, at: number): Reply {
     if (body.length > MAX_BODY_BYTES) return fail(413, "too_large", "body over 16 KiB");
-    const retry = take(`requests:${ip}`, quotas.requests_per_minute, 60, at);
+    const retry = take(`requests:${ipKey}`, quotas.requests_per_minute, 60, at);
     if (retry !== null) return limited("requests", retry);
 
-    if (method === "GET" && path === "/v1/signature-keys") {
-      const listed = [keys.receipt, keys.approval].map((k) => ({ kty: "OKP", crv: "Ed25519", kid: k.kid, x: k.x, use: "sig", alg: "EdDSA" }));
-      return { status: 200, body: { keys: listed } };
-    }
-    if (method === "GET" && path === "/v1/key-statement") return { status: 200, body: servedStatement(at) };
+    const endpoint = ENDPOINT_METHODS.find(([pattern]) => pattern.test(path));
+    if (endpoint === undefined) return fail(404, "not_found", "not found");
+    if (endpoint[1] !== method) return fail(405, "not_found", "method not allowed");
 
-    const cartApprovals = /^\/v1\/carts\/([^/]+)\/approvals$/.exec(path);
-    const approval = /^\/v1\/approvals\/([^/]+)$/.exec(path);
-    const known =
-      (method === "GET" && (path === "/v1/meta" || approval !== null)) ||
-      (method === "POST" && (path === "/v1/catalog/search" || path === "/v1/carts" || cartApprovals !== null));
-    if (!known) return fail(404, "not_found", "no such endpoint");
+    // The approval key only: receipts are signed by the edge, and app keys are never served here.
+    if (path === "/v1/signature-keys") {
+      const k = keys.approval;
+      return { status: 200, body: { keys: [{ kty: "OKP", crv: "Ed25519", kid: k.kid, x: k.x, use: "sig", alg: "EdDSA" }] } };
+    }
+    if (path === "/v1/key-statement") return { status: 200, body: servedStatement(at) };
 
     const verified = verifyRequest(req.headers, { method, path, body }, { now: at, seenNonce });
-    if (!verified.ok) {
-      return verified.status === 400 ? fail(400, "digest_mismatch", "content-digest does not match the body") : fail(401, "unauthorized", verified.code);
-    }
+    if (!verified.ok) return verified.status === 400 ? DIGEST_MISMATCH() : UNAUTHORIZED();
     const { keyid } = verified;
     if (path === "/v1/meta") {
       const limits = {
@@ -474,9 +531,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       return { status: 200, body: { contract_version: CONTRACT_VERSION, contract_sums_sha256: sums, rule_versions: [RULE_VERSION], limits } };
     }
     if (path === "/v1/catalog/search") return search(body, at);
-    if (path === "/v1/carts") return createCart(body, keyid, ip, at);
-    if (cartApprovals !== null) return createApproval(cartApprovals[1] ?? "", keyid, ip, at);
-    return getApproval(approval?.[1] ?? "", keyid, at);
+    if (path === "/v1/carts") return createCart(body, keyid, ipKey, at);
+    const cartApprovals = /^\/v1\/carts\/([^/]+)\/approvals$/.exec(path);
+    if (cartApprovals !== null) return createApproval(cartApprovals[1] ?? "", keyid, ipKey, at);
+    return getApproval(/^\/v1\/approvals\/([^/]+)$/.exec(path)?.[1] ?? "", keyid, at);
   }
 
   function receiptHeaders(method: string, path: string, body: Buffer, req: IncomingMessage, status: number, at: number): Record<string, string> {
@@ -509,10 +567,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     }
     const method = req.method ?? "GET";
     const path = (req.url ?? "/").split(/[?#]/)[0] ?? "/";
-    const ip = req.socket.remoteAddress ?? "unknown";
+    const ipKey = addressKey(req.socket.remoteAddress ?? "unknown");
     let reply: Reply;
     try {
-      reply = route(method, path, body, req, ip, at);
+      reply = route(method, path, body, req, ipKey, at);
     } catch {
       reply = fail(500, "bad_request", "fake cloud error");
     }
@@ -562,19 +620,9 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       a.state = "rejected";
       return { status: 200, state: a.state };
     }
-    const unsigned = {
-      v: 1 as const,
-      approval_handle: a.handle,
-      snapshot: a.snapshot,
-      snapshot_hash: a.snapshotHash,
-      assertion,
-      credential_public_key: passkey.publicJwk,
-      ledger: ref,
-      issued_at: timestamp(at),
-      kid: keys.approval.kid,
-    };
-    a.proof = { ...unsigned, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(unsigned)) };
+    a.approvedBy = { assertion, credentialPublicKey: passkey.publicJwk };
     a.state = "approved";
+    passkeyApprovedAt.set(a.cart.addressKey, at);
     return { status: 200, state: a.state };
   }
 
