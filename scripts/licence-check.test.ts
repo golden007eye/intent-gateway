@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAllowed, rejected } from "./licence-check.ts";
+import { isAllowed, rejectedPackages } from "./licence-check.ts";
 
 describe("isAllowed", () => {
   it.each(["MIT", "Apache-2.0", "(MIT OR GPL-3.0)", "MIT AND ISC", "Apache-2.0 WITH LLVM-exception", "(MIT AND GPL-3.0) OR Apache-2.0"])("allows %s", (expression) => {
@@ -11,13 +11,19 @@ describe("isAllowed", () => {
   });
 });
 
-describe("rejected", () => {
-  it("lists each package under a disallowed licence", () => {
-    const report = { MIT: [{ name: "ok" }], "GPL-3.0": [{ name: "bad-a" }, { name: "bad-b" }] };
-    expect(rejected(report)).toEqual(["bad-a: GPL-3.0", "bad-b: GPL-3.0"]);
+describe("rejectedPackages", () => {
+  const pkg = (name: string, license: string) => ({ name, version: "1.0.0", license, dir: `node_modules/${name}` });
+
+  it("lists each bundled package under a disallowed licence, with its version", () => {
+    expect(rejectedPackages([pkg("ok", "MIT"), pkg("bad-a", "GPL-3.0"), pkg("bad-b", "AGPL-3.0-only")])).toEqual(["bad-a@1.0.0: GPL-3.0", "bad-b@1.0.0: AGPL-3.0-only"]);
   });
 
-  it("passes an empty report", () => {
-    expect(rejected({})).toEqual([]);
+  // Attack: a package whose package.json names no licence must not slip through as "nothing to check".
+  it("rejects a bundled package that declares no licence", () => {
+    expect(rejectedPackages([pkg("quiet", "UNKNOWN")])).toEqual(["quiet@1.0.0: UNKNOWN"]);
+  });
+
+  it("passes an empty bundle", () => {
+    expect(rejectedPackages([])).toEqual([]);
   });
 });

@@ -1,7 +1,9 @@
-// Fails when a runtime (production) dependency carries a licence that is not compatible with
-// Apache-2.0, because the gateway ships under Apache-2.0 (CLAUDE.md "Project conventions").
-import { execFileSync } from "node:child_process";
+// Fails when a package compiled into the gateway's bundle carries a licence that is not compatible with Apache-2.0,
+// because the gateway ships under Apache-2.0 (CLAUDE.md "Project conventions"). The runtime dependencies are bundled
+// (ADR-0013), so the packages checked are the ones esbuild puts in dist/, read from its metafile, not package.json.
 import { realpathSync } from "node:fs";
+import { join } from "node:path";
+import { bundle, type BundledPackage } from "./bundle.ts";
 
 // Permissive licences an Apache-2.0 work may depend on and redistribute.
 export const ALLOWED = new Set([
@@ -57,19 +59,18 @@ export function isAllowed(expression: string): boolean {
   }
 }
 
-// Input is `pnpm licenses list --prod --json`: { "<licence>": [{ name, versions }] }.
-export function rejected(report: Record<string, { name: string }[]>): string[] {
-  return Object.entries(report)
-    .filter(([licence]) => !isAllowed(licence))
-    .flatMap(([licence, packages]) => packages.map((p) => `${p.name}: ${licence}`));
+/** The bundled packages whose licence is not Apache-2.0 compatible, as `name@version: licence`. */
+export function rejectedPackages(packages: readonly BundledPackage[]): string[] {
+  return packages.filter((p) => !isAllowed(p.license)).map((p) => `${p.name}@${p.version}: ${p.license}`);
 }
 
-function main(): void {
-  const json = execFileSync("pnpm", ["licenses", "list", "--prod", "--json"], { encoding: "utf8" });
-  const bad = rejected(JSON.parse(json) as Record<string, { name: string }[]>);
+async function main(): Promise<void> {
+  const repo = join(import.meta.dirname, "..");
+  const { packages } = await bundle(repo, join(repo, "dist"), false);
+  const bad = rejectedPackages(packages);
   for (const line of bad) console.error(`licence not allowed: ${line}`);
   if (bad.length > 0) process.exit(1);
-  console.log("licences: all runtime dependencies are Apache-2.0 compatible");
+  console.log(`licences: all ${String(packages.length)} bundled packages are Apache-2.0 compatible`);
 }
 
-if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === import.meta.filename) main();
+if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === import.meta.filename) await main();

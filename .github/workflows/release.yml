@@ -177,13 +177,17 @@ jobs:
           echo "${COSIGN_SHA256}  bin/cosign" | sha256sum -c -
           chmod +x bin/cosign
           echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
-      # syft scans the archive that was pushed, so the SBOM describes exactly the signed digest.
+      # syft scans the archive that was pushed, so the SBOM describes exactly the signed digest. The gateway's
+      # dependencies are compiled into dist/ (ADR-0013), where syft's package catalogers cannot see them; the build's
+      # dist/sbom.cdx.json lists them, and the sbom-cataloger (not on by default for images) reads it in.
       - name: CycloneDX SBOM
         run: |
           set -euo pipefail
           syft scan "oci-archive:${RUNNER_TEMP}/image.tar" --source-name "$IMAGE" --source-version "$VERSION" \
-            -o "cyclonedx-json=${RUNNER_TEMP}/sbom.cdx.json"
+            --select-catalogers "+sbom-cataloger" -o "cyclonedx-json=${RUNNER_TEMP}/sbom.cdx.json"
           jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' "${RUNNER_TEMP}/sbom.cdx.json" > /dev/null
+          # A bundled package, so a scan that missed dist/sbom.cdx.json fails here, before anything is signed.
+          jq -e 'any(.components[]; (.purl // "") | startswith("pkg:npm/%40sigstore/verify@"))' "${RUNNER_TEMP}/sbom.cdx.json" > /dev/null
       # Keyless: Fulcio certifies this job's OIDC identity (the workflow at the tag); the Sigstore bundles are stored
       # as OCI referrers of the digest, where `intent verify --image` looks for them.
       - name: cosign sign and attest (keyless)
