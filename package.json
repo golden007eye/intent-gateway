@@ -26,6 +26,7 @@
     "boundaries": "depcruise --config .dependency-cruiser.cjs scripts test $(test -d src && echo src)",
     "licence-check": "node scripts/licence-check.ts",
     "public-safety": "node scripts/public-safety.ts --optional",
+    "release": "node scripts/release.ts",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm boundaries && pnpm licence-check && pnpm public-safety"
   },
   "devDependencies": {
