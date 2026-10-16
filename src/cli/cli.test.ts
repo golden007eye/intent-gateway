@@ -400,6 +400,37 @@ describe("intent policy add", () => {
     expect(again.out).toContain("no change:");
   });
 
+  it("in a build whose commit is unknown (plain docker build) applies the bundled policy and says the commit is unknown (F-j)", async () => {
+    const s = setup();
+    const unknown = { io: { library: { buildCommit: null, dirty: null } } };
+    const said = "the library bundled with this gateway (commit unknown: a local build without BUILD_COMMIT)";
+    const added = await s.run(["policy", "add", "per-order-60", "--yes", "--demo"], unknown);
+    expect(added).toMatchObject({ code: 0, err: "" });
+    expect(added.out).toContain(`policy add per-order-60, from ${said}, into `);
+    expect(added.out).toContain(`policy.lock records ${said}\n`);
+    const shown = await s.run(["policy", "show", "--demo"], unknown);
+    expect(shown.code).toBe(0);
+    expect(shown.out).toContain(`lock: per-order-60 from ${said}\n`);
+    const doctor = await s.run(["doctor", "--demo"], unknown);
+    expect(doctor.out).toMatch(new RegExp(`^ok {4}policy: .+policy\\.yaml, from library policy per-order-60 in ${said.replace(/[()]/g, "\\$&")}$`, "m"));
+    expect(doctor.out).not.toMatch(/^(FAIL|WARN)/m);
+  });
+
+  it("in the container says to restart the container, not to run docker exec … intent serve (F-j)", async () => {
+    const s = setup({ INTENT_RUNTIME: "container", INTENT_DEMO: "1", HOSTNAME: "0123456789ab" });
+    const added = await s.run(["policy", "add", "per-order-60", "--yes"]);
+    expect(added.code).toBe(0);
+    expect(added.out).toContain("a running gateway reads its policy at start: run docker restart 0123456789ab to use it\n");
+  });
+
+  it("running from source refuses the bundled library in one line that says the fix once", async () => {
+    const result = await setup().run(["policy", "add", "per-order-60", "--yes"], { io: { library: { buildCommit: null } } });
+    expect(result.code).toBe(1);
+    expect(result.err).toBe(
+      "intent: policy library: this gateway runs from source, so its bundled policies have no build commit to record; pass --commit <sha> of a signed commit on main to take the policy from GitHub\n",
+    );
+  });
+
   it("an unknown library policy is one line with its fix", async () => {
     const result = await setup().run(["policy", "add", "no-such-policy", "--yes"]);
     expect(result.code).toBe(1);

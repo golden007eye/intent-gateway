@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { canonicalize } from "../jcs/index.ts";
 import { PolicyError, loadPolicy, meet } from "../policy/index.ts";
 import { noCommitReason } from "./add.ts";
-import { addPolicy, LibraryError, LIBRARY_REPO, MAX_GITHUB_BODY_BYTES, planPolicy, readLock, type AddOptions } from "./index.ts";
+import { addPolicy, LibraryError, LIBRARY_REPO, lockOrigin, MAX_GITHUB_BODY_BYTES, planPolicy, readLock, type AddOptions } from "./index.ts";
 
 // Each add fsyncs three times (two temp files and the directory); on a busy disk that alone can pass the
 // default 5 s timeout, which is latency, not a hang.
@@ -88,8 +88,41 @@ describe("addPolicy: bundled source", () => {
     const { policyPath, lockPath } = workdir();
     const error = await refusal(addPolicy("no-history", { policyPath, buildCommit: null }));
     expect(error.code).toBe("NO_BUILD_COMMIT");
-    expect(error.message).toMatch(/--commit/);
+    // The fix (pass --commit) is said once, by the CLI's error wording, not also in the message.
+    expect(error.message).toBe("this gateway runs from source, so its bundled policies have no build commit to record");
     expect(existsSync(policyPath) || existsSync(lockPath)).toBe(false);
+  });
+
+  it.each([
+    [null, "unknown", "commit unknown: a local build without BUILD_COMMIT"],
+    [true, "uncommitted", "commit unknown: built from a tree with uncommitted changes"],
+  ] as const)("a build with dirty %s applies the bundled policy and locks commit %s, never a SHA (F-j)", async (dirty, marker, said) => {
+    const { policyPath } = workdir();
+    const lock = await addPolicy("per-order-60", { policyPath, buildCommit: null, dirty });
+    expect(lock).toEqual({
+      name: "per-order-60",
+      commit: marker,
+      sha256: sha256(read("per-order-60/policy.yaml")),
+      source: "bundled",
+      policy_sha256: sha256(readFileSync(policyPath, "utf8")),
+    });
+    expect(await readLock(policyPath)).toEqual(lock);
+    expect(lockOrigin(lock)).toBe(`the library bundled with this gateway (${said})`);
+  });
+
+  it("a build that knows no commit still refuses a bundled policy.yaml that differs from the bundled index", async () => {
+    const { dir, policyPath, lockPath } = workdir();
+    const root = join(dir, "policies");
+    cpSync(new URL(".", POLICIES), root, { recursive: true });
+    writeFileSync(join(root, "per-order-60", "policy.yaml"), "version: 1\napproval: passkey\n");
+    const error = await refusal(addPolicy("per-order-60", { policyPath, buildCommit: null, dirty: null, bundledRoot: pathToFileURL(`${root}/`) }));
+    expect(error.code).toBe("HASH_MISMATCH");
+    expect(existsSync(policyPath) || existsSync(lockPath)).toBe(false);
+  });
+
+  it("names where a lock came from with its commit, and a GitHub lock always by its SHA", () => {
+    expect(lockOrigin({ source: "bundled", commit: BUILD_SHA })).toBe(`the library bundled with this gateway (commit ${BUILD_SHA})`);
+    expect(lockOrigin({ source: "github", commit: SHA })).toBe(`GitHub commit ${SHA}`);
   });
 
   it("names why a build has no commit to record, including a local build without BUILD_COMMIT (F-i)", () => {
@@ -329,6 +362,14 @@ describe("readLock", () => {
     expect((await readLock(policyPath))?.policy_sha256).toBe(sha256(readFileSync(policyPath, "utf8")));
   });
 
+  it("still reports a tampered policy.yaml as stale when the lock's commit is unknown (F-j)", async () => {
+    const { policyPath } = workdir();
+    await addPolicy("per-order-60", { policyPath, buildCommit: null, dirty: null });
+    // Attack: loosen the applied policy (drop the per-order limit) and keep the unknown-commit lock beside it.
+    writeFileSync(policyPath, "version: 1\napproval: passkey\n");
+    expect((await refusal(readLock(policyPath))).code).toBe("LOCK_STALE");
+  });
+
   it("reports a lock without its policy.yaml as stale", async () => {
     const { policyPath, lockPath } = workdir();
     await addPolicy("no-history", { policyPath, buildCommit: BUILD_SHA });
@@ -345,6 +386,13 @@ describe("readLock", () => {
     ["an old lock without policy_sha256", JSON.stringify({ name: "a", commit: SHA, sha256: z, source: "bundled" })],
     ["an unknown source", JSON.stringify({ name: "a", commit: SHA, sha256: z, source: "web", policy_sha256: z })],
     ["a short commit", JSON.stringify({ name: "a", commit: "abc", sha256: z, source: "github", policy_sha256: z })],
+    // Attacks on the no-commit marker (F-j): only a bundled lock may say its commit is unknown.
+    ["a GitHub lock with commit unknown", JSON.stringify({ name: "a", commit: "unknown", sha256: z, source: "github", policy_sha256: z })],
+    ["a GitHub lock with commit uncommitted", JSON.stringify({ name: "a", commit: "uncommitted", sha256: z, source: "github", policy_sha256: z })],
+    ["a marker mixed with a SHA", JSON.stringify({ name: "a", commit: `unknown-${SHA}`, sha256: z, source: "bundled", policy_sha256: z })],
+    ["a SHA mixed with a marker", JSON.stringify({ name: "a", commit: `${SHA}unknown`, sha256: z, source: "bundled", policy_sha256: z })],
+    ["an inherited property name as the commit", JSON.stringify({ name: "a", commit: "toString", sha256: z, source: "bundled", policy_sha256: z })],
+    ["a marker in another case", JSON.stringify({ name: "a", commit: "Unknown", sha256: z, source: "bundled", policy_sha256: z })],
   ])("refuses %s as LOCK_INVALID", async (_label, text) => {
     const { policyPath, lockPath } = workdir();
     mkdirSync(dirname(lockPath));

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { type Config, INTENT, type RootKey } from "../config/index.ts";
 import { CONTRACT_VERSION } from "../contract/index.ts";
 import { chainMode, contractSums } from "../gateway/index.ts";
-import { LibraryError, readLock } from "../library/index.ts";
+import { LibraryError, lockOrigin, readLock } from "../library/index.ts";
 import { PolicyError } from "../policy/index.ts";
 import { type Entry, openStore, verifyChain } from "../store/index.ts";
 import { verifyStatement } from "../trust/index.ts";
@@ -123,7 +123,7 @@ async function checkPolicy(policyPath: string, report: Report): Promise<void> {
     const lock = await readLock(policyPath);
     const note = noShipToNote(active.policy);
     if (note !== null) report("warn", `policy: ${note}; ${shipToFix(policyPath)}`);
-    report("ok", `policy: ${policyPath}${lock === undefined ? " (written by hand, no policy.lock)" : `, from library policy ${lock.name} (${lock.source} ${lock.commit.slice(0, 12)})`}`);
+    report("ok", `policy: ${policyPath}${lock === undefined ? " (written by hand, no policy.lock)" : `, from library policy ${lock.name} in ${lockOrigin(lock)}`}`);
   } catch (error) {
     if (error instanceof LibraryError) report("warn", `policy lock: ${describeError(error)}`);
     else if (error instanceof PolicyError) report("fail", describeError(error, { policyPath }));
