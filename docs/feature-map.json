@@ -2,6 +2,7 @@
   "$comment": "Features the docs describe as working, each with the intent subcommand or the test file that proves it exists. A `!!! planned` block in docs/ names its feature in a `<!-- feature: <id> -->` line above it, and that id must not be here: once a feature is listed, its planned marker must go (scripts/docs-structure.test.ts).",
   "features": {
     "demo-mode": { "command": "intent demo" },
+    "docker-image": { "test": "test/image-smoke.ts" },
     "mcp-stdio": { "test": "test/mcp-stdio.test.ts" },
     "mcp-http": { "test": "src/mcp/mcp.test.ts" },
     "serve": { "command": "intent serve" },

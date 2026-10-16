@@ -62,7 +62,7 @@ To report a vulnerability, see [Security](security.md).
 - `intent serve --http` binds to `127.0.0.1:8787` by default. Off loopback, it refuses to start without a bearer token of at least 32 characters (`INTENT_HTTP_TOKEN`). `localhost` is not treated as loopback, because it can resolve elsewhere.
 - With a token, a missing or wrong `Authorization: Bearer` gets 401; the comparison is constant-time. A `Host` or `Origin` that does not name the server gets 421, so a web page cannot rebind a DNS name to `127.0.0.1` and drive the tools through the developer's browser. Bodies over 256 KiB get 413.
 - On loopback without a token, any process of any user on the machine can call the tools, as with stdio for the agent's own user. The tools can search and prepare carts; they cannot approve or pay.
-- The Docker image runs the same package, serves MCP over HTTP, and is documented with the host side of the port bound to `127.0.0.1`. It generates its token on first start and keeps it in its data volume. The image is available with the first preview release ([ADR-0005](adr/0005-packaging-npx-docker.md)).
+- The Docker image runs the same package with no gateway code of its own, as uid 1000, which owns the `/data` volume. Inside the container it listens on `0.0.0.0:8787`, so a token is always set: the entrypoint makes a 43-character token on first start, saves it in `/data/http-token` (mode 600) and prints it once. The docs always publish the port as `-p 127.0.0.1:8787:8787`, so it stays on the host's loopback. In demo mode the confirm page listens on port 8788 and answers only `Host 127.0.0.1:8788` ([ADR-0005](adr/0005-packaging-npx-docker.md)).
 
 ## Phone hand-off and self-approval
 

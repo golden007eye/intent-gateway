@@ -40,7 +40,7 @@ $ claude mcp add intent -- npx -y "file:$PWD/intent-gateway-0.0.0.tgz" demo
 > Find running shoes to ZIP 94103, under $200, and prepare a cart for the cheapest.
 ```
 
-The agent calls `find_offers`, then `create_cart`, and shows an approval link such as `http://127.0.0.1:<port>/confirm/c/…`. Open it, check the item and total, and click **Approve with demo passkey**. Then ask the agent to check the approval status: it reports the purchase as approved, with the approver passkey's fingerprint.
+The agent calls `find_offers`, then `create_cart`, and shows an approval link such as `http://127.0.0.1:<port>/confirm/c/…`. Open it, check the item and total, and click **Approve with demo passkey**. Then ask the agent to check the approval status: it reports the purchase as approved, with the approver passkey's fingerprint. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started.
 
 **4 · Check what was sent**, in the cloned folder:
 
@@ -59,7 +59,26 @@ $ claude mcp add intent -- npx -y intent-gateway@next demo
 $ npx -y intent-gateway@next verify --demo
 ```
 
-The Docker image runs the same package. With `INTENT_DEMO=1` it serves the demo over MCP HTTP on port 8787; the image and its exact `docker run` flags are available with the first preview release.
+### With Docker
+
+The image runs the same package and serves MCP over HTTP. Until the first preview release puts it on GHCR, build it from the cloned folder:
+
+```console
+$ docker build --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t intent-gateway .
+$ docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 \
+    -e INTENT_DEMO=1 -v intent-data:/data intent-gateway
+$ docker logs intent
+```
+
+On its first start the container makes an HTTP token, saves it in `/data/http-token` and prints it once, inside the line to paste:
+
+```console
+$ claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer <token>"
+```
+
+Later starts reuse the token; read it with `docker exec intent cat /data/http-token`. Port 8788 is the demo's confirm page and must be published on the same host port, as above. Check what was sent with `docker exec intent intent verify --demo`.
+
+Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`. For a bind mount instead of a volume, add `--user "$(id -u):$(id -g)"`. Without `INTENT_DEMO=1` the container needs the root key pinned for the Intent Cloud host, which arrives with the first preview release.
 
 ## Real purchases
 

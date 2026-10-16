@@ -31,6 +31,7 @@ The gateway itself is the same code as in a real run: the same policy, identity 
 | `intent demo`, typed in a terminal | MCP over HTTP on `127.0.0.1:8787`; it prints the `claude mcp add --transport http` line. |
 | `intent serve --demo --http` | The same, explicitly. |
 | `INTENT_DEMO=1` | The same as `--demo`, for any command. |
+| `docker run … -e INTENT_DEMO=1 …` | The image in demo mode, with the confirm page on port 8788; see [Quickstart](quickstart.md#with-docker). |
 
 Every other command takes `--demo` and then reads the demo data dir: `intent log --demo`, `intent verify --demo`, `intent panel --demo`, `intent doctor --demo`, `intent policy show --demo`, `intent approver list --demo`.
 
