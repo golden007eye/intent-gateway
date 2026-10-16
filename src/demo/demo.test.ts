@@ -2,8 +2,10 @@
 // - Flow: startDemo → find_offers → create_cart → Approve on the local confirm page (an HTTP POST) →
 //   get_approval_status = approved → runVerify exit 0 over the demo data dir; every tool result carries the banner.
 // - Confirm page: CSP, loopback bind, no approval by GET, CSRF token required (missing, wrong, other page, reused),
-//   foreign Host/Origin/Sec-Fetch-Site refused; Approve needs the demo code (missing, wrong refused; locked after
-//   MAX_WRONG_CODES), which is kept 0600, new on every start and never in a tool result.
+//   foreign Host/Origin/Sec-Fetch-Site refused, no external URL or inline handler; Approve needs the demo code
+//   (missing, wrong, five or seven digits refused; spaces, hyphens, words around it accepted; a wrong one shows the
+//   form again with the error and the tries left; locked after MAX_WRONG_CODES), asked for as a one-time code, kept
+//   0600, new on every start and never in a tool result.
 // - Separation: a demo chain and a real chain never mix (both ways); demo mode refuses any root but the published
 //   test root; the test root is never in PINNED_HOSTS; the demo passkey is stable per data dir.
 // - Port: the confirm page listens on the port asked for, falls back to a free one only when told to, and the next
@@ -269,8 +271,12 @@ describe("confirm page", () => {
     expect(CONFIRM_CSP).toContain("default-src 'none'");
     expect(CONFIRM_CSP).toContain("frame-ancestors 'none'");
     expect(page.headers["x-frame-options"]).toBe("DENY");
+    // A browser sends `Origin: null` on a form POST under no-referrer, and the Origin check would refuse every click.
+    expect(page.headers["referrer-policy"]).toBe("same-origin");
     expect(page.body).not.toMatch(/(src|href)="https?:/);
+    expect(page.body).not.toMatch(/https?:\/\//);
     expect(page.body).not.toContain("<script");
+    expect(page.body).not.toMatch(/\son[a-z]+=|style=/i);
     const css = await raw(new URL("/confirm/style.css", url).href);
     expect(css.status).toBe(200);
     expect(css.headers["content-security-policy"]).toBe(CONFIRM_CSP);
@@ -310,6 +316,8 @@ describe("confirm page", () => {
     const token = (): Promise<string> => raw(url).then((p) => csrfOf(p.body));
     expect((await raw(url, { headers: { host: "evil.example" } })).status).toBe(421);
     expect((await post(url, { action: "approve", csrf: await token() }, { origin: "http://evil.example" })).status).toBe(403);
+    // A sandboxed or no-referrer page sends Origin: null; still refused.
+    expect((await post(url, { action: "approve", csrf: await token() }, { origin: "null" })).status).toBe(403);
     expect((await post(url, { action: "approve", csrf: await token() }, { "sec-fetch-site": "cross-site" })).status).toBe(403);
     const put = await raw(url, { method: "PUT" });
     expect(put.status).toBe(405);
@@ -343,6 +351,65 @@ describe("the demo code", () => {
     const right = await approve(url, ` ${demo.code} `);
     expect(right.status).toBe(200);
     expect(demo.cloud.inspect(handle)?.state).toBe("approved");
+  });
+
+  it("accepts the code typed or pasted with spaces, hyphens, words or full-width digits: only its digits count", async () => {
+    const demo = await demoAt(await tmpData());
+    const { gateway } = await gatewayOver(demo);
+    await gateway.start();
+    const c = demo.code;
+    const fullWidth = c.replace(/[0-9]/g, (d) => String.fromCodePoint(0xff10 + Number(d)));
+    for (const typed of [`${c.slice(0, 3)} ${c.slice(3)}`, `${c.slice(0, 3)}-${c.slice(3)}`, ` ${c}\n`, `Demo code: ${c}`, fullWidth]) {
+      const { url, handle } = await pendingApproval(gateway);
+      const done = await approve(url, typed);
+      expect(done.status, JSON.stringify(typed)).toBe(200);
+      expect(demo.cloud.inspect(handle)?.state).toBe("approved");
+    }
+  });
+
+  it("refuses five or seven digits and a code with an extra digit in its text, counting each as a wrong try (attack)", async () => {
+    const { demo, url, handle } = await pending();
+    const c = demo.code;
+    const tries = [c.slice(0, 5), `${c}1`, `${c} (1)`];
+    for (const [i, typed] of tries.entries()) {
+      const got = await approve(url, typed);
+      expect(got.status).toBe(403);
+      expect(got.body).toContain(`${String(MAX_WRONG_CODES - 1 - i)} tries left`);
+    }
+    expect(demo.cloud.inspect(handle)?.state).toBe("pending");
+  });
+
+  it("shows a wrong code as an error under the field, on the form again with a fresh token and the tries left", async () => {
+    const { demo, url, handle } = await pending();
+    const wrong = String((Number(demo.code) + 1) % 1_000_000).padStart(6, "0");
+    const first = await approve(url, wrong);
+    expect(first.status).toBe(403);
+    expect(first.body).toContain('<p class="error" id="code-error" role="alert">That is not the demo code. 4 tries left.</p>');
+    expect(first.body).toMatch(/<input id="code"[^>]* aria-describedby="code-error code-hint" aria-invalid="true" autofocus>/);
+    // The typed code is not echoed back.
+    expect(first.body).not.toContain(`value="${wrong}"`);
+    expect(first.body).toContain("Approve with demo passkey");
+    const short = await post(url, { csrf: csrfOf(first.body), action: "approve", code: "12" });
+    expect(short.body).toContain("That is not the demo code (it has 6 digits; this had 2). 3 tries left.");
+    let last = short;
+    for (const left of [2, 1]) {
+      last = await post(url, { csrf: csrfOf(last.body), action: "approve", code: wrong });
+      expect(last.body).toContain(`${String(left)} ${left === 1 ? "try" : "tries"} left.`);
+    }
+    expect(demo.cloud.inspect(handle)?.state).toBe("pending");
+    // The re-rendered form's token works: the right code approves on the last try.
+    const right = await post(url, { csrf: csrfOf(last.body), action: "approve", code: demo.code });
+    expect(right.status).toBe(200);
+    expect(demo.cloud.inspect(handle)?.state).toBe("approved");
+  });
+
+  it("asks for a one-time code with a numeric keyboard and no pattern or length cap that would block a paste", async () => {
+    const { url } = await pending();
+    const field = /<input id="code"[^>]*>/.exec((await raw(url)).body)?.[0] ?? "";
+    expect(field).toContain('autocomplete="one-time-code"');
+    expect(field).toContain('inputmode="numeric"');
+    expect(field).toContain('aria-describedby="code-hint"');
+    expect(field).not.toMatch(/pattern=|maxlength=|aria-invalid/);
   });
 
   it("locks Approve after MAX_WRONG_CODES wrong codes, even for the right code, until the demo restarts", async () => {
