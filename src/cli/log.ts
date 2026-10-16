@@ -19,13 +19,14 @@ export function formatLog(items: readonly unknown[]): string {
     return `No entries yet: the gateway has sent nothing. Start it with ${INTENT} serve, or try ${INTENT} demo.\n`;
   }
   const lines: string[] = [];
+  const demo = demoChain(items);
   for (const [index, raw] of items.entries()) {
     const item = asItem(raw);
     if (item === null) {
       lines.push(`line ${String(index + 1)}: not an entry (a torn or edited line); run ${INTENT} verify`);
       continue;
     }
-    const [label, detail] = describe(item);
+    const [label, detail] = describe(item, demo);
     lines.push(`#${String(item.seq).padEnd(4)} ${item.ts}  ${label.padEnd(14)} ${detail}`);
   }
   const chain = verifyChain(items);
@@ -50,7 +51,13 @@ export function readLog(dataDir: string): unknown[] {
   }
 }
 
-function describe(item: Item): [string, string] {
+/** Whether the chain was written in demo mode: its first entry is the demo `session` entry `{mode: "demo"}`. */
+function demoChain(items: readonly unknown[]): boolean {
+  const first = asItem(items[0]);
+  return first?.kind === "session" && first.body.mode === "demo";
+}
+
+function describe(item: Item, demo: boolean): [string, string] {
   const b = item.body;
   const ref = typeof b.disclosure_seq === "number" ? `#${String(b.disclosure_seq)}` : "#?";
   switch (item.kind) {
@@ -60,7 +67,8 @@ function describe(item: Item): [string, string] {
       return ["blocked", `${text(b.endpoint)}: held back ${list(strings(b.blocked), "(no reason recorded)")}; nothing was sent`];
     case "receipt": {
       const how = b.verified === true ? "signature verified" : `signature checked by ${INTENT} verify`;
-      return ["receipt", `${ref}: Intent Cloud acknowledged receiving it (status ${typeof b.status === "number" ? String(b.status) : "?"}, ${how})`];
+      const who = demo ? "the local demo Intent Cloud acknowledged receiving it (demo chain, test keys)" : "Intent Cloud acknowledged receiving it";
+      return ["receipt", `${ref}: ${who} (status ${typeof b.status === "number" ? String(b.status) : "?"}, ${how})`];
     }
     case "unacknowledged":
       return ["no receipt", `${ref}: ${text(b.reason)}; it may or may not have arrived`];

@@ -503,4 +503,10 @@ describe("next steps", () => {
       `  claude mcp add --transport http intent http://127.0.0.1:8787/mcp --header "Authorization: Bearer ${"t".repeat(32)}"`,
     );
   });
+
+  it("in the image, points at the entrypoint's connect line instead of printing a second one", () => {
+    const lines = nextSteps({ http: "above" });
+    expect(lines).toContain("Add the demo gateway to Claude Code with the claude mcp add line above.");
+    expect(lines.join("\n")).not.toContain("claude mcp add --transport");
+  });
 });

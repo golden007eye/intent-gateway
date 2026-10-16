@@ -46,17 +46,17 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       const http = await runHttp({ gateway, host, port, token, log, ...banner });
       transport = http;
       // In the Docker image the server listens on 0.0.0.0, which is no address to connect to; the documented
-      // mapping publishes it on the host's 127.0.0.1. The token stays out of the log there: the entrypoint printed
-      // it once, on the start that made it.
+      // mapping publishes it on the host's 127.0.0.1. The entrypoint printed the one connect line there (with the
+      // token, or a `$(docker exec … cat …)` that reads it), so none is printed here: a second line with a
+      // placeholder token would get a 401 when pasted.
       const container = config.runtime === "container";
       const url = container ? `http://127.0.0.1:${String(http.port)}/mcp` : http.url;
-      const shownToken = token === null ? null : container ? "<token>" : "$INTENT_HTTP_TOKEN";
       if (demo === null) {
         say(`MCP over HTTP at ${url}`);
-        const auth = shownToken === null ? "" : ` --header "Authorization: Bearer ${shownToken}"`;
-        say(`connect an agent: claude mcp add --transport http intent ${url}${auth}`);
+        const auth = token === null ? "" : ` --header "Authorization: Bearer $INTENT_HTTP_TOKEN"`;
+        say(container ? "connect an agent with the claude mcp add line above" : `connect an agent: claude mcp add --transport http intent ${url}${auth}`);
       } else {
-        for (const text of nextSteps({ http: { url, token: container ? shownToken : token }, code: { code: demo.code, file: demo.codeFile } })) log(text);
+        for (const text of nextSteps({ http: container ? "above" : { url, token }, code: { code: demo.code, file: demo.codeFile } })) log(text);
         say("serving until Ctrl-C");
       }
     } else {

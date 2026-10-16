@@ -6,21 +6,24 @@ import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBuild, type Build } from "./build.ts";
-import { invocation } from "./invocation.ts";
+import { dockerExec, invocation } from "./invocation.ts";
 
 export type { Build } from "./build.ts";
 
 /** Version and build commit of this gateway (buildCommit is null when running from source). */
 export const BUILD: Build = readBuild(new URL("../", import.meta.url));
 
-export { invocation, type InvocationInput } from "./invocation.ts";
+export { dockerExec, invocation, type InvocationInput } from "./invocation.ts";
 
 /**
  * The command that runs this gateway, to print before a subcommand (`${INTENT} verify --demo`): `npx -y <spec>`
- * under npx, `node /abs/dist/main.js` from a path, `intent` from a global install, `docker exec <container> intent`
+ * under npx, `node /abs/dist/main.js` from a path, `intent` from a global install, `docker exec <container id> intent`
  * in the image. See invocation().
  */
 export const INTENT: string = invocation({ argv1: process.argv[1], packageRoot: fileURLToPath(new URL("../../", import.meta.url)), env: process.env });
+
+/** `docker exec <this container's id>`, to print before a command run inside the image. See dockerExec(). */
+export const DOCKER_EXEC: string = dockerExec(process.env);
 
 export interface RootKey {
   kid: string;

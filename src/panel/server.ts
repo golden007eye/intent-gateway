@@ -36,6 +36,8 @@ export interface PanelOptions {
   port: number;
   /** Must be 127.0.0.1; any other value is refused. Defaults to 127.0.0.1. */
   host?: string;
+  /** The command that runs this gateway (config's INTENT), so the page's hints paste as is. Defaults to `intent`. */
+  intent?: string;
 }
 
 export interface Panel {
@@ -55,10 +57,11 @@ export async function startPanel(source: string | Pick<Config, "dataDir">, opts:
     throw new PanelError(`the panel binds to ${PANEL_HOST} only, refusing host ${JSON.stringify(host)}`);
   }
   assertPrivate(dataDir);
+  const intent = opts.intent ?? "intent";
 
   let allowedHosts: ReadonlySet<string> = new Set();
   const server = createServer((req, res) => {
-    handle(req, res, dataDir, allowedHosts);
+    handle(req, res, dataDir, allowedHosts, intent);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -110,7 +113,7 @@ function mode(value: number): string {
   return (value & 0o777).toString(8).padStart(4, "0");
 }
 
-function handle(req: IncomingMessage, res: ServerResponse, dataDir: string, allowedHosts: ReadonlySet<string>): void {
+function handle(req: IncomingMessage, res: ServerResponse, dataDir: string, allowedHosts: ReadonlySet<string>, intent: string): void {
   if (!allowedHosts.has((req.headers.host ?? "").toLowerCase())) {
     send(res, 421, "text/plain; charset=utf-8", "misdirected request: use the panel's own address\n");
     return;
@@ -141,7 +144,7 @@ function handle(req: IncomingMessage, res: ServerResponse, dataDir: string, allo
     items = [];
   }
   const view = buildView(items);
-  send(res, 200, "application/json; charset=utf-8", JSON.stringify({ chain: view.chain, entries: items, view }));
+  send(res, 200, "application/json; charset=utf-8", JSON.stringify({ chain: view.chain, entries: items, view, intent }));
 }
 
 function send(res: ServerResponse, status: number, type: string, body: string): void {

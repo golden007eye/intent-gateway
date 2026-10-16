@@ -4,8 +4,11 @@ import { INTENT } from "../config/index.ts";
 export const DEMO_BANNER = "DEMO: test keys, sample catalog, nothing can be bought.";
 
 export interface NextStepsOptions {
-  /** The MCP Streamable HTTP endpoint when the demo serves HTTP (`--http`); stdio otherwise. */
-  http?: { url: string; token: string | null };
+  /**
+   * The MCP Streamable HTTP endpoint when the demo serves HTTP (`--http`); stdio otherwise. `"above"` in the Docker
+   * image: the entrypoint already printed the one connect line, with the real token, so none is repeated here.
+   */
+  http?: { url: string; token: string | null } | "above";
   /** The command that runs this gateway (config INTENT): `npx -y <spec>`, `node /abs/dist/main.js`, `intent`. */
   intent?: string;
   /** The demo code the confirm page's Approve needs, and the file that keeps it (Demo.code, Demo.codeFile). */
@@ -15,15 +18,16 @@ export interface NextStepsOptions {
 /** The lines printed on stderr when the demo starts, ready to paste. Never put in a tool result: they hold the code. */
 export function nextSteps(options: NextStepsOptions = {}): string[] {
   const intent = options.intent ?? INTENT;
+  const { http } = options;
   const add =
-    options.http === undefined
+    http === undefined
       ? `claude mcp add intent -- ${intent} demo`
-      : `claude mcp add --transport http intent ${options.http.url}` +
-        (options.http.token === null ? "" : ` --header "Authorization: Bearer ${options.http.token}"`);
+      : http === "above"
+        ? null
+        : `claude mcp add --transport http intent ${http.url}` + (http.token === null ? "" : ` --header "Authorization: Bearer ${http.token}"`);
   return [
     DEMO_BANNER,
-    "Add the demo gateway to Claude Code:",
-    `  ${add}`,
+    ...(add === null ? ["Add the demo gateway to Claude Code with the claude mcp add line above."] : ["Add the demo gateway to Claude Code:", `  ${add}`]),
     "Then ask your agent to find something to buy (for example running shoes to ZIP 94103, under $200).",
     "When it prepares a cart, open the approval link, enter the demo code and click Approve with demo passkey,",
     "then ask the agent to check the approval status.",
