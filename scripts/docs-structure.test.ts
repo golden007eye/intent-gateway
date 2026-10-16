@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { help } from "../src/cli/index.ts";
+import { IMAGE_PIN_DOCS } from "./release.ts";
 
 // The docs must not drift from the gateway: the threat model keeps its required sections and statements (AC-D4),
 // and a feature is marked planned only while it does not exist (AC-D3). docs/feature-map.json lists the features
@@ -121,5 +122,16 @@ describe("planned markers and docs/feature-map.json", () => {
   it("the README marks nothing planned that exists", () => {
     const readme = readFileSync(join(ROOT, "README.md"), "utf8");
     expect(readme).not.toMatch(/\(planned\)/);
+  });
+});
+
+describe("image pins", () => {
+  // A doc that pins an older image tag tells users to pull an old release; `pnpm release` bumps these with package.json.
+  const version = (JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { version: string }).version;
+  it.each(IMAGE_PIN_DOCS)("%s pins the image of the package.json version", (doc) => {
+    const text = readFileSync(join(ROOT, doc), "utf8");
+    const pins = [...text.matchAll(/ghcr\.io\/golden007eye\/intent-gateway:([^\s"'`)]+)/g)].map((m) => m[1]).filter((t) => t !== "latest");
+    expect(pins.length).toBeGreaterThan(0);
+    expect(pins).toEqual(pins.map(() => version));
   });
 });

@@ -283,10 +283,18 @@ export function withVersion(text: string, from: string, to: string): string {
   return text.replace(field, `"version": ${JSON.stringify(to)}`);
 }
 
+/** The docs that tell users which image tag to pull; the bump sets their pins to the new version. */
+export const IMAGE_PIN_DOCS = ["README.md", "docs/quickstart.md"];
+
+/** `text` with every pinned image tag (not `latest`) set to `to`. */
+export function withImageTag(text: string, to: string): string {
+  return text.replace(/(ghcr\.io\/golden007eye\/intent-gateway):\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/g, `$1:${to}`);
+}
+
 export function prBody(version: string, from: string): string {
   return [
     "## What changed",
-    `Sets the package version to \`${version}\` (from \`${from}\`); nothing else.`,
+    `Sets the package version to \`${version}\` (from \`${from}\`) and the image tag the docs pin; nothing else.`,
     "",
     "## Why",
     `The release \`v${version}\` (docs/release.md, ADR-0010). \`pnpm release\` opened this pull request and tags the merged commit.`,
@@ -341,10 +349,11 @@ async function bump(io: Io, flags: Flags, version: string, from: string): Promis
   const branch = `release/${version}`;
   const retry = `fix it, then re-run \`pnpm release --version ${version}\``;
   act(io, flags, `delete or rename the branch ${branch}, then re-run`, "git", ["switch", "-c", branch]);
-  if (flags.dryRun) io.log(`  would set package.json "version" from ${from} to ${version}`);
+  if (flags.dryRun) io.log(`  would set package.json "version" from ${from} to ${version}, and the image tag in ${IMAGE_PIN_DOCS.join(", ")}`);
   else {
     io.writeFile("package.json", withVersion(io.readFile("package.json"), from, version));
     io.log(`  package.json "version": ${from} → ${version}`);
+    for (const doc of IMAGE_PIN_DOCS) io.writeFile(doc, withImageTag(io.readFile(doc), version));
   }
   act(io, flags, retry, "git", ["commit", "--all", "--message", `release: ${version}`]);
   act(io, flags, retry, "git", ["push", "--set-upstream", "origin", branch]);

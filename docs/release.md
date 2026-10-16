@@ -60,7 +60,7 @@ $ pnpm release
 
 1. **Preflight.** On `main`, a clean tree, local `main` equal to `origin/main`, the latest CI run on `main` green for that commit, `gh auth status` ok, Node 24.15+ or 26+, the `release` environment exists with a required reviewer, and a root key is pinned in `src/config/index.ts`.
 2. **Version.** By default, the version in `package.json` while its tag `v<version>` is not on origin, else the next preview (`0.1.0-preview.1` → `0.1.0-preview.2`). `--version <v>` picks another one: it must be greater than the last tag, and a prerelease unless `--stable` is given too. A version the npm registry already lists is refused.
-3. **Bump.** Only when the version is not the one in `package.json`: a branch `release/<v>` that changes only the version, a pull request, its CI, a squash merge, then `main` fast-forwarded and its CI awaited.
+3. **Bump.** Only when the version is not the one in `package.json`: a branch `release/<v>` that changes only the version and the image tag that `README.md` and `docs/quickstart.md` pin, a pull request, its CI, a squash merge, then `main` fast-forwarded and its CI awaited.
 4. **Tag.** An annotated `v<v>` on that commit, signed when git signs tags by default (`tag.gpgSign`), pushed with `git push origin refs/tags/v<v>`. It asks `push tag v<v>? [y/N]` first; `--yes` skips the question, and without a terminal it refuses unless `--yes` is given.
 5. **Watch.** It prints the release run's URL with "Approve the `release` deployment in GitHub: <url>" and follows the run. Your Approve is the only human step. At the end it prints the `npx -y intent-gateway@<dist-tag>` command, the npm dist-tags, the image reference with its digest and the GitHub Release URL, or, on a failure, the failed jobs and the tail of their logs.
 
@@ -68,7 +68,7 @@ A failed release is fixed with a new version (`0.1.0-preview.2`), never by movin
 
 ### By hand
 
-When the script cannot run: change `version` in `package.json` by pull request (edit the file; the repository's hooks block `npm version`), merge it, then from an up-to-date `main`:
+When the script cannot run: change `version` in `package.json` and the image tag in `README.md` and `docs/quickstart.md` by pull request (edit the files; the repository's hooks block `npm version`), merge it, then from an up-to-date `main`:
 
 ```console
 $ git tag -a v0.1.0-preview.2 -m "intent-gateway 0.1.0-preview.2" && git push origin refs/tags/v0.1.0-preview.2

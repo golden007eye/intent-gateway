@@ -2,7 +2,7 @@
 
 This runs the [demo](demo.md) end to end: an agent finds offers, prepares a cart, you approve it, and you check what was sent. It needs no account and no config. Nothing can be bought.
 
-You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+ and an MCP client. Claude Code is the example.
+You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+ and an MCP client. Claude Code is the example. Odd-numbered releases such as Node 25 are not supported; [Docker](#with-docker) needs no Node.
 
 ## 1. Connect your agent
 
@@ -71,8 +71,8 @@ $ npx -y ./intent-gateway.tgz verify --demo
 The image runs the same package and serves MCP over HTTP on port 8787. Pull the preview from GHCR and name it `intent-gateway`, the name the commands below and the gateway's own hints use (or build it from a clone: `docker build --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t intent-gateway .`, where the build-arg is optional and records the commit):
 
 ```console
-$ docker pull ghcr.io/golden007eye/intent-gateway:0.1.0-preview.2
-$ docker tag ghcr.io/golden007eye/intent-gateway:0.1.0-preview.2 intent-gateway
+$ docker pull ghcr.io/golden007eye/intent-gateway:0.1.0-preview.3
+$ docker tag ghcr.io/golden007eye/intent-gateway:0.1.0-preview.3 intent-gateway
 $ docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 \
     -e INTENT_DEMO=1 -v intent-data:/data intent-gateway
 $ docker logs intent
