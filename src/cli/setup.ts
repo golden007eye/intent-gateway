@@ -80,23 +80,21 @@ export interface ActivePolicy {
 }
 
 /**
- * The library policy that applies when there is no policy file: strict-default, or zip-only in demo mode.
- * strict-default shares no ship-to at all, so no search can be sent under it (a search needs a ZIP); the demo
- * uses zip-only, the cloud baseline plus a 5-digit ZIP, so the first run can search and build a cart.
+ * The library policy that applies when there is no policy file, in every mode: zip-only, the cloud baseline plus
+ * a 5-digit ZIP, the least a search needs. strict-default shares no ship-to at all, so no search could be sent
+ * under it; it stays available through `intent policy add strict-default`.
  */
-export function defaultPolicyName(demo: boolean): string {
-  return demo ? "zip-only" : "strict-default";
-}
+export const DEFAULT_POLICY = "zip-only";
 
-/** The policy at `policyPath`, or the bundled default (defaultPolicyName) when there is no file. A bad file is an error. */
-export async function activePolicy(policyPath: string, demo = false): Promise<ActivePolicy> {
+/** The policy at `policyPath`, or the bundled DEFAULT_POLICY when there is no file. A bad file is an error. */
+export async function activePolicy(policyPath: string): Promise<ActivePolicy> {
   let text: string;
   let bundled: string | null = null;
   try {
     text = await readFile(policyPath, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    bundled = defaultPolicyName(demo);
+    bundled = DEFAULT_POLICY;
     text = await readFile(new URL(`policies/${bundled}/policy.yaml`, PACKAGE_ROOT), "utf8");
   }
   return { policy: loadPolicy(text), text, bundled };

@@ -19,6 +19,10 @@ merchants:
 approval: passkey          # required; "off" is rejected
 ```
 
+## When there is no policy file
+
+With no `policy.yaml`, every command (`serve`, `demo`, `doctor`, `policy show`, `policy test`) uses the bundled `zip-only` policy and says so. Under it, the only detail about the buyer that a search sends is a 5-digit ZIP code, the least a search needs. To share less, run `intent policy add strict-default`: it sends no ship-to at all, so no search can be sent under it.
+
 ## What a policy cannot do
 
 - Turn off the passkey Approval for a purchase.
