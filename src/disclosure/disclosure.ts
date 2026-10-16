@@ -8,7 +8,8 @@
 // 3. After the exchange, exactly one of `receipt`, `unacknowledged` or `discarded` (ADR-0006):
 //    - receipt: both receipt headers came back and verify (trust's verifyReceipt) against the logged request and the
 //      verified key set. Before a key set exists only the three key-bootstrap reads may be sent; their receipts are
-//      logged with `verified: false`.
+//      logged with `verified: false`. Once the key set has expired, the other calls are refused before anything is
+//      logged (DisclosureKeysExpiredError).
 //    - unacknowledged: no HTTP response, or a non-2xx response without Intent-Contract-Version and without a receipt.
 //    - discarded: a 2xx without a valid receipt (its content is never returned: DisclosureDiscardedError), any
 //      response with Intent-Contract-Version and no receipt, or any invalid receipt.
@@ -78,6 +79,16 @@ export class DisclosureNoKeysError extends Error {
   override name = "DisclosureNoKeysError";
 }
 
+/** A search, cart or approval call after the key statement expired: no key of it is trusted, so nothing is sent. */
+export class DisclosureKeysExpiredError extends DisclosureNoKeysError {
+  override name = "DisclosureKeysExpiredError";
+  readonly expiresAt: Date;
+  constructor(expiresAt: Date) {
+    super(`the key statement expired on ${expiresAt.toISOString()}: fetch a fresh one (restart the gateway) before sending`);
+    this.expiresAt = expiresAt;
+  }
+}
+
 interface Acknowledgement {
   status: number;
   receipt: { header: string; signature: string } | null;
@@ -96,8 +107,13 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
     needsKeys: boolean,
     run: (beforeSend: (request: PreparedRequest) => Promise<void>) => Promise<CloudResult<T>>,
   ): Promise<CloudResult<T>> {
-    if (needsKeys && options.keySet() === null) {
-      throw new DisclosureNoKeysError("no verified key statement yet: only meta, signatureKeys and keyStatement may be sent");
+    if (needsKeys) {
+      const keySet = options.keySet();
+      if (keySet === null) {
+        throw new DisclosureNoKeysError("no verified key statement yet: only meta, signatureKeys and keyStatement may be sent");
+      }
+      // Fail closed before anything is logged: every receipt of a send made now would be discarded anyway.
+      if (now() >= keySet.expiresAt.getTime()) throw new DisclosureKeysExpiredError(keySet.expiresAt);
     }
     // A holder, not locals, because beforeSend fills it inside the adapter's call.
     const logged: { seq: number | null; sent: SentRequest | null } = { seq: null, sent: null };

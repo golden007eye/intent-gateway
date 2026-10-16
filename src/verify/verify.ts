@@ -114,9 +114,10 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       keyFailures.push(`seq ${String(entry.seq)}: the recorded key statement does not verify against the pinned root (${why})`);
     }
   }
-  // The key-bootstrap reads are sent before any statement is recorded; their receipts are checked against the first.
-  const [first] = statements;
-  const bootstrap: RecordedKeys | null = first === undefined ? null : { seq: first[0], keySet: first[1] };
+  // The key-bootstrap reads (at start, and again when the statement has expired) are sent while no key set is
+  // trusted; their receipts, logged `verified: false`, are checked against the next statement recorded after them.
+  const recorded = [...statements].map(([seq, keySet]): RecordedKeys => ({ seq, keySet }));
+  const nextKeys = (seq: number): RecordedKeys | null => recorded.find((k) => k.seq > seq) ?? null;
   // The latest statement recorded before the entry being checked.
   let keys: RecordedKeys | null = null;
 
@@ -149,7 +150,7 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
         if (entry.kind === "discarded") {
           disclosureFailures.push(`${at}: discarded: a response to ${of} came without a valid receipt (${String(body.reason)})`);
         } else if (entry.kind === "receipt") {
-          const problem = receiptProblem(body, target.entry, keys ?? bootstrap, ts);
+          const problem = receiptProblem(body, target.entry, body.verified === false ? (nextKeys(entry.seq) ?? keys) : keys, ts);
           if (problem !== null) disclosureFailures.push(`${at}: the receipt for ${of} ${problem}`);
         }
         break;
