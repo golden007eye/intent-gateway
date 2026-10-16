@@ -2,31 +2,19 @@
 
 This runs the [demo](demo.md) end to end: an agent finds offers, prepares a cart, you approve it, and you check what was sent. It needs no account and no config. Nothing can be bought.
 
-You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+, pnpm (`corepack enable`) and an MCP client. Claude Code is the example.
+You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+ and an MCP client. Claude Code is the example.
 
-## 1. Build the package
+## 1. Connect your agent
 
-There is no release on npm yet, so build the package from a clone:
-
-```console
-$ git clone https://github.com/golden007eye/intent-gateway.git
-$ cd intent-gateway
-$ pnpm install && pnpm build && npm pack && mv intent-gateway-*.tgz intent-gateway.tgz
-```
-
-`npm pack` writes the same package a release publishes; renaming it to `intent-gateway.tgz` keeps the commands below the same for every version.
-
-## 2. Connect your agent
-
-From the same folder:
+The preview release is on npm as `intent-gateway@next`:
 
 ```console
-$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
+$ claude mcp add intent -- npx -y intent-gateway@next demo
 ```
 
 Claude Code starts the gateway over stdio when it needs it. The gateway starts a demo Intent Cloud and a local confirm page on `127.0.0.1`, and keeps its data in `<data dir>/demo` (on Linux `~/.local/share/intent-gateway/demo`).
 
-## 3. Ask for something
+## 2. Ask for something
 
 Start `claude` and ask:
 
@@ -39,13 +27,11 @@ Start `claude` and ask:
 3. Open the link. The page shows the item, merchant, total, the ZIP prefix and the check code. Enter the demo code and click **Approve $<total> with demo passkey**. The code is six digits, new on every start and never shown to the agent. Claude Code does not show the gateway's terminal output, so the page shows the command that reads it: `cat <data dir>/demo/approval-code`.
 4. Ask the agent whether it was approved. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started. The agent calls `get_approval_status` and reports it approved, with the approver passkey's fingerprint. The first passkey that approves becomes the [approver pin](threat-model.md#phone-hand-off-and-self-approval).
 
-## 4. Check what was sent
-
-In the cloned folder:
+## 3. Check what was sent
 
 ```console
-$ npx -y ./intent-gateway.tgz log --demo
-$ npx -y ./intent-gateway.tgz verify --demo
+$ npx -y intent-gateway@next log --demo
+$ npx -y intent-gateway@next verify --demo
 ```
 
 `log` lists each entry of the local hash chain. `verify` re-checks the chain, each receipt and the approval, and ends with `verify: ok` and the chain's head seq and hash. [Verify](verify.md) says what each check proves.
@@ -55,7 +41,7 @@ $ npx -y ./intent-gateway.tgz verify --demo
 `demo --http` (or `demo` run in a terminal) serves MCP over HTTP on `127.0.0.1:8787` and prints the line to connect with and the demo code:
 
 ```console
-$ npx -y ./intent-gateway.tgz demo --http
+$ npx -y intent-gateway@next demo --http
 DEMO: test keys, sample catalog, nothing can be bought.
 Add the demo gateway to Claude Code:
   claude mcp add --transport http intent http://127.0.0.1:8787/mcp
@@ -64,23 +50,29 @@ Demo code for the confirm page: 123456 (new on every start; also in …/demo/app
 ...
 ```
 
-The commands the gateway prints start with the invocation that runs it, here `npx -y file:/…/intent-gateway.tgz`.
+The commands the gateway prints start with the invocation that runs it, here `npx -y intent-gateway@next`.
 
-## From the first preview release
+## From a clone
 
-Once `0.1.0-preview.1` is on npm, skip step 1:
+To run the code on `main` instead of the preview release, build the package from a clone (this needs pnpm: `corepack enable`):
 
 ```console
-$ claude mcp add intent -- npx -y intent-gateway@next demo
-$ npx -y intent-gateway@next verify --demo
+$ git clone https://github.com/golden007eye/intent-gateway.git
+$ cd intent-gateway
+$ pnpm install && pnpm build && npm pack && mv intent-gateway-*.tgz intent-gateway.tgz
+$ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
+$ npx -y ./intent-gateway.tgz verify --demo
 ```
+
+`npm pack` writes the same package a release publishes; renaming it to `intent-gateway.tgz` keeps the commands the same for every version. In that folder, `npx -y ./intent-gateway.tgz` takes the place of `npx -y intent-gateway@next` in the steps above.
 
 ## With Docker
 
-The image runs the same package and serves MCP over HTTP on port 8787. Until the first preview release puts it on GHCR, build it from the cloned folder:
+The image runs the same package and serves MCP over HTTP on port 8787. Pull the preview from GHCR and name it `intent-gateway`, the name the commands below and the gateway's own hints use (or build it from a clone: `docker build --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t intent-gateway .`, where the build-arg is optional and records the commit):
 
 ```console
-$ docker build --build-arg BUILD_COMMIT="$(git rev-parse HEAD)" -t intent-gateway .   # the build-arg is optional: it records the commit
+$ docker pull ghcr.io/golden007eye/intent-gateway:0.1.0-preview.2
+$ docker tag ghcr.io/golden007eye/intent-gateway:0.1.0-preview.2 intent-gateway
 $ docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 \
     -e INTENT_DEMO=1 -v intent-data:/data intent-gateway
 $ docker logs intent
@@ -96,7 +88,7 @@ Later starts reuse the token without printing it: their connect line reads it fr
 
 - Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`: inside the container the gateway listens on every interface, and the token is then the only protection.
 - The gateway runs as uid 1000, which owns the `/data` volume. For a bind mount, run as its owner: `--user "$(id -u):$(id -g)" -v "$PWD/data:/data"`.
-- Without `INTENT_DEMO=1` the container talks to the Intent Cloud staging host, whose root key this build pins. Until that host is open, the container exits with a line saying it cannot be reached and how to re-run it in demo mode.
+- Without `INTENT_DEMO=1` the container talks to the Intent Cloud staging host, whose root key this build pins. When it cannot reach that host, the container exits with a line saying so and how to re-run it in demo mode.
 
 ## Next
 

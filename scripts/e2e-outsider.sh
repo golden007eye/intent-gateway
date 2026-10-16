@@ -633,22 +633,52 @@ outsider_docker() {
   mkdir -p "$DOCKER_CONFIG"
 }
 
-scenario_g_nodemo() {
-  local c v f rc=0
-  c="$(docker_name nodemo)"
-  v="$c"
+# g1a: the image as the README runs it, without INTENT_DEMO, reaches Intent Cloud staging, prints the connect line
+# with the token and serves; `doctor` inside the container is ok.
+scenario_g_staging() {
+  local c f logs i
+  c="$(docker_name staging)"
   CONTAINERS+=("$c")
-  VOLUMES+=("$v")
-  f="$LOGS/g-nodemo.txt"
-  timeout 180 docker run --name "$c" -v "$v:/data" "$IMAGE" >"$f" 2>&1 || rc=$?
-  [ "$rc" != 0 ] || { WHY="the container without INTENT_DEMO exited 0; see $f"; return 1; }
+  VOLUMES+=("$c")
+  f="$LOGS/g-staging-run.txt"
+  docker run -d --name "$c" -v "$c:/data" "$IMAGE" >"$f" 2>&1 || { WHY="docker run failed; see $f"; return 1; }
+  logs="$LOGS/g-staging-logs.txt"
+  for i in $(seq 1 120); do
+    docker logs "$c" >"$logs" 2>&1 || true
+    grep -q 'claude mcp add' "$logs" && break
+    [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = true ] || break
+    sleep 1
+  done
+  must_match "$logs" 'claude mcp add intent --transport http http://127\.0\.0\.1:8787/mcp --header "Authorization: Bearer [A-Za-z0-9_-]{32,}"' "the connect line with the token" || return 1
+  must_match "$logs" 'MCP over HTTP at' "the gateway serves" || return 1
+  [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = true ] || { WHY="the container stopped; see $logs"; return 1; }
+  f="$LOGS/g-staging-doctor.txt"
+  docker exec "$c" intent doctor >"$f" 2>&1 || { WHY="doctor in the container exited non-zero; see $f"; return 1; }
+  must_match "$f" '^doctor: ok' "doctor against staging" || return 1
+  WHY="connect line with the token; serving; doctor: ok against staging"
+}
+
+# g1b, g1c: when Intent Cloud cannot be used, the image without INTENT_DEMO exits cleanly with the demo re-run line
+# and prints no token: staging unreachable (no network) and a host with no pinned root key.
+scenario_g_nocloud() { # scenario_g_nocloud <name> <docker run args...>
+  local name="$1" c f rc=0
+  shift
+  c="$(docker_name "$name")"
+  CONTAINERS+=("$c")
+  VOLUMES+=("$c")
+  f="$LOGS/g-$name.txt"
+  timeout 180 docker run --name "$c" "$@" -v "$c:/data" "$IMAGE" >"$f" 2>&1 || rc=$?
+  [ "$rc" != 0 ] || { WHY="the container exited 0; see $f"; return 1; }
+  [ "$rc" != 124 ] || { WHY="the container did not exit within 180s; see $f"; return 1; }
   must_match "$f" 'INTENT_DEMO=1' "the exit message gives the demo re-run line" || return 1
   must_not_match "$f" 'Bearer [A-Za-z0-9_-]{32,}' "no token in the output" || return 1
   local token
-  token="$(docker run --rm -v "$v:/data" --entrypoint cat "$IMAGE" /data/http-token 2>/dev/null | tr -d '[:space:]' || true)"
+  token="$(docker run --rm -v "$c:/data" --entrypoint cat "$IMAGE" /data/http-token 2>/dev/null | tr -d '[:space:]' || true)"
   if [ -n "$token" ]; then must_not_match "$f" "$token" "the saved token is not in the output" || return 1; fi
   WHY="exit $rc: $(grep -m1 'INTENT_DEMO=1' "$f" | cut -c1-200); no token printed"
 }
+scenario_g_offline() { scenario_g_nocloud offline --network none; }
+scenario_g_unpinned() { scenario_g_nocloud unpinned -e INTENT_CLOUD_URL=https://unpinned.example; }
 
 scenario_g_demo() {
   local c f host_port=8787
@@ -774,7 +804,9 @@ case "$MODE" in
     VOLUMES+=("$VOL_A")
     wants a && run_scenario a "first run in the image: --help, doctor --demo, verify --demo on an empty chain" scenario_a
     if wants g; then
-      run_scenario g1 "image without INTENT_DEMO: clean exit, demo re-run line, no token" scenario_g_nodemo
+      run_scenario g1a "image without INTENT_DEMO: reaches staging, connect line, serves, doctor ok" scenario_g_staging
+      run_scenario g1b "image without INTENT_DEMO, no network: clean exit, demo re-run line, no token" scenario_g_offline
+      run_scenario g1c "image without INTENT_DEMO, unpinned INTENT_CLOUD_URL: clean exit, demo re-run line, no token" scenario_g_unpinned
       run_scenario g2 "image with INTENT_DEMO=1: connect line, happy path, no-code 403, restart verifies" scenario_g_demo
     fi
     ;;

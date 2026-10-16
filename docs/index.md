@@ -3,7 +3,7 @@
 intent-gateway is a self-hosted gateway, run with npx or Docker, that gives AI agents real shopping under a privacy policy the developer controls. It is the developer channel of [intent](https://intentai.shop): the agent searches and builds carts, a person approves each purchase with a passkey, and the buyer pays on the merchant's own checkout.
 
 !!! note "Pre-alpha preview"
-    The gateway, the `intent` CLI and [demo mode](demo.md) work today, built from the repository. There is no release on npm or GHCR yet, and nothing can be bought: the first preview targets the Intent Cloud staging host, and real purchases wait for the launch criteria in [ADR-0004](adr/0004-public-pre-alpha.md). Anything not built yet is marked *planned*.
+    The gateway, the `intent` CLI and [demo mode](demo.md) work today. Preview releases are on npm (`intent-gateway@next`) and GHCR. Nothing can be bought: the preview targets the Intent Cloud staging host, and real purchases wait for the launch criteria in [ADR-0004](adr/0004-public-pre-alpha.md). Anything not built yet is marked *planned*.
 
 ## How it fits together
 

@@ -231,7 +231,7 @@ describe("preflight", () => {
       "`git fetch origin main` failed (fatal: unable to access): check the network and your GitHub access",
     ]);
     expect(failing([(l) => (l === "gh auth status" ? fail("not logged in") : undefined)])).toEqual(["gh is not logged in: run `gh auth login`"]);
-    expect(failing([], { node: "v25.1.0" })).toEqual(["node v25.1.0 is not 24.15+ or 26+: use Node 24 (.node-version)"]);
+    expect(failing([], { node: "v25.1.0" })).toEqual(["node v25.1.0: releasing needs Node 24.15+ or 26+, because releases build on Node 24 (.node-version); switch to Node 24, for example nvm use 24, and re-run"]);
     expect(failing([], { node: "v24.14.0" })).toHaveLength(1);
     expect(failing([], { node: "v26.0.0" })).toEqual([]);
     expect(failing([], { keys: 0 })).toEqual([
