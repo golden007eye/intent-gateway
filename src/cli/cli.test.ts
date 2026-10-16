@@ -178,6 +178,16 @@ describe("intent log (golden)", () => {
     );
   });
 
+  it("names a signature-counter flag as such, not as another passkey", async () => {
+    const s = setup();
+    await writeChain(s.dir, async (append) => {
+      await append("approver_flag", { fingerprint: "aaaa 1111", reason: "sign_count" });
+    });
+    const result = await s.run(["log"]);
+    expect(result.out).toContain("FLAGGED        aaaa 1111 signed with a signature counter that did not go up; the passkey may have been copied\n");
+    expect(result.out).not.toContain("aaaa 1111 is not the pinned approver");
+  });
+
   it("says what to do on an empty or missing chain", async () => {
     const result = await setup().run(["log"]);
     expect(result).toEqual({ code: 0, err: "", out: "No entries yet: the gateway has sent nothing. Start it with intent serve, or try intent demo.\n" });

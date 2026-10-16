@@ -42,6 +42,7 @@ import type { Entry, Store } from "../store/index.ts";
 import {
   approverFingerprint,
   checkApprover,
+  type FlagReason,
   type KeySet,
   onlyTestRoot,
   type PinnedRootKey,
@@ -570,10 +571,10 @@ export function createGateway(options: GatewayOptions): Gateway {
       const lastPin = chain.findLastIndex((e) => e.kind === "approver_pin");
       const alreadyFlagged = chain.some((e, i) => i > lastPin && e.kind === "approver_flag" && bodyOf(e).fingerprint === check.fingerprint);
       if (!alreadyFlagged) await store.append(check.entry.kind, check.entry.body);
-      return flagged(check.fingerprint, fromSeq);
+      return flagged(check.fingerprint, check.reason, fromSeq);
     }
     if (check.entry !== null) await store.append(check.entry.kind, check.entry.body);
-    await store.append("approval", { handle, proof: status.proof });
+    await store.append("approval", { handle, proof: status.proof, sign_count: verified.credential.signCount });
     if (check.decision === "pin") {
       logger.warn(`intent-gateway: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
     }
@@ -608,7 +609,18 @@ export function createGateway(options: GatewayOptions): Gateway {
     return { status: "approved", fingerprint, message: `${base} The buyer pays at the merchant checkout.`, summary: summary(fromSeq) };
   }
 
-  function flagged(fingerprint: string, fromSeq: number): ApprovalStatusResult {
+  function flagged(fingerprint: string, reason: FlagReason, fromSeq: number): ApprovalStatusResult {
+    if (reason === "sign_count") {
+      return {
+        status: "flagged",
+        fingerprint,
+        message:
+          `Not approved: the pinned passkey (fingerprint ${fingerprint}) signed with a signature counter that did not ` +
+          "go up since its last approval, as happens when a passkey has been copied. Check the passkey with its owner " +
+          "before creating a new cart.",
+        summary: summary(fromSeq),
+      };
+    }
     return {
       status: "flagged",
       fingerprint,

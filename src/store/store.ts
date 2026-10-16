@@ -177,6 +177,7 @@ class FileStore implements Store {
   #fenced: string | null = null;
   #broken: string | null = null;
   #lease: Lease | null = null;
+  #dirSynced = false;
   /** The head this handle last verified or wrote; on first acquire, genesis, so the whole file is verified. */
   #tail: Tail = { size: 0, hash: GENESIS, seq: -1 };
 
@@ -245,6 +246,7 @@ class FileStore implements Store {
       const { bytesWritten } = await handle.write(line);
       if (bytesWritten !== line.length) throw new Error(`short write: ${String(bytesWritten)} of ${String(line.length)}`);
       await handle.datasync();
+      if (!this.#dirSynced) await this.#syncDir();
     } catch (error) {
       this.#fenced = `write failed: ${(error as Error).message}`;
       await handle.truncate(size).then(() => handle.datasync()).catch(() => undefined);
@@ -252,6 +254,23 @@ class FileStore implements Store {
     } finally {
       await handle.close();
     }
+  }
+
+  /**
+   * fsyncs the data dir, once per handle, after its first entry is on disk. fdatasync makes the entry durable but not
+   * the directory entries of a newly created `audit.jsonl` and `audit.lock`; without this, POSIX allows a crash to
+   * lose the whole file after the first send. Windows cannot open a directory for fsync, and there it is skipped.
+   */
+  async #syncDir(): Promise<void> {
+    if (process.platform !== "win32") {
+      const dir = await this.#fs.open(this.#dir, READ);
+      try {
+        await dir.sync();
+      } finally {
+        await dir.close();
+      }
+    }
+    this.#dirSynced = true;
   }
 
   async #acquire(): Promise<void> {

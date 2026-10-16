@@ -165,7 +165,11 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       }
       case "approver_flag":
         counts.flags += 1;
-        flags.push(`${at}: a passkey other than the pinned approver signed an approval, not counted as approved (fingerprint ${String(body.fingerprint)})`);
+        flags.push(
+          body.reason === "sign_count"
+            ? `${at}: the pinned approver's passkey signed an approval with a signature counter that did not go up, not counted as approved (fingerprint ${String(body.fingerprint)})`
+            : `${at}: a passkey other than the pinned approver signed an approval, not counted as approved (fingerprint ${String(body.fingerprint)})`,
+        );
         break;
       default:
         break;
@@ -231,6 +235,9 @@ function approvalProblem(
   const verified = verifyApprovalProof({ state: "approved", proof: body.proof }, pendingEntry, keys.keySet, before, ts);
   if (!verified.ok) return `does not verify (step ${String(verified.step)}: ${verified.reason})`;
   const approver = checkApprover(verified.credential, before);
+  if (approver.decision === "flag" && approver.reason === "sign_count") {
+    return `is counted as approved, but its passkey's signature counter did not go up since the last approval (fingerprint ${approver.fingerprint})`;
+  }
   if (approver.decision === "flag") return `is counted as approved, but its passkey is not the pinned approver (fingerprint ${approver.fingerprint})`;
   if (approver.decision === "pin") return "was chained before any approver pin";
   return null;

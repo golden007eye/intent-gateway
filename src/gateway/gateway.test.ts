@@ -2,6 +2,7 @@
 // checks. Invariant 3: identity anywhere in a tool input → 0 sends. Invariant 4: "approved" only after the proof
 // verified, was chained, and came from the pinned passkey. Invariant 1: the policy's blocks and caps (the weekly one
 // computed from the chain) hold before anything is sent.
+import { generateKeyPairSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -633,6 +634,27 @@ describe("invariant 4: approved only when verified, chained and from the pinned 
     const accepted = await h.gateway.getApprovalStatus({ approval_handle: second });
     expect(accepted.status).toBe("approved");
     expect(bodies(h, "approval")).toHaveLength(2);
+  });
+
+  it("a copy of the pinned passkey whose signature counter did not go up is flagged, not approved (attack)", async () => {
+    const h = await setup();
+    const key = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey;
+    const at = (signCount: number) => new SoftPasskey({ privateKey: key, credentialId: "Y3JlZC0x", signCount });
+    expect((await approvedPurchase(h, "Trail Runner 3", at(5))).status).toBe("approved");
+    expect(bodies(h, "approver_pin")[0]?.sign_count).toBe(5);
+    expect(bodies(h, "approval")[0]?.sign_count).toBe(5);
+
+    const cloned = await pendingPurchase(h, "Road Runner 2");
+    expect(h.fake.approveWithPasskey(cloned, at(5)).status).toBe(200);
+    const result = await h.gateway.getApprovalStatus({ approval_handle: cloned });
+    expect(result.status).toBe("flagged");
+    expect(result.message).toContain("signature counter");
+    expect(bodies(h, "approver_flag")).toMatchObject([{ reason: "sign_count", sign_count: 5, handle: cloned }]);
+    expect(bodies(h, "approval")).toHaveLength(1);
+
+    // The real passkey's counter has gone up: its next approval is accepted.
+    expect((await approvedPurchase(h, "Trail Runner 3", at(6))).status).toBe("approved");
+    expect(bodies(h, "approval").map((b) => b.sign_count)).toEqual([5, 6]);
   });
 
   it("an approval this gateway never asked for is unknown, and nothing is sent", async () => {

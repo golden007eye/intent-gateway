@@ -21,6 +21,10 @@ export interface VerifiedCredential {
   readonly publicKey: CredentialPublicKey;
   /** `approverFingerprint(publicKey)`. */
   readonly fingerprint: string;
+  /** The authenticator's signature counter: authenticatorData bytes 33–36, big-endian. 0 means it does not count. */
+  readonly signCount: number;
+  /** The approval this credential signed, so checkApprover can tell its own pin from an earlier one. */
+  readonly handle: string;
 }
 
 export interface VerifiedApproval {
@@ -102,6 +106,9 @@ export function verifyApprovalProof(
   // Step 3: the snapshot hashes to snapshot_hash, which is the hash the gateway chained when it asked for approval.
   if (sha256Hex(canonicalize(proof.snapshot)) !== proof.snapshot_hash) return fail(3, "snapshot_hash_mismatch");
   if (proof.snapshot_hash !== pending.snapshotHash) return fail(3, "not_pending_snapshot");
+  // issued_at is deliberately not compared with snapshot.expires_at. Appendix E defines issued_at as when Intent
+  // Cloud made the proof, and Intent Cloud makes one at each read, so a status read after the approval window
+  // carries a later issued_at for an approval given inside it. The proof carries no approval time to compare.
 
   // Step 4: clientDataJSON says this is a get() on the confirm origin over the approve challenge.
   const clientDataBytes = fromBase64Url(proof.assertion.client_data_json);
@@ -133,6 +140,8 @@ export function verifyApprovalProof(
     id: proof.assertion.credential_id,
     publicKey: Object.freeze({ ...proof.credential_public_key }),
     fingerprint: approverFingerprint(proof.credential_public_key),
+    signCount: authData.readUInt32BE(33),
+    handle: proof.approval_handle,
   });
   verifiedCredentials.add(credential);
   return {
@@ -181,13 +190,18 @@ function jsonObject(bytes: Uint8Array): Record<string, unknown> | null {
   }
 }
 
-/** The passkey's public key, from the two JWK forms Appendix E allows and no other. */
+/**
+ * The passkey's public key, from the two JWK forms Appendix E allows and no other. An RSA key must have the public
+ * exponent 65537 (`AQAB`, the only one WebAuthn authenticators use; e = 1 would make any signature verify) and a
+ * modulus of at least 2048 bits.
+ */
 function credentialKey(jwk: CredentialPublicKey): KeyObject | null {
   try {
     if (jwk.kty === "EC") {
       const key = createPublicKey({ key: { kty: "EC", crv: "P-256", x: jwk.x, y: jwk.y }, format: "jwk" });
       return key.asymmetricKeyDetails?.namedCurve === "prime256v1" ? key : null;
     }
+    if (jwk.e !== "AQAB") return null;
     const key = createPublicKey({ key: { kty: "RSA", n: jwk.n, e: jwk.e }, format: "jwk" });
     return (key.asymmetricKeyDetails?.modulusLength ?? 0) >= 2048 ? key : null;
   } catch {

@@ -7,7 +7,8 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTarGz, routedFetch, sha512, type Route } from "../../test/support/fake-registry.ts";
 import { createTestSigstore } from "../../test/support/sigstore-ca.ts";
-import { makeProof, pendingEntry, PINNED, S1, signReceipt, signStatement, STATEMENT_VALID_AT, TestPasskey } from "../../test/support/trust-kit.ts";
+import { makeProof, pendingEntry, PINNED, S1, SNAPSHOT, signReceipt, signStatement, STATEMENT_VALID_AT, TestPasskey } from "../../test/support/trust-kit.ts";
+import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { type Entry, type EntryKind, openStore, type Store, type StoreFs } from "../store/index.ts";
 import { approverFingerprint } from "../trust/index.ts";
 import * as fsp from "node:fs/promises";
@@ -383,6 +384,53 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
       await approve(s, passkey, makeProof({ passkey }), false);
     });
     expect(check(await verify(dir), "approvals")?.details).toContain("seq 2: the approval for ap_TEST0001 was chained before any approver pin");
+  });
+});
+
+describe("runVerify: the passkey signature counter", () => {
+  /** The pending entry and proof for approval `handle` by `passkey` with counter `signCount`. */
+  function counted(passkey: TestPasskey, handle: string, signCount: number) {
+    const snapshot = { ...SNAPSHOT, approval: handle };
+    const snapshotHash = sha256Hex(canonicalize(snapshot));
+    return { pending: pendingEntry(handle, snapshotHash).body, proof: makeProof({ passkey, handle, snapshot, snapshotHash, signCount }) };
+  }
+  /** Two approvals as the gateway chains them now: the pin and each approval record the counter. */
+  const twoApprovals = (second: number) => {
+    const passkey = new TestPasskey("ES256");
+    return chain(async (s) => {
+      await keys(s);
+      const a = counted(passkey, "ap_TEST0001", 5);
+      await s.append("approval_pending", a.pending);
+      await s.append("approver_pin", { ...pinBody(passkey), sign_count: 5, handle: "ap_TEST0001" });
+      await s.append("approval", { handle: "ap_TEST0001", proof: a.proof, sign_count: 5 });
+      const b = counted(passkey, "ap_TEST0002", second);
+      await s.append("approval_pending", b.pending);
+      await s.append("approval", { handle: "ap_TEST0002", proof: b.proof, sign_count: second });
+    });
+  };
+
+  it("verifies a chain whose counter goes up, including the approval that wrote the pin", async () => {
+    const report = await verify(await twoApprovals(6));
+    expect(failed(report)).toEqual([]);
+    expect(report.counts).toMatchObject({ approvals: 2, flags: 0 });
+  });
+
+  it("fails an approval chained with a counter that did not go up (attack: a cloned passkey's approval inserted)", async () => {
+    const report = await verify(await twoApprovals(5));
+    expect(failed(report)).toEqual(["approvals"]);
+    expect(check(report, "approvals")?.details.join("\n")).toMatch(/the approval for ap_TEST0002 is counted as approved, but its passkey's signature counter did not go up/);
+  });
+
+  it("reports a counter flag as such", async () => {
+    const passkey = new TestPasskey("ES256");
+    const dir = await chain(async (s) => {
+      await keys(s);
+      await approve(s, passkey);
+      await s.append("approver_flag", { ...pinBody(passkey), sign_count: 0, handle: "ap_TEST0002", reason: "sign_count" });
+    });
+    const report = await verify(dir);
+    expect(report).toMatchObject({ exitCode: 0, counts: { approvals: 1, flags: 1 } });
+    expect(formatReport(report)).toContain("the pinned approver's passkey signed an approval with a signature counter that did not go up");
   });
 });
 
