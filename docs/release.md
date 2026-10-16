@@ -41,6 +41,8 @@ These steps need the maintainer's accounts. The workflow cannot succeed until th
 
 ## Tag
 
+Before tagging, the [outsider e2e](https://github.com/golden007eye/intent-gateway/blob/main/CONTRIBUTING.md#outsider-e2e) must pass on the release commit: `scripts/e2e-outsider.sh --tarball` and `scripts/e2e-outsider.sh --docker`. It needs a logged-in Claude Code, so a maintainer runs it; CI does not.
+
 From an up-to-date `main`:
 
 ```console
@@ -51,6 +53,7 @@ Approve the `release` deployment when GitHub asks. A failed release is fixed wit
 
 ## After the first release
 
+- Run the outsider e2e against what was published: `scripts/e2e-outsider.sh --npm next` and `scripts/e2e-outsider.sh --image ghcr.io/golden007eye/intent-gateway:<version>`.
 - Record real fixtures for `src/supplychain` from the published package and image. Its tests use the Sigstore bundle format cosign is documented to write; the first release is the first real one.
 - Set the repository variable `STAGING_HOST_LIVE` to `true` once the staging host is live. That turns on the daily `staging-contract` and `statement-expiry` runs. `statement-expiry` fails, with an annotation, when the key statement the staging host serves has fewer than 14 days left or does not verify against the pinned root.
 
