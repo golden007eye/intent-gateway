@@ -106,9 +106,9 @@ jobs:
       - run: pnpm build
       - name: one line, exit 1
         run: |
-          set -uo pipefail
-          node dist/main.js --help > out.txt 2> err.txt
-          code=$?
+          set -euo pipefail
+          code=0
+          node dist/main.js --help > out.txt 2> err.txt || code=$?
           cat out.txt err.txt
           [[ "$code" == 1 ]] || { echo "::error::exit $code, not 1"; exit 1; }
           [[ ! -s out.txt ]] || { echo "::error::stdout is not empty"; exit 1; }
