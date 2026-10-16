@@ -42,6 +42,7 @@ With no policy file the bundled zip-only policy applies: the only detail about y
 ${intent} policy add per-order-60 (or another library policy) narrows it, here to $60 a cart.
 
 Settings: INTENT_DATA_DIR, INTENT_POLICY, INTENT_CLOUD_URL, INTENT_HTTP_HOST, INTENT_HTTP_PORT,
-INTENT_HTTP_TOKEN, INTENT_DEMO=1, INTENT_DEBUG=1 (stack traces).
+INTENT_HTTP_TOKEN, INTENT_DEMO=1, INTENT_DEMO_CONFIRM_PORT (demo confirm page, default 8788),
+INTENT_DEBUG=1 (stack traces).
 `;
 }

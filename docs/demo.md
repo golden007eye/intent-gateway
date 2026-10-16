@@ -18,7 +18,7 @@ DEMO: test keys, sample catalog, nothing can be bought.
 |---|---|
 | Demo Intent Cloud | A stand-in for Intent Cloud inside the gateway process, on `127.0.0.1`, following the public contract. It signs receipts, key statements and approvals with the published test keys. |
 | Sample catalog | About seventy US offers from `*.example` merchants across everyday categories: running shoes, water bottles and mugs, coffee and kitchen gear, headphones and phone accessories, backpacks, books, toys and games, home basics, office supplies, camping gear, pet supplies, beauty basics and gifts under $30. Some exist so a seed policy has something to act on: electronics (`no-electronics`), drop-ship merchants (`block-dropship`) and items over $60 (`per-order-60`). See [Searching the sample catalog](#searching-the-sample-catalog). |
-| Local confirm page | `http://127.0.0.1:<port>/confirm/c/<link>`, with **Approve with demo passkey** and **Reject**. A click signs on the server with a demo passkey kept in `<data dir>/demo/demo-passkey.json`. Approve also needs the demo code (below). |
+| Local confirm page | `http://127.0.0.1:8788/confirm/c/<link>`, with **Approve with demo passkey** and **Reject**. A click signs on the server with a demo passkey kept in `<data dir>/demo/demo-passkey.json`. Approve also needs the demo code (below). |
 | Demo code | Six digits, new on every start, printed on the gateway's stderr with the next steps and kept in `<data dir>/demo/approval-code` (mode 600). It never appears in a tool result. When your agent started the gateway, you do not see its stderr: the confirm page shows the command that reads the file. |
 | Demo data dir | `<data dir>/demo`. Its chain starts with a demo `session` entry, and the gateway refuses to mix a demo chain with a real one. |
 
@@ -39,6 +39,22 @@ Here `intent` stands for the command that runs your gateway: `npx -y "file:$PWD/
 Every other command takes `--demo` and then reads the demo data dir: `intent log --demo`, `intent verify --demo`, `intent panel --demo`, `intent doctor --demo`, `intent policy show --demo`, `intent approver list --demo`.
 
 In demo mode the policy file is `<data dir>/demo/policy.yaml`. With none, the bundled `zip-only` policy applies, as it does outside the demo. Try `intent policy add per-order-60 --demo` and then ask for something over $60.
+
+If Claude Code already has an MCP server named `intent` (for example a connector added in your Claude account), add the demo under another name, so the agent cannot pick the wrong one:
+
+```console
+$ claude mcp add intent-demo -- npx -y "file:$PWD/intent-gateway.tgz" demo
+```
+
+### The confirm page's port
+
+The confirm page listens on `127.0.0.1:8788`, and the demo prints its address with the next steps. If 8788 is taken (another demo is running, say), it uses a free port and says so on startup. Set `INTENT_DEMO_CONFIRM_PORT` to choose the port. A port you chose is never swapped for another: if it is taken, the demo stops with a line saying so. On a host the page listens on `127.0.0.1` only.
+
+When the gateway runs on a remote machine over SSH and your browser runs on your laptop, forward the confirm page's port when you connect. With npx and with Docker it is the same one port, because the agent runs on the server and reaches the gateway there:
+
+```console
+$ ssh -L 8788:127.0.0.1:8788 <host>
+```
 
 ## Searching the sample catalog
 

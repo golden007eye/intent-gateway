@@ -70,7 +70,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
         const auth = token === null ? "" : ` --header "Authorization: Bearer $INTENT_HTTP_TOKEN"`;
         say(container ? "connect an agent with the claude mcp add line above" : `connect an agent: claude mcp add --transport http intent ${url}${auth}`);
       } else {
-        for (const text of nextSteps({ http: container ? "above" : { url, token }, code: { code: demo.code, file: demo.codeFile } })) log(text);
+        for (const text of nextSteps({ http: container ? "above" : { url, token }, code: { code: demo.code, file: demo.codeFile }, confirm: confirmOf(demo) })) log(text);
         // A detached container has no terminal to press Ctrl-C in.
         say(container ? `serving; stop it with ${DOCKER_STOP}` : "serving until Ctrl-C");
       }
@@ -78,7 +78,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       transport = await runStdio({ gateway, ...banner });
       policyLine();
       if (demo === null) say(`MCP over stdio is ready; data dir ${dataDir}`);
-      else for (const text of nextSteps({ code: { code: demo.code, file: demo.codeFile } })) log(text);
+      else for (const text of nextSteps({ code: { code: demo.code, file: demo.codeFile }, confirm: confirmOf(demo) })) log(text);
     }
     const stop = async (): Promise<void> => {
       await transport.close();
@@ -91,4 +91,9 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
     await store.close();
     throw error;
   }
+}
+
+/** The confirm page for nextSteps: its origin, and the port that was taken when it fell back to a free one. */
+function confirmOf(demo: Demo): { origin: string; busy: number | null } {
+  return { origin: new URL(demo.confirmBaseUrl).origin, busy: demo.confirmPortBusy };
 }
