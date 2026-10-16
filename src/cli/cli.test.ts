@@ -712,6 +712,8 @@ describe("serve failures", () => {
     const doctor = await s.run(["doctor", "--demo"]);
     expect(doctor.out).toContain(`intent doctor: data dir ${join(s.dir, "demo")}`);
     expect(doctor.out).toMatch(/^ok {4}root key: .+ \(the published test key; demo mode only\)$/m);
+    // The line holds no command: inside the container the demo is already serving, so "run demo" would mislead.
+    expect(doctor.out).toMatch(/^ok {4}Intent Cloud: the demo gateway runs its own on 127\.0\.0\.1 while it is serving; nothing to reach$/m);
     expect(doctor.code).toBe(0);
     // The hand-written chain's entries carry no receipts, so verify fails; it ran against the demo dir and test root.
     const verify = await s.run(["verify", "--demo"]);
