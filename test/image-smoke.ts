@@ -1,6 +1,6 @@
 // Smoke test of a built Docker image (G24; AC-R2, ADR-0005), run by CI's package job and by hand:
 //   node test/image-smoke.ts <image> [--mcp-port 8787]
-// It needs Docker and runs four containers, removing each afterwards:
+// It needs Docker and runs these containers, removing each (and its volume) afterwards:
 // 1. No configuration beyond a mounted policy file, against a fake Intent Cloud on the host (host network, because
 //    no real host has a pinned root key yet): the entrypoint makes a 43-character token in /data/http-token (0600,
 //    owned by uid 1000) and prints it once; MCP `initialize` on /mcp works with it and gets 401 without it or with
@@ -11,6 +11,9 @@
 // 4. The demo exactly as documented: `-p 127.0.0.1:<mcp>:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1`, then
 //    find_offers → create_cart → Approve (a POST from the host to the mapped confirm page) → approved, and
 //    `docker exec … intent verify --demo` passes.
+// 5. The first run as documented but without INTENT_DEMO, so with no root key: the container exits 1 with no
+//    connect line and a hint to re-run it with -e INTENT_DEMO=1 (not `docker exec`, it has exited); the next start
+//    that serves, on the same volume, prints the token it made.
 // TEST KEYS ONLY. Not part of the npm package or the image.
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -102,7 +105,7 @@ async function tokenAndPolicy(): Promise<void> {
     const url = `http://127.0.0.1:${port}/mcp`;
     const token = await until("the token line", () => TOKEN_LINE.exec(logs(id))?.[1]);
     check(token.length === 43, "first start prints a 43-character token once, in the claude mcp add line");
-    check(logs(id).includes("so it is also kept in this container's log (docker logs); set INTENT_QUIET_TOKEN=1"), "the first start says the token stays in the container log");
+    check(logs(id).includes("so it is also kept in this container's log (docker logs)") && logs(id).includes("set INTENT_QUIET_TOKEN=1 to never print it"), "the first start says the token stays in the container log");
     await until("the server", async () => ((await initialize(url, null)).status === 0 ? undefined : true));
     const ok = await initialize(url, `Bearer ${token}`);
     check(ok.status === 200 && ok.body.includes('"name":"intent-gateway"'), "initialize with the token: 200 from intent-gateway", ok.body);
@@ -182,7 +185,7 @@ async function demo(): Promise<void> {
   check(logs(id).includes(DEMO_BANNER), "the demo banner is in the container log");
   const short = id.slice(0, 12);
   await until("the demo next steps", () => (logs(id).includes("Re-check what was sent afterwards with:") ? true : undefined));
-  check(logs(id).split("\n").filter((l) => l.includes("claude mcp add --") || l.includes("claude mcp add intent")).length === 1, "the demo log has exactly one connect line, the entrypoint's", logs(id));
+  check(logs(id).split("\n").filter((l) => l.includes("claude mcp add --") || l.includes("claude mcp add intent")).length === 1, "the demo log has exactly one connect line", logs(id));
   check(!logs(id).includes("<token>") && !logs(id).includes("<container>"), "the demo log has no <token> or <container> placeholder", logs(id));
   check(logs(id).includes("Add the demo gateway to Claude Code with the claude mcp add line above."), "the demo next steps point at that line");
   check(logs(id).includes(`docker exec ${short} intent verify --demo`), "the demo log names this container by its id (HOSTNAME)");
@@ -223,8 +226,27 @@ async function demo(): Promise<void> {
   check(verify.status === 0 && /^verify: ok$/m.test(verify.stdout), "docker exec <c> intent verify --demo passes", verify.stdout + verify.stderr);
 }
 
+async function noRootKey(): Promise<void> {
+  const volume = `image-smoke-${String(process.pid)}`;
+  volumes.push(volume);
+  const id = run(["-p", `127.0.0.1:${String(mcpPort + 30)}:8787`, "-v", `${volume}:/data`, image]);
+  const exit = await until("the container to exit", () => {
+    const s = docker("inspect", "-f", "{{.State.Status}} {{.State.ExitCode}}", id).trim();
+    return s.startsWith("exited") ? s : undefined;
+  });
+  const first = logs(id);
+  check(exit === "exited 1", "with no root key and no INTENT_DEMO the container exits 1", exit);
+  check(!first.includes("claude mcp add"), "a container that cannot start prints no connect line (and no token)", first);
+  check(first.includes(`docker rm ${id.slice(0, 12)} && docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 -v intent-data:/data intent-gateway`), "the hint re-runs the container with -e INTENT_DEMO=1", first);
+  check(first.includes("--trust-keys /keys.json") && !first.includes("docker exec"), "the hint names a mounted root key file and no docker exec into the exited container", first);
+  const next = run(["-p", `127.0.0.1:${String(mcpPort + 30)}:8787`, "-e", "INTENT_DEMO=1", "-v", `${volume}:/data`, image]);
+  const token = await until("the token line on the first start that serves", () => TOKEN_LINE.exec(logs(next))?.[1]);
+  check(token === docker("exec", next, "cat", "/data/http-token").trim(), "the first start that serves prints the token made by the one that failed", logs(next));
+}
+
+const volumes: string[] = [];
 try {
-  for (const step of [tokenAndPolicy, defaultPolicy, foreignDataDir, quietToken, demo]) {
+  for (const step of [tokenAndPolicy, defaultPolicy, foreignDataDir, quietToken, demo, noRootKey]) {
     try {
       await step();
     } catch (error) {
@@ -234,6 +256,7 @@ try {
   }
 } finally {
   for (const id of containers) spawnSync("docker", ["rm", "-f", id]);
+  for (const volume of volumes) spawnSync("docker", ["volume", "rm", "-f", volume]);
 }
 process.stdout.write(outcome.failed ? "image-smoke: FAILED\n" : "image-smoke: ok\n");
 process.exit(outcome.failed ? 1 : 0);

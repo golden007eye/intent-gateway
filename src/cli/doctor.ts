@@ -13,6 +13,7 @@ import { verifyStatement } from "../trust/index.ts";
 import { describeError } from "./errors.ts";
 import { type Io, line } from "./io.ts";
 import { readLog } from "./log.ts";
+import { noShipToNote, shipToFix } from "./policy.ts";
 import { demoTrustKeys } from "../demo/index.ts";
 import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
 
@@ -120,6 +121,8 @@ async function checkPolicy(policyPath: string, report: Report): Promise<void> {
       return;
     }
     const lock = await readLock(policyPath);
+    const note = noShipToNote(active.policy);
+    if (note !== null) report("warn", `policy: ${note}; ${shipToFix(policyPath)}`);
     report("ok", `policy: ${policyPath}${lock === undefined ? " (written by hand, no policy.lock)" : `, from library policy ${lock.name} (${lock.source} ${lock.commit.slice(0, 12)})`}`);
   } catch (error) {
     if (error instanceof LibraryError) report("warn", `policy lock: ${describeError(error)}`);

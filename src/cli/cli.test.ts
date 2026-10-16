@@ -156,6 +156,86 @@ describe("--version and --help", () => {
   });
 });
 
+describe("an unknown option is one line in our words (F-h)", () => {
+  const commands: string[][] = [[], ["serve"], ["demo"], ["log"], ["verify"], ["panel"], ["doctor"], ["policy", "test", "x.yaml"], ["policy", "add", "zip-only"], ["policy", "show"], ["approver", "list"], ["approver", "accept"]];
+  it.each(commands)("%s --bogus", async (...words) => {
+    const result = await setup().run([...words, "--bogus"]);
+    const command = words.filter((w) => !w.includes(".") && w !== "zip-only").join(" ") || "serve";
+    expect(result.code).toBe(2);
+    expect(result.err).toBe(`intent: unknown option --bogus for ${command}; run intent --help\n`);
+  });
+
+  it("names a short option, another command's option, and a missing or unwanted value without parseArgs' advice", async () => {
+    const s = setup();
+    expect((await s.run(["demo", "-x"])).err).toBe("intent: unknown option -x for demo; run intent --help\n");
+    expect((await s.run(["log", "--http"])).err).toBe("intent: unknown option --http for log; run intent --help\n");
+    expect((await s.run(["panel", "--port"])).err).toBe("intent: option --port for panel needs a value; run intent --help\n");
+    expect((await s.run(["demo", "--http=1"])).err).toBe("intent: option --http for demo takes no value; run intent --help\n");
+    for (const argv of [["demo", "--bogus"], ["panel", "--port"], ["demo", "-x"]]) {
+      expect((await s.run(argv)).err).not.toMatch(/Unknown option|place it at the end|'--'|-- "/);
+    }
+  });
+});
+
+describe("intent verify with no chain yet (F-h)", () => {
+  it("verify --demo before anything was sent passes the chain part and says how to start", async () => {
+    const result = await setup().run(["verify", "--demo"]);
+    expect(result.code).toBe(0);
+    expect(result.err).toBe("");
+    expect(result.out).toMatch(/^chain: ok\n {2}No entries yet: the gateway has sent nothing\. Start it with intent serve, or try intent demo\.\n/);
+    expect(result.out).toMatch(/\nverify: ok\n$/);
+    expect(result.out).not.toMatch(/ENOENT|usage|FAILED/);
+  });
+
+  it("attack: a chain that is there but unreadable still fails as a usage error", async () => {
+    const s = setup();
+    mkdirSync(join(s.dir, "demo", "audit.jsonl"), { recursive: true });
+    const result = await s.run(["verify", "--demo"]);
+    expect(result.code).toBe(2);
+    expect(result.out).toMatch(/^usage: FAILED\n {2}cannot read the chain in /);
+  });
+
+  it("without --demo the root-key check is unchanged", async () => {
+    const result = await setup().run(["verify"]);
+    expect(result.code).not.toBe(0);
+  });
+});
+
+describe("a policy that shares no ZIP says that search cannot work (F-h)", () => {
+  const NOTE = /note: with this policy the gateway sends no ZIP code, so it blocks every find_offers before sending and no cart can be made; agents will see every search blocked/;
+
+  it("policy add strict-default shows the note with the diff, before asking", async () => {
+    const s = setup();
+    const result = await s.run(["policy", "add", "strict-default"], { tty: true, input: "n\n" });
+    expect(result.code).toBe(1);
+    expect(result.out).toMatch(NOTE);
+    expect(result.out.indexOf("note:")).toBeLessThan(result.out.indexOf("Apply this change?"));
+    expect(result.out.indexOf("+ ")).toBeLessThan(result.out.indexOf("note:"));
+  });
+
+  it("policy add of a policy that keeps the ZIP has no note", async () => {
+    const result = await setup().run(["policy", "add", "per-order-60", "--yes"]);
+    expect(result.code).toBe(0);
+    expect(result.out).not.toMatch(/note:/);
+  });
+
+  it("policy show and doctor say it too (doctor as a warning, not a failure)", async () => {
+    const s = setup();
+    // In demo mode, so doctor has nothing else to fail on.
+    const added = await s.run(["policy", "add", "strict-default", "--yes", "--demo"]);
+    expect(added).toMatchObject({ code: 0, err: "" });
+    const shown = await s.run(["policy", "show", "--demo"]);
+    expect(shown.code).toBe(0);
+    expect(shown.out).toMatch(NOTE);
+    expect(shown.out).toMatch(/to search again, delete .+policy\.yaml and run intent policy add per-order-60/);
+    const doctor = await s.run(["doctor", "--demo"]);
+    expect(doctor.out).toMatch(/^WARN {2}policy: with this policy the gateway sends no ZIP code/m);
+    expect(doctor.out).not.toMatch(/^FAIL/m);
+    const plain = await setup().run(["policy", "show"]);
+    expect(plain.out).not.toMatch(/note:/);
+  });
+});
+
 describe("intent log (golden)", () => {
   it("prints the chain field by field", async () => {
     const s = setup();
@@ -681,6 +761,30 @@ describe("serve failures", () => {
     }
   });
 
+  it("in the container, the token the entrypoint made is printed only once the gateway serves (F-h)", async () => {
+    const token = "w".repeat(43);
+    const port = String(40_000 + Math.floor(Math.random() * 10_000));
+    const env = { INTENT_RUNTIME: "container", INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token };
+    const s = setup(env);
+    mkdirSync(s.dir, { recursive: true });
+    writeFileSync(join(s.dir, "http-token"), `${token}\n`);
+    writeFileSync(join(s.dir, "http-token.unshown"), "");
+    // No root key and no demo: the start fails, prints no connect line, and keeps the token for the next start.
+    const failed = await s.run(["serve", "--http"]);
+    expect(failed.code).not.toBe(0);
+    expect(failed.err).not.toContain("claude mcp add");
+    expect(failed.err).not.toContain(token);
+    expect(failed.err).toContain("-e INTENT_DEMO=1");
+    expect(failed.err).not.toContain("docker exec");
+    expect(existsSync(join(s.dir, "http-token.unshown"))).toBe(true);
+    // The next start serves (the demo, on the same data dir): the token is printed, once, after the server is up.
+    const served = await setup({ ...env, INTENT_DATA_DIR: s.dir, INTENT_DEMO: "1" }).run(["serve", "--http"]);
+    expect(served.code).toBe(0);
+    expect(served.err).toContain(`  claude mcp add intent --transport http http://127.0.0.1:8787/mcp --header "Authorization: Bearer ${token}"\n`);
+    expect(served.err.split(token).length - 1).toBe(1);
+    expect(existsSync(join(s.dir, "http-token.unshown"))).toBe(false);
+  });
+
   it("INTENT_DEBUG=1 adds the stack trace; without it there is none", async () => {
     const quiet = await setup().run(["policy", "test", "/nope.yaml"]);
     expect(quiet.err).not.toMatch(/\n\s+at /);
@@ -731,7 +835,9 @@ describe("printed commands name the invocation that works for this install (devr
     // A long invocation (a path) is named once above the list; a short one leads every line.
     if (intent.length > 30) expect(text).toContain(`Commands (run each as: ${intent} <command>):\n  serve [--http]  `);
     else expect(text).toContain(`\n  ${intent} verify `);
-    expect(text).toContain(`\n${intent} policy add strict-default`);
+    expect(text).toContain(`\n${intent} policy add per-order-60`);
+    // strict-default shares no ZIP, so no search works under it: help never suggests it (F-h).
+    expect(text).not.toContain("strict-default");
     expect(text).not.toMatch(/^ {2}intent /m);
   });
 });

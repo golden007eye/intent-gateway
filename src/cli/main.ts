@@ -85,23 +85,26 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
 }
 
 function parse(argv: readonly string[]): "help" | { command: string; args: string[]; values: Values } {
+  // First pass, lenient: find the command words, so an unknown option can be named with its command.
   const all: Options = { ...COMMON };
   for (const options of Object.values(COMMANDS)) Object.assign(all, options);
-  let parsed;
-  try {
-    parsed = parseArgs({ args: [...argv], options: all, allowPositionals: true, strict: true });
-  } catch (error) {
-    throw new CliError(`${error instanceof Error ? error.message : String(error)}; run ${INTENT} --help`, 2);
-  }
-  const values = parsed.values as Values;
-  if (values.help === true || parsed.positionals[0] === "help") return "help";
-  const [first, second] = parsed.positionals;
+  const loose = parseArgs({ args: [...argv], options: all, allowPositionals: true, strict: false });
+  if (loose.values.help === true || loose.positionals[0] === "help") return "help";
+  const [first, second] = loose.positionals;
   // No command means serve: `npx -y intent-gateway` and `intent-gateway --demo` are what an MCP client runs.
   const command = first === undefined ? "serve" : first === "policy" || first === "approver" ? `${first} ${second ?? ""}`.trim() : first;
   if (!Object.hasOwn(COMMANDS, command)) {
     const what = first === "policy" || first === "approver" ? `${command} needs one of: ${subcommands(first).join(", ")}` : `unknown command "${command}"`;
     throw new CliError(first === "policy" || first === "approver" ? `${what}; run ${INTENT} --help` : what, 2);
   }
+  // Second pass, strict: only the options this command takes.
+  let parsed;
+  try {
+    parsed = parseArgs({ args: [...argv], options: { ...COMMON, ...COMMANDS[command] }, allowPositionals: true, strict: true });
+  } catch (error) {
+    throw new CliError(`${optionError(error, command)}; run ${INTENT} --help`, 2);
+  }
+  const values = parsed.values as Values;
   const words = command.split(" ").length;
   const args = parsed.positionals.slice(first === undefined ? 0 : words);
   const expected = ARGUMENTS[command] ?? [];
@@ -109,11 +112,19 @@ function parse(argv: readonly string[]): "help" | { command: string; args: strin
     const usage = [`${INTENT} ${command}`, ...expected].join(" ");
     throw new CliError(`usage: ${usage}${args.length > expected.length ? ` (unexpected "${args[expected.length] ?? ""}")` : ""}; run ${INTENT} --help`, 2);
   }
-  const allowed = { ...COMMON, ...COMMANDS[command] };
-  for (const name of Object.keys(values)) {
-    if (!Object.hasOwn(allowed, name)) throw new CliError(`${INTENT} ${command} does not take --${name}; run ${INTENT} --help`, 2);
-  }
   return { command, args, values };
+}
+
+/** A util.parseArgs failure in our words: the option and the command, never its `--` advice. */
+function optionError(error: unknown, command: string): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  const message = error instanceof Error ? error.message : String(error);
+  const option = /'(-[^' ]*)/.exec(message)?.[1] ?? "";
+  if (code === "ERR_PARSE_ARGS_UNKNOWN_OPTION") return `unknown option ${option} for ${command}`;
+  if (code === "ERR_PARSE_ARGS_INVALID_OPTION_VALUE") {
+    return `option ${option} for ${command} ${/argument missing/.test(message) ? "needs a value" : "takes no value"}`;
+  }
+  return `${command}: ${message.split(". ")[0] ?? message}`;
 }
 
 function subcommands(group: string): string[] {

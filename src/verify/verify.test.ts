@@ -442,10 +442,40 @@ describe("runVerify: usage and configuration errors exit 2", () => {
     expect(formatReport(report)).toMatch(/usage: FAILED\n {2}no root key is pinned.*\n[\s\S]*verify: usage error\n$/);
   });
 
-  it("reports a data dir without a chain", async () => {
-    const report = await verify(join(await tempDir("verify-"), "missing"));
+  it("still fails when the chain is there but cannot be read (a directory, no permission)", async () => {
+    const dir = await tempDir("verify-");
+    await mkdir(join(dir, "audit.jsonl"));
+    const report = await verify(dir);
     expect(report.exitCode).toBe(2);
-    expect(check(report, "usage")?.details[0]).toMatch(/^cannot read the chain in /);
+    expect(check(report, "usage")?.details[0]).toMatch(/^cannot read the chain in .*EISDIR/);
+    if (process.getuid?.() !== 0 && process.platform !== "win32") {
+      const locked = await tempDir("verify-");
+      await writeFile(join(locked, "audit.jsonl"), "", { mode: 0o000 });
+      const denied = await verify(locked);
+      expect(denied.exitCode).toBe(2);
+      expect(check(denied, "usage")?.details[0]).toMatch(/^cannot read the chain in .*EACCES/);
+    }
+  });
+});
+
+describe("runVerify: no chain yet", () => {
+  it("passes the chain part for a data dir with no chain file: nothing has been sent", async () => {
+    for (const dir of [join(await tempDir("verify-"), "missing"), await tempDir("verify-")]) {
+      const report = await verify(dir);
+      expect(report).toMatchObject({ ok: true, exitCode: 0, head: { seq: -1 } });
+      expect(check(report, "usage")).toBeUndefined();
+      expect(check(report, "chain")).toMatchObject({ ok: true });
+      expect(check(report, "chain")?.details[0]).toMatch(/^No entries yet: the gateway has sent nothing\. Start it with .* serve, or try .* demo\.$/);
+      expect(formatReport(report)).not.toMatch(/ENOENT|FAILED|usage/);
+    }
+  });
+
+  it("an empty chain file reads the same as a missing one", async () => {
+    const dir = await tempDir("verify-");
+    await writeFile(join(dir, "audit.jsonl"), "");
+    const report = await verify(dir);
+    expect(report).toMatchObject({ ok: true, exitCode: 0 });
+    expect(check(report, "chain")?.details[0]).toMatch(/^No entries yet/);
   });
 });
 
