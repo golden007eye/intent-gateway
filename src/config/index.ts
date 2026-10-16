@@ -95,6 +95,11 @@ export interface LoadOptions {
    * gives `trust.kind === "unpinned"` instead of a ConfigError. Defaults to true.
    */
   requireTrust?: boolean;
+  /**
+   * More INTENT_* variables, owned and read by the caller, to accept as known (the CLI's demo confirm page port, a
+   * name this module must not hold: no confirm literal lives here, see config.test.ts). Each is still refused empty.
+   */
+  settings?: readonly string[];
 }
 
 export class ConfigError extends Error {
@@ -129,11 +134,12 @@ export function loadConfig(
   const cwd = options.cwd ?? process.cwd();
   const home = options.homedir ?? homedir();
 
+  const known = new Set([...KNOWN_VARIABLES, ...(options.settings ?? [])]);
   const intent: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
     if (!name.startsWith("INTENT_") || value === undefined) continue;
-    if (!KNOWN_VARIABLES.has(name)) {
-      throw new ConfigError(`unknown environment variable ${name}; known: ${[...KNOWN_VARIABLES].join(", ")}`);
+    if (!known.has(name)) {
+      throw new ConfigError(`unknown environment variable ${name}; known: ${[...known].join(", ")}`);
     }
     if (value === "") throw new ConfigError(`${name} is set but empty; unset it to use the default`);
     intent[name] = value;
@@ -276,13 +282,7 @@ function httpConfig(intent: Readonly<Record<string, string>>): Config["http"] {
   if (!isBindHost(host)) {
     throw new ConfigError(`INTENT_HTTP_HOST must be an IP address or host name, got ${JSON.stringify(host)}`);
   }
-  let port = DEFAULT_HTTP_PORT;
-  if (intent.INTENT_HTTP_PORT !== undefined) {
-    port = /^[0-9]{1,5}$/.test(intent.INTENT_HTTP_PORT) ? Number(intent.INTENT_HTTP_PORT) : NaN;
-    if (!(port >= 1 && port <= 65535)) {
-      throw new ConfigError(`INTENT_HTTP_PORT must be a port number 1-65535, got ${JSON.stringify(intent.INTENT_HTTP_PORT)}`);
-    }
-  }
+  const port = intent.INTENT_HTTP_PORT === undefined ? DEFAULT_HTTP_PORT : parsePort("INTENT_HTTP_PORT", intent.INTENT_HTTP_PORT);
   const token = intent.INTENT_HTTP_TOKEN ?? null;
   if (token !== null && (token.length < MIN_TOKEN_LENGTH || /\s/.test(token))) {
     throw new ConfigError(`INTENT_HTTP_TOKEN must be at least ${String(MIN_TOKEN_LENGTH)} characters with no spaces`);
@@ -291,6 +291,13 @@ function httpConfig(intent: Readonly<Record<string, string>>): Config["http"] {
     throw new ConfigError(`INTENT_HTTP_TOKEN is required when INTENT_HTTP_HOST (${host}) is not a loopback address`);
   }
   return { host, port, token };
+}
+
+/** The port number `value` of the variable `name`, 1-65535 in plain digits; throws ConfigError naming the variable. */
+export function parsePort(name: string, value: string): number {
+  const port = /^[0-9]{1,5}$/.test(value) ? Number(value) : NaN;
+  if (!(port >= 1 && port <= 65535)) throw new ConfigError(`${name} must be a port number 1-65535, got ${JSON.stringify(value)}`);
+  return port;
 }
 
 const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;

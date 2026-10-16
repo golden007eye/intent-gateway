@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeCloud, noDnsAgent, startFakeCloud, startSilentHost } from "../cloud-fake/index.ts";
 import { BUILD, ConfigError, PINNED_HOSTS } from "../config/index.ts";
 import { CONTRACT_VERSION, type CredentialPublicKey } from "../contract/index.ts";
-import { CONTAINER_CONFIRM_PORT } from "../demo/index.ts";
+import { DEMO_CONFIRM_PORT, startDemo } from "../demo/index.ts";
 import {
   CloudNetworkError,
   CloudRequestError,
@@ -930,14 +930,20 @@ describe("serve failures", () => {
   it("in the container, the demo prints no second connect line (the entrypoint's is the one) and never the token", async () => {
     const token = "t".repeat(43);
     const port = String(40_000 + Math.floor(Math.random() * 10_000));
-    const s = setup({ INTENT_RUNTIME: "container", INTENT_DEMO: "1", INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token });
+    // The image's default confirm port is 8788 (DEMO_CONFIRM_PORT, no fallback there); a free one here, so that a demo
+    // another test file runs on 8788 at the same time cannot collide with this one.
+    const confirm = String(Number(port) + 1);
+    const env = { INTENT_RUNTIME: "container", INTENT_DEMO: "1", INTENT_HTTP_HOST: "0.0.0.0", INTENT_HTTP_PORT: port, INTENT_HTTP_TOKEN: token };
+    const s = setup({ ...env, INTENT_DEMO_CONFIRM_PORT: confirm });
     const result = await s.run(["serve", "--http"]);
     expect(result.code).toBe(0);
+    // The agent connects on the server; only the confirm page needs forwarding to the laptop's browser.
+    expect(result.err).toContain(`Approval links open the demo confirm page at http://127.0.0.1:${confirm} (over SSH, forward it: ssh -L ${confirm}:127.0.0.1:${confirm} <host>)\n`);
     expect(result.err).toContain("Add the demo gateway to Claude Code with the claude mcp add line above.\n");
     expect(result.err).not.toContain("claude mcp add --transport");
     expect(result.err).not.toContain("<token>");
     expect(result.err).not.toContain(token);
-    expect(CONTAINER_CONFIRM_PORT).toBe(8788);
+    expect(DEMO_CONFIRM_PORT).toBe(8788);
     // A detached container has no Ctrl-C: the last line says how to stop it (F-i).
     expect(result.err).toMatch(/\nintent-gateway: serving; stop it with docker stop (<container>|[0-9a-f]{12})\n$/);
     expect(result.err).not.toContain("Ctrl-C");
@@ -1079,6 +1085,78 @@ describe("intent demo --http (devrun F-c)", () => {
     expect(help()).toContain("demo [--http]");
     expect(result.err).toMatch(/\nintent-gateway: serving until Ctrl-C\n$/);
     expect(result.err).not.toContain("docker stop");
+  });
+});
+
+describe("the demo confirm page's port, for an ssh -L forward set up in advance (F-n)", () => {
+  const mcpPort = (): string => String(40_000 + Math.floor(Math.random() * 10_000));
+  const tmpData = (): string => join(mkdtempSync(join(tmpdir(), "cli-port-")), "data");
+  /** A port that was free a moment ago (the kernel's pick for a demo that is closed again). */
+  const freePort = async (): Promise<number> => {
+    const demo = await startDemo({ dataDir: tmpData() });
+    await demo.close();
+    return Number(new URL(demo.confirmBaseUrl).port);
+  };
+  /** Holds 127.0.0.1:<port> with another demo until the test ends; when something else already holds it, it is taken all the same. */
+  const hold = async (port: number): Promise<void> => {
+    try {
+      const other = await startDemo({ dataDir: tmpData(), port });
+      stops.push(() => other.close());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+    }
+  };
+  const confirmLine = (port: number | string): string =>
+    `Approval links open the demo confirm page at http://127.0.0.1:${String(port)} (over SSH, forward it: ssh -L ${String(port)}:127.0.0.1:${String(port)} <host>)\n`;
+
+  it("defaults to 8788 and prints the address and the ssh -L line with the next steps", async () => {
+    expect(DEMO_CONFIRM_PORT).toBe(8788);
+    const result = await setup({ INTENT_HTTP_PORT: mcpPort() }).run(["demo", "--http"]);
+    expect(result.code).toBe(0);
+    // 8788 is the default; only when something else on this machine already holds it does the fallback line appear.
+    if (result.err.includes("Port 8788 is taken")) expect(result.err).not.toContain(confirmLine(8788));
+    else expect(result.err).toContain(confirmLine(8788));
+    expect(result.err).toMatch(/then ask the agent to check the approval status\.\n(Port 8788 .+\n)?Approval links open .+\nDemo code for the confirm page: /);
+  });
+
+  it("falls back to a free port when 8788 is taken (a second demo), and says so", async () => {
+    await hold(8788);
+    const result = await setup({ INTENT_HTTP_PORT: mcpPort() }).run(["demo", "--http"]);
+    expect(result.code).toBe(0);
+    const port = /^Port 8788 is taken \(another demo running\?\), so the confirm page uses ([0-9]+); set INTENT_DEMO_CONFIRM_PORT to choose one\.$/m.exec(result.err)?.[1];
+    expect(port).toBeDefined();
+    expect(port).not.toBe("8788");
+    expect(result.err).toContain(confirmLine(port ?? ""));
+  });
+
+  it("INTENT_DEMO_CONFIRM_PORT chooses the port, over stdio too", async () => {
+    const port = await freePort();
+    const result = await setup({ INTENT_DEMO_CONFIRM_PORT: String(port) }).run(["demo"]);
+    expect(result.code).toBe(0);
+    expect(result.err).toContain(confirmLine(port));
+    expect(result.err).not.toContain("is taken");
+  });
+
+  it("a taken INTENT_DEMO_CONFIRM_PORT fails in one line naming it; it never falls back to another port", async () => {
+    const port = await freePort();
+    await hold(port);
+    const result = await setup({ INTENT_DEMO_CONFIRM_PORT: String(port), INTENT_HTTP_PORT: mcpPort() }).run(["demo", "--http"]);
+    expect(result).toMatchObject({ code: 1, out: "" });
+    expect(result.err).toBe(
+      `intent: the demo confirm page cannot listen on port ${String(port)} (INTENT_DEMO_CONFIRM_PORT): that port is taken; stop what uses it or set INTENT_DEMO_CONFIRM_PORT to another port\n`,
+    );
+  });
+
+  it.each(["0", "65536", "80a", "", "8788 "])("refuses INTENT_DEMO_CONFIRM_PORT=%j before starting anything", async (value) => {
+    const result = await setup({ INTENT_DEMO_CONFIRM_PORT: value }).run(["demo", "--http"]);
+    expect(result.code).not.toBe(0);
+    expect(result.out).toBe("");
+    expect(result.err).toMatch(value === "" ? /INTENT_DEMO_CONFIRM_PORT is set but empty/ : /INTENT_DEMO_CONFIRM_PORT must be a port number 1-65535, got /);
+    expect(result.err.split("\n")).toHaveLength(2);
+  });
+
+  it("is listed under Settings in --help", () => {
+    expect(help()).toContain("INTENT_DEMO_CONFIRM_PORT (demo confirm page, default 8788)");
   });
 });
 
