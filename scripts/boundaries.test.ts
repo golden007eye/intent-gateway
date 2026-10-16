@@ -34,6 +34,7 @@ describe("dependency-cruiser rules", () => {
     ["module-internals", "src/verify/index.ts", "src/store/file.ts"],
     ["only-disclosure-reaches-cloud", "src/gateway/index.ts", "src/cloud/index.ts"],
     ["fake-only-in-tests", "src/gateway/uses-fake.ts", "src/cloud-fake/index.ts"],
+    ["demo-only-from-cli", "src/gateway/uses-demo.ts", "src/demo/index.ts"],
     ["panel-offline", "src/panel/index.ts", "src/library/index.ts"],
     // Finding 12: panel -> relay -> disclosure -> cloud is caught, not only a direct import.
     ["panel-offline", "src/panel/transitive.ts", "src/disclosure/index.ts"],
@@ -51,8 +52,8 @@ describe("dependency-cruiser rules", () => {
     expect(violations).toContainEqual({ rule, from, to });
   });
 
-  it("flags nothing else: disclosure reaches cloud, a test loads the fake, network modules and scripts/ connect", () => {
-    expect(violations).toHaveLength(15);
+  it("flags nothing else: disclosure reaches cloud, a test and the demo load the fake, the CLI loads the demo, network modules and scripts/ connect", () => {
+    expect(violations).toHaveLength(16);
   });
 });
 
@@ -113,6 +114,7 @@ describe("eslint network rules", () => {
     "src/cloud/sockets.ts", // node:tls and a literal import("node:https")
     "src/mcp/index.ts", // node:net
     "src/cloud-fake/index.ts", // node:http and fetch
+    "src/demo/index.ts", // node:http
     "scripts/runs.ts", // node:child_process
   ])("allows %s", (file) => {
     expect(ruleHits(file)).toEqual([]);

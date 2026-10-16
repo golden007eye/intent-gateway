@@ -9,6 +9,8 @@ import { SERVER_INFO } from "./info.ts";
 export interface StdioOptions {
   /** A started gateway (call gateway.start() first). */
   gateway: Gateway;
+  /** A line put first in every tool result (demo mode's banner). */
+  banner?: string;
 }
 
 export interface McpHandle {
@@ -25,7 +27,7 @@ export async function runStdio(options: StdioOptions): Promise<McpHandle> {
   console.debug = toStderr;
 
   const server = new McpServer(SERVER_INFO);
-  registerTools(server, options.gateway);
+  registerTools(server, options.gateway, options.banner === undefined ? {} : { banner: options.banner });
   await server.connect(new StdioServerTransport());
   return { close: () => server.close() };
 }

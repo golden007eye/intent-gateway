@@ -43,6 +43,7 @@ import {
   approverFingerprint,
   checkApprover,
   type KeySet,
+  onlyTestRoot,
   type PinnedRootKey,
   verifyApprovalProof,
   verifyStatement,
@@ -69,6 +70,25 @@ export interface GatewayOptions {
   now?: () => number;
   /** Defaults to stderr. */
   logger?: GatewayLogger;
+  /**
+   * Demo mode: approval links point at the local demo confirm page (`http://127.0.0.1:<port>/confirm`) instead of
+   * the statement's confirm origin, and the chain starts with a `session` entry `{mode: "demo"}`. start() accepts it
+   * only when every pinned root key is the published test root, so a real Intent Cloud's approval links can never be
+   * redirected. A demo chain and a real one never mix: each mode refuses the other's chain.
+   */
+  demo?: { confirmBaseUrl: string };
+}
+
+/** The first entry of a demo chain. */
+export const DEMO_SESSION = Object.freeze({ mode: "demo" });
+const DEMO_CONFIRM_BASE = /^http:\/\/127\.0\.0\.1:[0-9]{1,5}\/confirm$/;
+
+/** Whether a chain was written in demo mode (its first entry is the demo session), or is still empty. */
+export function chainMode(entries: readonly Entry[]): "empty" | "demo" | "normal" {
+  const first = entries[0];
+  if (first === undefined) return "empty";
+  const body = first.body as { mode?: unknown } | null;
+  return first.kind === "session" && typeof body === "object" && body !== null && body.mode === "demo" ? "demo" : "normal";
 }
 
 /** The sha256 of `contract/SHA256SUMS` this gateway was built with; Intent Cloud's Meta must report the same. */
@@ -263,8 +283,32 @@ export function createGateway(options: GatewayOptions): Gateway {
 
   // ---- start ----------------------------------------------------------------------------------------------------
 
+  /** Demo mode only with the test root and a loopback confirm page; a chain only in the mode that started it. */
+  async function checkMode(): Promise<void> {
+    const mode = chainMode(store.entries());
+    if (options.demo === undefined) {
+      if (mode === "demo") {
+        throw new GatewayStartError(
+          "this data dir holds a demo chain (test keys, sample catalog); run `intent demo`, or use another data dir",
+        );
+      }
+      return;
+    }
+    if (!onlyTestRoot(pinnedRootKeys)) {
+      throw new GatewayStartError("demo mode trusts only the published test root key; refusing other pinned keys");
+    }
+    if (!DEMO_CONFIRM_BASE.test(options.demo.confirmBaseUrl)) {
+      throw new GatewayStartError("the demo confirm page must be http://127.0.0.1:<port>/confirm");
+    }
+    if (mode === "normal") {
+      throw new GatewayStartError("this data dir holds a real chain; demo mode uses its own data dir (<data>/demo)");
+    }
+    if (mode === "empty") await store.append("session", DEMO_SESSION);
+  }
+
   async function start(): Promise<void> {
     if (keySet !== null) return;
+    await checkMode();
     const meta = await cloud.meta();
     if (!meta.ok) throw new GatewayStartError(`Intent Cloud meta failed with status ${String(meta.status)}`);
     const sums = contractSums();
@@ -443,7 +487,8 @@ export function createGateway(options: GatewayOptions): Gateway {
         `Refused: the purchase snapshot does not match the cart (${snapshotProblems.join("; ")}). Do not approve it.`);
     }
 
-    const approvalUrl = keys.confirmOrigin + created.approval_link_path;
+    // start() admitted the demo base only under the published test root, so a real host's link is never rewritten.
+    const approvalUrl = (options.demo?.confirmBaseUrl ?? keys.confirmOrigin) + created.approval_link_path;
     await store.append("approval_pending", {
       handle: created.approval_handle,
       approval_url: approvalUrl,

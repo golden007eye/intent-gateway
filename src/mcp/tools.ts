@@ -60,7 +60,10 @@ export function inputJsonSchema(name: ToolName): Tool["inputSchema"] {
  * protocol layer rather than through McpServer.registerTool, which would parse the arguments with the schema first
  * and so drop an identity field before the gateway could see and log it.
  */
-export function registerTools(mcp: McpServer, gateway: Gateway): void {
+export function registerTools(mcp: McpServer, gateway: Gateway, options: { banner?: string } = {}): void {
+  const { banner } = options;
+  const marked = (result: CallToolResult): CallToolResult =>
+    banner === undefined ? result : { ...result, content: [{ type: "text", text: banner }, ...result.content] };
   const server = mcp.server;
   server.registerCapabilities({ tools: {} });
   const tools: Tool[] = (Object.keys(TOOLS) as ToolName[]).map((name) => ({
@@ -69,10 +72,11 @@ export function registerTools(mcp: McpServer, gateway: Gateway): void {
     inputSchema: inputJsonSchema(name),
   }));
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const args = request.params.arguments ?? {};
+  server.setRequestHandler(CallToolRequestSchema, async (request) => marked(await call(request.params.name, request.params.arguments ?? {})));
+
+  async function call(name: string, args: Record<string, unknown>): Promise<CallToolResult> {
     try {
-      switch (request.params.name) {
+      switch (name) {
         case "find_offers":
           return findOffersResult(await gateway.findOffers(args));
         case "create_cart":
@@ -80,13 +84,13 @@ export function registerTools(mcp: McpServer, gateway: Gateway): void {
         case "get_approval_status":
           return approvalStatusResult(await gateway.getApprovalStatus(args));
         default:
-          return failure(`Unknown tool ${JSON.stringify(request.params.name)}. Tools: ${Object.keys(TOOLS).join(", ")}.`);
+          return failure(`Unknown tool ${JSON.stringify(name)}. Tools: ${Object.keys(TOOLS).join(", ")}.`);
       }
     } catch (error) {
       // The gateway reports refusals as results; a throw means it could not run (not started, store failure).
       return failure(`The gateway could not run this tool: ${error instanceof Error ? error.message : String(error)}`);
     }
-  });
+  }
 }
 
 function failure(text: string): CallToolResult {
