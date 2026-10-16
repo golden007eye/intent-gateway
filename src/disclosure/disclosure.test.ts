@@ -21,6 +21,7 @@ import {
   createDisclosedCloud,
   DisclosureBlockedError,
   DisclosureDiscardedError,
+  DisclosureKeysExpiredError,
   DisclosureNoKeysError,
   type DisclosureOptions,
   type IntentCloud,
@@ -450,6 +451,35 @@ describe("receipt verification (trust)", () => {
     expect((await cloud.keyStatement()).ok).toBe(true);
     expect(kinds()).toEqual(["disclosure", "receipt"]);
     expect(bodyOf(store.entries()[1])).toMatchObject({ disclosure_seq: 0, verified: false });
+  });
+});
+
+describe("fail closed once the key statement has expired (attack: keep disclosing under stale keys)", () => {
+  it("search, cart and approval calls are refused before anything is logged or sent; bootstrap reads still go", async () => {
+    const after = KEYS.expiresAt.getTime();
+    const cloud = await setup(reply(), undefined, undefined, { keySet: () => KEYS, now: () => after });
+    for (const call of [
+      () => cloud.search(SEARCH),
+      () => cloud.createCart(CART_REQUEST),
+      () => cloud.createApproval("ct_TEST0001"),
+      () => cloud.getApproval("ap_TEST0001"),
+    ]) {
+      const failure = call();
+      await expect(failure).rejects.toThrow(DisclosureKeysExpiredError);
+      await expect(failure).rejects.toThrow(`the key statement expired on ${KEYS.expiresAt.toISOString()}`);
+    }
+    expect(stub.connections).toHaveLength(0);
+    expect(kinds()).toEqual([]);
+    // The statement can still be fetched again, through the logged bootstrap path.
+    await cloud.keyStatement().catch(() => undefined);
+    expect(kinds()[0]).toBe("disclosure");
+  });
+
+  it("one millisecond before expiry a search is still sent", async () => {
+    const before = KEYS.expiresAt.getTime() - 1;
+    const cloud = await setup(reply(), undefined, undefined, { keySet: () => KEYS, now: () => before });
+    await cloud.search(SEARCH).catch(() => undefined);
+    expect(kinds()[0]).toBe("disclosure");
   });
 });
 

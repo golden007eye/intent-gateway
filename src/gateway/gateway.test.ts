@@ -295,6 +295,47 @@ describe("policy", () => {
     expect(bodies(h, "block").at(-1)).toMatchObject({ endpoint: "searchCatalog", blocked: ["categories.block at category"] });
   });
 
+  describe("attack: a product-only search must not get around categories.block (the no-electronics seed)", () => {
+    const NO_ELECTRONICS = readFileSync(new URL("../../policies/no-electronics/policy.yaml", import.meta.url), "utf8");
+    const HEADPHONES = { product: "Studio Headphones", budget_usd: 200, zip: "94103" };
+
+    it("a product-only search is not sent: the agent is asked for the category", async () => {
+      const h = await setup({ policy: NO_ELECTRONICS });
+      const result = await h.gateway.findOffers(HEADPHONES);
+      expect(result.status).toBe("needs_details");
+      if (result.status !== "needs_details") return;
+      expect(result.missing.map((m) => m.field)).toEqual(["category"]);
+      expect(result.message).toMatch(/What kind of product is it.*blocks some categories, so a search must name one/);
+      expect(result.summary).toBe("Sent: nothing / Blocked: nothing");
+      expect(h.sends.search).toBe(0);
+      expect(bodies(h, "disclosure")).toHaveLength(2); // meta and key statement at start, nothing since
+    });
+
+    it("the same product under category electronics is blocked before it is sent", async () => {
+      const h = await setup({ policy: NO_ELECTRONICS });
+      const result = await h.gateway.findOffers({ ...HEADPHONES, category: "electronics" });
+      expect(result.status).toBe("blocked");
+      expect(result.summary).toBe("Sent: nothing / Blocked: categories.block at category");
+      expect(h.sends.search).toBe(0);
+    });
+
+    it("a search naming an allowed category is sent, and its offer carts against that category", async () => {
+      const h = await setup({ policy: NO_ELECTRONICS });
+      const result = offersOf(await h.gateway.findOffers(SHOES));
+      expect(result.offers.length).toBeGreaterThan(0);
+      expect(h.sends.search).toBe(1);
+      approvalOf(await h.gateway.createCart({ offer_handle: result.offers[0]?.offer_handle ?? "" }));
+      // The headphones never come back under that category, so no electronics offer handle is ever remembered.
+      const headphones = await h.gateway.findOffers({ ...HEADPHONES, category: "running-shoes" });
+      expect(offersOf(headphones).offers).toEqual([]);
+    });
+
+    it("a policy without category blocks still accepts a product-only search", async () => {
+      const h = await setup();
+      expect(offersOf(await h.gateway.findOffers(HEADPHONES)).offers.map((o) => o.title)).toEqual(["Studio Headphones"]);
+    });
+  });
+
   it("the Cloud baseline holds under a policy that names nothing: an excluded category is never searched", async () => {
     const h = await setup();
     const result = await h.gateway.findOffers({ category: "health", budget_usd: 50, zip: "94103" });
@@ -693,5 +734,80 @@ describe("runVerify over a chain the gateway wrote", () => {
     const after = await verify(h);
     expect(after.exitCode).toBe(1);
     expect(after.counts.discarded).toBe(1);
+  });
+});
+
+// ---- key statement expiry -----------------------------------------------------------------------------------------
+
+describe("the key statement expires while the gateway runs", () => {
+  // The fake's statement lives 90 days from the day it was issued; 100 days on it has expired.
+  const LATER = 100 * DAY_MS;
+  const endpoints = (h: Harness, fromSeq: number) =>
+    h.store
+      .entries()
+      .filter((e) => e.seq > fromSeq && e.kind === "disclosure")
+      .map((e) => (e.body as { endpoint: string }).endpoint);
+
+  it("attack: Cloud still serves the expired statement, so every tool refuses and nothing but the re-fetch is sent", async () => {
+    const h = await setup();
+    const road = await offerHandle(h, "Road Runner 2");
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    const expiredOn = new Date(h.fake.statement.expires_at).toISOString();
+    const fromSeq = h.store.entries().at(-1)?.seq ?? -1;
+    const searches = h.sends.search;
+    h.advance(LATER);
+
+    const search = await h.gateway.findOffers(SHOES);
+    expect(search.status).toBe("error");
+    expect(search.message).toContain(`the key statement expired on ${expiredOn}`);
+    expect(search.message).toContain("Restart the gateway to fetch a fresh one");
+    expect((await h.gateway.createCart({ offer_handle: road })).status).toBe("error");
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).status).toBe("error");
+
+    expect(h.sends.search).toBe(searches);
+    expect(h.sends.createCart).toBe(1);
+    expect(h.sends.getApproval).toBe(0);
+    // Only the disclosed statement re-fetch left the gateway: no ZIP, no search terms.
+    expect(endpoints(h, fromSeq)).toEqual(["getKeyStatement", "getKeyStatement", "getKeyStatement"]);
+    expect(bodies(h, "keys")).toHaveLength(1);
+  });
+
+  it("a fresh valid statement is fetched, chained and used, and intent verify still passes", async () => {
+    const h = await setup();
+    h.advance(LATER);
+    // The same test root signs a statement issued 100 days later (the fake's keys are the published test seeds).
+    const later = await startFakeCloud({ now: () => T0 + LATER });
+    try {
+      h.patch.keyStatement = async () => {
+        const served = await h.real.keyStatement();
+        return served.ok ? { ...served, body: later.statement } : served;
+      };
+      const fromSeq = h.store.entries().at(-1)?.seq ?? -1;
+      const result = offersOf(await h.gateway.findOffers(SHOES));
+      expect(result.offers.length).toBeGreaterThan(0);
+      expect(endpoints(h, fromSeq)).toEqual(["getKeyStatement", "searchCatalog"]);
+      expect(bodies(h, "keys").map((k) => k.statement)).toEqual([h.fake.statement, later.statement]);
+      expect(h.warnings.some((w) => w.includes("fetched and chained a fresh one"))).toBe(true);
+      // The next call uses the fresh statement without fetching again.
+      offersOf(await h.gateway.findOffers(SHOES));
+      expect(endpoints(h, fromSeq)).toEqual(["getKeyStatement", "searchCatalog", "searchCatalog"]);
+
+      const report = await runVerify({ dataDir: h.dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(h.now()), skipSupplyChain: true });
+      expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+      expect(report.exitCode).toBe(0);
+    } finally {
+      await later.close();
+    }
+  });
+
+  it("a re-fetched statement that does not verify is refused and not chained", async () => {
+    const h = await setup();
+    h.advance(LATER);
+    h.fake.tamper.statementNonRoot();
+    const result = await h.gateway.findOffers(SHOES);
+    expect(result.status).toBe("error");
+    expect(result.message).toMatch(/expired on .*returns now is not a fresh valid one \(the key statement did not verify .*step 2: bad_signature/);
+    expect(bodies(h, "keys")).toHaveLength(1);
+    expect(h.sends.search).toBe(0);
   });
 });

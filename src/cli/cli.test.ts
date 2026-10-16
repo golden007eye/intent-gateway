@@ -20,7 +20,7 @@ import {
   DisclosureDiscardedError,
   DisclosureNoKeysError,
 } from "../disclosure/index.ts";
-import { GatewayNotStartedError, GatewayStartError } from "../gateway/index.ts";
+import { DEMO_SESSION, GatewayNotStartedError, GatewayStartError } from "../gateway/index.ts";
 import { LibraryError } from "../library/index.ts";
 import { McpHttpError } from "../mcp/index.ts";
 import { PanelError } from "../panel/index.ts";
@@ -82,9 +82,16 @@ function setup(env: Record<string, string> = {}): Setup {
 }
 
 /** A chain with one entry of every kind `intent log` describes, at a fixed time. */
-async function writeChain(dir: string, extra: (append: (kind: Entry["kind"], body: unknown) => Promise<unknown>) => Promise<void> = async () => {}): Promise<void> {
+async function writeChain(
+  dir: string,
+  extra: (append: (kind: Entry["kind"], body: unknown) => Promise<unknown>) => Promise<void> = async () => {},
+  { demo = false }: { demo?: boolean } = {},
+): Promise<void> {
   const store = await openStore(dir, { clock: () => TS });
   const append = (kind: Entry["kind"], body: unknown) => store.append(kind, body);
+  // A demo chain starts with the demo session entry; the seqs below move up by one.
+  const o = demo ? 1 : 0;
+  if (demo) await append("session", DEMO_SESSION);
   await append("keys", { statement: { kid: "cloud-root-1", expires_at: "2027-01-13T00:00:00Z" } });
   await append("disclosure", {
     endpoint: "searchCatalog",
@@ -92,12 +99,12 @@ async function writeChain(dir: string, extra: (append: (kind: Entry["kind"], bod
     path: "/v1/search",
     fields: ["budget_max", "budget_max.amount_minor", "budget_max.currency", "category", "ship_to", "ship_to.country", "ship_to.postal_code"],
   });
-  await append("receipt", { disclosure_seq: 1, status: 200, verified: true });
+  await append("receipt", { disclosure_seq: 1 + o, status: 200, verified: true });
   await append("block", { endpoint: "searchCatalog", fields: ["category", "note"], blocked: ["email at $.note"] });
   await append("disclosure", { endpoint: "createCart", fields: ["offer_handle", "quantity"] });
-  await append("unacknowledged", { disclosure_seq: 4, reason: "CloudNetworkError: timeout" });
+  await append("unacknowledged", { disclosure_seq: 4 + o, reason: "CloudNetworkError: timeout" });
   await append("disclosure", { endpoint: "createApproval", fields: [] });
-  await append("discarded", { disclosure_seq: 6, reason: "200 without a receipt" });
+  await append("discarded", { disclosure_seq: 6 + o, reason: "200 without a receipt" });
   await append("approval_pending", { handle: "ap_one", approval_url: "https://confirm.example/a/ap_one", total_minor: 4599 });
   await append("approver_pin", { fingerprint: "aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111 aaaa 1111" });
   await append("approval", { handle: "ap_one" });
@@ -550,13 +557,13 @@ describe("serve failures", () => {
 
   it("--demo on log, doctor and verify reads <data>/demo with the test root, starts nothing and needs no config", async () => {
     const s = setup();
-    await writeChain(join(s.dir, "demo"));
+    await writeChain(join(s.dir, "demo"), undefined, { demo: true });
     await writeChain(s.dir, async (append) => {
       await append("approver_flag", { fingerprint: "real chain" });
     });
     const log = await s.run(["log", "--demo"]);
     expect(log.code).toBe(0);
-    expect(log.out).toMatch(/11 entries, every hash links/);
+    expect(log.out).toMatch(/12 entries, every hash links/);
     expect(log.out).not.toContain("real chain");
     const doctor = await s.run(["doctor", "--demo"]);
     expect(doctor.out).toContain(`intent doctor: data dir ${join(s.dir, "demo")}`);
@@ -564,12 +571,36 @@ describe("serve failures", () => {
     expect(doctor.code).toBe(0);
     // The hand-written chain's entries carry no receipts, so verify fails; it ran against the demo dir and test root.
     const verify = await s.run(["verify", "--demo"]);
-    expect(verify.out).toMatch(/^chain: ok\n {2}11 entries/m);
+    expect(verify.out).toMatch(/^chain: ok\n {2}12 entries/m);
     expect(verify.out).toContain("self-check: skipped on request (demo mode)");
     // INTENT_DEMO=1 (the image's switch) is the same as --demo.
     const env = setup({ INTENT_DEMO: "1" });
-    await writeChain(join(env.dir, "demo"));
-    expect((await env.run(["log"])).out).toMatch(/11 entries, every hash links/);
+    await writeChain(join(env.dir, "demo"), undefined, { demo: true });
+    expect((await env.run(["log"])).out).toMatch(/12 entries, every hash links/);
+  });
+
+  it("attack: doctor never writes a real keys entry into a demo chain, and --demo refuses a real chain", async () => {
+    const fake = await startFakeCloud({});
+    try {
+      const demoDir = join(setup().dir, "demo");
+      await writeChain(demoDir, undefined, { demo: true });
+      const before = readFileSync(join(demoDir, "audit.jsonl"), "utf8");
+      // The demo data dir named as the real one, without --demo: the cloud check is refused, nothing is appended.
+      const mixed = await setup({ INTENT_CLOUD_URL: fake.url, INTENT_DATA_DIR: demoDir }).run(["doctor", "--trust-keys", trustFile(fake)]);
+      expect(mixed.code).toBe(1);
+      expect(mixed.out).toMatch(/^FAIL {2}Intent Cloud not checked: .+ holds a demo chain \(test keys, sample catalog\); run intent doctor --demo/m);
+      expect(mixed.out).not.toMatch(/contract: |key statement: /);
+      expect(readFileSync(join(demoDir, "audit.jsonl"), "utf8")).toBe(before);
+
+      // A real chain where demo mode looks: refused too.
+      const r = setup();
+      await writeChain(join(r.dir, "demo"));
+      const real = await r.run(["doctor", "--demo"]);
+      expect(real.code).toBe(1);
+      expect(real.out).toMatch(/^FAIL {2}chain mode: .+ holds a real chain; demo mode uses its own data dir/m);
+    } finally {
+      await fake.close();
+    }
   });
 
   // The Docker image: `docker run -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 -e INTENT_DEMO=1 <image>`.
