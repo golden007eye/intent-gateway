@@ -1,4 +1,4 @@
-// The visual system of the gateway's local pages (the demo confirm page; the panel next): the approved "Receipt"
+// The visual system of the gateway's local pages (the demo confirm page and the panel): the approved "Receipt"
 // look, dark by design. An ink ground carries the brand row, a paper card holds the content, and amber marks demo
 // mode. Plain CSS with no font, image or other request, so a page works offline under a
 // `default-src 'none'; style-src 'self'` CSP. A page serves UI_CSS plus its own rules as its one stylesheet.
@@ -37,6 +37,9 @@ export const UI_TOKENS = {
   success: "#8BD3A0",
   "disabled-bg": "#3A3F3C",
   "disabled-text": "#A9B1AB",
+  card: "#181B19",
+  "card-line": "#262A28",
+  "on-card-muted": "#8A938D",
   sans: 'Geist,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif',
   mono: '"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace',
 } as const;
@@ -59,6 +62,15 @@ export const UI_CONTRAST_PAIRS: readonly (readonly [keyof typeof UI_TOKENS, keyo
   ["demo-text", "demo-bg"],
   ["ground", "sage"],
   ["ground", "sage-hover"],
+  // The panel: text on its dark cards, and its muted text on the ground.
+  ["on-ground", "card"],
+  ["on-ground-muted", "card"],
+  ["on-card-muted", "card"],
+  ["on-card-muted", "ground"],
+  ["danger-on-ground", "card"],
+  ["success", "card"],
+  ["demo-bg", "card"],
+  ["demo-bg", "ground"],
 ];
 
 const vars = Object.entries(UI_TOKENS)

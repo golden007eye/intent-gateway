@@ -17,7 +17,7 @@ Commands:
                                      --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
   intent verify                     re-check the chain, receipts, approvals and this install
                                     (--skip-install-check: chain only, for offline use)
-  intent panel [--port <n>]         read-only local page: pending approvals, approver pin
+  intent panel [--port <n>]         read-only local page: activity, purchases, approvals, policy, log, verify
   intent doctor                     check the setup; each problem comes with its fix
   intent policy show                the active policy and its policy.lock
   intent policy add <name> [--yes]  narrow the policy with a library policy (shows the diff first)

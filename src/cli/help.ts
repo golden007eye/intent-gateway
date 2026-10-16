@@ -26,7 +26,7 @@ ${"".padEnd(width)}(-v: by action, with the values sent; --json: one action per 
 ${"".padEnd(width)} --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
 ${pad("verify")}re-check the chain, receipts, approvals and this install
 ${"".padEnd(width)}(--skip-install-check: chain only, for offline use)
-${pad("panel [--port <n>]")}read-only local page: pending approvals, approver pin
+${pad("panel [--port <n>]")}read-only local page: activity, purchases, approvals, policy, log, verify
 ${pad("doctor")}check the setup; each problem comes with its fix
 ${pad("policy show")}the active policy and its policy.lock
 ${pad("policy add <name> [--yes]")}narrow the policy with a library policy (shows the diff first)

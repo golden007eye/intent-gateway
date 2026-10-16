@@ -88,6 +88,9 @@ caret-color:transparent;font-size:16px;letter-spacing:0;outline:0}
 .code.js .slots:focus-within .box.on{border:2px solid var(--deep-sage);box-shadow:0 0 0 3px var(--sage)}
 .code.invalid input,.code.invalid .box{border-color:var(--danger)}
 .code .hint{font-size:13px;color:var(--on-paper-muted)}
+.code .more summary{cursor:pointer;width:max-content;text-decoration:underline;text-underline-offset:2px}
+.code .more summary:focus-visible{outline:2px solid var(--deep-sage);outline-offset:2px}
+.code .more p{margin-top:6px}
 .error{display:flex;gap:6px;align-items:flex-start;color:var(--danger);font-size:14px;font-weight:600}
 .error .icon{flex:none;width:16px;height:16px;margin-top:2px}
 .shell-main{display:flex;flex-direction:column;gap:18px}
@@ -173,8 +176,9 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
       `<div><dt>Approval</dt><dd title="${esc(handle)}">${esc(short)}</dd></div></dl>`;
 
     const hint =
-      `<p class="hint" id="code-hint">Paste works; spaces and dashes are ignored. If your agent started the gateway, ` +
-      `read the code with <code class="cmd">${esc(options.codeHint)}</code></p>`;
+      `<p class="hint" id="code-hint">Paste works; spaces and dashes are ignored.</p>` +
+      `<details class="hint more"><summary>Can't see the code?</summary><p>If your agent started the gateway, ` +
+      `read the code with <code class="cmd">${esc(options.codeHint)}</code></p></details>`;
     const field = locked
       ? `<div class="dash"><div class="alert alert-error" role="alert">${ICONS.lock}<p>Too many wrong demo codes. Restart the demo ` +
         `to get a new code; until then nothing can be approved here. You can still reject.</p></div></div>`

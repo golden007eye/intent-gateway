@@ -1,4 +1,4 @@
-// The visual system the gateway's local pages share (the demo confirm page; the panel next): the "Receipt" look as
+// The visual system the gateway's local pages share (the demo confirm page and the panel): the "Receipt" look as
 // one stylesheet built from design tokens, the inline intent logo and line icons. Strings only: no request, no
 // network, no DOM.
 //

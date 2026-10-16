@@ -14,7 +14,7 @@ import { openStore, type StoreFs } from "../store/index.ts";
 import { buildView, type Panel, PanelError, startPanel, type View } from "./index.ts";
 
 const EXPECTED_CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const ROUTES = ["/", "/app.js", "/app.css", "/entries.json"];
 
 vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
@@ -124,16 +124,26 @@ describe("routes", () => {
     expect(reply.headers["x-content-type-options"]).toBe("nosniff");
     expect(reply.headers["referrer-policy"]).toBe("no-referrer");
     expect(reply.headers["cache-control"]).toBe("no-store");
+    expect(reply.headers["x-frame-options"]).toBe("DENY");
   });
 
   it("served assets contain no external URL and no inline script or style", async () => {
     const { url } = await start();
-    for (const path of ["/", "/app.js", "/app.css"]) {
+    for (const path of ["/app.js", "/app.css"]) {
       const { body } = await call(url, path);
       expect(body).not.toMatch(/https?:\/\//i);
       expect(body).not.toMatch(/\/\/[a-z0-9-]+\.[a-z]/i);
     }
     const html = (await call(url, "/")).body;
+    // The page's only outside URLs are the approval link the chain holds for the waiting approval, as a link you choose
+    // to open (no referrer, no opener), and chain values shown as text; no attribute makes the page load anything.
+    const outside = /<a ([^>]*)href="(https?:[^"]*)"([^>]*)>/g;
+    const links = [...html.matchAll(outside)];
+    expect(new Set(links.map((m) => m[2]))).toEqual(new Set(["https://confirm.example/a/h2"]));
+    for (const m of links) expect(`${m[1] ?? ""}${m[3] ?? ""}`).toContain('target="_blank" rel="noopener noreferrer"');
+    const attributes = html.replace(outside, "").match(/\s[a-z-]+="[^"]*"/gi) ?? [];
+    for (const attribute of attributes) expect(attribute).not.toMatch(/https?:|\/\/[a-z0-9-]+\.[a-z]/i);
+    expect(html).not.toMatch(/<(img|iframe|object|embed|link(?![^>]*href="\/app\.css")|script(?![^>]*src="\/app\.js"))\b/i);
     expect(html).not.toMatch(/<style|style=|<script>|<script(?![^>]*\ssrc=)|\son[a-z]+=/i);
     expect((await call(url, "/app.js")).body).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   });
@@ -260,11 +270,13 @@ describe("buildView", () => {
 });
 
 describe("the command the page names", () => {
-  it("serves the approver accept command for this install, as the CLI passes it in, and app.js prints it", async () => {
+  it("serves the approver accept command for this install, as the CLI passes it in, and the page prints it", async () => {
     panel = await startPanel(dir, { port: 0, intent: "npx -y intent-gateway@next" });
     const data = JSON.parse((await call(panel.url, "/entries.json")).body) as { intent: string };
     expect(data.intent).toBe("npx -y intent-gateway@next");
-    expect((await call(panel.url, "/app.js")).body).toContain('Accept it only with " + data.intent + " approver accept at a terminal."');
+    const html = (await call(panel.url, "/")).body;
+    expect(html).toContain('Accept a passkey only with <code class="cmd">npx -y intent-gateway@next approver accept</code> at a terminal');
+    expect(html).toContain('<code class="cmd">npx -y intent-gateway@next log</code>');
   });
 
   it("defaults to intent when no command is passed in", async () => {
@@ -275,5 +287,58 @@ describe("the command the page names", () => {
   it("app.js hard-codes no command: every hint takes the passed-in one", async () => {
     const { url } = await start();
     expect((await call(url, "/app.js")).body).not.toMatch(/intent (approver|verify|log|panel|serve|demo)/);
+  });
+});
+
+describe("the page", () => {
+  const verifyResult = { ok: true, head: { seq: 7, hash: "x" }, checks: [{ name: "chain", ok: true, details: ["8 entries, every hash links"] }] };
+
+  it("runs verify once per chain head and again when the chain grows", async () => {
+    let runs = 0;
+    panel = await startPanel(dir, {
+      port: 0,
+      verify: () => {
+        runs += 1;
+        return Promise.resolve(verifyResult);
+      },
+    });
+    expect((await call(panel.url, "/")).body).toContain("Every check passed");
+    await call(panel.url, "/");
+    expect(runs).toBe(1);
+    const store = await openStore(dir, { fs: fast });
+    await store.append("approval_pending", { handle: "h3", approval_url: "https://confirm.example/a/h3" });
+    await store.close();
+    await call(panel.url, "/");
+    expect(runs).toBe(2);
+  });
+
+  it("still serves the page when the policy cannot be read or verify fails, and says so", async () => {
+    panel = await startPanel(dir, {
+      port: 0,
+      policy: () => Promise.reject(new Error("POLICY_LOOSENS")),
+      verify: () => Promise.reject(new Error("boom")),
+    });
+    const reply = await call(panel.url, "/");
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain("the active policy could not be read: POLICY_LOOSENS");
+    expect(reply.body).toContain("Not run here.");
+  });
+
+  it("shows REAL unless told or the chain says demo", async () => {
+    const { url } = await start();
+    expect((await call(url, "/")).body).toContain('<span class="pill pill-real">REAL</span>');
+    await panel?.close();
+    panel = await startPanel(dir, { port: 0, mode: "demo" });
+    expect((await call(panel.url, "/")).body).toContain('<span class="pill">DEMO</span>');
+  });
+
+  it("an unchanged chain gives the same region versions, so a refresh replaces nothing but the clock", async () => {
+    let now = Date.parse("2026-10-16T10:00:00Z");
+    panel = await startPanel(dir, { port: 0, now: () => (now += 5000) });
+    const versions = (html: string): Record<string, string> =>
+      Object.fromEntries([...html.matchAll(/data-live="([^"]+)" data-v="([^"]+)"/g)].map((m) => [m[1] ?? "", m[2] ?? ""]));
+    const a = versions((await call(panel.url, "/")).body);
+    const b = versions((await call(panel.url, "/")).body);
+    expect(Object.keys(a).filter((k) => a[k] !== b[k])).toEqual(["meta"]);
   });
 });
