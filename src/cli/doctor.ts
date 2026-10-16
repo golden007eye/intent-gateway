@@ -16,6 +16,7 @@ import { readLog } from "./log.ts";
 import { noShipToNote, shipToFix } from "./policy.ts";
 import { demoTrustKeys } from "../demo/index.ts";
 import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
+import { leaseNotice, slowCloudNotice } from "./waiting.ts";
 
 type Level = "ok" | "warn" | "fail";
 interface Finding {
@@ -171,22 +172,26 @@ async function checkLease(dataDir: string, now: number, report: Report): Promise
   if (typeof expires !== "number") {
     report("warn", "lease: audit.lock is not a lease the gateway wrote; stop every gateway on this data dir, then delete audit.lock");
   } else if (expires > now) {
-    report("ok", `lease: held by a running gateway until ${new Date(expires).toISOString()}`);
+    report("ok", `lease: held until ${new Date(expires).toISOString()} by a gateway that is writing, or one that stopped mid-write; it frees itself then`);
   } else {
     report("ok", `lease: expired at ${new Date(expires).toISOString()}; the next writer takes it over`);
   }
 }
 
 async function checkCloud(io: Io, config: Config, cloudUrl: string, pins: readonly RootKey[], now: () => number, report: Report): Promise<void> {
+  // Progress goes to stderr: stdout holds only the report lines.
+  const say = (text: string): void => {
+    line(io.stderr, `intent doctor: ${text}`);
+  };
   let store;
   try {
-    store = await openStore(config.dataDir);
+    store = await openStore(config.dataDir, { onWait: leaseNotice(say, io.now) });
   } catch (error) {
     report("fail", `Intent Cloud not checked: ${describeError(error, { dataDir: config.dataDir })}`);
     return;
   }
   try {
-    const cloud = cloudFor(io, store, cloudUrl, { keySet: () => null, now });
+    const cloud = cloudFor(io, store, cloudUrl, { keySet: () => null, now }, slowCloudNotice(say, io.cloudNoticeMs));
     const meta = await cloud.meta();
     if (!meta.ok) {
       report("fail", metaRefused(meta.status, { ...errorContext(config, io.env), cloudUrl }));

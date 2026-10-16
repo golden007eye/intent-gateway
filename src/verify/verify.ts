@@ -39,7 +39,8 @@ export interface Report {
   /** The last entry of the verified chain (seq -1 and the genesis hash for an empty one), for outside comparison. */
   head: { seq: number; hash: string };
   checks: Check[];
-  counts: { disclosures: number; receipts: number; unacknowledged: number; discarded: number; approvals: number; flags: number };
+  /** `unanswered`: disclosures with no follow-up entry (the gateway stopped before it recorded an answer, or is still waiting). */
+  counts: { disclosures: number; receipts: number; unacknowledged: number; unanswered: number; discarded: number; approvals: number; flags: number };
 }
 
 /** The chain line for a missing or empty chain; the same words as `intent log`. */
@@ -49,7 +50,7 @@ const EMPTY_CHAIN = `No entries yet: the gateway has sent nothing. Start it with
 const USAGE_REASONS: ReadonlySet<FailureReason> = new Set(["package-unreadable", "ref-invalid"]);
 
 export async function runVerify(opts: VerifyOptions): Promise<Report> {
-  const counts = { disclosures: 0, receipts: 0, unacknowledged: 0, discarded: 0, approvals: 0, flags: 0 };
+  const counts = { disclosures: 0, receipts: 0, unacknowledged: 0, unanswered: 0, discarded: 0, approvals: 0, flags: 0 };
   const empty = { seq: -1, hash: GENESIS };
   if (opts.pinnedRootKeys.length === 0) {
     return usage(["no root key is pinned for this Intent Cloud host; pass --trust-keys"], empty, counts);
@@ -187,14 +188,20 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
     }
   }
 
+  // A disclosure with no follow-up: the gateway logged it and may have sent it, then stopped (a crash, a kill) before
+  // it recorded an answer, or it is still waiting for one. That is normal life, not a broken chain: it is reported
+  // apart, and never counted as sent or acknowledged (invariant 5). Its follow-up cannot have been cut from inside the
+  // chain without breaking the links; cutting it from the end is the dropped-tail case the reported head answers.
+  const unanswered: number[] = [];
   for (const { entry, followUps } of disclosures.values()) {
     if (followUps.length === 0) {
-      disclosureFailures.push(`seq ${String(entry.seq)}: the disclosure has no receipt, unacknowledged or discarded entry`);
+      unanswered.push(entry.seq);
     } else if (followUps.length > 1) {
       disclosureFailures.push(`seq ${String(entry.seq)}: the disclosure has ${String(followUps.length)} follow-up entries (seq ${followUps.join(", ")}); expected one`);
     }
   }
 
+  counts.unanswered = unanswered.length;
   return [
     {
       name: "key statements",
@@ -205,8 +212,11 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       name: "disclosures",
       ok: disclosureFailures.length === 0,
       details: [
-        `sent: ${String(counts.disclosures - notSent)}`,
+        `sent: ${String(counts.disclosures - notSent - unanswered.length)}`,
         ...(notSent === 0 ? [] : [`logged but not sent (no connection was made): ${String(notSent)}`]),
+        ...(unanswered.length === 0
+          ? []
+          : [`logged, maybe sent, no answer recorded (the gateway stopped before it finished, or is still waiting): ${String(unanswered.length)} (seq ${unanswered.join(", ")})`]),
         demoChain(entries)
           ? `acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): ${String(counts.receipts)}`
           : `acknowledged by a receipt from Intent Cloud's public edge: ${String(counts.receipts)}`,

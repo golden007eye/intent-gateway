@@ -9,6 +9,7 @@ import { approverFingerprint } from "../trust/index.ts";
 import { CliError, type Io, line } from "./io.ts";
 import { readLog } from "./log.ts";
 import { ask } from "./prompt.ts";
+import { leaseNotice } from "./waiting.ts";
 
 type Body = Record<string, unknown>;
 
@@ -100,7 +101,11 @@ export async function approverAccept(io: Io, dataDir: string): Promise<number> {
     line(io.stdout, "the fingerprint does not match; nothing was written");
     return 1;
   }
-  const store = await openStore(dataDir);
+  const store = await openStore(dataDir, {
+    onWait: leaseNotice((text) => {
+      line(io.stderr, `intent: ${text}`);
+    }, io.now),
+  });
   try {
     const entry = await store.append("approver_pin", {
       fingerprint,

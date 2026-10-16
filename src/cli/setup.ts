@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { type Config, ConfigError, DOCKER_EXEC, loadConfig, type RootKey } from "../config/index.ts";
 import { CONTAINER_CONFIRM_PORT, type Demo, demoDataDir, demoTrustKeys, startDemo } from "../demo/index.ts";
-import { connectCloud, type DisclosedCloud, type DisclosureOptions } from "../disclosure/index.ts";
+import { connectCloud, type DisclosedCloud, type DisclosureOptions, type HttpCloudOptions } from "../disclosure/index.ts";
 import { loadPolicy, type Policy } from "../policy/index.ts";
 import { createSession } from "../signing/index.ts";
 import type { Store } from "../store/index.ts";
@@ -104,7 +104,7 @@ export async function activePolicy(policyPath: string): Promise<ActivePolicy> {
 }
 
 /** The disclosed cloud for this config: every request is logged to `store` before it is sent. */
-export function cloudFor(io: Io, store: Store, baseUrl: string, options: DisclosureOptions): DisclosedCloud {
-  const http = { baseUrl, session: createSession(), ...(io.now === undefined ? {} : { now: io.now }) };
+export function cloudFor(io: Io, store: Store, baseUrl: string, options: DisclosureOptions, slow?: HttpCloudOptions["slow"]): DisclosedCloud {
+  const http = { baseUrl, session: createSession(), ...(io.now === undefined ? {} : { now: io.now }), ...(slow === undefined ? {} : { slow }) };
   return (io.connect ?? connectCloud)(http, store, options);
 }

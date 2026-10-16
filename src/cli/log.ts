@@ -7,6 +7,9 @@ import { neverLeft, readChain, verifyChain } from "../store/index.ts";
 
 type Body = Record<string, unknown>;
 
+/** The entry kinds that answer a disclosure, naming it by `disclosure_seq`. */
+const FOLLOW_UPS: ReadonlySet<string> = new Set(["receipt", "unacknowledged", "discarded"]);
+
 interface Item {
   seq: number;
   ts: string;
@@ -22,9 +25,12 @@ export function formatLog(items: readonly unknown[]): string {
   const demo = demoChain(items);
   // Logged requests that never left (no connection was made): listed as logged, not as sent (invariant 5).
   const notSent = new Set<unknown>();
+  // Disclosures some entry answers; one no entry answers is logged and maybe sent, with no answer recorded.
+  const answered = new Set<unknown>();
   for (const raw of items) {
     const item = asItem(raw);
     if (item?.kind === "unacknowledged" && neverLeft(item.body)) notSent.add(item.body.disclosure_seq);
+    if (item !== null && FOLLOW_UPS.has(item.kind)) answered.add(item.body.disclosure_seq);
   }
   for (const [index, raw] of items.entries()) {
     const item = asItem(raw);
@@ -32,7 +38,14 @@ export function formatLog(items: readonly unknown[]): string {
       lines.push(`line ${String(index + 1)}: not an entry (a torn or edited line); run ${INTENT} verify`);
       continue;
     }
-    const [label, detail] = item.kind === "disclosure" && notSent.has(item.seq) ? notSentRow(item) : describe(item, demo);
+    const [label, detail] =
+      item.kind !== "disclosure"
+        ? describe(item, demo)
+        : notSent.has(item.seq)
+          ? notSentRow(item)
+          : answered.has(item.seq)
+            ? describe(item, demo)
+            : unansweredRow(item);
     lines.push(`#${String(item.seq).padEnd(4)} ${item.ts}  ${label.padEnd(14)} ${detail}`);
   }
   const chain = verifyChain(items);
@@ -66,6 +79,15 @@ function demoChain(items: readonly unknown[]): boolean {
 /** A disclosure whose request never left: logged before the send, which then failed to connect. */
 function notSentRow(item: Item): [string, string] {
   return ["logged", `${text(item.body.endpoint)}: ${list(leafFields(strings(item.body.fields)), "no body fields")} (not sent: no connection was made)`];
+}
+
+/**
+ * A disclosure no entry answers: logged before the send, which may have left, and then the gateway stopped before it
+ * recorded an answer (or it is still waiting for one).
+ */
+function unansweredRow(item: Item): [string, string] {
+  const fields = list(leafFields(strings(item.body.fields)), "no body fields");
+  return ["logged", `${text(item.body.endpoint)}: ${fields} (maybe sent; no answer recorded: the gateway stopped before it finished, or is still waiting)`];
 }
 
 function describe(item: Item, demo: boolean): [string, string] {

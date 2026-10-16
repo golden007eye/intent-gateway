@@ -1,6 +1,6 @@
 // verify: `intent verify` (plan §3.2). Re-checks the local chain offline against the pinned root key (links, key
-// statements, one follow-up per disclosure with its receipt re-verified, approvals re-verified from their chained
-// proofs), then runs the supply-chain self-check, and reports the head seq and hash (ADR-0006, ADR-0007, ADR-0010).
+// statements, at most one follow-up per disclosure with its receipt re-verified (none is reported as no answer
+// recorded, not failed), approvals re-verified from their chained proofs), then runs the supply-chain self-check, and reports the head seq and hash (ADR-0006, ADR-0007, ADR-0010).
 //
 // Chain bodies verify reads (written by disclosure and the gateway):
 // - keys: `{statement}`, the key statement as Intent Cloud served it. Receipts before the first keys entry (the

@@ -37,7 +37,7 @@ Before each request to Intent Cloud, the gateway appends the exact request to th
 |---|---|---|
 | `chain` | Every entry links to the one before by its hash: no entry inside the chain was changed, removed or reordered. | That entries were not dropped from the end (see below). |
 | `key statements` | Each key statement recorded in the chain was signed by the pinned root key and was valid when it was recorded. | Anything about keys the chain never recorded. |
-| `disclosures` | Each send has exactly one follow-up. Each receipt is signed by a receipt key from the statement and covers the digest of the bytes the log says were sent, with the same keyid, nonce and time. | What Intent Cloud did with the data after it received it. |
+| `disclosures` | Each send has at most one follow-up. Each receipt is signed by a receipt key from the statement and covers the digest of the bytes the log says were sent, with the same keyid, nonce and time. | What Intent Cloud did with the data after it received it. |
 | `approvals` | Each Approval carries a passkey assertion over the purchase snapshot that was pending, signed by a key from the statement, from the pinned approver passkey. | That the person who holds the passkey meant to buy (see the [threat model](threat-model.md#phone-hand-off-and-self-approval)). |
 | `approver flags` | Lists Approvals signed by a passkey other than the pinned approver; they were not counted as approved. | Flags do not fail verify; read them. |
 | `self-check` | The installed npm package matches its published provenance, or the image matches its signature and SBOM. | That the gateway is untampered: see below. |
@@ -47,6 +47,7 @@ Before each request to Intent Cloud, the gateway appends the exact request to th
 - **Acknowledged:** a receipt Intent Cloud signs at its public edge, over the digest of the bytes it received. A receipt means "received at Intent Cloud's public edge" and nothing more.
 - **Sent, not acknowledged:** the request went out and no receipt came back because there was no HTTP response, or an error page made by the network in front of Intent Cloud. Verify reports it and does not fail: the field was sent, and the log says so.
 - **Discarded:** a response that should have carried a valid receipt did not. The gateway did not use its content, and verify fails.
+- **No answer recorded:** the gateway logged the request, may have sent it, and stopped (killed, crashed, the machine lost power) before it recorded what came back, or it is still waiting for the answer. Verify lists it as "logged, maybe sent, no answer recorded" with its seq and does not fail: it is not counted as sent or as acknowledged. `intent log` shows its row as `logged … (maybe sent; no answer recorded …)`. An answer cannot be cut from inside the chain without breaking the links; cutting it from the end is caught only by the head check below.
 
 `intent verify` proves what the gateway sent and what Intent Cloud acknowledged receiving. It cannot show what happens to that data afterwards, and these docs do not claim otherwise.
 

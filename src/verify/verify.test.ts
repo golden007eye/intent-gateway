@@ -106,7 +106,7 @@ describe("runVerify: a clean chain", () => {
     const head = await lastEntry(dir);
     expect(failed(report)).toEqual([]);
     expect(report).toMatchObject({ ok: true, exitCode: 0, head: { seq: 5, hash: head.hash } });
-    expect(report.counts).toEqual({ disclosures: 1, receipts: 1, unacknowledged: 0, discarded: 0, approvals: 1, flags: 0 });
+    expect(report.counts).toEqual({ disclosures: 1, receipts: 1, unacknowledged: 0, unanswered: 0, discarded: 0, approvals: 1, flags: 0 });
     const text = formatReport(report);
     expect(text).toContain(`head: seq 5 hash ${head.hash}\n`);
     expect(text).toContain("sent, not acknowledged: 0\n");
@@ -147,6 +147,100 @@ describe("runVerify: a clean chain", () => {
   });
 });
 
+describe("runVerify: a gateway that stopped mid-request (F-l)", () => {
+  /** What a gateway killed after logging a send and before recording its answer leaves: a disclosure, then nothing. */
+  async function killedMidRequest(after: (s: Store) => Promise<unknown> = () => Promise.resolve()): Promise<string> {
+    return chain(async (s) => {
+      await keys(s);
+      await receipt(s, await disclose(s, 1), response(sent(1)));
+      await disclose(s, 2);
+      await after(s);
+    });
+  }
+
+  it("passes, and reports the request as logged, maybe sent, with no answer recorded; never as sent or acknowledged", async () => {
+    const dir = await killedMidRequest();
+    const report = await verify(dir);
+    expect(failed(report)).toEqual([]);
+    expect(report).toMatchObject({ ok: true, exitCode: 0, head: { seq: 3 } });
+    expect(report.counts).toMatchObject({ disclosures: 2, receipts: 1, unacknowledged: 0, unanswered: 1 });
+    const text = formatReport(report);
+    expect(text).toContain("  sent: 1\n");
+    expect(text).toContain("  logged, maybe sent, no answer recorded (the gateway stopped before it finished, or is still waiting): 1 (seq 3)\n");
+    expect(text).toContain("  sent, not acknowledged: 0\n");
+    expect(text).toMatch(/verify: ok\n$/);
+  });
+
+  it("passes when the next start appended after it (the request stays unanswered, inside the chain)", async () => {
+    const dir = await killedMidRequest(async (s) => {
+      await keys(s);
+      await receipt(s, await disclose(s, 3), response(sent(3)));
+    });
+    const report = await verify(dir);
+    expect(report.exitCode).toBe(0);
+    expect(check(report, "disclosures")?.details).toContain(
+      "logged, maybe sent, no answer recorded (the gateway stopped before it finished, or is still waiting): 1 (seq 3)",
+    );
+  });
+
+  it("hides no other failure: a discarded response elsewhere still fails", async () => {
+    const dir = await killedMidRequest(async (s) => {
+      await followUp(s, "discarded", await disclose(s, 3), "200 without a receipt");
+    });
+    const report = await verify(dir);
+    expect(report.exitCode).toBe(1);
+    expect(check(report, "disclosures")?.details).toContain(
+      "seq 5: discarded: a response to the disclosure at seq 4 came without a valid receipt (200 without a receipt)",
+    );
+  });
+
+  it("attack: a forged `interrupted` entry is no entry kind, so it breaks the chain instead of closing anything", async () => {
+    const dir = await killedMidRequest();
+    const head = await lastEntry(dir);
+    const fields = { seq: head.seq + 1, prev: head.hash, ts: "2026-09-24T12:00:09.000Z", kind: "interrupted", body: { disclosure_seq: 3 } };
+    await writeFile(join(dir, "audit.jsonl"), `${canonicalize({ ...fields, hash: sha256Hex(canonicalize(fields)) })}\n`, { flag: "a" });
+    const report = await verify(dir);
+    expect(report.exitCode).toBe(1);
+    expect(check(report, "chain")?.details[0]).toBe("broken at seq 4: unknown kind");
+  });
+
+  it("attack: a forged follow-up cannot turn a discarded response into ok: two follow-ups fail", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      const d = await disclose(s, 1);
+      await followUp(s, "discarded", d, "200 without a receipt");
+      await followUp(s, "unacknowledged", d, "the gateway stopped");
+    });
+    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    expect(details).toContain("seq 1: the disclosure has 2 follow-up entries (seq 2, 3); expected one");
+    expect(details).toContain("seq 2: discarded: a response to the disclosure at seq 1 came without a valid receipt (200 without a receipt)");
+  });
+
+  it("attack: editing the unanswered disclosure still breaks the chain", async () => {
+    const dir = await killedMidRequest();
+    const file = join(dir, "audit.jsonl");
+    const text = await readFile(file, "utf8");
+    await writeFile(file, text.replace('"fields":["query"]', '"fields":["nothing"]'));
+    const report = await verify(dir);
+    expect(report.exitCode).toBe(1);
+    expect(check(report, "chain")?.ok).toBe(false);
+  });
+
+  it("dropping an answer from the end leaves an unanswered disclosure, and a head that no longer matches an earlier copy", async () => {
+    const full = await killedMidRequest(async (s) => followUp(s, "discarded", s.entries().at(-1) as Entry, "200 without a receipt"));
+    const before = await verify(full);
+    expect(before.exitCode).toBe(1);
+    const file = join(full, "audit.jsonl");
+    const lines = (await readFile(file, "utf8")).trimEnd().split("\n");
+    await writeFile(file, `${lines.slice(0, -1).join("\n")}\n`);
+    const after = await verify(full);
+    // ADR-0007: only the file is checked, so a cut tail verifies; the reported head is what tells it apart.
+    expect(after.exitCode).toBe(0);
+    expect(after.head.seq).toBe(before.head.seq - 1);
+    expect(after.head.hash).not.toBe(before.head.hash);
+  });
+});
+
 describe("runVerify: tampered chains exit non-zero with a named failure", () => {
   it("an edited disclosure body breaks the chain at its seq", async () => {
     const dir = await chain(async (s) => {
@@ -184,14 +278,19 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
     expect(details).toContain("seq 3: the disclosure body_b64 is not base64");
   });
 
-  it("a dropped receipt leaves its disclosure without a follow-up", async () => {
+  it("a receipt cut from inside the chain breaks it at the gap", async () => {
     const dir = await chain(async (s) => {
       await keys(s);
-      await disclose(s, 1);
+      await receipt(s, await disclose(s, 1), response(sent(1)));
+      await receipt(s, await disclose(s, 2), response(sent(2)));
     });
+    const file = join(dir, "audit.jsonl");
+    const lines = (await readFile(file, "utf8")).split("\n");
+    lines.splice(2, 1);
+    await writeFile(file, lines.join("\n"));
     const report = await verify(dir);
     expect(report.exitCode).toBe(1);
-    expect(check(report, "disclosures")?.details).toContain("seq 1: the disclosure has no receipt, unacknowledged or discarded entry");
+    expect(check(report, "chain")?.details[0]).toBe("broken at seq 2: seq is 3, expected 2");
   });
 
   it("swapped receipts each fail against the other disclosure", async () => {

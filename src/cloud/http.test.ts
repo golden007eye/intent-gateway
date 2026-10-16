@@ -514,6 +514,31 @@ describe("failures without a usable response", () => {
     expect(error).toMatchObject({ neverLeft: false, message: `Intent Cloud at 127.0.0.1:${String(stub.port)} cannot be reached (no complete response within 100 ms)` });
   });
 
+  it("slow: notifies once with the host while a sent request has no answer, then still times out (F-l)", async () => {
+    const stub = await startStub(() => "hang");
+    const hosts: string[] = [];
+    let sentAt = 0;
+    let notifiedAfter = -1;
+    const slow = { afterMs: 50, notify: (host: string) => ((notifiedAfter = Date.now() - sentAt), hosts.push(host)) };
+    const beforeSend = async (): Promise<void> => {
+      // Time spent before the send (logging it) does not count towards afterMs.
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      sentAt = Date.now();
+    };
+    await expect(cloudFor(stub, { timeoutMs: 300, slow }).meta({ beforeSend })).rejects.toMatchObject({ reason: "timeout" });
+    expect(hosts).toEqual([`127.0.0.1:${String(stub.port)}`]);
+    expect(notifiedAfter).toBeGreaterThanOrEqual(40);
+  });
+
+  it("slow: a response within afterMs notifies nothing", async () => {
+    const stub = await startStub();
+    const hosts: string[] = [];
+    const slow = { afterMs: 2000, notify: (host: string) => hosts.push(host) };
+    expect((await cloudFor(stub, { slow }).meta()).ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(hosts).toEqual([]);
+  });
+
   it("a host name with no DNS record: plain words, no error code, and nothing left (attack: never claims more)", async () => {
     const looked: string[] = [];
     const lookup = (hostname: string, _options: unknown, callback: (error: Error) => void): void => {
