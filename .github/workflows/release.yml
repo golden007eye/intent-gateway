@@ -5,7 +5,8 @@
 # release.yml@refs/tags/v<version>. `intent verify` (src/supplychain releaseIdentity) checks exactly that identity,
 # so renaming this file or publishing from anything but a version tag breaks every self-check.
 #
-# Jobs: gate → npm + image (the `release` environment) → post-publish and rebuild. Release jobs use no dependency
+# Jobs: gate → npm + image (the `release` environment) → post-publish and rebuild; github-release after post-publish
+# (the only job that may write to the repository: the GitHub Release and its assets). Release jobs use no dependency
 # cache, so nothing a pull request wrote can reach a published artifact.
 name: release
 
@@ -295,3 +296,89 @@ jobs:
           rebuilt="$(tar -xOf "${RUNNER_TEMP}/image.tar" index.json | jq -r '.manifests[0].digest')"
           echo "published ${PUBLISHED}, rebuilt ${rebuilt}"
           [[ "$rebuilt" == "$PUBLISHED" ]] || { echo "::error::the rebuild from ${GITHUB_REF_NAME} gives ${rebuilt}, not the published ${PUBLISHED}"; exit 1; }
+
+  # What a stranger sees on the repository page: a GitHub Release for the tag, once the published package and image
+  # have passed the developer's checks. A preview is a prerelease and never "latest". The SBOM attached is read back
+  # from the verified cosign attestation and the tarball from the registry (checksums compared to dist.shasum and
+  # dist.integrity), so both are exactly what was published. Re-running the job edits the release, never fails on it.
+  github-release:
+    name: github-release (notes, attested SBOM and the published npm tarball)
+    needs: [gate, image, post-publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      DIST_TAG: ${{ needs.gate.outputs.dist_tag }}
+      DIGEST: ${{ needs.image.outputs.digest }}
+      REF: ghcr.io/golden007eye/intent-gateway@${{ needs.image.outputs.digest }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+      - name: install cosign (sha256-pinned release binary)
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -sSfLo "${RUNNER_TEMP}/bin/cosign" "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  ${RUNNER_TEMP}/bin/cosign" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/bin/cosign"
+          echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
+      - name: the SBOM attested to the digest (verified against the release identity)
+        run: |
+          set -euo pipefail
+          identity="https://github.com/golden007eye/intent-gateway/.github/workflows/release.yml@refs/tags/v${VERSION}"
+          cd "${RUNNER_TEMP}"
+          cosign verify-attestation --new-bundle-format=true --type cyclonedx \
+            --certificate-identity "$identity" --certificate-oidc-issuer "$OIDC_ISSUER" "$REF" > attestations.jsonl
+          jq -rs '.[0].payload' attestations.jsonl | base64 -d > statement.json
+          jq -e --arg d "${DIGEST#sha256:}" '.predicateType == "https://cyclonedx.org/bom" and any(.subject[]; .digest.sha256 == $d)' statement.json > /dev/null
+          jq '.predicate' statement.json > sbom.cdx.json
+          jq -e '.bomFormat == "CycloneDX" and (.components | length) > 0' sbom.cdx.json > /dev/null
+      - name: the npm tarball the registry serves (checksums compared to dist.shasum and dist.integrity)
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          npm pack --ignore-scripts "intent-gateway@${VERSION}" > /dev/null
+          file="intent-gateway-${VERSION}.tgz"
+          shasum="$(npm view "intent-gateway@${VERSION}" dist.shasum)"
+          integrity="$(npm view "intent-gateway@${VERSION}" dist.integrity)"
+          [[ "$(sha1sum "$file" | cut -d' ' -f1)" == "$shasum" ]] || { echo "::error::${file} does not match dist.shasum ${shasum}"; exit 1; }
+          [[ "sha512-$(openssl dgst -sha512 -binary "$file" | base64 -w0)" == "$integrity" ]] || { echo "::error::${file} does not match dist.integrity"; exit 1; }
+          echo "SHASUM=$shasum" >> "$GITHUB_ENV"
+          echo "INTEGRITY=$integrity" >> "$GITHUB_ENV"
+      - name: notes (fixed header, then the pull requests since the previous tag)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          previous="$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_SHA}^" 2>/dev/null || true)"
+          node scripts/release-notes.ts --version "$VERSION" --dist-tag "$DIST_TAG" --digest "$DIGEST" \
+            --shasum "$SHASUM" --integrity "$INTEGRITY" > "${RUNNER_TEMP}/notes.md"
+          args=(-f "tag_name=${tag}")
+          if [[ -n "$previous" ]]; then args+=(-f "previous_tag_name=${previous}"); fi
+          echo "notes for ${tag} since ${previous:-the first commit}"
+          gh api --method POST "repos/${GH_REPO}/releases/generate-notes" "${args[@]}" --jq .body >> "${RUNNER_TEMP}/notes.md"
+      - name: create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if [[ "$VERSION" == *-* ]]; then kind=(--prerelease --latest=false); else kind=(--prerelease=false --latest); fi
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release edit "$tag" --title "intent-gateway ${VERSION}" --notes-file "${RUNNER_TEMP}/notes.md" --draft=false "${kind[@]}"
+          else
+            gh release create "$tag" --verify-tag --title "intent-gateway ${VERSION}" --notes-file "${RUNNER_TEMP}/notes.md" "${kind[@]}"
+          fi
+          gh release upload "$tag" --clobber "${RUNNER_TEMP}/sbom.cdx.json" "${RUNNER_TEMP}/intent-gateway-${VERSION}.tgz"
+          url="$(gh release view "$tag" --json url --jq .url)"
+          echo "GitHub Release ${url}"
+          echo "GitHub Release: ${url}" >> "$GITHUB_STEP_SUMMARY"

@@ -17,6 +17,7 @@ const SHA = "a".repeat(40);
 const DIGEST = `sha256:${"b".repeat(64)}`;
 const CI_URL = "https://github.com/golden007eye/intent-gateway/actions/runs/1";
 const RELEASE_URL = "https://github.com/golden007eye/intent-gateway/actions/runs/2";
+const GH_RELEASES = "https://github.com/golden007eye/intent-gateway/releases";
 const PKG = (v: string): string => `{\n  "name": "intent-gateway",\n  "version": "${v}",\n  "license": "Apache-2.0"\n}\n`;
 
 // Commands that change the repository, GitHub or npm, or follow a run that only a real release starts. A dry run
@@ -25,7 +26,8 @@ const MUTATING = [
   /^git (push|tag|commit|switch|checkout|merge|branch|reset|pull|rebase|stash|add|rm)\b/,
   /^gh pr (create|merge|edit|close|checks .*--watch)\b/,
   /^gh run (watch|rerun|cancel)\b/,
-  /^gh (release|workflow run)\b/,
+  /^gh release (?!(view|list)\b)/,
+  /^gh workflow run\b/,
   /^gh api .*(-X|--method|-f |-F |--field|--input)/,
   /^npm (publish|version|dist-tag (add|rm))\b/,
 ];
@@ -72,6 +74,7 @@ function world(overrides: Responder[] = [], opts: { version?: string; tty?: bool
     }
     if (line.includes("--log --job 7")) return ok(`push\tbuilt ${DIGEST}, pushed ${DIGEST}, tag x is ${DIGEST}\n`);
     if (line.includes("dist-tags --json")) return ok('{"next":"0.1.0-preview.1"}');
+    if (line.startsWith("gh release view v")) return ok(JSON.stringify({ url: `${GH_RELEASES}/tag/${line.split(" ")[3] ?? ""}`, isPrerelease: true }));
     return undefined;
   };
   const io: Io = {
@@ -322,6 +325,20 @@ describe("release", () => {
     expect(text).toContain('dist-tags: {"next":"0.1.0-preview.1"}');
     expect(text).toContain(`image:     ghcr.io/golden007eye/intent-gateway@${DIGEST} (tag 0.1.0-preview.1)`);
     expect(text).toContain("the release run concluded success");
+    expect(text).toContain(`github:    ${GH_RELEASES}/tag/v0.1.0-preview.1 (prerelease)`);
+  });
+
+  it("names the github-release job when the run left no GitHub Release", async () => {
+    const w = world([(l) => (l.startsWith("gh release view") ? fail("release not found") : undefined)]);
+    await release(flags({ yes: true }), w.io);
+    expect(w.text()).toContain(`github:    no GitHub Release for v0.1.0-preview.1 (release not found): see the github-release job of ${RELEASE_URL}`);
+  });
+
+  it("counts gh release create, edit and upload as mutating, view and list not", () => {
+    expect(isMutating("gh release create v1")).toBe(true);
+    expect(isMutating("gh release upload v1 x")).toBe(true);
+    expect(isMutating("gh release view v1 -R x")).toBe(false);
+    expect(isMutating("gh release list")).toBe(false);
   });
 
   it("annotates without signing when the repo does not sign tags", async () => {
