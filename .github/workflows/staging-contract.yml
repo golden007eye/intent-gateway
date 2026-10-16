@@ -1,0 +1,48 @@
+# The contract suite (test/contract) against the staging Intent Cloud host: the same assertions `pnpm test` runs
+# against the fake. Not a required check. Third-party actions are pinned by full commit SHA, as in ci.yml.
+#
+# Scheduled runs are gated by the repo variable STAGING_HOST_LIVE == 'true', set once the host is live (R3-5).
+# Nothing skips when the host is unreachable: with the variable set, an outage fails the run. A manual run always
+# runs. Until the staging root key is committed in PINNED_HOSTS, the repo variable STAGING_ROOT_KEYS holds the key
+# file (`{"rootKeys": [...]}`, public keys only) and the suite reads it through TRUST_KEYS.
+name: staging-contract
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-contract
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: contract suite (TARGET=staging)
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.STAGING_HOST_LIVE == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: root key file (until PINNED_HOSTS carries the staging root key)
+        if: ${{ vars.STAGING_ROOT_KEYS != '' }}
+        env:
+          STAGING_ROOT_KEYS: ${{ vars.STAGING_ROOT_KEYS }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$STAGING_ROOT_KEYS" > "$RUNNER_TEMP/trust-keys.json"
+          echo "TRUST_KEYS=$RUNNER_TEMP/trust-keys.json" >> "$GITHUB_ENV"
+      - run: pnpm vitest run test/contract
+        env:
+          TARGET: staging
