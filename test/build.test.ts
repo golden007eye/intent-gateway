@@ -1,11 +1,11 @@
 // The built package works: `pnpm build` emits dist/main.js, which reports the version, plus build-info.json.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const repo = join(import.meta.dirname, "..");
-const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { version: string; bin: Record<string, string> };
+const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { version: string; bin: Record<string, string>; files: string[] };
 
 describe("pnpm build", () => {
   it("emits dist/main.js that prints the version, and dist/build-info.json", { timeout: 60_000 }, () => {
@@ -19,6 +19,15 @@ describe("pnpm build", () => {
     expect(JSON.parse(readFileSync(join(repo, "dist/build-info.json"), "utf8"))).toEqual(
       dirty ? { version: pkg.version, buildCommit: null, dirty: true } : { version: pkg.version, buildCommit: head, dirty: false },
     );
+  });
+
+  it("ships demo mode (src/demo and the fake it runs) in dist, and no test file", () => {
+    for (const file of ["dist/demo/index.js", "dist/cloud-fake/index.js"]) expect(existsSync(join(repo, file)), file).toBe(true);
+    const files = readdirSync(join(repo, "dist"), { recursive: true }).map(String);
+    expect(files.filter((f) => /\.test\.(js|d\.ts)$/.test(f))).toEqual([]);
+    expect(pkg.files).toContain("dist");
+    // The fake reads its test keys and the contract sums from the package's contract/ at run time.
+    expect(pkg.files).toContain("contract");
   });
 
   it("points both bin names at dist/main.js", () => {

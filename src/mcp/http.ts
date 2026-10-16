@@ -38,6 +38,8 @@ export interface HttpOptions {
   token: string | null;
   /** Defaults to stderr. */
   log?: (line: string) => void;
+  /** A line put first in every tool result (demo mode's banner). */
+  banner?: string;
 }
 
 export interface HttpHandle extends McpHandle {
@@ -111,7 +113,7 @@ export async function runHttp(options: HttpOptions): Promise<HttpHandle> {
     }
 
     const mcp = new McpServer(SERVER_INFO);
-    registerTools(mcp, gateway);
+    registerTools(mcp, gateway, options.banner === undefined ? {} : { banner: options.banner });
     const transport = new StreamableHTTPServerTransport({ enableJsonResponse: true });
     res.on("close", () => {
       void transport.close();

@@ -456,11 +456,13 @@ describe("invariant 3: buyer identity in a tool input is never sent", () => {
 
   it.each(ATTACKS)("find_offers with %s: 0 sends, a block entry without the value", async (_name, input) => {
     const h = await setup();
+    const before = h.store.entries().length;
     const result = await h.gateway.findOffers(input);
     expect(result.status).toBe("blocked");
     expect(result.summary).toMatch(/^Sent: nothing \/ Blocked: /);
     expect(h.totalSends()).toBe(0);
-    const chain = JSON.stringify(h.store.entries());
+    // What this call wrote, without the hashes and the start-up receipts, whose random hex can contain "4111".
+    const chain = JSON.stringify(h.store.entries().slice(before).map((e) => [e.kind, e.body]));
     for (const secret of ["4111", "jane", "Jane", "Pennsylvania", "555-2671", "Infinite"]) expect(chain).not.toContain(secret);
     expect(bodies(h, "block")).toHaveLength(1);
   });
@@ -474,12 +476,14 @@ describe("invariant 3: buyer identity in a tool input is never sent", () => {
   it("create_cart with a card or an address next to the offer handle: 0 sends", async () => {
     const h = await setup();
     const handle = await offerHandle(h, "Trail Runner 3");
+    const before = h.store.entries().length;
     for (const extra of [{ card_number: "4111111111111111" }, { note: "ship to 742 Evergreen Terrace" }, { recipient: "Jane Doe" }]) {
       const result = await h.gateway.createCart({ offer_handle: handle, ...extra });
       expect(result.status).toBe("blocked");
     }
     expect(h.sends.createCart + h.sends.createApproval).toBe(0);
-    expect(JSON.stringify(h.store.entries())).not.toMatch(/4111|Evergreen|Jane/);
+    // What these calls wrote, without the hashes, whose random hex can contain "4111".
+    expect(JSON.stringify(h.store.entries().slice(before).map((e) => [e.kind, e.body]))).not.toMatch(/4111|Evergreen|Jane/);
   });
 
   it("get_approval_status with an email next to the handle: 0 sends", async () => {

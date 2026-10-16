@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 // Network access is confined to the modules whose job it is (plan §3.2 "Rules"), so a send cannot bypass the
 // disclosure log (invariant 2) by opening its own connection. .dependency-cruiser.cjs holds the same import rules
 // as a second, resolver-based check; scripts/boundaries.test.ts proves each bypass below is rejected.
-const networkMessage = "Only src/cloud, src/mcp, src/panel and src/cloud-fake open network connections.";
+const networkMessage = "Only src/cloud, src/mcp, src/panel, src/cloud-fake and src/demo open network connections.";
 const fetchMessage = "fetch is allowed only in src/library, src/supplychain and src/cloud-fake.";
 const escapeMessage = "src/ never runs other processes or code (child_process, vm, module, eval): it could send unlogged.";
 
@@ -62,7 +62,7 @@ export default tseslint.config(
   },
   {
     files: ["src/**/*.ts"],
-    ignores: ["src/cloud/**", "src/mcp/**", "src/panel/**", "src/cloud-fake/**"],
+    ignores: ["src/cloud/**", "src/mcp/**", "src/panel/**", "src/cloud-fake/**", "src/demo/**"],
     rules: {
       "no-restricted-imports": [
         "error",

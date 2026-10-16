@@ -7,5 +7,5 @@
     "outDir": "dist"
   },
   "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/cloud-fake"]
+  "exclude": ["src/**/*.test.ts"]
 }

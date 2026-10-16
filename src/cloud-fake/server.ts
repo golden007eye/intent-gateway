@@ -140,6 +140,8 @@ export interface FakeCloud {
   /** The merchant reports the order: handed_off → ordered. */
   order(handle: string): Outcome;
   inspect(handle: string): ApprovalRecordView | undefined;
+  /** The approval handle whose `approval_link_path` is `linkPath` (`/c/…`), for a confirm page; undefined if none. */
+  approvalForLink(linkPath: string): string | undefined;
   /** Answer every request with this 52x status and no receipt or version header, as the network in front of the
    * edge would; null turns it off. */
   simulateCloudflareError(status: number | null): void;
@@ -639,6 +641,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       if (a.claimedBy !== undefined) view.claimed_by = a.claimedBy;
       if (a.ledger !== undefined) view.ledger = a.ledger;
       return view;
+    },
+    approvalForLink(linkPath) {
+      for (const a of approvals.values()) if (a.linkPath === linkPath) return a.handle;
+      return undefined;
     },
     simulateCloudflareError(status) {
       cloudflareStatus = status;

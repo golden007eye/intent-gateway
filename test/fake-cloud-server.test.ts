@@ -1,5 +1,5 @@
 // The standalone fake Cloud entry used by manual and acceptance runs: starts, prints its URL and root pin, serves the
-// statement, answers buyer commands on stdin, and stays out of the npm package and the build.
+// statement, answers buyer commands on stdin, and stays out of the npm package (demo mode ships src/cloud-fake itself).
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -26,11 +26,11 @@ describe("test/support/fake-cloud-server.ts", () => {
     }
   });
 
-  it("is in neither the npm package files nor the build", () => {
+  it("stays out of the npm package; the build ships src/cloud-fake for demo mode but no test files", () => {
     const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { files: string[] };
     expect(pkg.files.some((f) => f === "test" || f.startsWith("test/"))).toBe(false);
     const build = JSON.parse(readFileSync(join(repo, "tsconfig.build.json"), "utf8")) as { include: string[]; exclude: string[] };
     expect(build.include).toEqual(["src"]);
-    expect(build.exclude).toContain("src/cloud-fake");
+    expect(build.exclude).toEqual(["src/**/*.test.ts"]);
   });
 });
