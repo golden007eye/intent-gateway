@@ -79,7 +79,8 @@ function narrowerOrEqual(n: Policy, p: Policy): boolean {
 }
 
 describe("meet", () => {
-  it("is at least as narrow as both inputs for 1000 seeded random pairs", () => {
+  // CPU-bound: about 1 s alone, but it can pass the 5 s default when the whole suite shares the cores.
+  it("is at least as narrow as both inputs for 1000 seeded random pairs", { timeout: 30_000 }, () => {
     const rand = prng(0x5eed);
     const now = Date.parse("2026-10-01T12:00:00Z");
     for (let i = 0; i < 1000; i++) {
