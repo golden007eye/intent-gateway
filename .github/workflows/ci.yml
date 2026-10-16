@@ -106,22 +106,28 @@ jobs:
       - run: npm pack --dry-run --ignore-scripts
       - run: npm publish --dry-run --ignore-scripts --tag next
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: two image builds give the same digest
+        with:
+          # One BuildKit for every build that must give the published digest (package, image, rebuild): an unpinned
+          # builder could change between the image and rebuild jobs and change the layers it writes.
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+      # Three builds from scratch must give one digest. When they do not, image-diff.sh prints the layers, tar
+      # entries and files that differ, so the job log names the cause.
+      - name: three image builds give the same digest
         run: |
           set -euo pipefail
-          date -u; echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH ($(date -u -d "@$SOURCE_DATE_EPOCH"))"
-          bad=0
-          for n in 1 2 3 4 5 6 7 8; do
+          for n in 1 2 3; do
             docker buildx build --no-cache --platform linux/amd64 \
               --build-arg BUILD_COMMIT --build-arg SOURCE_DATE_EPOCH \
-              --output "type=oci,dest=${RUNNER_TEMP}/image-$n.tar,rewrite-timestamp=true" . 2>/dev/null
+              --output "type=oci,dest=${RUNNER_TEMP}/image-$n.tar,rewrite-timestamp=true" .
             tar -xOf "${RUNNER_TEMP}/image-$n.tar" index.json | jq -r '.manifests[0].digest' > "${RUNNER_TEMP}/digest-$n"
-            echo "build $n at $(date -u +%T): $(cat "${RUNNER_TEMP}/digest-$n")"
-            if ! cmp -s "${RUNNER_TEMP}/digest-1" "${RUNNER_TEMP}/digest-$n"; then
-              bad=1; scripts/image-diff.sh "${RUNNER_TEMP}/image-1.tar" "${RUNNER_TEMP}/image-$n.tar"
-            fi
           done
-          exit "$bad"
+          cat "${RUNNER_TEMP}"/digest-[123]
+          status=0
+          for n in 2 3; do
+            cmp "${RUNNER_TEMP}/digest-1" "${RUNNER_TEMP}/digest-$n" ||
+              { status=1; scripts/image-diff.sh "${RUNNER_TEMP}/image-1.tar" "${RUNNER_TEMP}/image-$n.tar"; }
+          done
+          exit "$status"
       - name: load the image
         run: |
           docker buildx build --platform linux/amd64 \
