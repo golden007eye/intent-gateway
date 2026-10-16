@@ -39,6 +39,12 @@ jobs:
       - run: pnpm test
       - run: pnpm boundaries
       - run: pnpm licence-check
+      # The docs site must build with no warning (mkdocs.yml sets strict). The runner's python3, no extra action.
+      - name: docs (mkdocs build --strict)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/docs-venv"
+          "$RUNNER_TEMP/docs-venv/bin/pip" install --quiet -r requirements-docs.txt
+          "$RUNNER_TEMP/docs-venv/bin/mkdocs" build --strict --site-dir "$RUNNER_TEMP/site"
 
   security:
     name: security (gitleaks, public-safety)

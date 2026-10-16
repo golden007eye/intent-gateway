@@ -8,6 +8,9 @@ repo_name: intent-gateway
 edit_uri: edit/main/docs/
 copyright: intent-gateway is licensed under Apache-2.0.
 strict: true
+# With strict, a link to a missing heading anchor fails the build too.
+validation:
+  anchors: warn
 
 theme:
   name: material
@@ -64,9 +67,12 @@ markdown_extensions:
 nav:
   - Overview: index.md
   - Quickstart: quickstart.md
+  - Demo mode: demo.md
   - Gateway policy: policy.md
   - Policy library: policy-library.md
   - Verify: verify.md
+  - Panel: panel.md
+  - Threat model: threat-model.md
   - Security: security.md
   - Decisions:
       - "ADR-0001: Public-safe harness": adr/0001-harness.md
