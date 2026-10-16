@@ -2,7 +2,8 @@
 // - Flow: startDemo → find_offers → create_cart → Approve on the local confirm page (an HTTP POST) →
 //   get_approval_status = approved → runVerify exit 0 over the demo data dir; every tool result carries the banner.
 // - Confirm page: CSP, loopback bind, no approval by GET, CSRF token required (missing, wrong, other page, reused),
-//   foreign Host/Origin/Sec-Fetch-Site refused.
+//   foreign Host/Origin/Sec-Fetch-Site refused; Approve needs the demo code (missing, wrong refused; locked after
+//   MAX_WRONG_CODES), which is kept 0600, new on every start and never in a tool result.
 // - Separation: a demo chain and a real chain never mix (both ways); demo mode refuses any root but the published
 //   test root; the test root is never in PINNED_HOSTS; the demo passkey is stable per data dir.
 import * as fsp from "node:fs/promises";
@@ -22,8 +23,8 @@ import { loadPolicy } from "../policy/index.ts";
 import { createSession } from "../signing/index.ts";
 import { openStore, type Store } from "../store/index.ts";
 import { isTestRoot, type PinnedRootKey, TEST_ROOT_KEY } from "../trust/index.ts";
-import { runVerify } from "../verify/index.ts";
-import { CONFIRM_CSP, type Demo, DEMO_BANNER, demoDataDir, demoTrustKeys, nextSteps, startDemo } from "./index.ts";
+import { formatReport, runVerify } from "../verify/index.ts";
+import { CONFIRM_CSP, type Demo, DEMO_BANNER, demoDataDir, demoTrustKeys, MAX_WRONG_CODES, nextSteps, startDemo } from "./index.ts";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
@@ -140,12 +141,17 @@ describe("demo flow", () => {
     expect(page.body).toContain("Approve with demo passkey");
     expect(page.body).toContain("ZIP 941xx");
     expect(page.body).toContain(DEMO_BANNER);
-    const done = await post(link, { csrf: csrfOf(page.body), action: "approve" }, { origin: new URL(link).origin, "sec-fetch-site": "same-origin" });
+    expect(page.body).toContain(`cat ${demo.codeFile}`);
+    const done = await post(link, { csrf: csrfOf(page.body), action: "approve", code: demo.code }, { origin: new URL(link).origin, "sec-fetch-site": "same-origin" });
     expect(done.status).toBe(200);
     expect(done.body).toContain("Approved with the demo passkey.");
 
     const status = texts(await call("get_approval_status", { approval_handle: handle })).join("\n");
     expect(status).toContain("Approver passkey fingerprint:");
+    // The demo code reaches the person through the gateway's stderr and its file, never through a tool result.
+    for (const text of [offers, cart, status]) expect(text).not.toContain(demo.code);
+    expect(cart).toContain("click Approve with demo passkey (enter the code shown in the gateway's terminal)");
+    expect(cart).not.toMatch(/phone/);
     expect(store.entries().map((e) => e.kind)).toContain("approval");
 
     await store.close();
@@ -153,6 +159,8 @@ describe("demo flow", () => {
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);
     expect(report.exitCode).toBe(0);
     expect(report.counts.approvals).toBe(1);
+    expect(formatReport(report)).toContain("acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): ");
+    expect(formatReport(report)).not.toContain("public edge");
   });
 
   it("rejects with the demo passkey", async () => {
@@ -234,6 +242,64 @@ describe("confirm page", () => {
     expect((await raw(new URL("/", url).href)).status).toBe(404);
     expect((await post(url, { action: "approve", csrf: (await token()) + "x".repeat(5000) })).status).toBe(403);
     expect(demo.cloud.inspect(handle)?.state).toBe("pending");
+  });
+});
+
+describe("the demo code", () => {
+  async function pending(): Promise<{ demo: Demo; url: string; handle: string }> {
+    const demo = await demoAt(await tmpData());
+    const { gateway } = await gatewayOver(demo);
+    await gateway.start();
+    return { demo, ...(await pendingApproval(gateway)) };
+  }
+  const approve = async (url: string, code?: string): Promise<Raw> =>
+    post(url, { csrf: csrfOf((await raw(url)).body), action: "approve", ...(code === undefined ? {} : { code }) });
+
+  it("refuses Approve without the code or with a wrong one, as a local script would send it (attack)", async () => {
+    const { demo, url, handle } = await pending();
+    const missing = await approve(url);
+    expect(missing.status).toBe(403);
+    expect(missing.body).toContain("That is not the demo code");
+    const wrong = String((Number(demo.code) + 1) % 1_000_000).padStart(6, "0");
+    expect((await approve(url, wrong)).status).toBe(403);
+    expect((await approve(url, `${demo.code}0`)).status).toBe(403);
+    expect(demo.cloud.inspect(handle)?.state).toBe("pending");
+    const right = await approve(url, ` ${demo.code} `);
+    expect(right.status).toBe(200);
+    expect(demo.cloud.inspect(handle)?.state).toBe("approved");
+  });
+
+  it("locks Approve after MAX_WRONG_CODES wrong codes, even for the right code, until the demo restarts", async () => {
+    const { demo, url, handle } = await pending();
+    const wrong = String((Number(demo.code) + 1) % 1_000_000).padStart(6, "0");
+    for (let i = 0; i < MAX_WRONG_CODES; i += 1) expect((await approve(url, wrong)).status).toBe(403);
+    const locked = await approve(url, demo.code);
+    expect(locked.status).toBe(403);
+    expect(locked.body).toContain("Too many wrong demo codes");
+    expect(demo.cloud.inspect(handle)?.state).toBe("pending");
+    // Reject needs no code and still works.
+    expect((await post(url, { csrf: csrfOf((await raw(url)).body), action: "reject" })).status).toBe(200);
+  });
+
+  it("is six digits, kept 0600 in <data>/demo/approval-code, and new on every start", async () => {
+    const data = await tmpData();
+    const a = await demoAt(data);
+    expect(a.code).toMatch(/^[0-9]{6}$/);
+    expect(a.codeFile).toBe(join(demoDataDir(data), "approval-code"));
+    expect(await fsp.readFile(a.codeFile, "utf8")).toBe(`${a.code}\n`);
+    expect((await fsp.stat(a.codeFile)).mode & 0o777).toBe(0o600);
+    const codes = new Set([a.code]);
+    for (let i = 0; i < 3; i += 1) codes.add((await demoAt(data)).code);
+    expect(codes.size).toBeGreaterThan(1);
+  });
+
+  it("shows the command that reads the code file (docker exec in the image)", async () => {
+    const demo = await startDemo({ dataDir: await tmpData(), readCommand: "docker exec <container> cat" });
+    cleanup.push(() => demo.close());
+    const { gateway } = await gatewayOver(demo);
+    await gateway.start();
+    const { url } = await pendingApproval(gateway);
+    expect((await raw(url)).body).toContain(`docker exec &#60;container&#62; cat ${demo.codeFile}`);
   });
 });
 
@@ -342,19 +408,23 @@ describe("demo keys and passkey", () => {
 
 describe("next steps", () => {
   it("prints the banner and the exact claude mcp add line for stdio", () => {
-    const lines = nextSteps();
+    const lines = nextSteps({ code: { code: "123456", file: "/d/demo/approval-code" } });
     expect(lines[0]).toBe("DEMO: test keys, sample catalog, nothing can be bought.");
-    // This build is unreleased (0.0.0) or a preview: only the `next` dist-tag exists.
-    expect(lines).toContain("  claude mcp add intent -- npx -y intent-gateway@next demo");
-    expect(lines.join("\n")).toContain("open the approval link, click Approve");
+    // Under vitest this process is not the gateway's own script, so the command is the bare `intent`.
+    expect(lines).toContain("  claude mcp add intent -- intent demo");
+    expect(lines.join("\n")).toContain("open the approval link, enter the demo code and click Approve with demo passkey");
+    expect(lines).toContain("Demo code for the confirm page: 123456 (new on every start; also in /d/demo/approval-code; never sent to the agent)");
+    expect(lines).toContain("Re-check what was sent afterwards with: intent verify --demo");
   });
 
   it.each([
-    ["0.1.0-preview.1", "intent-gateway@next"],
-    ["0.0.0", "intent-gateway@next"],
-    ["1.0.0", "intent-gateway"],
-  ])("names the release line of version %s: npx -y %s", (version, spec) => {
-    expect(nextSteps({ version })).toContain(`  claude mcp add intent -- npx -y ${spec} demo`);
+    ["npx -y intent-gateway@next", "a published preview"],
+    ["npx -y file:/home/dev/intent-gateway.tgz", "a local tarball"],
+    ["node /home/dev/intent-gateway/dist/main.js", "a source build"],
+  ])("names the command that started this gateway: %s (%s)", (intent) => {
+    const lines = nextSteps({ intent });
+    expect(lines).toContain(`  claude mcp add intent -- ${intent} demo`);
+    expect(lines).toContain(`Re-check what was sent afterwards with: ${intent} verify --demo`);
   });
 
   it("prints the HTTP form with --http, with the token header only when there is a token", () => {

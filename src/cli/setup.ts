@@ -33,7 +33,7 @@ export function startDemoFor(config: Config, io: Io): Promise<Demo> {
   // cliConfig moved dataDir to demoDataDir(<data>); startDemo takes <data> and adds the demo folder itself.
   // In the Docker image the host's browser must reach the confirm page through a port mapping, so it listens on
   // all interfaces at a fixed port there; its links still say 127.0.0.1:8788 (map it to the same port on the host).
-  const container = config.runtime === "container" ? { bind: "0.0.0.0", port: CONTAINER_CONFIRM_PORT } : {};
+  const container = config.runtime === "container" ? { bind: "0.0.0.0", port: CONTAINER_CONFIRM_PORT, readCommand: "docker exec <container> cat" } : {};
   return startDemo({ dataDir: dirname(config.dataDir), ...container, ...(io.now === undefined ? {} : { now: io.now }) });
 }
 

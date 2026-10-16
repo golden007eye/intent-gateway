@@ -1,7 +1,7 @@
 // `intent policy test | add | show`. A policy can only narrow (invariant 1): `add` writes meet(current, library),
 // shows the change as a diff first, and asks before writing (or needs --yes when no one is at the terminal).
 import { readFile } from "node:fs/promises";
-import type { Config } from "../config/index.ts";
+import { type Config, INTENT } from "../config/index.ts";
 import { LibraryError, type Lock, planPolicy, readLock } from "../library/index.ts";
 import { loadPolicy, PolicyError, runCases } from "../policy/index.ts";
 import { describeError } from "./errors.ts";
@@ -97,7 +97,7 @@ export async function policyAdd(io: Io, config: Config, name: string, flags: Add
   }
   const lock = await plan.apply();
   line(io.stdout, `applied: ${policyPath} now includes ${name}; policy.lock records ${origin(lock)}`);
-  line(io.stdout, "a running gateway reads its policy at start: restart intent serve to use it");
+  line(io.stdout, `a running gateway reads its policy at start: restart ${INTENT} serve to use it`);
   return 0;
 }
 
@@ -112,13 +112,13 @@ export async function policyShow(io: Io, config: Config): Promise<number> {
   let code = 0;
   if (active.bundled !== null) {
     line(io.stdout, `no policy file at ${policyPath}: the gateway uses the bundled ${active.bundled} policy`);
-    line(io.stdout, "intent policy add <name> writes one, narrowed with a library policy");
+    line(io.stdout, `${INTENT} policy add <name> writes one, narrowed with a library policy`);
   } else {
     line(io.stdout, `policy: ${policyPath}`);
     try {
       const lock = await readLock(policyPath);
       if (lock === undefined) {
-        line(io.stdout, "lock: none (this policy.yaml was not written by intent policy add)");
+        line(io.stdout, `lock: none (this policy.yaml was not written by ${INTENT} policy add)`);
       } else {
         line(io.stdout, `lock: ${lock.name} from ${origin(lock)}`);
         line(io.stdout, `  library policy sha256 ${lock.sha256}`);

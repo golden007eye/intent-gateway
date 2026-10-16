@@ -3,8 +3,8 @@
 //
 // The demo keeps its chain in `<data>/demo`, apart from the real one; the gateway marks it with a demo `session`
 // entry and refuses to mix the two (GatewayOptions.demo). Its trust keys are returned, never added to PINNED_HOSTS.
-import { createPrivateKey, generateKeyPairSync } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, type Stats, writeFileSync } from "node:fs";
+import { createPrivateKey, generateKeyPairSync, randomInt } from "node:crypto";
+import { lstatSync, mkdirSync, readFileSync, renameSync, type Stats, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
 import { type PinnedRootKey, TEST_ROOT_KEY } from "../trust/index.ts";
@@ -14,6 +14,8 @@ export const DEMO_DIR = "demo";
 /** The confirm page's fixed port in the Docker image, which `-p 127.0.0.1:8788:8788` maps to the host. */
 export const CONTAINER_CONFIRM_PORT = 8788;
 const PASSKEY_FILE = "demo-passkey.json";
+/** The demo code of the running demo (0600), for a person whose gateway was started by an agent, with no terminal. */
+export const CODE_FILE = "approval-code";
 
 export interface DemoOptions {
   /** The gateway's data dir; the demo uses `<dataDir>/demo`. */
@@ -24,6 +26,11 @@ export interface DemoOptions {
   bind?: string;
   /** Milliseconds since the epoch. Defaults to Date.now. */
   now?: () => number;
+  /**
+   * The command a person runs to read the code file, shown on the confirm page: `cat` by default, or e.g.
+   * `docker exec <container> cat` in the image.
+   */
+  readCommand?: string;
 }
 
 export interface Demo {
@@ -37,6 +44,10 @@ export interface Demo {
   dataDir: string;
   /** The demo passkey the confirm page signs with; the same key on every run over the same data dir. */
   passkey: SoftPasskey;
+  /** The six-digit code Approve needs, new on every start: print it on stderr, never in a tool result. */
+  code: string;
+  /** `<dataDir>/demo/approval-code`, which holds `code`. */
+  codeFile: string;
   /** For tests: the fake behind the demo. */
   cloud: FakeCloud;
   close(): Promise<void>;
@@ -56,11 +67,16 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
   const dataDir = demoDataDir(options.dataDir);
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const passkey = demoPasskey(dataDir);
+  const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  const codeFile = join(dataDir, CODE_FILE);
+  writePrivate(codeFile, `${code}\n`);
   const cloud = await startFakeCloud(options.now === undefined ? {} : { now: options.now });
   try {
     const page = await startConfirmPage({
       fake: cloud,
       passkey,
+      code,
+      codeHint: `${options.readCommand ?? "cat"} ${codeFile}`,
       port: options.port ?? 0,
       ...(options.bind === undefined ? {} : { bind: options.bind }),
       ...(options.now === undefined ? {} : { now: options.now }),
@@ -71,6 +87,8 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
       confirmBaseUrl: page.origin + CONFIRM_PATH,
       dataDir,
       passkey,
+      code,
+      codeFile,
       cloud,
       close: async () => {
         await page.close();
@@ -108,6 +126,15 @@ function demoPasskey(dir: string): SoftPasskey {
     throw new Error(`${file} is not a demo passkey file; delete it to make a new demo passkey`);
   }
   return new SoftPasskey({ credentialId: saved.credential_id, sub: saved.sub, privateKey: createPrivateKey(saved.private_key_pem) });
+}
+
+/** Replaces `file` with `text`, readable by its owner only. */
+function writePrivate(file: string, text: string): void {
+  const info = lstatOrNull(file);
+  if (info !== null && !info.isFile()) throw new Error(`${file} is not a regular file`);
+  const tmp = `${file}.${String(process.pid)}`;
+  writeFileSync(tmp, text, { mode: 0o600, flag: "wx" });
+  renameSync(tmp, file);
 }
 
 function lstatOrNull(path: string): Stats | null {

@@ -4,22 +4,23 @@
 import type { JsonWebKey } from "node:crypto";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readBuild, type Build } from "./build.ts";
+import { invocation } from "./invocation.ts";
 
 export type { Build } from "./build.ts";
 
 /** Version and build commit of this gateway (buildCommit is null when running from source). */
 export const BUILD: Build = readBuild(new URL("../", import.meta.url));
 
+export { invocation, type InvocationInput } from "./invocation.ts";
+
 /**
- * The npx package spec that runs this gateway's release line: `intent-gateway` for a stable release (the `latest`
- * dist-tag), `intent-gateway@next` for a prerelease such as 0.1.0-preview.1 and for an unreleased 0.0.0 build,
- * because prereleases are published only under `next` (.github/workflows/release.yml).
+ * The command that runs this gateway, to print before a subcommand (`${INTENT} verify --demo`): `npx -y <spec>`
+ * under npx, `node /abs/dist/main.js` from a path, `intent` from a global install, `docker exec <container> intent`
+ * in the image. See invocation().
  */
-export function npxPackage(version: string = BUILD.version): string {
-  const stable = /^\d+\.\d+\.\d+$/.test(version) && !/^0\.0\.0$/.test(version);
-  return stable ? "intent-gateway" : "intent-gateway@next";
-}
+export const INTENT: string = invocation({ argv1: process.argv[1], packageRoot: fileURLToPath(new URL("../../", import.meta.url)), env: process.env });
 
 export interface RootKey {
   kid: string;
@@ -59,6 +60,8 @@ export interface Config {
   demo: boolean;
   /** INTENT_DEBUG=1: print stack traces with errors. */
   debug: boolean;
+  /** INTENT_QUIET_TOKEN=1: the Docker entrypoint never prints the HTTP token (read here only to check its value). */
+  quietToken: boolean;
 }
 
 export interface LoadOptions {
@@ -86,6 +89,7 @@ const KNOWN_VARIABLES = new Set([
   "INTENT_HTTP_TOKEN",
   "INTENT_DEMO",
   "INTENT_DEBUG",
+  "INTENT_QUIET_TOKEN",
 ]);
 
 /**
@@ -145,6 +149,7 @@ export function loadConfig(
     http: httpConfig(intent),
     demo: flag("INTENT_DEMO", intent.INTENT_DEMO),
     debug: flag("INTENT_DEBUG", intent.INTENT_DEBUG),
+    quietToken: flag("INTENT_QUIET_TOKEN", intent.INTENT_QUIET_TOKEN),
   };
 }
 
@@ -230,7 +235,7 @@ function cloudConfig(raw: string, trustKeys: string | undefined, requireTrust: b
       rootKeys === undefined
         ? `${url.host} is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key`
         : `this build has no trusted root key for ${url.host} yet; staging opens with the first preview release. ` +
-          `Try everything locally now with intent demo, or pass --trust-keys <file> for a self-hosted Intent Cloud`;
+          `Try everything locally now with ${INTENT} demo, or pass --trust-keys <file> for a self-hosted Intent Cloud`;
     if (requireTrust) throw new ConfigError(reason);
     return { url: url.origin, trust: { kind: "unpinned", host: url.host, reason } };
   }

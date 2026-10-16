@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { stringify } from "yaml";
-import { BUILD } from "../config/index.ts";
+import { BUILD, INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { loadPolicy, meet, type Policy } from "../policy/index.ts";
 
@@ -153,12 +153,12 @@ export async function readLock(policyPath: string): Promise<Lock | undefined> {
   } catch {
     throw new LibraryError("LOCK_INVALID", "policy.lock is not JSON");
   }
-  if (!isLock(parsed)) throw new LibraryError("LOCK_INVALID", "policy.lock is not a lock written by intent policy add");
+  if (!isLock(parsed)) throw new LibraryError("LOCK_INVALID", `policy.lock is not a lock written by ${INTENT} policy add`);
   const policy = (await readOptional(policyPath)) ?? new Uint8Array();
   if (sha256Hex(policy) !== parsed.policy_sha256) {
     throw new LibraryError(
       "LOCK_STALE",
-      "policy.lock does not describe policy.yaml (the last policy add did not finish, or policy.yaml was edited since); run intent policy add again",
+      `policy.lock does not describe policy.yaml (the last policy add did not finish, or policy.yaml was edited since); run ${INTENT} policy add again`,
     );
   }
   return parsed;

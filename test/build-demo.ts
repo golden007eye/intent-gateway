@@ -1,9 +1,10 @@
 // The first-run path a developer takes, against the built package: `intent demo` over stdio (as
 // `claude mcp add intent -- npx -y intent-gateway@next demo` runs it) → find_offers → create_cart → Approve on the local
-// confirm page (an HTTP POST, as the button sends) → get_approval_status approved → `intent verify --demo` exit 0.
+// confirm page with the demo code from stderr (an HTTP POST, as the button sends) → get_approval_status approved →
+// `intent verify --demo` exit 0. The printed commands name `node <dist/main.js>`, the invocation that started it.
 // Called from test/build.test.ts after its build, so it never races the rebuild. TEST KEYS ONLY.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, realpathSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,17 +56,25 @@ export async function demoFirstRun(main: string): Promise<void> {
     const link = /Approval link: (\S+)/.exec(cart)?.[1] ?? "";
     const handle = /approval_handle: (\S+)/.exec(cart)?.[1] ?? "";
     expect(link).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/confirm\/c\//);
+    expect(cart).toContain("click Approve with demo passkey (enter the code shown in the gateway's terminal)");
+    const code = /Demo code for the confirm page: ([0-9]{6}) /.exec(stderr)?.[1] ?? "";
+    expect(code).not.toBe("");
+    expect(offers + cart).not.toContain(code);
 
     const page = await http(link, "GET");
     expect(page.body).toContain("Approve with demo passkey");
     const csrf = /name="csrf" value="([A-Za-z0-9_-]+)"/.exec(page.body)?.[1] ?? "";
     const form = { "content-type": "application/x-www-form-urlencoded", origin: new URL(link).origin, "sec-fetch-site": "same-origin" };
-    const approved = await http(link, "POST", form, new URLSearchParams({ csrf, action: "approve" }).toString());
+    // A local script that scraped the page but has no code is refused (review 2, finding 2).
+    expect((await http(link, "POST", form, new URLSearchParams({ csrf, action: "approve" }).toString())).status).toBe(403);
+    const again = /name="csrf" value="([A-Za-z0-9_-]+)"/.exec((await http(link, "GET")).body)?.[1] ?? "";
+    const approved = await http(link, "POST", form, new URLSearchParams({ csrf: again, action: "approve", code }).toString());
     expect(approved.status).toBe(200);
 
     expect(await call("get_approval_status", { approval_handle: handle })).toContain("Approver passkey fingerprint:");
     expect(stderr).toContain(DEMO_BANNER);
-    expect(stderr).toContain("claude mcp add intent -- npx -y intent-gateway@next demo");
+    expect(stderr).toContain(`claude mcp add intent -- node ${realpathSync(main)} demo`);
+    expect(stderr).toContain(`Re-check what was sent afterwards with: node ${realpathSync(main)} verify --demo`);
   } finally {
     await client.close();
   }

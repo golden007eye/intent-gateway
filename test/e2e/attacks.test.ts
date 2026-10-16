@@ -9,7 +9,7 @@
 //   an identity field in a tool input → refused with 0 sends, the value never reaches the chain, verify 0.
 // No policy file exists, so these runs also use the default zip-only policy.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -168,7 +168,7 @@ describe("attack: a second passkey approves", () => {
     expect(fake.tamper.secondCredential(second).outcome.status).toBe(200);
     const flagged = await g.call("get_approval_status", { approval_handle: second });
     expect(flagged).toMatch(/^Not approved: a passkey other than the pinned approver signed this purchase/);
-    expect(flagged).toContain("intent approver accept");
+    expect(flagged).toContain(`node ${realpathSync(main)} approver accept`);
     const fingerprint = /fingerprint ([0-9a-f]{4}(?: [0-9a-f]{4}){15})/.exec(flagged)?.[1] ?? "";
     expect(fingerprint).not.toBe("");
     expect(count(chain(dataDir), "approver_flag")).toBe(1);

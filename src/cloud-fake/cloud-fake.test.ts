@@ -195,7 +195,7 @@ const post = (cloud: FakeCloud, session: Session, path: string, value: unknown):
   call(cloud, session, "POST", path, JSON.stringify(value));
 
 const SHIP = { country: "US", postal_code: "94110" };
-// The platform's error bodies (platform-shapes): one body per failure class, whatever the cause inside it.
+// Intent Cloud's error bodies: one body per failure class, whatever the cause inside it.
 const UNAUTHORIZED = { error: "unauthorized", message: "authentication failed" };
 const DIGEST_MISMATCH = { error: "digest_mismatch", message: "content digest mismatch" };
 const UNKNOWN_HANDLE = { error: "not_found", message: "unknown handle" };

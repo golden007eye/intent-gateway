@@ -3,7 +3,7 @@
 // contract version and key statement. Its two requests to Intent Cloud go through the disclosure log like any other.
 import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Config, RootKey } from "../config/index.ts";
+import { type Config, INTENT, type RootKey } from "../config/index.ts";
 import { CONTRACT_VERSION } from "../contract/index.ts";
 import { chainMode, contractSums } from "../gateway/index.ts";
 import { LibraryError, readLock } from "../library/index.ts";
@@ -34,6 +34,7 @@ export async function doctor(io: Io, config: Config): Promise<number> {
   };
 
   line(io.stdout, `intent doctor: data dir ${config.dataDir}`);
+  checkNode(io.nodeVersion ?? process.versions.node, report);
   await checkDataDir(config.dataDir, report);
   await checkPolicy(config.policyPath, report);
   const mode = checkChain(config.dataDir, report);
@@ -42,14 +43,14 @@ export async function doctor(io: Io, config: Config): Promise<number> {
   // A demo chain and a real one never mix (as for serve): doctor writes a real `keys` entry, so it never does so into
   // a demo chain, and demo mode refuses a real one.
   if (mode === "demo" && !config.demo) {
-    report("fail", `Intent Cloud not checked: ${config.dataDir} holds a demo chain (test keys, sample catalog); run intent doctor --demo, or set INTENT_DATA_DIR to another folder`);
+    report("fail", `Intent Cloud not checked: ${config.dataDir} holds a demo chain (test keys, sample catalog); run ${INTENT} doctor --demo, or set INTENT_DATA_DIR to another folder`);
   } else if (mode === "normal" && config.demo) {
-    report("fail", `chain mode: ${config.dataDir} holds a real chain; demo mode uses its own data dir (<data>/demo), so run intent doctor without --demo`);
+    report("fail", `chain mode: ${config.dataDir} holds a real chain; demo mode uses its own data dir (<data>/demo), so run ${INTENT} doctor without --demo`);
   } else if (config.demo) {
     // The demo Intent Cloud runs only inside intent demo, and its contract and keys are the ones this build ships.
     const kids = demoTrustKeys().rootKeys.map((k) => k.kid).join(", ");
     report("ok", `root key: ${kids} (the published test key; demo mode only)`);
-    report("ok", "Intent Cloud: demo mode runs its own on 127.0.0.1 when intent demo starts; nothing to reach");
+    report("ok", `Intent Cloud: demo mode runs its own on 127.0.0.1 when ${INTENT} demo starts; nothing to reach`);
   } else {
     let pins: readonly RootKey[] | null = null;
     try {
@@ -68,12 +69,26 @@ export async function doctor(io: Io, config: Config): Promise<number> {
 
 type Report = (level: Level, text: string) => void;
 
+/** The Node releases the gateway and its sigstore dependencies support: package.json `engines`. */
+export const SUPPORTED_NODE = "Node 24 LTS (24.15 or later) or 26+";
+
+/** Whether Node `version` (as in process.versions.node) satisfies `^24.15.0 || >=26.0.0`. */
+export function nodeSupported(version: string): boolean {
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  return (major === 24 && minor >= 15) || major >= 26;
+}
+
+function checkNode(version: string, report: Report): void {
+  if (nodeSupported(version)) report("ok", `node: ${version}`);
+  else report("warn", `node: ${version} is not supported; the gateway needs ${SUPPORTED_NODE}. Install Node 24 LTS (for example nvm install 24) and run it again`);
+}
+
 async function checkDataDir(dataDir: string, report: Report): Promise<void> {
   let info;
   try {
     info = await lstat(dataDir);
   } catch {
-    report("ok", "data dir: not created yet; intent serve creates it (mode 700)");
+    report("ok", `data dir: not created yet; ${INTENT} serve creates it (mode 700)`);
     return;
   }
   if (info.isSymbolicLink() || !info.isDirectory()) {
@@ -101,7 +116,7 @@ async function checkPolicy(policyPath: string, report: Report): Promise<void> {
   try {
     const active = await activePolicy(policyPath);
     if (active.bundled !== null) {
-      report("ok", `policy: the bundled ${active.bundled} (no file at ${policyPath}; intent policy add <name> writes one)`);
+      report("ok", `policy: the bundled ${active.bundled} (no file at ${policyPath}; ${INTENT} policy add <name> writes one)`);
       return;
     }
     const lock = await readLock(policyPath);
@@ -128,7 +143,7 @@ function checkChain(dataDir: string, report: Report): ReturnType<typeof chainMod
   }
   const chain = verifyChain(items);
   if (!chain.ok) {
-    report("fail", `chain: breaks at seq ${String(chain.brokenSeq)} (${chain.reason}); run intent verify, then move audit.jsonl aside to start a new chain`);
+    report("fail", `chain: breaks at seq ${String(chain.brokenSeq)} (${chain.reason}); run ${INTENT} verify, then move audit.jsonl aside to start a new chain`);
     return null;
   }
   const head = items.at(-1) as { seq: number; hash: string };

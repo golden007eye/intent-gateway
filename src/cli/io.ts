@@ -18,6 +18,8 @@ export interface Io {
   cwd?: string;
   /** Milliseconds since the epoch. Defaults to Date.now. */
   now?: () => number;
+  /** The Node version doctor checks (process.versions.node by default). */
+  nodeVersion?: string;
   /** Test seams: the library's commit and fetch, and the disclosed cloud doctor and serve connect through. */
   library?: Pick<AddOptions, "buildCommit" | "fetch" | "bundledRoot">;
   connect?: (http: HttpCloudOptions, store: Store, options: DisclosureOptions) => DisclosedCloud;

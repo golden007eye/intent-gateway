@@ -10,7 +10,7 @@ key statements: ok
   1 recorded, checked offline against the pinned root key
 disclosures: ok
   sent: 6
-  acknowledged by a receipt from Intent Cloud's public edge: 6
+  acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): 6
   sent, not acknowledged: 0
   discarded: 0
 approvals: ok
@@ -23,7 +23,7 @@ head: seq 16 hash 96e8d697…fa40
 verify: ok
 ```
 
-It exits 0 when every check passes, 1 when one fails, and 2 for a usage or configuration error. Without `--demo` it reads the real chain and needs the host's root key, pinned in the build or given with `--trust-keys <file>`.
+It exits 0 when every check passes, 1 when one fails, and 2 for a usage or configuration error. On a demo chain the receipts came from the local demo Intent Cloud, and the report says so; on a real chain the line reads "acknowledged by a receipt from Intent Cloud's public edge". Without `--demo` it reads the real chain and needs the host's root key, pinned in the build or given with `--trust-keys <file>`.
 
 ## How the log is kept
 

@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { readBuild } from "./build.ts";
-import { BUILD, ConfigError, loadConfig, npxPackage, PINNED_HOSTS, type LoadOptions } from "./index.ts";
+import { BUILD, ConfigError, loadConfig, PINNED_HOSTS, type LoadOptions } from "./index.ts";
 
 // The staging pin is empty until the release task commits the root key, so most cases pass --trust-keys.
 const TRUST = ["--trust-keys", "/keys/root.jwk"];
@@ -433,7 +433,7 @@ describe("no URL or host literal in src/config except the pinned hosts", () => {
   it("src/config holds only the pinned host literals", () => {
     const files = configSources();
     // Non-vacuous: the module's files were read, and the scan sees the pinned host where it is declared.
-    expect([...files.keys()].sort()).toEqual(["build.ts", "index.ts"]);
+    expect([...files.keys()].sort()).toEqual(["build.ts", "index.ts", "invocation.ts"]);
     const found = [...files.values()].flatMap(hostLiterals);
     for (const host of pinned) expect(found).toContain(host);
     expect(found.filter((literal) => !allowed.has(literal))).toEqual([]);
@@ -497,21 +497,5 @@ describe("BUILD", () => {
     const url = tree();
     writeFileSync(join(root ?? "", "package.json"), "{}");
     expect(() => readBuild(url)).toThrow(/no version/);
-  });
-});
-
-describe("npxPackage", () => {
-  it.each([
-    ["0.1.0-preview.1", "intent-gateway@next"],
-    ["0.2.0-rc.1", "intent-gateway@next"],
-    ["0.0.0", "intent-gateway@next"],
-    ["0.1.0", "intent-gateway"],
-    ["1.2.3", "intent-gateway"],
-  ])("%s runs as npx -y %s", (version, spec) => {
-    expect(npxPackage(version)).toBe(spec);
-  });
-
-  it("defaults to this build's version", () => {
-    expect(npxPackage()).toBe(npxPackage(BUILD.version));
   });
 });

@@ -1,9 +1,15 @@
 // The demo confirm page: http://127.0.0.1:<port>/confirm/c/<link>. It shows the purchase snapshot and two buttons;
-// a click POSTs back here and the page signs with the demo passkey on the server. A person still has to click.
+// a click POSTs back here and the page signs with the demo passkey on the server. It is a local stand-in for the
+// passkey step: any program that can reach 127.0.0.1 can press its buttons. Real approvals need the buyer's passkey
+// on Intent Cloud's confirm page.
+//
+// Approve also needs the demo code: six digits the gateway prints on its own stderr (and keeps in a 0600 file), never
+// in a tool result, so an agent that reads only tool results cannot approve. After MAX_WRONG_CODES wrong codes the
+// page refuses every approval until the demo restarts with a new code. Reject needs no code.
 //
 // Loopback only, no external assets, a strict CSP and no script. A GET never changes anything. A POST needs the
 // one-time token of the page it came from (CSRF), and a foreign Host (421), Origin or Sec-Fetch-Site (403) is refused.
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { FakeCloud, Outcome, SoftPasskey } from "../cloud-fake/index.ts";
@@ -28,13 +34,16 @@ const STYLE_PATH = "/confirm/style.css";
 const MAX_FORM_BYTES = 4096;
 const TOKEN_TTL_MS = 15 * 60_000;
 const MAX_TOKENS = 1000;
+/** Wrong demo codes before the page refuses every approval until the demo restarts. */
+export const MAX_WRONG_CODES = 5;
 
 const STYLE = `body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:2rem auto;padding:0 1rem;color:#111;background:#fff}
 .demo{background:#fde68a;border:2px solid #b45309;padding:.5rem .75rem;font-weight:700}
+.hint{color:#555}input{font:inherit;padding:.3rem .5rem;letter-spacing:.2em}
 dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem 1rem}dt{color:#555}dd{margin:0}
 button{font:inherit;padding:.6rem 1rem;margin:.5rem .5rem 0 0;border-radius:.4rem;border:1px solid #333;cursor:pointer}
 button[value=approve]{background:#166534;color:#fff}
-@media (prefers-color-scheme:dark){body{background:#111;color:#eee}dt{color:#aaa}.demo{color:#111}}
+@media (prefers-color-scheme:dark){body{background:#111;color:#eee}dt,.hint{color:#aaa}.demo{color:#111}}
 `;
 
 export interface ConfirmPageOptions {
@@ -50,6 +59,10 @@ export interface ConfirmPageOptions {
   bind?: string;
   /** Milliseconds since the epoch, for token expiry. Defaults to Date.now. */
   now?: () => number;
+  /** The six-digit demo code Approve needs. */
+  code: string;
+  /** Where a person finds the code when no terminal shows it, e.g. `cat <file>`; shown on the page. */
+  codeHint: string;
 }
 
 export interface ConfirmPage {
@@ -63,6 +76,9 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
   const now = options.now ?? Date.now;
   /** One-time form tokens: token → the link of the page that holds it. */
   const tokens = new Map<string, { link: string; expiresAt: number }>();
+  const code = Buffer.from(options.code);
+  if (!/^[0-9]{6}$/.test(options.code)) throw new Error("the demo code must be six digits");
+  let wrongCodes = 0;
   let origin = "";
 
   function issue(link: string): string {
@@ -91,6 +107,10 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     const form =
       view.state === "pending"
         ? `<form method="post" action="${esc(`${CONFIRM_PATH}/c/${link}`)}"><input type="hidden" name="csrf" value="${issue(link)}">` +
+          `<p><label for="code">Demo code</label> <input id="code" name="code" inputmode="numeric" autocomplete="off" ` +
+          `pattern="[0-9]{6}" maxlength="6" size="8"></p>` +
+          `<p class="hint">Enter the 6-digit code shown in the gateway's terminal. If your agent started the gateway, ` +
+          `read it with: <code>${esc(options.codeHint)}</code></p>` +
           `<button type="submit" name="action" value="approve">Approve with demo passkey</button>` +
           `<button type="submit" name="action" value="reject">Reject</button></form>`
         : `<p>This approval is ${esc(view.state)}. Ask your agent to check the approval status.</p>`;
@@ -130,6 +150,17 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     tokens.delete(token);
     const action = form.get("action");
     if (action !== "approve" && action !== "reject") return [400, layout("Bad request", "<p>Unknown action.</p>")];
+    if (action === "approve") {
+      if (wrongCodes >= MAX_WRONG_CODES) {
+        return [403, layout("Locked", "<p>Too many wrong demo codes. Restart the demo to get a new code; until then nothing can be approved here.</p>")];
+      }
+      const given = Buffer.from(form.get("code")?.trim() ?? "");
+      if (given.length !== code.length || !timingSafeEqual(given, code)) {
+        wrongCodes += 1;
+        const left = MAX_WRONG_CODES - wrongCodes;
+        return [403, layout("Wrong demo code", `<p>That is not the demo code. Go back, reload the page and enter the code shown in the gateway's terminal (${String(left)} tries left).</p>`)];
+      }
+    }
     const outcome = action === "approve" ? fake.approveWithPasskey(approval, passkey) : fake.reject(approval, passkey);
     return [outcome.status, decided(outcome, action)];
   }

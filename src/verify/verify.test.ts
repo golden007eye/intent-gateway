@@ -110,6 +110,7 @@ describe("runVerify: a clean chain", () => {
     const text = formatReport(report);
     expect(text).toContain(`head: seq 5 hash ${head.hash}\n`);
     expect(text).toContain("sent, not acknowledged: 0\n");
+    expect(text).toContain("acknowledged by a receipt from Intent Cloud's public edge: 1\n");
     expect(text).toMatch(/verify: ok\n$/);
   });
 

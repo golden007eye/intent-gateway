@@ -35,7 +35,7 @@ export const TOOLS = {
     schema: CreateCartInput,
     description:
       "Prepare a cart for the offer the user picked, using its offer_handle from find_offers. This does not buy " +
-      "anything: every purchase needs a person to approve it with their passkey on their phone, through the link or " +
+      "anything: every purchase needs a person to approve it with a passkey, through the link or " +
       "QR code in the result. Pass a quantity only if the user asked for one. " +
       `${LIMITS} The result ends with what this gateway sent to Intent Cloud and what it blocked.`,
   },
