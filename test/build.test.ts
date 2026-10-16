@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { demoFirstRun } from "./build-demo.ts";
 
 const repo = join(import.meta.dirname, "..");
 const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8")) as { version: string; bin: Record<string, string>; files: string[] };
@@ -28,6 +29,10 @@ describe("pnpm build", () => {
     expect(pkg.files).toContain("dist");
     // The fake reads its test keys and the contract sums from the package's contract/ at run time.
     expect(pkg.files).toContain("contract");
+  });
+
+  it("runs the developer's first run from the build: intent demo → find → cart → Approve → approved → verify --demo", { timeout: 60_000 }, async () => {
+    await demoFirstRun(join(repo, "dist/main.js"));
   });
 
   it("points both bin names at dist/main.js", () => {

@@ -34,7 +34,9 @@ const MIN_TOKEN_LENGTH = 32;
 
 export type Trust =
   | { kind: "pinned"; host: string; rootKeys: readonly RootKey[] }
-  | { kind: "file"; path: string };
+  | { kind: "file"; path: string }
+  /** Only with `requireTrust: false`: the host has no root key pinned and no `--trust-keys` was given. */
+  | { kind: "unpinned"; host: string; reason: string };
 
 export interface Config {
   runtime: "host" | "container";
@@ -43,12 +45,21 @@ export interface Config {
   cloud: { url: string; trust: Trust };
   /** The MCP HTTP transport. token is null only on a loopback host. */
   http: { host: string; port: number; token: string | null };
+  /** INTENT_DEMO=1: run against the local demo Intent Cloud (the `--demo` flag does the same). */
+  demo: boolean;
+  /** INTENT_DEBUG=1: print stack traces with errors. */
+  debug: boolean;
 }
 
 export interface LoadOptions {
   platform?: NodeJS.Platform;
   homedir?: string;
   cwd?: string;
+  /**
+   * False for the commands that never reach Intent Cloud (log, panel, policy, approver): an unpinned host then
+   * gives `trust.kind === "unpinned"` instead of a ConfigError. Defaults to true.
+   */
+  requireTrust?: boolean;
 }
 
 export class ConfigError extends Error {
@@ -63,6 +74,8 @@ const KNOWN_VARIABLES = new Set([
   "INTENT_HTTP_HOST",
   "INTENT_HTTP_PORT",
   "INTENT_HTTP_TOKEN",
+  "INTENT_DEMO",
+  "INTENT_DEBUG",
 ]);
 
 /**
@@ -111,9 +124,24 @@ export function loadConfig(
   const cloud = cloudConfig(
     intent.INTENT_CLOUD_URL ?? DEFAULT_CLOUD_URL,
     trustKeys === undefined ? undefined : path.resolve(cwd, userPath("--trust-keys", trustKeys)),
+    options.requireTrust ?? true,
   );
 
-  return { runtime, dataDir, policyPath, cloud, http: httpConfig(intent) };
+  return {
+    runtime,
+    dataDir,
+    policyPath,
+    cloud,
+    http: httpConfig(intent),
+    demo: flag("INTENT_DEMO", intent.INTENT_DEMO),
+    debug: flag("INTENT_DEBUG", intent.INTENT_DEBUG),
+  };
+}
+
+function flag(name: string, value: string | undefined): boolean {
+  if (value === undefined) return false;
+  if (value !== "1") throw new ConfigError(`${name} must be 1 or unset, got ${JSON.stringify(value)}`);
+  return true;
 }
 
 /**
@@ -171,7 +199,7 @@ function readTrustKeys(argv: readonly string[]): string | undefined {
   return found;
 }
 
-function cloudConfig(raw: string, trustKeys: string | undefined): Config["cloud"] {
+function cloudConfig(raw: string, trustKeys: string | undefined, requireTrust: boolean): Config["cloud"] {
   let url: URL;
   try {
     url = new URL(raw);
@@ -186,14 +214,16 @@ function cloudConfig(raw: string, trustKeys: string | undefined): Config["cloud"
     throw new ConfigError(`INTENT_CLOUD_URL must be an origin such as ${DEFAULT_CLOUD_URL}, got ${JSON.stringify(raw)}`);
   }
   if (trustKeys !== undefined) return { url: url.origin, trust: { kind: "file", path: trustKeys } };
-  const pin = Object.hasOwn(PINNED_HOSTS, url.host) ? PINNED_HOSTS[url.host] : undefined;
-  if (pin === undefined) {
-    throw new ConfigError(`${url.host} is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key`);
+  const rootKeys = Object.hasOwn(PINNED_HOSTS, url.host) ? PINNED_HOSTS[url.host]?.rootKeys : undefined;
+  if (rootKeys === undefined || rootKeys.length === 0) {
+    const reason =
+      rootKeys === undefined
+        ? `${url.host} is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key`
+        : `no root key is pinned for ${url.host} in this build; pass --trust-keys <path>`;
+    if (requireTrust) throw new ConfigError(reason);
+    return { url: url.origin, trust: { kind: "unpinned", host: url.host, reason } };
   }
-  if (pin.rootKeys.length === 0) {
-    throw new ConfigError(`no root key is pinned for ${url.host} in this build; pass --trust-keys <path>`);
-  }
-  return { url: url.origin, trust: { kind: "pinned", host: url.host, rootKeys: pin.rootKeys } };
+  return { url: url.origin, trust: { kind: "pinned", host: url.host, rootKeys } };
 }
 
 function httpConfig(intent: Readonly<Record<string, string>>): Config["http"] {

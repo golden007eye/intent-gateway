@@ -37,7 +37,9 @@ One entry per term: what it is, and its boundary. Vocabulary here is used as-is 
 | **Disclosure summary** | `Sent: … / Blocked: …` | The last line of every tool result: the field names each request sent to Intent Cloud and whether a verified receipt acknowledged it, then what was held back. Names only, never values. |
 | **Buyer identity** | `findIdentity` | Anything that identifies or pays as the buyer: name, postal address, card number, email, phone. The gateway refuses to send it; a ZIP code alone is not buyer identity. |
 | **Hand-off** | `continue_url` | The step where the buyer leaves our confirm page for the merchant's checkout and pays there. The gateway never sees the buyer's name, address or payment. |
-| **Verify command** | `intent verify` (planned) | Checks the local hash chain, matches receipts to the log, and checks the image signature and SBOM. |
+| **Verify command** | `intent verify` | Checks the local hash chain, matches receipts to the log, re-verifies approvals, and self-checks the npm package or image. |
+| **Doctor** | `intent doctor` | Checks the setup one line at a time (data dir, active policy and lock, chain and lease, root key, Intent Cloud's contract and key statement) and names the fix for each problem. Its requests go through the disclosure log. |
+| **Default policy** | `defaultPolicyName` | The bundled library policy the gateway runs when no `policy.yaml` exists: `strict-default`, or `zip-only` in demo mode. Every command that uses it says so. |
 | **Canonical JSON** | `jcs` | RFC 8785 JSON restricted to safe integers (no fractions, no NaN, no lone surrogates): the exact bytes the gateway hashes and verifies signatures over. |
 | **Data directory** | `Config.dataDir` | Where the gateway keeps its state: `INTENT_DATA_DIR`, else `/data` in the image, else the platform's per-user data folder. Resolved only by `src/config`. |
 | **Root key pin** | `PINNED_HOSTS` | The root public key (kid `cloud-root-1`) the gateway trusts for one Intent Cloud host. It holds only that key; everything else trusted comes from the statement the key signs. `--trust-keys` replaces it for an unpinned host. |

@@ -92,9 +92,18 @@ describe("environment validation", () => {
   it.each([
     ["INTENT_DATADIR", "/x"],
     ["INTENT_HTTP_TOKN", "x".repeat(40)],
-    ["INTENT_DEBUG", "1"],
+    ["INTENT_DEBUGGING", "1"],
   ])("rejects the unknown variable %s", (name, value) => {
     expect(() => load({ [name]: value })).toThrow(new RegExp(`unknown environment variable ${name}`));
+  });
+
+  it.each([
+    ["INTENT_DEMO", "demo"],
+    ["INTENT_DEBUG", "debug"],
+  ] as const)("%s=1 sets %s; unset is false; any other value is refused", (name, key) => {
+    expect(load({})[key]).toBe(false);
+    expect(load({ [name]: "1" })[key]).toBe(true);
+    expect(() => load({ [name]: "true" })).toThrow(new RegExp(`${name} must be 1 or unset`));
   });
 
   it("ignores variables outside INTENT_*", () => {
@@ -232,6 +241,21 @@ describe("cloud trust", () => {
   it("refuses the default host while its pin is empty", () => {
     expect(PINNED_HOSTS["staging-api.intentai.shop"]?.rootKeys).toEqual([]);
     expect(() => load({}, LINUX, [])).toThrow(/no root key is pinned for staging-api\.intentai\.shop/);
+  });
+
+  it("with requireTrust false, an unpinned host is reported instead of refused (offline commands)", () => {
+    const config = load({}, { ...LINUX, requireTrust: false }, []);
+    expect(config.cloud.trust).toEqual({
+      kind: "unpinned",
+      host: "staging-api.intentai.shop",
+      reason: "no root key is pinned for staging-api.intentai.shop in this build; pass --trust-keys <path>",
+    });
+    expect(load({ INTENT_CLOUD_URL: "https://cloud.example" }, { ...LINUX, requireTrust: false }, []).cloud.trust).toMatchObject({
+      kind: "unpinned",
+      reason: expect.stringMatching(/not a pinned Intent Cloud host/) as unknown,
+    });
+    // A bad URL is still refused: requireTrust only relaxes the missing pin.
+    expect(() => load({ INTENT_CLOUD_URL: "http://cloud.example" }, { ...LINUX, requireTrust: false }, [])).toThrow(/must use https/);
   });
 
   it("refuses an empty pin even when other arguments are present", () => {
