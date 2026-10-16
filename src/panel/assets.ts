@@ -200,6 +200,9 @@ ${Array.from({ length: 21 }, (_, i) => `.w${String(i * 5)}{width:${String(i * 5)
 .split{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
 .panel{background:var(--card);border:1px solid var(--card-line);border-radius:14px;padding:18px 20px;display:flex;flex-direction:column;gap:10px;min-width:0}
 .feed-panel{grid-column:span 2}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.panel-head h2{margin:0}
+.btn-inline{display:inline-flex;width:auto;min-height:36px;padding:8px 14px;font-size:14px;text-decoration:none}
 .feed{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px;font-size:14px}
 .feed li{display:grid;grid-template-columns:52px 84px minmax(0,1fr);gap:12px}
 .feed time{font-family:var(--mono);color:var(--on-card-muted)}

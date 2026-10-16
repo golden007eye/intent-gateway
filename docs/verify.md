@@ -5,7 +5,7 @@ The gateway is built so you can check what left your machine instead of taking o
 ```console
 $ intent verify --demo
 chain: ok
-  18 entries, every hash links
+  22 entries, every hash links
 key statements: ok
   1 recorded, checked offline against the pinned root key
 disclosures: ok
@@ -13,12 +13,13 @@ disclosures: ok
   acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): 6
   sent, not acknowledged: 0
   discarded: 0
+  answers summarised locally (observed, never sent): 4
 approvals: ok
   verified: 1
 approver flags: ok
   flagged: 0
 self-check: skipped on request (demo mode); npm provenance and the image signature were not checked
-head: seq 17 hash 96e8d697…fa40
+head: seq 21 hash 96e8d697…fa40
   Compare this head with a copy of the chain taken earlier, or with your receipts.
 verify: ok
 ```
@@ -27,7 +28,7 @@ It exits 0 when every check passes, 1 when one fails, and 2 for a usage or confi
 
 ## How the log is kept
 
-Before each request to Intent Cloud, the gateway appends the exact request to the chain: the endpoint, the field names, the body bytes and their digest, and the signature parameters. A send whose append fails does not happen, so a send cannot be missing from the log (invariant 2). What came back is appended after it, and each Approval the gateway verified is appended to the same chain. The file is `<data dir>/audit.jsonl`, one JSON entry per line, each holding the hash of the one before.
+Before each request to Intent Cloud, the gateway appends the exact request to the chain: the endpoint, the field names, the body bytes and their digest, and the signature parameters. A send whose append fails does not happen, so a send cannot be missing from the log (invariant 2). What came back is appended after it, and each Approval the gateway verified is appended to the same chain. After an answer whose receipt verified, the gateway also appends an `observed` entry, a summary of what Intent Cloud returns (the offers, the cart, the approval state) kept on this machine for `intent log`; it is never sent and never stands in for a receipt ([what came back](log.md#what-came-back)). The file is `<data dir>/audit.jsonl`, one JSON entry per line, each holding the hash of the one before.
 
 `intent log` prints it as one line per action with the values it sent and its outcome; `intent log -v` lists every entry of each action, and `intent log --json` prints one action per line ([the log](log.md)). The [panel](panel.md) shows the entries in a browser.
 
@@ -37,7 +38,7 @@ Before each request to Intent Cloud, the gateway appends the exact request to th
 |---|---|---|
 | `chain` | Every entry links to the one before by its hash: no entry inside the chain was changed, removed or reordered. | That entries were not dropped from the end (see below). |
 | `key statements` | Each key statement recorded in the chain was signed by the pinned root key and was valid when it was recorded. | Anything about keys the chain never recorded. |
-| `disclosures` | Each send has at most one follow-up, and a send with none is the last of its gateway session. Each receipt is signed by a receipt key from the statement and covers the digest of the bytes the log says were sent, with the same keyid, nonce and time. | What Intent Cloud did with the data after it received it. |
+| `disclosures` | Each send has at most one follow-up, and a send with none is the last of its gateway session. Each receipt is signed by a receipt key from the statement and covers the digest of the bytes the log says were sent, with the same keyid, nonce and time. Each `observed` entry has the shape of an observation, holds no buyer identity, and names an earlier send of the same endpoint whose verified receipt, with a success status, came before it; no two name the same send. A `block` entry's held-back values hold no buyer identity. | What Intent Cloud did with the data after it received it. |
 | `approvals` | Each Approval carries a passkey assertion over the purchase snapshot that was pending, signed by a key from the statement, from the pinned approver passkey. | That the person who holds the passkey meant to buy (see the [threat model](threat-model.md#phone-hand-off-and-self-approval)). |
 | `approver flags` | Lists Approvals signed by a passkey other than the pinned approver; they were not counted as approved. | Flags do not fail verify; read them. |
 | `self-check` | The installed npm package matches its published provenance file by file, or the image matches its signature and SBOM. The package's dependencies are compiled into its `dist/`, so the check covers their code too. | That the gateway is untampered: see below. |

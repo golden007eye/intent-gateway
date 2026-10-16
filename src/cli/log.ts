@@ -12,7 +12,7 @@ import { formatTimeline, timelineFollow, type TimelineStyle } from "./log-timeli
 type Body = Record<string, unknown>;
 
 /** The version of the `--json` line format (docs/log.md). */
-export const LOG_JSON_VERSION = 1;
+export const LOG_JSON_VERSION = 2;
 
 interface Item {
   seq: number;
@@ -28,6 +28,8 @@ export interface LogOptions extends ActivityFilter {
   /** The data dir the chain is in, and $HOME (shown as `~`), for the timeline's header. */
   readonly dataDir?: string;
   readonly home?: string;
+  /** The invocation for the footer's commands; config's INTENT when absent (tests pass their own). */
+  readonly intent?: string;
 }
 
 const PLAIN: LogStyle = { color: false };
@@ -55,7 +57,14 @@ export function formatLog(items: readonly unknown[], options: LogOptions = {}): 
   if (items.length === 0) return EMPTY;
   const all = buildActivity(items).activities;
   const shown = filterActivity(all, options);
-  const context = { items, shown, total: all.length, dataDir: options.dataDir ?? "", ...(options.home === undefined ? {} : { home: options.home }) };
+  const context = {
+    items,
+    shown,
+    total: all.length,
+    dataDir: options.dataDir ?? "",
+    ...(options.home === undefined ? {} : { home: options.home }),
+    ...(options.intent === undefined ? {} : { intent: options.intent }),
+  };
   return formatTimeline(context, options.style ?? PLAIN);
 }
 
@@ -115,6 +124,7 @@ export function verboseLines(items: readonly unknown[], activity: Activity, styl
     if (item === undefined) continue;
     const [label, detail, tone] = entryRow(item, demo, notSent, answered);
     lines.push(`  #${String(seq).padEnd(4)} ${paint(style, tone, label.padEnd(14))} ${detail}`);
+    if (item.kind === "observed") lines.push(...observedOffers(item.body).map((o) => `${" ".repeat(22)}${o}`));
     const request = activity.requests.find((r) => r.seq === seq);
     if (request !== undefined) {
       const pad = " ".repeat(22);
@@ -231,8 +241,13 @@ function describe(item: Item, demo: boolean): [string, string, Tone] {
   switch (item.kind) {
     case "disclosure":
       return ["sent", `${text(b.endpoint)}: ${list(leafFields(strings(b.fields)), "no body fields")}`, null];
-    case "block":
-      return ["blocked", `${text(b.endpoint)}: held back ${list(strings(b.blocked), "(no reason recorded)")}; nothing was sent`, "bad"];
+    case "block": {
+      const held = Object.entries(record(b.held)).map(([name, value]) => `${name} = ${JSON.stringify(value)}`);
+      const values = held.length === 0 ? "" : ` (${held.join(", ")}, kept here only)`;
+      return ["blocked", `${text(b.endpoint)}: held back ${list(strings(b.blocked), "(no reason recorded)")}${values}; nothing was sent`, "bad"];
+    }
+    case "observed":
+      return ["returned", `${ref}, returned by Intent Cloud (recorded here, never sent): ${observedSummary(b)}`, null];
     case "receipt": {
       const how = b.verified === true ? "signature verified" : `signature checked by ${INTENT} verify`;
       const who = demo ? "the local demo Intent Cloud acknowledged receiving it (demo chain, test keys)" : "Intent Cloud acknowledged receiving it";
@@ -265,6 +280,39 @@ function describe(item: Item, demo: boolean): [string, string, Tone] {
     default:
       return [item.kind, "", null];
   }
+}
+
+/** One line for an `observed` entry: `3 offers (1 hidden by the policy)`, a cart, or an approval state. */
+function observedSummary(b: Body): string {
+  const total = typeof b.total_minor === "number" ? `$${(b.total_minor / 100).toFixed(2)}` : "?";
+  const withheld = strings(b.withheld).length === 0 ? "" : `; withheld as possible buyer identity: ${strings(b.withheld).join(", ")}`;
+  switch (b.endpoint) {
+    case "searchCatalog": {
+      const count = typeof b.offers_count === "number" ? b.offers_count : 0;
+      const hidden = typeof b.offers_hidden === "number" && b.offers_hidden > 0 ? ` (${String(b.offers_hidden)} hidden by the gateway policy)` : "";
+      return `${String(count)} offer${count === 1 ? "" : "s"}${hidden}${withheld}`;
+    }
+    case "createCart":
+      return `cart: ${text(b.title)} x${String(b.quantity)}, ${total}, ${text(b.merchant)}${withheld}`;
+    case "createApproval":
+      return `approval ${text(b.approval_handle)} ${text(b.state)}: ${text(b.title)} x${String(b.quantity)}, ${total}, ${text(b.merchant)}${withheld}`;
+    case "getApproval":
+      return `approval ${text(b.approval_handle)} ${text(b.state)}: ${text(b.title)}, ${total}, ${text(b.merchant)}${withheld}`;
+    default:
+      return "not a known observation";
+  }
+}
+
+/** The offers an `observed` search entry kept, one line each. */
+function observedOffers(b: Body): string[] {
+  if (b.endpoint !== "searchCatalog" || !Array.isArray(b.offers)) return [];
+  const money = (v: unknown) => (typeof v === "number" ? `$${(v / 100).toFixed(2)}` : "?");
+  const kept = b.offers.map((raw) => {
+    const o = record(raw);
+    return `offer ${text(o.offer_handle)}: ${text(o.title)}, ${text(o.merchant)}, ${money(o.price_minor)} + ${money(o.shipping_minor)} shipping`;
+  });
+  const count = typeof b.offers_count === "number" ? b.offers_count : kept.length;
+  return count > kept.length ? [...kept, `(${String(count - kept.length)} more not recorded)`] : kept;
 }
 
 function asItem(raw: unknown): Item | null {

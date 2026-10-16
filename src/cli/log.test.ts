@@ -117,8 +117,8 @@ describe("intent log --verbose and --json (golden)", () => {
       Friday 16 October 2026 (UTC)
       17:26:37  keys      keys signed by cloud-root-1 · valid until 2027-01-14  ✓ recorded
       17:27:37  search    running shoes · must: road · under $120 · ZIP 94103   ✓ receipt
-      17:28:37  blocked   search: category blocked by your gateway policy       ✗ nothing sent
-      17:29:37  cart      offer of_abc ×1 · at most $41.98 · ZIP 94103          → approval link to the agent  ✓ 2 receipts
+      17:28:37  blocked   search: category excluded by your gateway policy      ✗ nothing sent
+      17:29:37  cart      offer of_abc ×1 · at most $41.98 · ZIP 94103          → approval link  ✓ 2 receipts
       17:30:37  status    approval ap_1                                         ✓ receipt
       17:30:37  approved  $41.98 · passkey aaaa 1111 (pinned now)               ✓ passkey proof checked
       17:31:37  search    running shoes · must: road · under $120 · ZIP 94103   ⚠ sent, no receipt
@@ -145,7 +145,7 @@ describe("intent log --verbose and --json (golden)", () => {
     expect(result.out).not.toContain("Never sent");
   });
 
-  it("--json prints one action per line, the activity model with v: 1", async () => {
+  it("--json prints one action per line, the activity model with v: 2 (an old chain: no observations)", async () => {
     const s = setup();
     await writeFlow(s.dir, false);
     const result = await s.run(["log", "--json"]);
@@ -190,8 +190,8 @@ describe("intent log filters", () => {
     await writeFlow(s.dir, false);
     const result = await s.run(["log", "--action", "blocked,approval", "--utc"]);
     expect(result.out.split("\n").filter((l) => /^\d\d:/.test(l))).toEqual([
-      "17:28:37  blocked   search: category blocked by your gateway policy  ✗ nothing sent",
-      "17:30:37  approved  $41.98 · passkey aaaa 1111 (pinned now)          ✓ passkey proof checked",
+      "17:28:37  blocked   search: category excluded by your gateway policy  ✗ nothing sent",
+      "17:30:37  approved  $41.98 · passkey aaaa 1111 (pinned now)           ✓ passkey proof checked",
     ]);
     expect(result.out).toContain("\n2 of 9 actions (filtered) · 1 approval · 1 blocked\n");
   });

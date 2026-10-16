@@ -9,6 +9,11 @@
 //   entry (kinds and paths, never values) and nothing is sent.
 // - Policy: each outbound request is mapped onto the policy module's own types and evaluated (which applies
 //   CLOUD_BASELINE). A refusal writes a `block` entry and nothing is sent. Offers that came back are filtered too.
+//   A policy block also keeps, locally, the values it held back (`held`, e.g. the category "alcohol"): they never left
+//   the machine, and the identity check above already passed on them. An identity block never keeps a value.
+// - Observations: after each answer whose receipt verified, an `observed` entry records a small summary of what Intent
+//   Cloud returned (offers, the cart, the approval state) with any identity-looking value withheld. It is written after
+//   the receipt, is never sent and answers no request, so log-before-send and `intent verify` are unchanged by it.
 // - Approval: a cart is checked against the offer, the snapshot against the cart, the ship-to area against the ZIP
 //   sent and the total against the caps, before the `approval_pending` entry is chained. "Approved" is reported only
 //   for a proof the trust module verified against that entry, that was chained, and whose passkey is the pin.
@@ -31,8 +36,8 @@ import {
   CloudNetworkError,
   CloudRequestError,
   CloudResponseError,
-  type CloudResult,
   type DisclosedCloud,
+  type DisclosedResult,
   DisclosureBlockedError,
   DisclosureDiscardedError,
   DisclosureKeysExpiredError,
@@ -42,6 +47,7 @@ import {
 import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { evaluate, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
+import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
 import { findIdentity } from "../privacy/index.ts";
 import type { Entry, Store } from "../store/index.ts";
 import {
@@ -243,7 +249,10 @@ export function createGateway(options: GatewayOptions): Gateway {
   const head = (): number => store.entries().at(-1)?.seq ?? -1;
   const summary = (fromSeq: number, extra: readonly string[] = []): string => summaryLine(disclosedSince(store.entries(), fromSeq), extra);
 
-  /** Writes a `block` entry and returns the refusal. Items name fields and rules, never values. */
+  /**
+   * Writes a `block` entry and returns the refusal. Items name fields and rules. `held` (policy blocks only) keeps the
+   * values the policy held back, which never left the machine; it is dropped whole if any of it looks like identity.
+   */
   async function block(
     endpoint: string,
     fields: readonly string[],
@@ -251,8 +260,10 @@ export function createGateway(options: GatewayOptions): Gateway {
     fromSeq: number,
     status: Refused["status"],
     message: string,
+    held: Readonly<Record<string, unknown>> = {},
   ): Promise<Refused> {
-    await store.append("block", { endpoint, fields: [...fields], blocked: [...blocked] });
+    const keep = Object.keys(held).length > 0 && findIdentity(held).length === 0;
+    await store.append("block", { endpoint, fields: [...fields], blocked: [...blocked], ...(keep ? { held: { ...held } } : {}) });
     return { status, message, summary: summary(fromSeq) };
   }
 
@@ -274,9 +285,12 @@ export function createGateway(options: GatewayOptions): Gateway {
   }
 
   /** Runs one disclosed call; a failure becomes a Refused naming what happened, never Cloud's content. */
-  async function call<T>(run: () => Promise<CloudResult<T>>, fromSeq: number): Promise<{ ok: true; body: T } | { ok: false; refused: Refused }> {
+  async function call<T>(
+    run: () => Promise<DisclosedResult<T>>,
+    fromSeq: number,
+  ): Promise<{ ok: true; body: T; seq: number } | { ok: false; refused: Refused }> {
     const refuse = (status: Refused["status"], message: string) => ({ ok: false as const, refused: { status, message, summary: summary(fromSeq) } });
-    let result: CloudResult<T>;
+    let result: DisclosedResult<T>;
     try {
       result = await run();
     } catch (error) {
@@ -303,7 +317,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       if (error instanceof CloudRequestError) return refuse("invalid", `Not sent: ${error.message}`);
       throw error;
     }
-    if (result.ok) return { ok: true, body: result.body };
+    if (result.ok) return { ok: true, body: result.body, seq: result.disclosureSeq };
     const said = result.body === null ? "" : `: ${result.body.message}`;
     const retry = result.retryAfter === null ? "" : ` Try again in ${String(result.retryAfter)} s.`;
     return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}`);
@@ -477,6 +491,11 @@ export function createGateway(options: GatewayOptions): Gateway {
         fromSeq,
         "blocked",
         `Not sent: the gateway policy refuses this search (${decision.blocked.map((b) => b.reason).join("; ")}).`,
+        {
+          ...(product === undefined ? {} : { product }),
+          ...(category === undefined ? {} : { category }),
+          ...(decision.blocked.some((b) => b.path === "ship_to_zip") ? { zip } : {}),
+        },
       );
     }
 
@@ -494,6 +513,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     }
     for (const offer of kept) remember(offer.offer_handle, { offer, category: category ?? "", zip });
     const hidden = sent.body.offers.length - kept.length;
+    await store.append("observed", observeSearch(sent.seq, sent.body, hidden));
     // Rule names only (e.g. merchants.block), never the merchant, category or price that matched it.
     const rules = [...hiddenBy].sort().join(", ");
     const hiddenNote = hidden === 0 ? "" : ` ${String(hidden)} more hidden by the gateway policy (${rules}).`;
@@ -545,7 +565,8 @@ export function createGateway(options: GatewayOptions): Gateway {
     const request: CloudCartRequest = { offer_handle: known.offer.offer_handle, quantity, ship_to: { country: "US", postal_code: known.zip } };
     if (before.length > 0) {
       return block("createCart", inputFields(request), before.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
-        `Not sent: the gateway policy refuses this cart (${before.map((b) => b.reason).join("; ")}).`);
+        `Not sent: the gateway policy refuses this cart (${before.map((b) => b.reason).join("; ")}).`,
+        { title: known.offer.title, merchant: known.offer.merchant.name, quantity });
     }
 
     const fresh = await currentKeys(fromSeq);
@@ -554,6 +575,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const cartCall = await call(() => cloud.createCart(request), fromSeq);
     if (!cartCall.ok) return cartCall.refused;
     const cart = cartCall.body;
+    await store.append("observed", observeCart(cartCall.seq, cart));
     const cartProblems = [
       ...(cart.merchant.domain === domain ? [] : ["merchant differs from the offer"]),
       ...(cart.quantity === quantity ? [] : ["quantity differs from the request"]),
@@ -567,6 +589,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const approvalCall = await call(() => cloud.createApproval(cart.cart_handle), fromSeq);
     if (!approvalCall.ok) return approvalCall.refused;
     const created = approvalCall.body;
+    await store.append("observed", observeApproval(approvalCall.seq, created));
     const snapshotProblems = [
       ...checkSnapshot(created, cart, known.zip),
       ...spendCheck(policyOffer(created.snapshot.merchant.domain, known.category, created.snapshot.total, null, created.snapshot.quantity)).map((b) => b.reason),
@@ -631,6 +654,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (!fresh.ok) return fresh.refused;
     const keys = fresh.keys;
     const fetched = await call(() => cloud.getApproval(handle), fromSeq);
+    if (fetched.ok) await store.append("observed", observeStatus(fetched.seq, handle, fetched.body));
     if (chained !== undefined) return reportChained(chained, fetched.ok ? fetched.body : null, fromSeq);
     if (!fetched.ok) return fetched.refused;
     const status = fetched.body;

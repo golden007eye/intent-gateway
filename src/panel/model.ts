@@ -215,7 +215,7 @@ export function buildModel(input: ModelInput): PanelModel {
     notSent: r.not_sent,
     discarded: r.discarded,
     refusedBefore: blocked.length,
-    refusedNote: blocked.length === 0 ? "nothing refused" : `last: ${refusalWords(blocked.at(-1)?.blocked ?? [])}, nothing sent`,
+    refusedNote: blocked.length === 0 ? "nothing refused" : `last: ${refusalWords(blocked.at(-1)?.blocked ?? [], blocked.at(-1)?.facts.held)}, nothing sent`,
   };
 
   const lines = activities.filter((a) => a.action !== "keys").map((a) => feedLine(a, time));
@@ -282,9 +282,15 @@ function feedLine(a: Activity, time: Clock): Line {
     case "keys":
       return { ...base, label: "keys", tone: "plain", text: join(["Key statement read", f.key_kid ?? "", delivery()]) };
     case "search":
-      return { ...base, label: "search", tone: toneOf(a.requests), text: join(["Search", searchWords(a), delivery()]) };
+      return { ...base, label: "search", tone: toneOf(a.requests), text: join(["Search", searchWords(a), offersWords(a), delivery()]) };
     case "blocked":
-      return { ...base, label: "refused", tone: "bad", text: join([`${endpointWords(f.endpoint)} refused before sending: ${refusalWords(a.blocked)}`, "nothing sent"]) };
+      // With the value the policy held back (chains with `held`): `Search refused: category "alcohol" excluded`.
+      return {
+        ...base,
+        label: "refused",
+        tone: "bad",
+        text: join([`${endpointWords(f.endpoint)} refused${f.held === undefined ? " before sending" : ""}: ${refusalWords(a.blocked, f.held)}`, "nothing sent"]),
+      };
     case "cart":
       return {
         ...base,
@@ -292,8 +298,15 @@ function feedLine(a: Activity, time: Clock): Line {
         tone: a.outcome === "refused" ? "bad" : toneOf(a.requests),
         text: join(["Cart", cartWords(a), a.outcome === "refused" ? `refused what came back: ${a.blocked.join("; ")}` : delivery(), a.outcome === "approval_asked" ? "approval asked" : ""]),
       };
-    case "status":
-      return { ...base, label: "status", tone: a.outcome === "refused" ? "bad" : toneOf(a.requests), text: join(["Approval status checked", short(f.approval_handle), delivery()]) };
+    case "status": {
+      const ended = a.outcome === "rejected" || a.outcome === "expired";
+      return {
+        ...base,
+        label: ended ? a.outcome : "status",
+        tone: a.outcome === "refused" || a.outcome === "rejected" ? "bad" : toneOf(a.requests),
+        text: join(["Approval status checked", short(f.approval_handle), f.title ?? "", f.approval_state === undefined ? "" : f.approval_state.replace("_", " "), delivery()]),
+      };
+    }
     case "approval":
       return {
         ...base,
@@ -320,7 +333,25 @@ function searchWords(a: Activity): string {
   ]);
 }
 
+/** `3 offers`, `3 offers, 1 hidden by your policy`, from the search's observation; "" without one. */
+function offersWords(a: Activity): string {
+  const n = a.facts.offers_count;
+  if (n === undefined || a.outcome !== "acknowledged") return "";
+  const hidden = a.facts.offers_hidden ?? 0;
+  return `${String(n)} offer${n === 1 ? "" : "s"}${hidden === 0 ? "" : `, ${String(hidden)} hidden by your policy`}`;
+}
+
 function cartWords(a: Activity, total = true): string {
+  const f = a.facts;
+  // With the cart's observation: what Intent Cloud returned (title, total, merchant); without one: the values sent.
+  if (f.title !== undefined) {
+    return join([`${f.title}${(f.quantity ?? 1) > 1 ? ` ×${String(f.quantity)}` : ""}`, f.total_minor === undefined || !total ? "" : money(f.total_minor), f.merchant ?? ""]);
+  }
+  return sentCartWords(a, total);
+}
+
+/** The values the cart request sent: `1 × offer of_8Kx2a…hij · ZIP 94103` (and the total, when asked). */
+function sentCartWords(a: Activity, total = false): string {
   const f = a.facts;
   return join([
     f.quantity === undefined ? "" : `${String(f.quantity)} ×`,
@@ -330,7 +361,9 @@ function cartWords(a: Activity, total = true): string {
   ]).replace(" × · ", " × ");
 }
 
+/** `Trail Socks 3-pack · $18.00 · Hydra Goods` from the cart's observation; on older chains, the search and the total. */
 function purchaseTitle(p: Purchase): string {
+  if (p.cart.facts.title !== undefined) return cartWords(p.cart);
   const what = p.search?.facts.product ?? p.search?.facts.category ?? "Purchase";
   return join([capitalise(what), p.cart.facts.total_minor === undefined ? "" : money(p.cart.facts.total_minor)]);
 }
@@ -339,6 +372,7 @@ const STATE: Record<Purchase["state"], readonly [string, Tone]> = {
   approved: ["Approved", "ok"],
   waiting: ["Waiting for you", "warn"],
   expired: ["Expired", "plain"],
+  rejected: ["Rejected", "bad"],
   refused: ["Refused by the gateway", "bad"],
   acknowledged: ["No approval asked", "plain"],
   unacknowledged: ["No receipt", "warn"],
@@ -369,8 +403,8 @@ function purchaseView(p: Purchase, time: Clock): PurchaseView {
       ? { n: 3, name: "Your approval", state: "done", note: join([time(p.approval.time), `passkey ${fingerprintShort(p.approval.facts.fingerprint ?? "")} ✓`]), drawer: drawerId(p.approval), link: null }
       : p.state === "waiting"
         ? { n: 3, name: "Your approval", state: "waiting", note: "waiting for you", drawer: null, link: safeUrl(cart.facts.approval_url) }
-        : p.state === "expired"
-          ? { n: 3, name: "Your approval", state: "failed", note: "expired", drawer: null, link: null }
+        : p.state === "expired" || p.state === "rejected"
+          ? { n: 3, name: "Your approval", state: "failed", note: p.state, drawer: null, link: null }
           : { n: 3, name: "Your approval", state: "todo", note: "not asked", drawer: null, link: null };
   steps.push(approvalStep);
   const lastCheck = p.checks.at(-1);
@@ -387,7 +421,7 @@ function purchaseView(p: Purchase, time: Clock): PurchaseView {
     ts: cart.time,
     clock: time(cart.time),
     title: purchaseTitle(p),
-    subtitle: join([cartWords(cart, false), p.approval === null && cart.facts.approval_handle !== undefined ? `approval ${short(cart.facts.approval_handle)}` : ""]),
+    subtitle: join([sentCartWords(cart), p.approval === null && cart.facts.approval_handle !== undefined ? `approval ${short(cart.facts.approval_handle)}` : ""]),
     state,
     tone,
     steps,
@@ -489,7 +523,15 @@ function entrySummary(kind: string, b: Record<string, unknown>): string {
     case "discarded":
       return join([`${kind} #${String(b.disclosure_seq)}`, text(b.reason)]);
     case "block":
-      return join([`refused before sending ${text(b.endpoint)}`, strings(b.blocked).join("; ")]);
+      return join([`refused before sending ${text(b.endpoint)}`, strings(b.blocked).join("; "), ...Object.entries(record(b.held)).map(([k, v]) => `${k} ${JSON.stringify(v)} kept here only`)]);
+    case "observed": {
+      // What came back for one request, recorded here after its receipt; never sent.
+      const what =
+        b.endpoint === "searchCatalog"
+          ? `${String(b.offers_count)} offers`
+          : join([text(b.title), typeof b.total_minor === "number" ? money(b.total_minor) : "", text(b.merchant), text(b.state)]);
+      return join([`came back for #${String(b.disclosure_seq)}`, what]);
+    }
     case "approval_pending":
       return join([`approval asked ${text(b.handle)}`, typeof b.total_minor === "number" ? money(b.total_minor) : ""]);
     case "approval":
@@ -522,10 +564,14 @@ function flatten(value: unknown, prefix: string, out: [string, string][]): void 
   }
 }
 
-/** Policy rules and identity findings in plain words; the rule itself stays in the server log. */
-export function refusalWords(blocked: readonly string[]): string {
+/**
+ * Policy rules and identity findings in plain words; the rule itself stays in the server log. `held`, the values a
+ * policy block kept (never sent), names the category: `category "alcohol" excluded`.
+ */
+export function refusalWords(blocked: readonly string[], held?: Readonly<Record<string, unknown>>): string {
+  const category = typeof held?.category === "string" ? held.category : null;
   const words = blocked.map((b) => {
-    if (b.startsWith("categories.block")) return "excluded or blocked category";
+    if (b.startsWith("categories.block")) return category === null ? "excluded or blocked category" : `category "${category}" excluded`;
     if (b.startsWith("spend.")) return "over a spend limit";
     if (b.startsWith("merchants.")) return "merchant not allowed";
     if (b.startsWith("quantity.")) return "over the quantity limit";

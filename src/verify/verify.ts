@@ -6,6 +6,8 @@
 // what it covered then. `now` is the self-check's clock.
 import { INTENT } from "../config/index.ts";
 import { ReceiptRequest } from "../contract/index.ts";
+import { observationProblem } from "../observation/index.ts";
+import { findIdentity } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
@@ -123,6 +125,9 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
   const sessions = new Map<string, number>();
   // Logged requests that never left (no connection was made): reported as not sent, not as sent (invariant 5).
   let notSent = 0;
+  // The status of each disclosure's receipt, and the disclosures an `observed` entry already summarises.
+  const receiptStatus = new Map<number, number>();
+  const observed = new Set<number>();
   // Every recorded statement, checked at the time it was recorded: its KeySet, or null when it did not verify.
   const statements = new Map<number, KeySet | null>();
   for (const entry of entries) {
@@ -194,7 +199,20 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
         } else if (entry.kind === "receipt") {
           const problem = receiptProblem(body, target.entry, body.verified === false ? (nextKeys(entry.seq) ?? keys) : keys, ts);
           if (problem !== null) disclosureFailures.push(`${at}: the receipt for ${of} ${problem}`);
+          else if (typeof body.status === "number") receiptStatus.set(target.entry.seq, body.status);
         }
+        break;
+      }
+      case "observed": {
+        // Never sent and never a follow-up: it only summarises an answer whose receipt verified, after that receipt.
+        const problem = observedProblem(body, disclosures, receiptStatus, observed);
+        if (problem !== null) disclosureFailures.push(`${at}: the observed entry ${problem}`);
+        else observed.add(body.disclosure_seq as number);
+        break;
+      }
+      case "block": {
+        const found = findIdentity(body.held ?? null);
+        if (found.length > 0) disclosureFailures.push(`${at}: the block entry keeps what looks like buyer identity in held (${found.map((f) => f.kind).join(", ")})`);
         break;
       }
       case "approval_pending":
@@ -265,6 +283,7 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
           : `acknowledged by a receipt from Intent Cloud's public edge: ${String(counts.receipts)}`,
         `sent, not acknowledged: ${String(counts.unacknowledged - notSent)}`,
         `discarded: ${String(counts.discarded)}`,
+        ...(observed.size === 0 ? [] : [`answers summarised locally (observed, never sent): ${String(observed.size)}`]),
         ...disclosureFailures,
       ],
     },
@@ -286,6 +305,31 @@ function sessionMark(value: unknown): SessionMark | null | "malformed" {
   const count = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
   if (typeof id !== "string" || !count(n) || !Array.isArray(open) || !open.every(count)) return "malformed";
   return { id, n, open };
+}
+
+/**
+ * Why an `observed` entry is not a summary of one acknowledged answer, or null: its shape and buyer identity
+ * (observationProblem), then its disclosure_seq must name an earlier disclosure of the same endpoint whose receipt
+ * verified with a 2xx status before it, and no other observation may name that disclosure.
+ */
+function observedProblem(
+  body: Record<string, unknown>,
+  disclosures: ReadonlyMap<number, Disclosure>,
+  receiptStatus: ReadonlyMap<number, number>,
+  observed: ReadonlySet<number>,
+): string | null {
+  const shape = observationProblem(body);
+  if (shape !== null) return shape;
+  const seq = body.disclosure_seq as number;
+  const target = disclosures.get(seq);
+  if (target === undefined) return `names disclosure_seq ${String(seq)}, which is not an earlier disclosure`;
+  const endpoint = record(target.entry.body).endpoint;
+  if (endpoint !== body.endpoint) return `is for ${String(body.endpoint)}, but the disclosure at seq ${String(seq)} is ${String(endpoint)}`;
+  const status = receiptStatus.get(seq);
+  if (status === undefined) return `summarises the disclosure at seq ${String(seq)}, which has no verified receipt before it`;
+  if (status < 200 || status >= 300) return `summarises the disclosure at seq ${String(seq)}, whose receipt is for status ${String(status)}, not a success`;
+  if (observed.has(seq)) return `repeats an observation of the disclosure at seq ${String(seq)}`;
+  return null;
 }
 
 /** Why a `receipt` entry does not acknowledge its disclosure, or null when it does. */
