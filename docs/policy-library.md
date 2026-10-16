@@ -7,7 +7,7 @@ The policy library is a public collection of [gateway policies](policy.md), revi
 | Name | What it does |
 |---|---|
 | `zip-only` | Shares only a 5-digit ZIP as the ship-to location. The default when there is no policy file. |
-| `strict-default` | Shares no ship-to at all; one item; at most $50 per order, $75 per day and $150 per week; blocks `dropship.example`. With no ZIP, no search can be sent, so use it to lock a gateway down. |
+| `strict-default` | Shares no ship-to at all; one item; at most $50 per order, $75 per day and $150 per week; blocks `dropship.example`. It sends no ZIP code, so the gateway blocks every search (`find_offers`) before sending and no cart can be made: agents see every search blocked. Use it only to lock a gateway down; `policy add`, `policy show` and `doctor` all say so. To search again, delete `policy.yaml` and add a policy that keeps the ZIP, such as `per-order-60`. |
 | `per-order-60` | Refuses a cart over $60 (price × quantity). |
 | `daily-40` | Refuses a cart that would take approved purchases in the last 24 hours above $40. |
 | `weekly-150` | Refuses a cart that would take approved purchases in the last 7 days above $150. |

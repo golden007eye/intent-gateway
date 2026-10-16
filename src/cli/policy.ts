@@ -3,7 +3,7 @@
 import { readFile } from "node:fs/promises";
 import { type Config, INTENT } from "../config/index.ts";
 import { LibraryError, type Lock, planPolicy, readLock } from "../library/index.ts";
-import { loadPolicy, PolicyError, runCases } from "../policy/index.ts";
+import { loadPolicy, type Policy, PolicyError, runCases } from "../policy/index.ts";
 import { describeError } from "./errors.ts";
 import { CliError, type Io, line } from "./io.ts";
 import { ask, diffLines } from "./prompt.ts";
@@ -66,6 +66,20 @@ async function readText(path: string, what: string): Promise<string> {
   }
 }
 
+/**
+ * Said wherever a policy with `share.ship_to: none` (strict-default) is shown or applied: every find_offers needs
+ * a ZIP, so under it the gateway blocks every search before sending, and with no offers no cart can be made.
+ */
+export function noShipToNote(policy: Policy): string | null {
+  if (policy.share.ship_to !== "none") return null;
+  return "with this policy the gateway sends no ZIP code, so it blocks every find_offers before sending and no cart can be made; agents will see every search blocked";
+}
+
+/** How to get search back: a policy only narrows, so the file goes and a library policy that keeps the ZIP comes in. */
+export function shipToFix(policyPath: string): string {
+  return `to search again, delete ${policyPath} and run ${INTENT} policy add per-order-60 (or another library policy that keeps the ZIP)`;
+}
+
 export interface AddFlags {
   commit: string | undefined;
   yes: boolean;
@@ -84,6 +98,10 @@ export async function policyAdd(io: Io, config: Config, name: string, flags: Add
   } else {
     if (plan.before === undefined) line(io.stdout, "(new file)");
     for (const diff of diffLines(plan.before ?? "", plan.after)) line(io.stdout, diff);
+  }
+  const note = noShipToNote(loadPolicy(plan.after));
+  if (note !== null) line(io.stdout, `note: ${note}`);
+  if (plan.before !== plan.after) {
     if (!flags.yes) {
       if (!io.isTTY.stdin) {
         throw new CliError("not applied: stdin is not a terminal, so no one can confirm the change; re-run with --yes to apply it", 2);
@@ -130,6 +148,8 @@ export async function policyShow(io: Io, config: Config): Promise<number> {
       code = 1;
     }
   }
+  const note = noShipToNote(active.policy);
+  if (note !== null) line(io.stdout, `note: ${note}; ${shipToFix(policyPath)}`);
   line(io.stdout, "---");
   io.stdout.write(active.text.endsWith("\n") ? active.text : `${active.text}\n`);
   return code;

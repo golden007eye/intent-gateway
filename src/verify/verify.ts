@@ -4,6 +4,7 @@
 // Historical checks run at each entry's own `ts`: a key statement is checked at the time it was recorded, a receipt
 // or an approval proof at the time it was chained. A statement that has expired since is still good evidence for
 // what it covered then. `now` is the self-check's clock.
+import { INTENT } from "../config/index.ts";
 import { ReceiptRequest } from "../contract/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, readChain, verifyChain } from "../store/index.ts";
@@ -41,6 +42,9 @@ export interface Report {
   counts: { disclosures: number; receipts: number; unacknowledged: number; discarded: number; approvals: number; flags: number };
 }
 
+/** The chain line for a missing or empty chain; the same words as `intent log`. */
+const EMPTY_CHAIN = `No entries yet: the gateway has sent nothing. Start it with ${INTENT} serve, or try ${INTENT} demo.`;
+
 /** Self-check reasons that mean the install given to verify is wrong, not that the artifact failed its check. */
 const USAGE_REASONS: ReadonlySet<FailureReason> = new Set(["package-unreadable", "ref-invalid"]);
 
@@ -54,7 +58,9 @@ export async function runVerify(opts: VerifyOptions): Promise<Report> {
   try {
     items = readChain(opts.dataDir);
   } catch (err) {
-    return usage([`cannot read the chain in ${opts.dataDir}: ${err instanceof Error ? err.message : String(err)}`], empty, counts);
+    // No chain file (or no data dir) yet: nothing has been sent, which is an empty chain, not an error.
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") items = [];
+    else return usage([`cannot read the chain in ${opts.dataDir}: ${err instanceof Error ? err.message : String(err)}`], empty, counts);
   }
 
   const result = verifyChain(items);
@@ -63,7 +69,8 @@ export async function runVerify(opts: VerifyOptions): Promise<Report> {
   const head = last === undefined ? empty : { seq: last.seq, hash: last.hash };
   const checks: Check[] = [];
   if (result.ok) {
-    checks.push({ name: "chain", ok: true, details: [`${String(entries.length)} entries, every hash links`] });
+    const details = entries.length === 0 ? [EMPTY_CHAIN] : [`${String(entries.length)} entries, every hash links`];
+    checks.push({ name: "chain", ok: true, details });
     checks.push(...checkEntries(entries, opts.pinnedRootKeys, counts));
   } else {
     checks.push({
