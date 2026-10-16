@@ -57,7 +57,7 @@ describe("the Node the repo's pnpm scripts run on", () => {
     expect(major === 24 ? minor >= 15 : major >= 26).toBe(true);
   });
 
-  it("leaves what end users need unchanged: engines still accepts Node 24.15+ and 26+", () => {
-    expect(pkg.engines?.node).toBe("^24.15.0 || >=26.0.0");
+  it("tells end users Node 22.22.2+, 24.15+ or 26+, the range src/runtime checks (F-t)", () => {
+    expect(pkg.engines?.node).toBe("^22.22.2 || ^24.15.0 || >=26.0.0");
   });
 });
