@@ -20,6 +20,19 @@ Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report c
 
 A significant design decision gets a short record in `docs/adr/`.
 
+## Outsider e2e
+
+`scripts/e2e-outsider.sh` runs the gateway the way a stranger meets it: a fresh HOME, an empty folder outside the repository, only Node, npx, Docker and a logged-in [Claude Code](https://claude.com/claude-code) on `PATH`, and the commands from the README. A headless Claude Code finds offers and prepares a cart; the script approves it on the confirm page, then checks the refusals (no demo code, a blocked category), a tampered chain, a restart and a `kill -9` mid-request. Each scenario prints PASS or FAIL with its evidence, and every log stays in the folder printed at the end.
+
+```console
+$ scripts/e2e-outsider.sh --tarball          # the package built from this checkout (npm pack)
+$ scripts/e2e-outsider.sh --docker           # the image built from this checkout
+$ scripts/e2e-outsider.sh --npm next         # a published version, from the registry
+$ scripts/e2e-outsider.sh --image ghcr.io/golden007eye/intent-gateway:<version>
+```
+
+It is run on demand on a maintainer's machine, never in CI, because it needs a logged-in Claude Code. Every `claude` call it makes sees only the gateway under test (`--strict-mcp-config`), and the run stops if Claude reports any other MCP server. The `e2e-tester` agent (`.claude/agents/e2e-tester.md`) runs it, finds the root cause of each failure, and fixes it by pull request.
+
 ## Licence
 
 By contributing you agree that your contribution is licensed under the [Apache License 2.0](LICENSE), the licence of this project.
