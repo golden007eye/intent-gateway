@@ -17,7 +17,7 @@ The gateway signs every request with a session key that lives for one process (A
 - **Deleted when no purchase needs it.** On start and after each status call, the gateway deletes a key:
   - with no `approval_pending` entry naming it, an hour after it was made;
   - for a cart never approved, at `expires_at`;
-  - for an approved hand-off, once Intent Cloud has reported a terminal outcome;
+  - for an approved hand-off, once Intent Cloud has reported a terminal outcome in a statement the gateway verified (ADR-0015);
   - for an approved gateway-wallet purchase, once a terminal outcome report the key signed got a 201 with a verified receipt;
   - in every case, at `expires_at` + 48 hours at the latest. That is never later than the R7 limit of the contract, a rule Intent Cloud enforces (48 hours after the later of `expires_at` and a terminal outcome), because every terminal outcome the gateway knows of deletes the key at once (amendment item 8).
 

@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import { at, PINNED, S1, seedOf, signOutcomeStatement, without } from "../../test/support/trust-kit.ts";
 import { type SnapshotV2 } from "../contract/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
-import { type KeySet, verifyOutcomeStatement, verifyStatement } from "./index.ts";
+import { PINNED_HOSTS } from "../config/index.ts";
+import { type KeySet, stagingSourceAllowed, verifyOutcomeStatement, verifyStatement } from "./index.ts";
 
 interface O2 {
   input: { valid_at: number; approved_snapshot?: SnapshotV2; approved_snapshot_hash: string };
@@ -20,6 +21,8 @@ const NOW = at(AMENDED.input.valid_at);
 const SNAPSHOT = AMENDED.input.approved_snapshot as SnapshotV2;
 const HASH = AMENDED.input.approved_snapshot_hash;
 const HANDLE = "ap_TEST0003";
+/** The vector's statements name `staging_webhook`, accepted under the s1 test root (stagingSourceAllowed). */
+const STAGING_OK = { stagingSource: true } as const;
 /** src/ lint forbids naming a property `binding` (it would also match `process.binding`). */
 const BINDING = "binding";
 
@@ -40,15 +43,32 @@ describe("vector o2", () => {
     );
   });
   it.each(AMENDED.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
-    const result = verifyOutcomeStatement(c.statement, approval, keys(), NOW);
+    const result = verifyOutcomeStatement(c.statement, approval, keys(), NOW, STAGING_OK);
     if (c.verifies) expect(result).toEqual({ ok: true });
     else expect(result).toMatchObject({ ok: false, refused_by: c.refused_by });
   });
   it("content refusals are signed claims; signature and snapshot refusals are not", () => {
     for (const c of AMENDED.cases.filter((x) => !x.verifies)) {
-      const result = verifyOutcomeStatement(c.statement, approval, keys(), NOW);
+      const result = verifyOutcomeStatement(c.statement, approval, keys(), NOW, STAGING_OK);
       expect(!result.ok && result.signed).toBe(c.refused_by !== "cloud_signature" && c.refused_by !== "snapshot_hash");
     }
+  });
+});
+
+describe("staging_webhook: only for Intent Cloud staging, or under the test root", () => {
+  const valid = AMENDED.cases.find((c) => c.verifies)?.statement as Record<string, unknown>;
+  it("attack: a staging_webhook outcome is refused (source) when the pinned host is not staging or the test root", () => {
+    expect(verifyOutcomeStatement(valid, approval, keys(), NOW, { stagingSource: false })).toEqual({ ok: false, refused_by: "source", signed: true });
+    expect(verifyOutcomeStatement(valid, approval, keys(), NOW, { stagingSource: true })).toEqual({ ok: true });
+  });
+  it("stagingSourceAllowed: the test root and the staging host's pinned root, nothing else", () => {
+    expect(stagingSourceAllowed(PINNED)).toBe(true);
+    const staging = PINNED_HOSTS["staging-api.intentai.shop"]?.rootKeys ?? [];
+    expect(stagingSourceAllowed(staging)).toBe(true);
+    const other = { kid: "cloud-root-1", jwk: { kty: "OKP", crv: "Ed25519", x: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } };
+    expect(stagingSourceAllowed([other])).toBe(false);
+    expect(stagingSourceAllowed([...staging, other])).toBe(false);
+    expect(stagingSourceAllowed([])).toBe(false);
   });
 });
 
@@ -58,7 +78,7 @@ describe("outcome statements: attacks and rules beyond the vector", () => {
   const outcome = valid.outcome as Record<string, unknown>;
   const resign = (changes: Record<string, unknown>, outcomeChanges: Record<string, unknown> = {}) =>
     signOutcomeStatement({ ...unsigned, ...changes, outcome: { ...outcome, ...outcomeChanges } });
-  const check = (statement: unknown, a = approval) => verifyOutcomeStatement(statement, a, keys(), NOW);
+  const check = (statement: unknown, a = approval) => verifyOutcomeStatement(statement, a, keys(), NOW, STAGING_OK);
 
   it("re-signing the valid statement's fields reproduces its signature", () => {
     expect(signOutcomeStatement(unsigned).cloud_signature).toBe(valid.cloud_signature);
@@ -79,8 +99,8 @@ describe("outcome statements: attacks and rules beyond the vector", () => {
     expect(check(valid, v1)).toMatchObject({ refused_by: "v1_snapshot" });
   });
   it("needs a key set verifyStatement made, and one still valid", () => {
-    expect(verifyOutcomeStatement(valid, approval, { ...keys() }, NOW)).toMatchObject({ refused_by: "not_verified" });
-    expect(verifyOutcomeStatement(valid, approval, keys(), new Date(Date.parse("2026-12-01T00:00:00Z")))).toMatchObject({ refused_by: "statement_expired" });
+    expect(verifyOutcomeStatement(valid, approval, { ...keys() }, NOW, STAGING_OK)).toMatchObject({ refused_by: "not_verified" });
+    expect(verifyOutcomeStatement(valid, approval, keys(), new Date(Date.parse("2026-12-01T00:00:00Z")), STAGING_OK)).toMatchObject({ refused_by: "statement_expired" });
   });
   it("not an object, extra fields or a lone surrogate: schema", () => {
     expect(check(null)).toMatchObject({ refused_by: "schema" });

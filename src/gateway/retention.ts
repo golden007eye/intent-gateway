@@ -5,16 +5,18 @@
 // - with no such entry, an hour after it was made: the cart was refused, or the gateway stopped before chaining the
 //   approval, so no chained purchase can ever need it (the hour spares a key whose cart is still on its way);
 // - for a purchase never approved (no `approval` entry and no status that showed one), at `expires_at`;
-// - for an approved hand-off purchase, once a consistent status reports a terminal outcome for it (nothing left to
-//   read or report);
+// - for an approved hand-off purchase, once the gateway chained a terminal outcome from a verified outcome statement
+//   (an `outcome` entry with `statement_verified` and a terminal `state_shown`, ADR-0015): nothing is left to read or
+//   report. An outcome the gateway did not verify deletes nothing, so a forged terminal outcome cannot drop the key
+//   early;
 // - for an approved `shop_agent` purchase, once a terminal outcome report the key signed got a 201 with a verified
 //   receipt, which is the last request the key signs;
 // - in every case, at `expires_at` + 48 h at the latest: never later than Intent Cloud's completer read window (R7,
 //   48 h after the later of `expires_at` and a terminal outcome), after which it accepts nothing the key signs.
-import type { OutcomeState } from "../contract/index.ts";
+import { outcomesFor, TERMINAL_STATES } from "../outcome/index.ts";
 import type { CompleterKey } from "../signing/index.ts";
 import type { Entry } from "../store/index.ts";
-import { PROOF_STATES, statusState, TERMINAL_OUTCOMES } from "./status-state.ts";
+import { PROOF_STATES } from "./status-state.ts";
 
 export const ORPHAN_GRACE_MS = 3_600_000;
 export const READ_WINDOW_MS = 48 * 3_600_000;
@@ -54,12 +56,7 @@ function keepFor(chain: readonly Entry[], entry: Entry, now: number): boolean {
     return now < expiresAt + (shownApproved ? READ_WINDOW_MS : 0);
   }
 
-  // Only a consistent status counts (state = the table's state for its outcome), so a status that names a terminal
-  // outcome under the wrong state cannot delete the key early.
-  const done =
-    mode === "handoff"
-      ? seen.some((s) => TERMINAL_OUTCOMES.has(s.outcome as never) && s.state === statusState(s.outcome as OutcomeState, "handoff"))
-      : terminalReport(chain, handle);
+  const done = mode === "handoff" ? verifiedTerminal(chain, handle) : terminalReport(chain, handle);
   if (done) return false;
   // Every terminal outcome the gateway knows of deletes the key above, so no known terminal ever extends the window:
   // the key goes at expires_at + 48 h, which is never later than Intent Cloud's R7 limit (amendment item 8). A
@@ -67,11 +64,16 @@ function keepFor(chain: readonly Entry[], entry: Entry, now: number): boolean {
   return now < expiresAt + READ_WINDOW_MS;
 }
 
-/** The `observed` getApproval entries for a handle: state, outcome state and entry time. */
-function observedStatuses(chain: readonly Entry[], handle: string): { state: unknown; outcome: unknown; at: number }[] {
+/** Whether the gateway chained a terminal outcome for a handle from a verified outcome statement. */
+function verifiedTerminal(chain: readonly Entry[], handle: string): boolean {
+  return outcomesFor(chain, handle).some((o) => o.basis === "cloud" && o.statement_verified && o.state_shown !== null && TERMINAL_STATES.has(o.state_shown));
+}
+
+/** The `observed` getApproval entries for a handle: the approval state each returned. */
+function observedStatuses(chain: readonly Entry[], handle: string): { state: unknown }[] {
   return chain
     .filter((e) => e.kind === "observed" && asBody(e.body).endpoint === "getApproval" && asBody(e.body).approval_handle === handle)
-    .map((e) => ({ state: asBody(e.body).state, outcome: asBody(e.body).outcome_state, at: Date.parse(e.ts) }));
+    .map((e) => ({ state: asBody(e.body).state }));
 }
 
 /** Whether a terminal outcome report the gateway logged for a handle got a 201 with a verified receipt. */

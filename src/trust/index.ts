@@ -15,7 +15,15 @@
 export { approvalChallenge, type ApprovalFailure, type ApprovalResult, type ChainEntry, verifyApprovalProof, type VerifiedApproval, type VerifiedCredential } from "./approval.ts";
 export { type ApproverBody, type ApproverCheck, checkApprover, type FlagReason } from "./approver.ts";
 export { approverFingerprint } from "./fingerprint.ts";
-export { OUTCOME_PREFIX, type OutcomeApproval, type OutcomeRefusal, type OutcomeStatementResult, verifyOutcomeStatement } from "./outcome.ts";
+export {
+  OUTCOME_PREFIX,
+  type OutcomeApproval,
+  type OutcomeCheckOptions,
+  type OutcomeRefusal,
+  type OutcomeStatementResult,
+  stagingSourceAllowed,
+  verifyOutcomeStatement,
+} from "./outcome.ts";
 export { type ReceiptFailure, type ReceiptResponse, type ReceiptResult, type SentRequest, verifyReceipt } from "./receipt.ts";
 export { instant, readSent, SENT_FIELDS, SENT_WORDS, SentPurchase, type SentReason, sentProblems } from "./sent.ts";
 export { isTestRoot, onlyTestRoot, TEST_ROOT_KEY, TEST_ROOT_X } from "./test-root.ts";

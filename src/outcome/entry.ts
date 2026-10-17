@@ -20,7 +20,10 @@ export const CloudOutcomeEntry = z.strictObject({
   /** Intent Cloud's words, as served; null when no outcome could be read at all. */
   cloud: z.strictObject({ state: OutcomeState, source: OutcomeSource, assurance: z.enum(["verified", "reported"]) }).nullable(),
   statement_verified: z.boolean(),
-  /** The rule the statement failed (Appendix G statement validity, or the gateway's own: m1, schema, identity). */
+  /**
+   * The rule the statement failed: Appendix G statement validity, or the gateway's own (m1; schema; identity, when the
+   * statement held what looks like buyer identity and so was not kept).
+   */
   refused_by: z.string().min(1).max(40).optional(),
   /** The outcome statement, canonical JSON; absent when none came, or when it held what looks like buyer identity. */
   statement_jcs: z.string().min(1).max(16_384).optional(),
@@ -72,17 +75,18 @@ export function outcomesFor(entries: readonly OutcomeChainEntry[], handle: strin
 /**
  * Whether the gateway holds local evidence that an approved purchase charged nothing, so its reservation may be freed
  * (contract §6): its latest `local` outcome is `failed`, read from Shop (`shop_api`: the checkout is terminal and not
- * completed), or its own precheck refusal (`gateway_precheck`) with no `complete_checkout` disclosure for the purchase
- * (log-before-send proves nothing was sent). A `cloud` outcome never frees room: a compromised Intent Cloud must not
- * widen spending.
+ * completed), or its own precheck refusal (`gateway_precheck`) while no `complete_checkout` disclosure at all was
+ * logged after the purchase's approval (log-before-send proves nothing was sent). The precheck branch fails closed: it
+ * does not rely on a disclosure naming its purchase, so any such send after the approval keeps the room. A `cloud`
+ * outcome never frees room: a compromised Intent Cloud must not widen spending.
  */
 export function chargedNothing(entries: readonly OutcomeChainEntry[], handle: string): boolean {
   const local = outcomesFor(entries, handle).filter((o): o is LocalOutcomeEntry => o.basis === "local").at(-1);
   if (local?.state !== "failed") return false;
   if (local.source === "shop_api") return true;
-  return !entries.some((e) => {
-    if (e.kind !== "disclosure" || typeof e.body !== "object" || e.body === null) return false;
-    const b = e.body as { purchase?: unknown; endpoint?: unknown };
-    return b.purchase === handle && b.endpoint === "complete_checkout";
+  const approvedAt = entries.findIndex((e) => e.kind === "approval" && (e.body as { handle?: unknown } | null)?.handle === handle);
+  return !entries.some((e, i) => {
+    if (i < approvedAt || e.kind !== "disclosure" || typeof e.body !== "object" || e.body === null) return false;
+    return (e.body as { endpoint?: unknown }).endpoint === "complete_checkout";
   });
 }

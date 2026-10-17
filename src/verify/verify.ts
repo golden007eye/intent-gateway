@@ -20,6 +20,7 @@ import {
   type ReceiptResponse,
   type SentRequest,
   verifyApprovalProof,
+  stagingSourceAllowed,
   verifyOutcomeStatement,
   verifyReceipt,
   verifyStatement,
@@ -286,7 +287,7 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       }
       case "outcome": {
         outcomeEntries += 1;
-        const result = outcomeProblem(entry.body, approvedProofs, keys, ts, entries.slice(0, index));
+        const result = outcomeProblem(entry.body, approvedProofs, keys, ts, entries.slice(0, index), stagingSourceAllowed(pinned));
         if (typeof result === "string") {
           outcomeFailures.push(`${at}: the outcome ${typeof body.handle === "string" ? `for ${body.handle} ` : ""}${result}`);
         } else {
@@ -469,6 +470,7 @@ function outcomeProblem(
   keys: RecordedKeys | null,
   ts: Date,
   before: readonly Entry[],
+  stagingSource: boolean,
 ): string | OutcomeEntry {
   const parsed = OutcomeEntry.safeParse(value);
   if (!parsed.success) return `is not an outcome entry (${parsed.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ")})`;
@@ -476,11 +478,18 @@ function outcomeProblem(
   const proof = ApprovalProof.safeParse(approvedProofs.get(entry.handle));
   if (!proof.success) return "names no approval that verified earlier in the chain";
   const { snapshot, snapshot_hash: snapshotHash } = proof.data;
-  const problem = entry.basis === "cloud" ? cloudOutcomeProblem(entry, snapshot, snapshotHash, keys, ts) : localOutcomeProblem(entry, snapshot, before);
+  const problem = entry.basis === "cloud" ? cloudOutcomeProblem(entry, snapshot, snapshotHash, keys, ts, stagingSource) : localOutcomeProblem(entry, snapshot, before);
   return problem ?? entry;
 }
 
-function cloudOutcomeProblem(entry: CloudOutcomeEntry, snapshot: ApprovalProof["snapshot"], snapshotHash: string, keys: RecordedKeys | null, ts: Date): string | null {
+function cloudOutcomeProblem(
+  entry: CloudOutcomeEntry,
+  snapshot: ApprovalProof["snapshot"],
+  snapshotHash: string,
+  keys: RecordedKeys | null,
+  ts: Date,
+  stagingSource: boolean,
+): string | null {
   if (entry.statement_jcs === undefined) {
     if (entry.statement_verified || entry.state_shown !== null) return "shows an outcome but holds no outcome statement";
     return null;
@@ -505,7 +514,7 @@ function cloudOutcomeProblem(entry: CloudOutcomeEntry, snapshot: ApprovalProof["
   }
   if (keys === null) return "cannot be checked: no key statement was recorded before it";
   if (keys.keySet === null) return `cannot be checked: the key statement at seq ${String(keys.seq)} did not verify`;
-  const check = verifyOutcomeStatement(statement, { handle: entry.handle, snapshot, snapshotHash }, keys.keySet, ts);
+  const check = verifyOutcomeStatement(statement, { handle: entry.handle, snapshot, snapshotHash }, keys.keySet, ts, { stagingSource });
   if (check.ok && entry.outcome_hash !== sha256Hex(canonicalize(stated))) return "names an outcome hash other than its verified statement's (M1)";
   if (entry.statement_verified !== check.ok) {
     return check.ok ? "says its statement did not verify, but it does" : `says its statement verified, but it does not (${check.refused_by})`;

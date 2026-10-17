@@ -2,14 +2,11 @@
 //
 // - O2: Intent Cloud's word is recorded as Intent Cloud's report, beside the gateway's own binding result over the
 //   values the statement carries. The gateway never upgrades it.
-// - M1: only a verified outcome statement is acted on. An outcome with no statement, a statement that does not verify,
-//   or one whose signature does not hold, shows nothing (`state_shown: null`).
-// - O1, on read: a statement Intent Cloud did sign but that breaks a content rule claims more than it shows. It is
-//   not verified, and the gateway shows only the lesser state its own reading supports: an `ordered` or `mismatch`
-//   whose total or binding result does not hold shows `mismatch` (an order may exist and it does not match what the
-//   buyer approved); one whose source or assurance cannot carry an order shows `reported`. Never `ordered`.
-// - `ordered` is shown only when the statement verified and the gateway's own re-run of the result rule, with its own
-//   total check against the approved snapshot, gives `ok`.
+// - M1: only a verified outcome statement is acted on. An outcome with no statement, or a statement refused by any
+//   rule (its signature, or a content rule it breaks even though Intent Cloud signed it), shows nothing
+//   (`state_shown: null`): the gateway never derives a state of its own from a statement it refused.
+// - O1, on read: `ordered` is shown only when the statement verified and the gateway's own re-run of the result rule,
+//   with its own total check against the approved snapshot, gives `ok`; otherwise nothing is shown.
 import type { Binding, CompletionMode, OutcomeState } from "../contract/index.ts";
 import { bindingResult, type BindingChecks, shipToOptional, totalMatches } from "./binding.ts";
 
@@ -23,12 +20,6 @@ export interface CloudReading {
   readonly local_binding: Binding | null;
 }
 
-/** Refusals of a signed statement that still show an order may exist that does not match: shown `mismatch`. */
-const SHOWN_MISMATCH: ReadonlySet<string> = new Set(["final_total", "binding_result"]);
-/** Refusals of a signed statement whose source or assurance cannot carry an order: shown `reported`. */
-const SHOWN_REPORTED: ReadonlySet<string> = new Set(["assurance", "o1"]);
-const ORDER_STATES: ReadonlySet<string> = new Set(["ordered", "mismatch"]);
-
 const BINDING_KEY = "binding";
 
 /**
@@ -39,16 +30,8 @@ export function readCloudOutcome(outcome: unknown, approvedMinor: number, check:
   const o = record(outcome);
   const state = typeof o.state === "string" ? o.state : "";
   const local = localBinding(o, approvedMinor);
-  if (!check.ok) {
-    if (!check.signed) return { state_shown: null, local_binding: local };
-    if (SHOWN_MISMATCH.has(check.refused_by) && ORDER_STATES.has(state)) return { state_shown: "mismatch", local_binding: local };
-    if (SHOWN_REPORTED.has(check.refused_by) && (ORDER_STATES.has(state) || state === "reported")) return { state_shown: "reported", local_binding: local };
-    return { state_shown: null, local_binding: local };
-  }
-  if (state === "ordered") {
-    if (local?.result === "ok") return { state_shown: "ordered", local_binding: local };
-    return { state_shown: local?.result === "mismatch" ? "mismatch" : "reported", local_binding: local };
-  }
+  if (!check.ok) return { state_shown: null, local_binding: local };
+  if (state === "ordered" && local?.result !== "ok") return { state_shown: null, local_binding: local };
   return { state_shown: state as OutcomeState, local_binding: local };
 }
 

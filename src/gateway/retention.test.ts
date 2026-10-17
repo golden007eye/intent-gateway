@@ -21,6 +21,20 @@ const observed = (state: string, outcome?: string, ts = T0): [EntryKind, unknown
   { endpoint: "getApproval", approval_handle: HANDLE, state, ...(outcome === undefined ? {} : { outcome_state: outcome }) },
   ts,
 ];
+/** A Cloud `outcome` entry (ADR-0015): what the gateway showed, and whether the statement verified. */
+const outcomeEntry = (stateShown: string | null, verified: boolean, ts = T0): [EntryKind, unknown, number] => [
+  "outcome",
+  {
+    handle: HANDLE,
+    basis: "cloud",
+    outcome_hash: "a".repeat(64),
+    cloud: { state: stateShown ?? "ordered", source: "merchant_api", assurance: "verified" },
+    statement_verified: verified,
+    ...(verified ? {} : { refused_by: "cloud_signature" }),
+    state_shown: stateShown,
+  },
+  ts,
+];
 const reportOf = (state: string, seqTs = T0): [EntryKind, unknown, number] => [
   "disclosure",
   { endpoint: "reportOutcome", path: `/v1/approvals/${HANDLE}/outcome-reports`, body_b64: Buffer.from(JSON.stringify({ state })).toString("base64") },
@@ -54,17 +68,22 @@ describe("completer key retention", () => {
     expect(gone(chain, EXPIRES + READ_WINDOW_MS)).toBe(true);
   });
 
-  it.each(["ordered", "checkout_expired", "mismatch"])("a hand-off purchase: gone once Intent Cloud reports %s", (outcome) => {
-    const chain = chainOf(pending(), approval, observed(outcome === "ordered" ? "ordered" : "handed_off", outcome, T0 + 60_000));
+  it.each(["ordered", "checkout_expired", "mismatch"])("a hand-off purchase: gone once a verified statement showed %s", (outcome) => {
+    const chain = chainOf(pending(), approval, outcomeEntry(outcome, true, T0 + 60_000));
     expect(gone(chain, T0 + 60_000)).toBe(true);
   });
 
-  it.each([
-    ["ordered under state approved", "approved", "ordered"],
-    ["checkout_expired under state ordered", "ordered", "checkout_expired"],
-    ["mismatch under state approved", "approved", "mismatch"],
-  ])("attack: an inconsistent status (%s) does not delete a hand-off key early", (_name, state, outcome) => {
-    const chain = chainOf(pending(), approval, observed(state, outcome, T0 + 60_000));
+  it("a verified non-terminal outcome (handed_off) keeps the key", () => {
+    expect(gone(chainOf(pending(), approval, outcomeEntry("handed_off", true)), T0 + 60_000)).toBe(false);
+  });
+
+  it.each(["ordered", "checkout_expired", "mismatch"])("attack: a forged terminal %s (status observed, or statement not verified) does not delete a hand-off key early", (outcome) => {
+    const chain = chainOf(
+      pending(),
+      approval,
+      observed(outcome === "ordered" ? "ordered" : "handed_off", outcome, T0 + 60_000),
+      outcomeEntry(null, false, T0 + 60_000),
+    );
     expect(gone(chain, T0 + 60_000)).toBe(false);
     expect(gone(chain, EXPIRES + READ_WINDOW_MS)).toBe(true);
   });
