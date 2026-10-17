@@ -20,11 +20,14 @@ import { demoTrustKeys } from "../demo/index.ts";
 import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
 import { leaseNotice, slowCloudNotice } from "./waiting.ts";
 
-type Level = "ok" | "warn" | "fail";
+export type Level = "ok" | "warn" | "fail";
 interface Finding {
   level: Level;
   text: string;
 }
+
+/** The label each report line starts with. */
+export const LABELS: Readonly<Record<Level, string>> = { ok: "ok  ", warn: "WARN", fail: "FAIL" };
 
 const DAY_MS = 86_400_000;
 const EXPIRY_WARNING_DAYS = 14;
@@ -34,7 +37,7 @@ export async function doctor(io: Io, config: Config): Promise<number> {
   const findings: Finding[] = [];
   const report = (level: Level, text: string): void => {
     findings.push({ level, text });
-    line(io.stdout, `${{ ok: "ok  ", warn: "WARN", fail: "FAIL" }[level]}  ${printable(text)}`);
+    line(io.stdout, `${LABELS[level]}  ${printable(text)}`);
   };
 
   line(io.stdout, `intent doctor: data dir ${config.dataDir}`);
@@ -71,14 +74,14 @@ export async function doctor(io: Io, config: Config): Promise<number> {
   return failed === 0 ? 0 : 1;
 }
 
-type Report = (level: Level, text: string) => void;
+export type Report = (level: Level, text: string) => void;
 
 function checkNode(version: string, report: Report): void {
   if (nodeSupported(version)) report("ok", `node: ${version}`);
   else report("warn", `node: ${version} is not supported; the gateway needs ${SUPPORTED_NODE}. Install Node 24 LTS (for example nvm install 24) and run it again`);
 }
 
-async function checkDataDir(dataDir: string, report: Report): Promise<void> {
+export async function checkDataDir(dataDir: string, report: Report): Promise<void> {
   let info;
   try {
     info = await lstat(dataDir);
@@ -107,7 +110,7 @@ async function checkDataDir(dataDir: string, report: Report): Promise<void> {
   report("ok", `data dir: yours, mode ${mode}`);
 }
 
-async function checkPolicy(policyPath: string, report: Report): Promise<void> {
+export async function checkPolicy(policyPath: string, report: Report): Promise<void> {
   try {
     const active = await activePolicy(policyPath);
     if (active.bundled !== null) {
@@ -126,7 +129,7 @@ async function checkPolicy(policyPath: string, report: Report): Promise<void> {
 }
 
 /** Reports on the chain and returns its mode, or null when it could not be read or does not link. */
-function checkChain(dataDir: string, report: Report): ReturnType<typeof chainMode> | null {
+export function checkChain(dataDir: string, report: Report): ReturnType<typeof chainMode> | null {
   let items: unknown[];
   try {
     items = readLog(dataDir);

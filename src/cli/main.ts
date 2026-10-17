@@ -14,7 +14,8 @@ import { logCommand } from "./log.ts";
 import { logFlags } from "./log-flags.ts";
 import { policyAdd, policyShow, policyTest } from "./policy.ts";
 import { serve } from "./serve.ts";
-import { walletStatus, walletUnlink } from "./wallet.ts";
+import { init } from "./init.ts";
+import { walletLink, walletStatus, walletUnlink } from "./wallet.ts";
 import type { Demo } from "../demo/index.ts";
 import { activePolicy, cliConfig, PACKAGE_ROOT, startDemoFor, trustedKeys } from "./setup.ts";
 import { printable, printableLines } from "../ui/index.ts";
@@ -50,17 +51,19 @@ const COMMANDS: Readonly<Record<string, Options>> = {
   },
   panel: { port: { type: "string" } },
   doctor: {},
+  init: { yes: { type: "boolean", short: "y" } },
   "policy test": { policy: { type: "string" } },
   "policy add": { commit: { type: "string" }, yes: { type: "boolean", short: "y" } },
   "policy show": {},
   "approver list": {},
   "approver accept": {},
   "wallet status": {},
+  "wallet link": {},
   "wallet unlink": {},
 };
 
 /** How many positional arguments follow the command words. */
-const ARGUMENTS: Readonly<Record<string, readonly string[]>> = { "policy test": ["<cases.yaml>"], "policy add": ["<name>"], "wallet unlink": ["<rail>"] };
+const ARGUMENTS: Readonly<Record<string, readonly string[]>> = { "policy test": ["<cases.yaml>"], "policy add": ["<name>"], "wallet link": ["<rail>"], "wallet unlink": ["<rail>"] };
 
 /** The commands that take a subcommand word: `policy show`, `approver list`, `wallet status`. */
 const GROUPS: ReadonlySet<string> = new Set(["policy", "approver", "wallet"]);
@@ -198,6 +201,8 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
     }
     case "doctor":
       return { code: await doctor(io, config) };
+    case "init":
+      return { code: await init(io, config, { yes: values.yes === true }) };
     case "policy test":
       return { code: await policyTest(io, config, arg(0), str("policy")) };
     case "policy add":
@@ -210,6 +215,8 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
       return { code: await approverAccept(io, config.dataDir) };
     case "wallet status":
       return { code: await walletStatus(io, config) };
+    case "wallet link":
+      return { code: await walletLink(io, config, arg(0)) };
     case "wallet unlink":
       return { code: await walletUnlink(io, config, arg(0)) };
     default:

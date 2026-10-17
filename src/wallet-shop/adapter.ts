@@ -64,6 +64,13 @@ export function parseShopCredentials(text: string): ShopCredentials | null {
  */
 export const SHOP_SECRET_PATHS: readonly string[] = ["params.arguments.checkout.payment.instruments[0].credential", "params.arguments.id"];
 
+/**
+ * Body paths of a request to Shop's account server whose values are digested in the log: the device code (token
+ * requests), a refresh token and the token being revoked. privacy's secret keys already cover each one; they are
+ * named here too, so the account server's credentials stay digested whatever privacy's list becomes.
+ */
+export const SHOP_ACCOUNTS_SECRET_PATHS: readonly string[] = ["device_code", "refresh_token", "token"];
+
 export interface ShopAdapterOptions {
   readonly mcp: ShopCaller;
   readonly accounts: ShopCaller;

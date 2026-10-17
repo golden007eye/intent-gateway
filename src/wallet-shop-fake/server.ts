@@ -1,4 +1,5 @@
-// The fake Shop: Shop's MCP server and its account server's revocation, on 127.0.0.1 (plan G7a). It plays Shop as
+// The fake Shop: Shop's MCP server and its account server (the OAuth device flow and revocation), on 127.0.0.1
+// (plans G7a, G8). It plays Shop as
 // its public tool schemas and the S1 kit describe it, including what makes Shop hard to hold safely:
 // - MCP 2026-07-28, stateless: `initialize` is refused; each request must carry `Mcp-Method` (equal to the body's
 //   method), `Mcp-Protocol-Version` and `params._meta` naming the protocol version, and `Mcp-Name` for a tool call.
@@ -59,6 +60,25 @@ export interface FakeShopFaults {
   addressId?: string;
   /** The `?key=` credential in every checkout id (random by default). */
   checkoutKey?: string;
+  /**
+   * The token endpoint's answers to device-code polls, in order (the last one repeats): `ok` issues the tokens, the
+   * others are RFC 8628 errors. ["ok"] by default.
+   */
+  deviceAnswers?: readonly DeviceAnswer[];
+  /** The device authorization's `interval` (seconds; 5 by default) and `expires_in` (600 by default). */
+  deviceInterval?: number;
+  deviceExpiresIn?: number;
+  /** The token answer carries no refresh token (Shop documents none for a public client). */
+  noRefreshToken?: boolean;
+}
+
+export type DeviceAnswer = "ok" | "authorization_pending" | "slow_down" | "expired_token" | "access_denied";
+
+/** One request to the account server's device flow, as received. */
+export interface FakeOAuthRequest {
+  readonly path: "/oauth/device" | "/oauth/token";
+  readonly form: Readonly<Record<string, string>>;
+  readonly contentType: string;
 }
 
 export interface FakeShopCall {
@@ -80,12 +100,17 @@ export interface FakeShop {
   readonly mcpUrl: string;
   /** Shop's account server URL (INTENT_SHOP_AUTH_URL). */
   readonly authUrl: string;
+  /** The latest grant's tokens: one pair at start, and a new pair for each device-flow grant. */
   readonly accessToken: string;
   readonly refreshToken: string;
   /** The Shop Pay token inside the offered payment instrument. */
   readonly instrumentToken: string;
   readonly clientId: string;
+  /** The device code and user code of the device flow (fixed per fake). */
+  readonly deviceCode: string;
+  readonly userCode: string;
   faults: FakeShopFaults;
+  readonly oauthRequests: FakeOAuthRequest[];
   readonly calls: FakeShopCall[];
   readonly revocations: FakeRevocation[];
   readonly protocolErrors: string[];
@@ -120,9 +145,20 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function startFakeShop(options: { faults?: FakeShopFaults; clientId?: string } = {}): Promise<FakeShop> {
   const token = (prefix: string) => `${prefix}_${randomBytes(18).toString("base64url")}`;
-  const accessToken = token("shpat_fake_access");
-  const refreshToken = token("shprt_fake_refresh");
+  // Each grant is a token pair; revoking either token ends its grant only (Shop's connection removal).
+  const grants: { access: string; refresh: string }[] = [];
+  const grant = () => {
+    const pair = { access: token("shpat_fake_access"), refresh: token("shprt_fake_refresh") };
+    grants.push(pair);
+    return pair;
+  };
+  grant();
+  const current = () => grants[grants.length - 1] as { access: string; refresh: string };
   const instrumentToken = token("spt_fake_instrument");
+  const deviceCode = token("fake_device_code");
+  const userCode = "WDJB-MJHT";
+  const oauthRequests: FakeOAuthRequest[] = [];
+  let polls = 0;
   const revoked = new Set<string>();
   const checkouts = new Map<string, Checkout>();
   const byKey = new Map<string, unknown>();
@@ -135,11 +171,18 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
   const shop: FakeShop = {
     mcpUrl: "",
     authUrl: "",
-    accessToken,
-    refreshToken,
+    get accessToken() {
+      return current().access;
+    },
+    get refreshToken() {
+      return current().refresh;
+    },
     instrumentToken,
     clientId: options.clientId ?? "fake-shop-client",
+    deviceCode,
+    userCode,
     faults: { ...options.faults },
+    oauthRequests,
     calls,
     revocations,
     protocolErrors,
@@ -308,11 +351,55 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       revocations.push({ token: form.get("token") ?? "", tokenTypeHint: form.get("token_type_hint"), clientId: form.get("client_id"), contentType: headers["content-type"] ?? "" });
       const status = shop.faults.revokeStatus ?? 200;
       if (status === 200) {
-        // Revoking either token ends the grant, as Shop's connection removal does.
-        revoked.add(accessToken);
-        revoked.add(refreshToken);
+        // Revoking either token ends its grant, as Shop's connection removal does.
+        const ended = grants.find((g) => g.access === form.get("token") || g.refresh === form.get("token"));
+        if (ended !== undefined) {
+          revoked.add(ended.access);
+          revoked.add(ended.refresh);
+        }
       }
       send(status, status === 200 ? {} : { error: "server_error", error_description: errorText("revocation failed") });
+      return;
+    }
+    if (req.method === "POST" && (req.url === "/oauth/device" || req.url === "/oauth/token")) {
+      const form = Object.fromEntries(new URLSearchParams(text));
+      oauthRequests.push({ path: req.url, form, contentType: headers["content-type"] ?? "" });
+      if (form.client_id !== shop.clientId) {
+        send(401, { error: "invalid_client", error_description: errorText("unknown client") });
+        return;
+      }
+      if (req.url === "/oauth/device") {
+        const base = `http://${headers.host ?? "127.0.0.1"}`;
+        send(200, {
+          device_code: deviceCode,
+          user_code: userCode,
+          verification_uri: `${base}/activate`,
+          verification_uri_complete: `${base}/activate?user_code=${userCode}`,
+          expires_in: shop.faults.deviceExpiresIn ?? 600,
+          interval: shop.faults.deviceInterval ?? 5,
+        });
+        return;
+      }
+      if (form.grant_type !== "urn:ietf:params:oauth:grant-type:device_code" || form.device_code !== deviceCode) {
+        send(400, { error: "invalid_grant" });
+        return;
+      }
+      const answers = shop.faults.deviceAnswers ?? ["ok"];
+      const answer = answers[Math.min(polls++, answers.length - 1)] ?? "ok";
+      if (answer !== "ok") {
+        send(400, { error: answer, error_description: errorText(answer) });
+        return;
+      }
+      const issued = grant();
+      send(200, {
+        access_token: issued.access,
+        token_type: "Bearer",
+        expires_in: 3600,
+        scope: form.scope ?? "openid personal_agent",
+        ...(shop.faults.noRefreshToken === true ? {} : { refresh_token: issued.refresh }),
+        // An id token names the buyer; the gateway must drop it.
+        id_token: `fake.${Buffer.from(JSON.stringify({ email: FAKE_BUYER.email })).toString("base64url")}.sig`,
+      });
       return;
     }
     if (req.method !== "POST" || req.url !== "/mcp") {
@@ -354,7 +441,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       return;
     }
     const bearer = /^Bearer (.+)$/.exec(headers.authorization ?? "")?.[1];
-    if (bearer !== accessToken || revoked.has(bearer)) {
+    if (bearer === undefined || !grants.some((g) => g.access === bearer) || revoked.has(bearer)) {
       send(401, rpcError(body.id, -32001, "invalid token"), { "www-authenticate": 'Bearer error="invalid_token"' });
       return;
     }
