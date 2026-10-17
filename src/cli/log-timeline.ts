@@ -204,6 +204,12 @@ function rawRow(a: Activity, g: Glyphs): Row {
       const state = f.approval_state === undefined || a.outcome !== "acknowledged" ? "" : `${g.arrow} ${says(f.approval_state.replace("_", " "))} ${g.dot} `;
       return { verb: "status", verbTone: tone === "warn" ? "warn" : "bold", values: handle, outcome: state + outcome, outcomeTone: tone };
     }
+    case "outcome": {
+      // Only what was sent and how the edge acknowledged it: nothing about what Intent Cloud did with the report.
+      const handle = f.approval_handle === undefined ? "approval" : `approval ${short(f.approval_handle, g)}`;
+      const [outcome, tone] = delivered();
+      return { verb: "outcome", verbTone: tone === "warn" ? "warn" : "bold", values: `outcome report sent to Intent Cloud${sep}${handle}`, outcome, outcomeTone: tone };
+    }
     case "approval": {
       const parts = [
         ...(f.total_minor === undefined ? [] : [money(f.total_minor)]),

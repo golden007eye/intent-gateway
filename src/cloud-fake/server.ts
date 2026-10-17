@@ -1,33 +1,47 @@
 // The fake Intent Cloud: an HTTP server on 127.0.0.1 that plays both the edge (body cap, request limit, appendix-C
 // signature check, receipts on every response) and the platform behind it (catalog, carts, approvals, proofs).
-// It follows contract/gateway-api.v1.yaml and appendices A–F, and the real platform's observable behaviour where the
+// It follows contract/gateway-api.v1.yaml and appendices A–G, and the real platform's observable behaviour where the
 // contract leaves room (error codes and messages, 404/405, quotas per address key, idempotency, proof issue time),
 // so the fake, demo mode and staging answer alike. The confirm page is driven through `approveWithPasskey` and `reject`.
-import { randomBytes } from "node:crypto";
+//
+// Versions (contract 1.6.0 §V1): a request with `Intent-Contract-Version: 1.6.0` is answered as 1.6.0 (v2 snapshots,
+// the completer key, outcomes, outcome reports); one without the header as 1.5.0, byte for byte, with the 1.5.0 sums.
+// `versions: ["1.5.0"]` makes a host that predates 1.6.0 and ignores the header.
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  type AnySnapshot,
   type ApprovalCreated,
-  type ApprovalProof,
+  type AnyApprovalProof,
+  type ApprovalProofV1,
   type ApprovalState,
   type ApprovalStatus,
   type Cart,
   CartHandle,
+  type CompletionMode,
   type CredentialPublicKey,
   ApprovalHandle,
   CartRequest,
+  CartRequestV1,
+  checkoutRefHash,
   CONTRACT_VERSION,
   type KeyStatement,
   type Offer,
+  type Outcome as CloudOutcome,
+  Outcome as CloudOutcomeSchema,
+  OutcomeReport,
+  type OutcomeState,
   type ReceiptRequest as ReceiptRequestType,
   ReceiptRequest,
   SearchRequest,
   type ShipTo,
-  type Snapshot,
+  type SnapshotV1,
+  type SnapshotV2,
   type WebAuthnAssertion,
 } from "../contract/index.ts";
-import { canonicalize, sha256Hex } from "../jcs/index.ts";
+import { canonicalize, nonIntegerToken, sha256Hex } from "../jcs/index.ts";
 import { contentDigest, createNonceCache, verifyRequest } from "../signing/index.ts";
 import { type CatalogItem, DEFAULT_CATALOG, searchCatalog } from "./catalog.ts";
 import {
@@ -50,6 +64,23 @@ const APPROVAL_TTL = 15 * 60;
 const REPLAY_WINDOW = 10 * 60;
 const PASSKEY_TIER_WINDOW = 86_400;
 const RULE_VERSION = "recheck-v1";
+/** Completer-signed reads end this long after the later of `expires_at` and a terminal outcome (Appendix G R7). */
+const COMPLETER_WINDOW = 48 * 3600;
+
+/** The versions a host can serve; the vendored copy is CONTRACT_VERSION (1.6.0). */
+export type ServedVersion = "1.5.0" | "1.6.0";
+/** The released 1.5.0 `SHA256SUMS` sha256 (contract/SOURCE.md), which a header-less request is answered with. */
+export const SUMS_1_5_0 = "c6fc6ffea8b7cb9053a74e0a3aa340d73d1c2800fcc4c47669707400d06410d2";
+const TERMINAL: ReadonlySet<OutcomeState> = new Set(["ordered", "mismatch", "failed", "checkout_expired"]);
+/** What an `ordered` or `mismatch` report must carry (Appendix G), and what R5 keeps of it under `reported`. */
+const ORDER_KEYS = ["order_ref", "final_total", "binding"] as const;
+const REPORTED_KEYS = ["state", "source", ...ORDER_KEYS] as const;
+
+/** `ApprovalStatus.state` for an outcome (Appendix G, vector o3): 1.6.0 and the 1.5.0 downgrade (null: not served). */
+export function statusState(outcome: OutcomeState, mode: CompletionMode): { "1.6.0": ApprovalState; "1.5.0": ApprovalState | null } {
+  if (outcome === "ordered") return { "1.6.0": "ordered", "1.5.0": mode === "handoff" ? "ordered" : null };
+  return mode === "handoff" ? { "1.6.0": "handed_off", "1.5.0": "handed_off" } : { "1.6.0": "approved", "1.5.0": null };
+}
 
 export interface Quotas {
   /** Edge requests per minute per address key (any endpoint). */
@@ -81,6 +112,10 @@ export interface FakeCloudOptions {
    */
   excludedCategories?: readonly string[];
   quotas?: Partial<Quotas>;
+  /** The contract versions served. Default both; `["1.5.0"]` is a host from before 1.6.0 that ignores the header. */
+  versions?: readonly ServedVersion[];
+  /** Whether `shop_agent` carts are enabled (Intent Cloud's ONE_TAP_GATEWAY_ENABLED). Default false. */
+  oneTap?: boolean;
 }
 
 /** What a confirm-page or merchant action did. `status` is what the confirm page or merchant would answer. */
@@ -99,10 +134,14 @@ export interface ApprovalRecordView {
   /** The `sub` of the passkey account that made the first decision. */
   claimed_by?: string;
   ledger?: { seq: number; entry_hash: string };
-  snapshot: Snapshot;
+  snapshot: AnySnapshot;
   snapshot_hash: string;
   /** The key statement's confirm_origin + approval_link_path. */
   approval_link: string;
+  /** 1.6.0: the outcome once the approval is past `approved`. */
+  outcome?: CloudOutcome;
+  /** 1.6.0: the bodies of the outcome reports accepted (or replayed), in order. */
+  reports: OutcomeReport[];
 }
 
 /** Faults for attack tests. Each stays on until `reset`; an optional path limits a receipt fault to that path. */
@@ -123,6 +162,14 @@ export interface Tamper {
   statementExpired(): void;
   /** Approves the approval with a fresh passkey (a second credential) and returns it. */
   secondCredential(handle: string, sub?: string): { outcome: Outcome; passkey: SoftPasskey };
+  /** 1.6.0 carts carry these values instead of their own (completion_mode, variant_ref, merchant_origin, …). */
+  cart(patch: Partial<Cart>): void;
+  /** 1.6.0 snapshots carry these values instead of their own, with snapshot_hash and check_code computed over them. */
+  snapshot(patch: Partial<SnapshotV2>): void;
+  /** 1.6.0 proofs carry a snapshot with these values, correctly hashed and cloud-signed. */
+  proofSnapshot(patch: Partial<SnapshotV2>): void;
+  /** Outcome reports get this status (and no outcome) instead of being handled; null turns it off. */
+  reportStatus(status: number | null): void;
   reset(): void;
 }
 
@@ -146,8 +193,13 @@ export interface FakeCloud {
   reject(handle: string, passkey: SoftPasskey, override?: Partial<AssertOptions>): Outcome;
   /** The confirm page's hand-off to the merchant: approved → handed_off. */
   handoff(handle: string): Outcome;
-  /** The merchant reports the order: handed_off → ordered. */
+  /** The merchant reports the order: handed_off → ordered (1.6.0: a verified `ordered` outcome, binding ok). */
   order(handle: string): Outcome;
+  /**
+   * 1.6.0: Intent Cloud records this outcome for a hand-off approval that is approved or handed off (a merchant
+   * webhook, a checkout read), observed now; `state` then follows Appendix G's table.
+   */
+  setOutcome(handle: string, outcome: Omit<CloudOutcome, "observed_at">): Outcome;
   inspect(handle: string): ApprovalRecordView | undefined;
   /** The approval handle whose `approval_link_path` is `linkPath` (`/c/…`), for a confirm page; undefined if none. */
   approvalForLink(linkPath: string): string | undefined;
@@ -166,6 +218,9 @@ interface OfferRecord {
 interface CartRecord {
   handle: string;
   owner: string;
+  version: ServedVersion;
+  /** 1.6.0: the completer keyid of the cart request. */
+  completer?: string;
   /** The address key the cart was created from: its approval by passkey raises that key's cart tier. */
   addressKey: string;
   offerHandle: string;
@@ -183,18 +238,27 @@ interface ApprovalRecord {
   handle: string;
   owner: string;
   cart: CartRecord;
-  snapshot: Snapshot;
+  snapshot: AnySnapshot;
   snapshotHash: string;
   continueUrl: string;
   linkPath: string;
   expiresAt: number;
   state: ApprovalState;
-  created: ApprovalCreated;
+  // The 201 body as served: a v1 snapshot for a 1.5.0 cart, v2 for a 1.6.0 one.
+  created: Omit<ApprovalCreated, "snapshot"> & { snapshot: AnySnapshot };
   claimedBy?: string;
   ledger?: { seq: number; entry_hash: string };
   /** The approving passkey's assertion and key; the proof is signed from them at each read. */
   approvedBy?: { assertion: WebAuthnAssertion; credentialPublicKey: CredentialPublicKey };
   orderNumber?: string;
+  /** 1.6.0: the outcome, and when it became terminal (seconds). */
+  outcome?: CloudOutcome;
+  terminalAt?: number;
+  /** 1.6.0: the last reported state (R4) and the accepted completing report's id, which every later report names. */
+  reportedState?: OutcomeReport["state"];
+  completingReportId?: string;
+  /** 1.6.0: accepted outcome reports by report_id: the body's hash and the first answer, which a retry replays. */
+  reports: Map<string, { hash: string; body: OutcomeReport; reply: Reply }>;
 }
 
 interface Reply {
@@ -239,14 +303,24 @@ export function addressKey(address: string): string {
 }
 
 function parseJson(body: Buffer): unknown {
+  const text = body.toString("utf8");
+  // Amendment item 9: a non-integer number token is refused, as JSON.parse would read 1.0 as 1.
+  if (nonIntegerToken(text) !== null) return undefined;
   try {
-    return JSON.parse(body.toString("utf8"));
+    return JSON.parse(text);
   } catch {
     return undefined;
   }
 }
 
-function toOffer(offerHandle: string, item: CatalogItem): Offer {
+/** The item's merchant variant reference: its own, or a stable Shopify-style one derived from it. */
+export function variantRef(item: CatalogItem): string {
+  if (item.variant_ref !== undefined) return item.variant_ref;
+  const digest = createHash("sha256").update(`${item.merchant.domain}\n${item.title}\n${item.variant}`).digest();
+  return `gid://shopify/ProductVariant/${String(digest.readUInt32BE(0))}`;
+}
+
+function toOffer(offerHandle: string, item: CatalogItem, version: ServedVersion): Offer {
   const offer: Offer = {
     offer_handle: offerHandle,
     merchant: item.merchant,
@@ -261,6 +335,7 @@ function toOffer(offerHandle: string, item: CatalogItem): Offer {
   if (item.delivery !== undefined) offer.delivery = item.delivery;
   if (item.rating !== undefined) offer.rating = item.rating;
   if (item.returns !== undefined) offer.returns = item.returns;
+  if (version === "1.6.0") offer.variant_ref = variantRef(item);
   return offer;
 }
 
@@ -270,7 +345,13 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   const now = (): number => Math.floor(clockMs() / 1000);
   const quotas: Quotas = { ...DEFAULT_QUOTAS, ...options.quotas };
   const keys = loadKeys();
-  const sums = sha256Hex(readFileSync(new URL("../../contract/SHA256SUMS", import.meta.url)));
+  const versions: ReadonlySet<ServedVersion> = new Set(options.versions ?? ["1.5.0", "1.6.0"]);
+  const oneTap = options.oneTap ?? false;
+  // The vendored copy is 1.6.0 (CONTRACT_VERSION); 1.5.0 is answered with its released sums.
+  const sums: Record<ServedVersion, string> = {
+    "1.5.0": SUMS_1_5_0,
+    "1.6.0": sha256Hex(readFileSync(new URL("../../contract/SHA256SUMS", import.meta.url))),
+  };
   const statement = makeStatement(keys, now());
   const seenNonce = createNonceCache();
 
@@ -284,6 +365,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   const ledger: { seq: number; entry_hash: string }[] = [];
   let orders = 0;
   let cloudflareStatus: number | null = null;
+  let cartPatch: Partial<Cart> | null = null;
+  let snapshotPatch: Partial<SnapshotV2> | null = null;
+  let proofSnapshotPatch: Partial<SnapshotV2> | null = null;
+  let reportFault: number | null = null;
 
   const catalog = options.catalog ?? DEFAULT_CATALOG;
   const excluded = options.excludedCategories ?? [];
@@ -322,10 +407,11 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   }
 
   /** The proof as a read at `at` serves it: issued at the read, naming the ledger's `approved` entry. */
-  function servedProof(a: ApprovalRecord, approvedBy: NonNullable<ApprovalRecord["approvedBy"]>, at: number): ApprovalProof {
+  function servedProof(a: ApprovalRecord, approvedBy: NonNullable<ApprovalRecord["approvedBy"]>, at: number): AnyApprovalProof {
     const ref = a.ledger;
     if (ref === undefined) throw new Error("an approved approval without a ledger entry");
-    const unsigned: Omit<ApprovalProof, "cloud_signature"> = {
+    // A 1.5.0 approval's proof names its v1 snapshot, a 1.6.0 one its v2 snapshot.
+    const unsigned: Omit<ApprovalProofV1, "cloud_signature" | "snapshot"> & { snapshot: AnySnapshot } = {
       v: 1,
       approval_handle: a.handle,
       snapshot: a.snapshot,
@@ -338,18 +424,23 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     };
     if (faults.has("proofHash")) {
       const changed = { ...unsigned, snapshot_hash: sha256Hex("not the snapshot") };
-      return { ...changed, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(changed)) };
+      return { ...changed, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(changed)) } as AnyApprovalProof;
     }
     if (faults.has("proofUnknownKid")) {
       const changed = { ...unsigned, kid: "cloud-approval-209912" };
-      return { ...changed, cloud_signature: randomKey(changed.kid).sign(APPROVAL_PREFIX + canonicalize(changed)) };
+      return { ...changed, cloud_signature: randomKey(changed.kid).sign(APPROVAL_PREFIX + canonicalize(changed)) } as AnyApprovalProof;
     }
-    return { ...unsigned, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(unsigned)) };
+    if (proofSnapshotPatch !== null && a.snapshot.v === 2) {
+      const snapshot = { ...a.snapshot, ...proofSnapshotPatch };
+      const changed = { ...unsigned, snapshot, snapshot_hash: sha256Hex(canonicalize(snapshot)) };
+      return { ...changed, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(changed)) };
+    }
+    return { ...unsigned, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(unsigned)) } as AnyApprovalProof;
   }
 
   // ---- Platform handlers (behind the edge) -------------------------------------------------------------------
 
-  function search(body: Buffer, at: number): Reply {
+  function search(body: Buffer, version: ServedVersion, at: number): Reply {
     const parsed = SearchRequest.safeParse(parseJson(body));
     if (!parsed.success) return fail(400, "bad_request", "body does not match SearchRequest");
     const found = searchCatalog(catalog, parsed.data, excluded).slice(0, 20);
@@ -359,30 +450,49 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         offers: found.map((item) => {
           const offerHandle = item.offer_handle ?? handle("of");
           if (item.offer_handle === undefined) offers.set(offerHandle, { item, expiresAt: at + OFFER_TTL });
-          return toOffer(offerHandle, item);
+          return toOffer(offerHandle, item, version);
         }),
       },
     };
   }
 
-  function createCart(body: Buffer, keyid: string, ipKey: string, at: number): Reply {
-    const parsed = CartRequest.safeParse(parseJson(body));
+  /** Mode choice (contract 1.6.0 §3): the item's first mode that the caller accepts and the environment enables. */
+  function chooseMode(item: CatalogItem, accepts: readonly CompletionMode[]): CompletionMode | null {
+    for (const mode of item.completion ?? ["handoff"]) {
+      if (accepts.includes(mode) && (mode !== "shop_agent" || oneTap)) return mode;
+    }
+    return null;
+  }
+
+  function createCart(body: Buffer, keyid: string, ipKey: string, version: ServedVersion, at: number): Reply {
+    const json = parseJson(body);
+    const v16 = version === "1.6.0";
+    // 1.6.0 requires the completer key; 1.5.0 has neither 1.6.0 field, and its strict schema refuses them.
+    const parsed = v16 ? CartRequest.safeParse(json) : CartRequestV1.safeParse(json);
     if (!parsed.success) return fail(400, "bad_request", "body does not match CartRequest");
-    const request = parsed.data;
+    const request: Partial<CartRequest> & CartRequestV1 = parsed.data;
+    if (v16 && request.completer_keyid === keyid) return fail(400, "bad_request", "completer_keyid must not be the session key");
     const offer = offers.get(request.offer_handle);
     if (offer === undefined) return UNKNOWN_HANDLE();
     if (offer.expiresAt !== null && at >= offer.expiresAt) return fail(410, "gone", "offer expired");
-    const zip3 = request.ship_to.postal_code.slice(0, 3);
     for (const cart of carts.values()) {
       const same =
         cart.owner === keyid &&
+        cart.version === version &&
+        cart.completer === request.completer_keyid &&
         cart.offerHandle === request.offer_handle &&
         cart.quantity === request.quantity &&
-        cart.shipTo.postal_code.slice(0, 3) === zip3;
+        (v16 ? cart.shipTo.postal_code === request.ship_to.postal_code : cart.shipTo.postal_code.slice(0, 3) === request.ship_to.postal_code.slice(0, 3));
       const live = at - cart.createdAt < REPLAY_WINDOW && at < cart.expiresAt;
       if (same && live && (cart.latest === undefined || cart.latest.state === "pending")) return { status: 201, body: cart.body };
     }
+    // Amendment M5: a completer key names one approval; an earlier approval's key is refused (a replay returned above).
+    if (v16 && [...approvals.values()].some((a) => a.snapshot.v === 2 && a.snapshot.completer_keyid === request.completer_keyid)) {
+      return fail(400, "bad_request", "completer_keyid belongs to an earlier approval");
+    }
     if (request.quantity > offer.item.stock) return fail(409, "conflict", "not enough stock");
+    const mode = v16 ? chooseMode(offer.item, request.completion_accepts ?? ["handoff"]) : "handoff";
+    if (mode === null) return fail(409, "conflict", "no completion mode in common");
     const approvedAt = passkeyApprovedAt.get(ipKey);
     const passkeyTier = approvedAt !== undefined && at - approvedAt < PASSKEY_TIER_WINDOW;
     const retry = take(`carts:${ipKey}`, passkeyTier ? quotas.carts_per_hour_passkey : quotas.carts_per_hour, 3600, at);
@@ -402,9 +512,20 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       expires_at: timestamp(at + CART_TTL),
     };
     if (item.image_url !== undefined) cart.image_url = item.image_url;
+    if (v16) {
+      Object.assign(cart, {
+        completion_mode: mode,
+        merchant_origin: `https://${item.merchant.domain.toLowerCase()}`,
+        variant_ref: variantRef(item),
+        total_estimated: false,
+      });
+      if (cartPatch !== null) Object.assign(cart, cartPatch);
+    }
     carts.set(cartHandle, {
       handle: cartHandle,
       owner: keyid,
+      version,
+      ...(request.completer_keyid === undefined ? {} : { completer: request.completer_keyid }),
       addressKey: ipKey,
       offerHandle: request.offer_handle,
       item,
@@ -434,7 +555,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     const approvalHandle = handle("ap");
     const expiresAt = Math.min(cart.expiresAt, at + APPROVAL_TTL);
     const continueUrl = `https://${cart.item.merchant.domain}/checkout/${cart.handle}`;
-    const snapshot: Snapshot = {
+    const v1: SnapshotV1 = {
       v: 1,
       approval: approvalHandle,
       nonce: randomBytes(16).toString("base64url"),
@@ -450,9 +571,30 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       rule_version: RULE_VERSION,
       expires_at: timestamp(expiresAt),
     };
+    let snapshot: AnySnapshot = v1;
+    if (cart.version === "1.6.0") {
+      const { body } = cart;
+      // The checkout URL's query (`?key=…`) is not part of the hash (amendment L1).
+      const checkoutHash = checkoutRefHash(`gid://shopify/Checkout/${cart.handle}?key=${randomBytes(8).toString("hex")}`);
+      if (body.completion_mode === undefined || body.merchant_origin === undefined || body.variant_ref === undefined || cart.completer === undefined || checkoutHash === null) {
+        throw new Error("a 1.6.0 cart without its 1.6.0 fields");
+      }
+      const v2: SnapshotV2 = {
+        ...v1,
+        v: 2,
+        ship_to: { country: "US", postal_code: cart.shipTo.postal_code },
+        merchant_origin: body.merchant_origin,
+        variant_ref: body.variant_ref,
+        checkout_ref_hash: checkoutHash,
+        completion_mode: body.completion_mode,
+        completer_keyid: cart.completer,
+        total_estimated: body.total_estimated ?? false,
+      };
+      snapshot = snapshotPatch === null ? v2 : { ...v2, ...snapshotPatch };
+    }
     const snapshotHash = sha256Hex(canonicalize(snapshot));
     const linkPath = `/c/${randomBytes(16).toString("base64url")}`;
-    const created: ApprovalCreated = {
+    const created: ApprovalRecord["created"] = {
       approval_handle: approvalHandle,
       approval_link_path: linkPath,
       snapshot,
@@ -472,6 +614,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       expiresAt,
       state: "pending",
       created,
+      reports: new Map(),
     };
     approvals.set(approvalHandle, record);
     cart.latest = record;
@@ -479,20 +622,98 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return { status: 201, body: created };
   }
 
-  function getApproval(param: string, keyid: string, at: number): Reply {
+  /**
+   * Who may read or report an approval (Appendix G R1/R7): the session that created its cart, or, in 1.6.0, the
+   * snapshot's completer key until 48 h after the later of `expires_at` and a terminal outcome.
+   */
+  function mayUse(a: ApprovalRecord, keyid: string, version: ServedVersion, at: number): boolean {
+    if (a.owner === keyid) return true;
+    if (version !== "1.6.0" || a.snapshot.v !== 2 || a.snapshot.completer_keyid !== keyid) return false;
+    return at < Math.max(a.expiresAt, a.terminalAt ?? 0) + COMPLETER_WINDOW;
+  }
+
+  const modeOf = (a: ApprovalRecord): CompletionMode => (a.snapshot.v === 2 ? a.snapshot.completion_mode : "handoff");
+
+  function getApproval(param: string, keyid: string, version: ServedVersion, at: number): Reply {
     if (!ApprovalHandle.safeParse(param).success) return fail(400, "bad_request", "malformed approval handle");
     const a = approvals.get(param);
-    if (a?.owner !== keyid) return UNKNOWN_HANDLE();
+    if (a === undefined || !mayUse(a, keyid, version, at)) return UNKNOWN_HANDLE();
+    // R8: an approval created by a 1.6.0 request is read only with the 1.6.0 header.
+    if (version !== "1.6.0" && a.snapshot.v === 2) return UNKNOWN_HANDLE();
     refresh(a, at);
-    const status: ApprovalStatus = {
-      state: a.state,
+    let state = a.state;
+    if (a.outcome !== undefined) {
+      const mapped = statusState(a.outcome.state, modeOf(a))[version];
+      if (mapped === null) return UNKNOWN_HANDLE();
+      state = mapped;
+    }
+    // A 1.5.0 approval's proof carries its v1 snapshot, which the 1.6.0 ApprovalStatus schema does not allow.
+    const status: Omit<ApprovalStatus, "proof"> & { proof?: AnyApprovalProof } = {
+      state,
       display: { merchant: a.snapshot.merchant.name, title: a.snapshot.item.title, total: a.snapshot.total },
     };
     if (a.cart.body.image_url !== undefined) status.display.image_url = a.cart.body.image_url;
     if (a.orderNumber !== undefined) status.order_number = a.orderNumber;
-    const withProof = a.state === "approved" || a.state === "handed_off" || a.state === "ordered";
+    const withProof = state === "approved" || state === "handed_off" || state === "ordered";
     if (withProof && a.approvedBy !== undefined) status.proof = servedProof(a, a.approvedBy, at);
+    if (version === "1.6.0" && a.outcome !== undefined) status.outcome = a.outcome;
     return { status: 200, body: status };
+  }
+
+  /**
+   * How Intent Cloud stores a gateway's report (Appendix G R5): source gateway_report, reported assurance, and what the
+   * gateway said under `reported`; an ordered or mismatch report is stored as `reported`, the others in their state.
+   */
+  function storedOutcome(report: OutcomeReport): CloudOutcome {
+    // Copied by key name: src/ lint forbids reading a property named like `process.binding`.
+    const reported = Object.fromEntries(REPORTED_KEYS.filter((k) => report[k] !== undefined).map((k) => [k, report[k]])) as NonNullable<CloudOutcome["reported"]>;
+    const state = report.state === "ordered" || report.state === "mismatch" ? "reported" : report.state;
+    return { state, source: "gateway_report", assurance: "reported", observed_at: report.observed_at, reported };
+  }
+
+  /** R4's transitions of the reported state; `approved` is before any report. Terminal states allow nothing. */
+  const NEXT: Readonly<Record<string, readonly string[]>> = {
+    approved: ["completing"],
+    completing: ["indeterminate", "ordered", "mismatch", "failed"],
+    indeterminate: ["ordered", "mismatch", "failed"],
+  };
+
+  /** `POST /v1/approvals/{h}/outcome-reports` (Appendix G R1–R7). */
+  function reportOutcome(param: string, body: Buffer, keyid: string, version: ServedVersion, at: number): Reply {
+    if (version !== "1.6.0") return fail(404, "not_found", "not found");
+    if (!ApprovalHandle.safeParse(param).success) return fail(400, "bad_request", "malformed approval handle");
+    const a = approvals.get(param);
+    if (a === undefined || a.snapshot.v !== 2) return UNKNOWN_HANDLE();
+    // R1 first: any key but the cart's session or the completer gets 404, like an unknown handle; then R0.
+    if (!mayUse(a, keyid, version, at)) return UNKNOWN_HANDLE();
+    if (modeOf(a) !== "shop_agent") return fail(409, "conflict", "not a shop_agent approval");
+    if (reportFault !== null) return fail(reportFault, "bad_request", "fake cloud error");
+    const parsed = OutcomeReport.safeParse(parseJson(body));
+    if (!parsed.success) return fail(400, "bad_request", "body does not match OutcomeReport");
+    // The schema holds the field rules (checkout_ref_hash, completing_report_id, the order fields, gateway_precheck).
+    const report = parsed.data;
+    // R2: the body hash is hex(SHA-256(JCS(body))); a retry resends the same bytes and gets the first answer.
+    const hash = sha256Hex(canonicalize(report));
+    const prior = a.reports.get(report.report_id);
+    if (prior !== undefined) return prior.hash === hash ? prior.reply : fail(409, "conflict", "report_id reused with another body");
+    refresh(a, at);
+    const current = a.reportedState ?? "approved";
+    if (report.state === "completing") {
+      if (current !== "approved") return fail(409, "conflict", "the approval is already completing");
+      if (a.state !== "approved" || at >= a.expiresAt) return fail(410, "gone", "the approval is not approved, or has expired");
+    } else if (report.completing_report_id !== a.completingReportId) {
+      return fail(409, "conflict", "completing_report_id is not the accepted completing report");
+    }
+    if (!(NEXT[current] ?? []).includes(report.state)) return fail(409, "conflict", `no ${report.state} report after ${current}`);
+    const outcome = storedOutcome(report);
+    a.outcome = outcome;
+    a.reportedState = report.state;
+    if (report.state === "completing") a.completingReportId = report.report_id;
+    // Terminal is judged on the reported state (R4).
+    if (report.state === "ordered" || report.state === "mismatch" || report.state === "failed") a.terminalAt = at;
+    const reply: Reply = { status: 201, body: { accepted: true, outcome } };
+    a.reports.set(report.report_id, { hash, body: report, reply });
+    return reply;
   }
 
   // ---- The edge -------------------------------------------------------------------------------------------------
@@ -506,12 +727,25 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     [/^\/v1\/carts$/, "POST"],
     [/^\/v1\/carts\/[^/]+\/approvals$/, "POST"],
     [/^\/v1\/approvals\/[^/]+$/, "GET"],
+    [/^\/v1\/approvals\/[^/]+\/outcome-reports$/, "POST"],
   ];
 
-  function route(method: string, path: string, body: Buffer, req: IncomingMessage, ipKey: string, at: number): Reply {
+  /**
+   * The version a request is answered in (1.6.0 §V1): the header's when this host serves 1.6.0, 1.5.0 without it;
+   * null for a value this host does not serve. A host from before 1.6.0 ignores the header.
+   */
+  function negotiate(req: IncomingMessage): ServedVersion | null {
+    if (!versions.has("1.6.0")) return "1.5.0";
+    const raw = req.headers["intent-contract-version"];
+    if (raw === undefined) return versions.has("1.5.0") ? "1.5.0" : null;
+    return raw === "1.6.0" || (raw === "1.5.0" && versions.has("1.5.0")) ? raw : null;
+  }
+
+  function route(method: string, path: string, body: Buffer, req: IncomingMessage, ipKey: string, version: ServedVersion | null, at: number): Reply {
     if (body.length > MAX_BODY_BYTES) return fail(413, "too_large", "body over 16 KiB");
     const retry = take(`requests:${ipKey}`, quotas.requests_per_minute, 60, at);
     if (retry !== null) return limited("requests", retry);
+    if (version === null) return fail(400, "bad_request", "unsupported contract version");
 
     const endpoint = ENDPOINT_METHODS.find(([pattern]) => pattern.test(path));
     if (endpoint === undefined) return fail(404, "not_found", "not found");
@@ -534,13 +768,15 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         carts_per_hour_passkey: Math.max(1, quotas.carts_per_hour_passkey),
         approvals_per_day: Math.max(1, quotas.approvals_per_day),
       };
-      return { status: 200, body: { contract_version: CONTRACT_VERSION, contract_sums_sha256: sums, rule_versions: [RULE_VERSION], limits } };
+      return { status: 200, body: { contract_version: version, contract_sums_sha256: sums[version], rule_versions: [RULE_VERSION], limits } };
     }
-    if (path === "/v1/catalog/search") return search(body, at);
-    if (path === "/v1/carts") return createCart(body, keyid, ipKey, at);
+    if (path === "/v1/catalog/search") return search(body, version, at);
+    if (path === "/v1/carts") return createCart(body, keyid, ipKey, version, at);
     const cartApprovals = /^\/v1\/carts\/([^/]+)\/approvals$/.exec(path);
     if (cartApprovals !== null) return createApproval(cartApprovals[1] ?? "", keyid, ipKey, at);
-    return getApproval(/^\/v1\/approvals\/([^/]+)$/.exec(path)?.[1] ?? "", keyid, at);
+    const reports = /^\/v1\/approvals\/([^/]+)\/outcome-reports$/.exec(path);
+    if (reports !== null) return reportOutcome(reports[1] ?? "", body, keyid, version, at);
+    return getApproval(/^\/v1\/approvals\/([^/]+)$/.exec(path)?.[1] ?? "", keyid, version, at);
   }
 
   function receiptHeaders(method: string, path: string, body: Buffer, req: IncomingMessage, status: number, at: number): Record<string, string> {
@@ -574,9 +810,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     const method = req.method ?? "GET";
     const path = (req.url ?? "/").split(/[?#]/)[0] ?? "/";
     const ipKey = addressKey(req.socket.remoteAddress ?? "unknown");
+    const version = negotiate(req);
     let reply: Reply;
     try {
-      reply = route(method, path, body, req, ipKey, at);
+      reply = route(method, path, body, req, ipKey, version, at);
     } catch {
       reply = fail(500, "bad_request", "fake cloud error");
     }
@@ -584,7 +821,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     const headers: Record<string, string> = {
       "content-type": "application/json",
       "content-length": String(bytes.length),
-      "intent-contract-version": CONTRACT_VERSION,
+      // An unsupported request version is answered in the newest version this host serves.
+      "intent-contract-version": version ?? CONTRACT_VERSION,
       ...reply.headers,
     };
     const drop = reply.status >= 200 && reply.status < 300 && faultOn("dropReceipt", path);
@@ -665,12 +903,15 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       const a = approvals.get(h);
       if (a === undefined) return { status: 404, reason: "unknown approval" };
       if (a.state !== "approved") return { status: 409, state: a.state, reason: `cannot hand off when ${a.state}` };
+      if (modeOf(a) !== "handoff") return { status: 409, state: a.state, reason: "the approval's completion mode is not handoff" };
       // Appendix A hand-off invariant: redirect only to a URL whose hash is in the snapshot.
       if (`sha256:${sha256Hex(a.continueUrl)}` !== a.snapshot.continue_url_hash) {
         a.state = "expired";
         return { status: 409, state: a.state, reason: "continue_url does not match the snapshot" };
       }
       a.state = "handed_off";
+      // The confirm page's redirect is Intent Cloud's own unsigned event: `reported` at most (Appendix G sources).
+      if (a.snapshot.v === 2) a.outcome = { state: "handed_off", source: "checkout_page", assurance: "reported", observed_at: timestamp(now()) };
       return { status: 200, state: a.state, continueUrl: a.continueUrl };
     },
     order(h) {
@@ -680,7 +921,36 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       orders += 1;
       a.orderNumber = `ORD-${String(100000 + orders)}`;
       a.state = "ordered";
+      if (a.snapshot.v === 2) {
+        const at = now();
+        a.outcome = {
+          state: "ordered",
+          source: "signed_webhook",
+          assurance: "verified",
+          order_ref: a.orderNumber,
+          final_total: a.snapshot.total,
+          binding: {
+            rule_version: "binding-v1",
+            result: "ok",
+            checks: { merchant_origin: "match", checkout_ref: "match", line: "match", ship_to: "match", total: "match" },
+          },
+          observed_at: timestamp(at),
+        };
+        a.terminalAt = at;
+      }
       return { status: 200, state: a.state, orderNumber: a.orderNumber };
+    },
+    setOutcome(h, outcome) {
+      const a = approvals.get(h);
+      if (a === undefined) return { status: 404, reason: "unknown approval" };
+      if (a.snapshot.v !== 2) return { status: 409, state: a.state, reason: "a 1.5.0 approval has no outcome" };
+      if (a.state !== "approved" && a.state !== "handed_off") return { status: 409, state: a.state, reason: `no outcome when ${a.state}` };
+      if (a.terminalAt !== undefined) return { status: 409, state: a.state, reason: "the outcome is final" };
+      const at = now();
+      // Parsed, so a test cannot make the fake serve an outcome the 1.6.0 schema refuses (fields, O1, assurance caps).
+      a.outcome = CloudOutcomeSchema.parse({ ...outcome, observed_at: timestamp(at) });
+      if (TERMINAL.has(outcome.state)) a.terminalAt = at;
+      return { status: 200, state: statusState(outcome.state, modeOf(a))["1.6.0"] };
     },
     inspect(h) {
       const a = approvals.get(h);
@@ -691,9 +961,11 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         snapshot: a.snapshot,
         snapshot_hash: a.snapshotHash,
         approval_link: CONFIRM_ORIGIN + a.linkPath,
+        reports: [...a.reports.values()].map((r) => r.body),
       };
       if (a.claimedBy !== undefined) view.claimed_by = a.claimedBy;
       if (a.ledger !== undefined) view.ledger = a.ledger;
+      if (a.outcome !== undefined) view.outcome = a.outcome;
       return view;
     },
     approvalForLink(linkPath) {
@@ -723,8 +995,24 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         const passkey = new SoftPasskey(sub === undefined ? {} : { sub });
         return { outcome: decide(h, passkey, "approve"), passkey };
       },
+      cart(patch) {
+        cartPatch = patch;
+      },
+      snapshot(patch) {
+        snapshotPatch = patch;
+      },
+      proofSnapshot(patch) {
+        proofSnapshotPatch = patch;
+      },
+      reportStatus(status) {
+        reportFault = status;
+      },
       reset() {
         faults.clear();
+        cartPatch = null;
+        snapshotPatch = null;
+        proofSnapshotPatch = null;
+        reportFault = null;
       },
     },
     close: () =>

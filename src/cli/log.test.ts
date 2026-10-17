@@ -212,7 +212,7 @@ describe("intent log filters", () => {
 
   it.each([
     [["--since", "yesterday"], /^intent: --since takes a duration \(30m, 2h, 7d\) or a date .+, not "yesterday"; run intent --help\n$/],
-    [["--action", "buy"], /^intent: --action takes one or more of start, keys, search, cart, status, approval, blocked, pin, flagged, wallet, call \(comma-separated\), not "buy"; run intent --help\n$/],
+    [["--action", "buy"], /^intent: --action takes one or more of start, keys, search, cart, status, outcome, approval, blocked, pin, flagged, wallet, call \(comma-separated\), not "buy"; run intent --help\n$/],
     [["--last", "0"], /^intent: --last takes a whole number of actions \(1 or more\), not "0"; run intent --help\n$/],
     [["--last"], /^intent: option --last for log needs a value; run intent --help\n$/],
   ])("refuses %j with one line and exit 2", async (args, message) => {

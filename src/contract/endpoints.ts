@@ -12,13 +12,18 @@ import {
   Jwks,
   KeyStatement,
   Meta,
+  OutcomeReport,
+  OutcomeReportAccepted,
   RateLimited,
   SearchRequest,
   SearchResponse,
 } from "./schemas.ts";
 
-/** The contract version this module implements; the spec's `info.version` and `Intent-Contract-Version`. */
-export const CONTRACT_VERSION = "1.5.0";
+/**
+ * The contract version this module implements: the spec's `info.version`, sent as `Intent-Contract-Version` on every
+ * request (a request without it is answered as 1.5.0), and the version Intent Cloud must report back.
+ */
+export const CONTRACT_VERSION = "1.6.0";
 
 export interface Endpoint {
   readonly method: "GET" | "POST";
@@ -36,8 +41,8 @@ export interface Endpoint {
 }
 
 /**
- * The six endpoints a `gw-` session key may call (plan §3.1, key scoping) and `GET /v1/key-statement`, keyed by
- * the spec's operationId.
+ * The endpoints a `gw-` key may call (plan §3.1, key scoping; `reportOutcome` from 1.6.0) and
+ * `GET /v1/key-statement`, keyed by the spec's operationId.
  */
 export const ENDPOINTS = {
   getMeta: { method: "GET", path: "/v1/meta", signed: true, request: null, status: 200, response: Meta, errors: [400, 401, 413, 429] },
@@ -87,6 +92,15 @@ export const ENDPOINTS = {
     response: ApprovalStatus,
     errors: [400, 401, 404, 413, 429],
   },
+  reportOutcome: {
+    method: "POST",
+    path: "/v1/approvals/{approval_handle}/outcome-reports",
+    signed: true,
+    request: OutcomeReport,
+    status: 201,
+    response: OutcomeReportAccepted,
+    errors: [400, 401, 404, 409, 410, 413, 429],
+  },
 } as const satisfies Record<string, Endpoint>;
 export type OperationId = keyof typeof ENDPOINTS;
 
@@ -103,6 +117,11 @@ export function approvalsPath(cartHandle: string): string {
 /** `getApproval`'s path. Throws on a malformed handle. */
 export function approvalPath(approvalHandle: string): string {
   return `/v1/approvals/${ApprovalHandle.parse(approvalHandle)}`;
+}
+
+/** `reportOutcome`'s path. Throws on a malformed handle. */
+export function outcomeReportsPath(approvalHandle: string): string {
+  return `${approvalPath(approvalHandle)}/outcome-reports`;
 }
 
 /**

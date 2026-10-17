@@ -1,11 +1,14 @@
 // Contract suite, flows (G23, AC-R1, AC-A1): search → cart → approval with the adapter and a session key, each
 // response parsed with the src/contract schemas and carrying a receipt that verifies. On the fake the buyer then
 // approves with a software passkey and the proof verifies with src/trust; staging has no phone, so that step is
-// fake-only. Runs against TARGET (see target.ts).
+// fake-only. Every request carries `Intent-Contract-Version: 1.6.0` (the adapter sends it), so the flow is 1.6.0:
+// a completer key in the cart request, snapshot v2, and the completer key reading the approval. Runs against TARGET
+// (see target.ts).
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SoftPasskey } from "../../src/cloud-fake/index.ts";
-import { ApprovalCreated, ApprovalStatus, Cart, type CartRequest, SearchResponse } from "../../src/contract/index.ts";
+import { ApprovalCreated, ApprovalStatus, Cart, type CartRequest, SearchResponse, SnapshotV2 } from "../../src/contract/index.ts";
 import { canonicalize, sha256Hex } from "../../src/jcs/index.ts";
+import { createSession } from "../../src/signing/index.ts";
 import { approverFingerprint, type KeySet, verifyApprovalProof } from "../../src/trust/index.ts";
 import { closeTargets, IS_FAKE, openTarget, receiptProblem, TARGET, type Target, trustedKeySet } from "./target.ts";
 
@@ -36,12 +39,16 @@ async function pendingApproval() {
   const offer = offers[0];
   if (offer === undefined) throw new Error("no offer");
 
-  const request: CartRequest = { offer_handle: offer.offer_handle, quantity: 1, ship_to: SHIP };
+  // Contract 1.6.0: a per-approval completer key, and the completion modes this caller can use.
+  const completer = createSession();
+  const request: CartRequest = { offer_handle: offer.offer_handle, quantity: 1, ship_to: SHIP, completer_keyid: completer.keyid, completion_accepts: ["handoff"] };
   const cart = await cloud.createCart(request);
   expect(cart.status).toBe(201);
   expect(receiptProblem(cart, keySet, now)).toBeNull();
   if (!cart.ok) throw new Error("cart failed");
   const cartBody = Cart.parse(cart.body);
+  expect(cartBody).toMatchObject({ completion_mode: "handoff", variant_ref: offer.variant_ref, merchant_origin: `https://${cartBody.merchant.domain}` });
+  expect(typeof cartBody.total_estimated).toBe("boolean");
 
   const created = await cloud.createApproval(cartBody.cart_handle);
   expect(created.status).toBe(201);
@@ -53,12 +60,22 @@ async function pendingApproval() {
   expect(approval.check_code).toBe(approval.snapshot_hash.slice(0, 8));
   expect(approval.snapshot.approval).toBe(approval.approval_handle);
   expect(approval.state).toBe("pending");
+  // A 1.6.0 caller gets snapshot v2: offer = cart = snapshot, the 5-digit ZIP and the completer key it sent.
+  const snapshot = SnapshotV2.parse(approval.snapshot);
+  expect(snapshot).toMatchObject({
+    ship_to: SHIP,
+    variant_ref: offer.variant_ref,
+    merchant_origin: cartBody.merchant_origin,
+    completion_mode: cartBody.completion_mode,
+    total_estimated: cartBody.total_estimated,
+    completer_keyid: completer.keyid,
+  });
 
   const pendingEntry = {
     kind: "approval_pending",
     body: { handle: approval.approval_handle, approval_url: `${keySet.confirmOrigin}${approval.approval_link_path}`, snapshot_hash: approval.snapshot_hash },
   };
-  return { cloud, approval, pendingEntry };
+  return { cloud, approval, pendingEntry, completer };
 }
 
 describe(`flows (${TARGET})`, () => {
@@ -82,6 +99,16 @@ describe(`flows (${TARGET})`, () => {
     const unknown = await target.connect().getApproval(`ap_${Buffer.alloc(12, 1).toString("base64url")}`);
     expect(intruder.body).toEqual(unknown.body);
     expect(intruder.body).toEqual({ error: "not_found", message: "unknown handle" });
+  });
+
+  it("the approval's completer key reads it from another session, as a restarted gateway does (Appendix G R7)", async () => {
+    const { approval, completer } = await pendingApproval();
+    const read = await target.connect().getApproval(approval.approval_handle, { session: completer });
+    expect(read.status).toBe(200);
+    expect(receiptProblem(read, keySet, target.now())).toBeNull();
+    expect(read.raw.request.headers.find(([k]) => k === "signature-input")?.[1]).toContain(`keyid="${completer.keyid}"`);
+    if (!read.ok) throw new Error("status failed");
+    expect(ApprovalStatus.parse(read.body).state).toBe("pending");
   });
 
   it.runIf(IS_FAKE)("passkey approval: the proof verifies with src/trust and names the approving credential", async () => {

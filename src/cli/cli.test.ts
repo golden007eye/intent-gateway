@@ -713,6 +713,20 @@ describe("intent doctor", () => {
     expect(readable.out).toMatch(new RegExp(`^FAIL {2}data dir: other users can read it \\(mode 755\\); run chmod 700 ${s.dir}$`, "m"));
   });
 
+  it("attack (L5): the published test root is refused for a host on the network, before anything is sent", async () => {
+    fake = await startFakeCloud({});
+    const s = setup({ INTENT_CLOUD_URL: "https://intent.example" });
+    let connected = 0;
+    const serve = await s.run(["serve", "--trust-keys", trustFile(fake)], { input: "", io: { connect: () => (connected++, ({}) as never) } });
+    expect(serve.code).toBe(2);
+    expect(serve.err).toMatch(/holds the published test root key .*not for https:\/\/intent\.example/);
+    expect(connected).toBe(0);
+    const doctor = await s.run(["doctor", "--trust-keys", trustFile(fake)]);
+    expect(doctor.out).toMatch(/^FAIL {2}root key: .*published test root key/m);
+    // Reading the local chain trusts no host, so verify still runs with it.
+    expect((await s.run(["verify", "--trust-keys", trustFile(fake), "--skip-install-check"])).err).not.toMatch(/published test root/);
+  });
+
   it("with no configuration and no DNS record for staging, the pinned key is ok and the Intent Cloud line says what to do", async () => {
     const s = setup();
     const result = await s.run(["doctor"], { io: noDns });

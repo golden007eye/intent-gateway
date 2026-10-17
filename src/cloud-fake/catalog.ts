@@ -2,7 +2,7 @@
 // something to act on (an electronics item, a drop-shipper, an item in a category Intent Cloud excludes). Demo mode
 // uses the larger SAMPLE_CATALOG (sample-catalog.ts). Both are searched the forgiving way a shop search works:
 // see `searchCatalog`.
-import type { DeliveryEstimate, Merchant, Money, Rating, ReturnsPolicy, SearchRequest, TotalKind } from "../contract/index.ts";
+import type { CompletionMode, DeliveryEstimate, Merchant, Money, Rating, ReturnsPolicy, SearchRequest, TotalKind } from "../contract/index.ts";
 
 export interface CatalogItem {
   /** A fixed offer handle that never expires (for vectors); without it each search mints a 30-minute handle. */
@@ -24,6 +24,10 @@ export interface CatalogItem {
   delivery?: DeliveryEstimate;
   rating?: Rating;
   returns?: ReturnsPolicy;
+  /** 1.6.0: the merchant's variant reference; without it the fake derives a stable one (server.ts `variantRef`). */
+  variant_ref?: string;
+  /** 1.6.0, not on the wire: the merchant's completion modes in preference order (Intent Cloud's config). Default [handoff]. */
+  completion?: readonly CompletionMode[];
 }
 
 const usd = (amount_minor: number): Money => ({ amount_minor, currency: "USD" });

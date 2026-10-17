@@ -47,6 +47,30 @@ export function createSession(): Session {
   return makeSession(generateKeyPairSync("ed25519").privateKey);
 }
 
+/**
+ * A fresh per-approval completer key (contract 1.6.0, Appendix G R1/R7): an Ed25519 key pair whose keyid goes in
+ * the cart request and the signed snapshot. Unlike a session's, its private half is returned as PKCS#8 PEM, because
+ * the gateway keeps it on disk (0600) until the purchase ends, so a restarted gateway can still read the approval.
+ */
+export function createCompleterKey(): { keyid: string; privateKeyPem: string } {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const x = privateKey.export({ format: "jwk" }).x;
+  if (typeof x !== "string") throw new SigningError("Ed25519 key without a public part");
+  return { keyid: `gw-${x}`, privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString() };
+}
+
+/** A session that signs with a key saved by createCompleterKey. Throws SigningError for anything but an Ed25519 key. */
+export function sessionFromPem(privateKeyPem: string): Session {
+  let key: KeyObject;
+  try {
+    key = createPrivateKey({ key: privateKeyPem, format: "pem" });
+  } catch {
+    throw new SigningError("not a PEM private key");
+  }
+  if (key.asymmetricKeyType !== "ed25519") throw new SigningError("not an Ed25519 private key");
+  return makeSession(key);
+}
+
 /** A session from a fixed 32-byte seed. For published test vectors (c2) and the fake Cloud only. */
 export function sessionFromSeed(seed: Uint8Array): Session {
   if (seed.length !== 32) throw new SigningError("Ed25519 seed must be 32 bytes");

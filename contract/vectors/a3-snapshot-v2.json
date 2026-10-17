@@ -1,0 +1,121 @@
+{
+  "id": "A3",
+  "appendix": "A",
+  "description": "Snapshot v2 (contract 1.6.0): one handoff and one shop_agent snapshot. checkout_ref_hash and continue_url_hash are over the input checkout_id and continue_url; completer_keyid is gw- + the public key of completer_seed_hex. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "cases": [
+    {
+      "name": "handoff snapshot",
+      "input": {
+        "continue_url": "https://shop.example/checkouts/cn/TEST0001",
+        "checkout_id": "gid://shopify/Checkout/TEST0001?key=TESTKEY0001",
+        "completer_seed_hex": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+        "snapshot": {
+          "v": 2,
+          "approval": "ap_TEST0003",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 12500,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:45ed87d3b03a94e1d226e0a3c3cccdea408ff08bf68454c7a393162f34dd3727",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:ec0dd227ace40a3562f73439d5bfb4cf504025ad0baa4ba89cedfc48c1063e36",
+          "completion_mode": "handoff",
+          "completer_keyid": "gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw",
+          "total_estimated": false
+        }
+      },
+      "expected": {
+        "jcs": "{\"approval\":\"ap_TEST0003\",\"checkout_ref_hash\":\"sha256:ec0dd227ace40a3562f73439d5bfb4cf504025ad0baa4ba89cedfc48c1063e36\",\"completer_keyid\":\"gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw\",\"completion_mode\":\"handoff\",\"continue_url_hash\":\"sha256:45ed87d3b03a94e1d226e0a3c3cccdea408ff08bf68454c7a393162f34dd3727\",\"expires_at\":\"2026-10-16T12:15:00Z\",\"item\":{\"title\":\"Trail Runner 3\",\"variant\":\"US 10 / Blue\"},\"merchant\":{\"domain\":\"shop.example\",\"name\":\"Test Shop\"},\"merchant_origin\":\"https://shop.example\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODw\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"},\"shipping\":{\"amount_minor\":500,\"currency\":\"USD\"},\"total\":{\"amount_minor\":12500,\"currency\":\"USD\"},\"total_estimated\":false,\"total_kind\":\"exact\",\"unit_price\":{\"amount_minor\":12000,\"currency\":\"USD\"},\"v\":2,\"variant_ref\":\"gid://shopify/ProductVariant/1001\"}",
+        "snapshot_hash": "4b2db81e360c18267ea114c833835b424dc1c0963b6545ba791af91eef96c8d7",
+        "check_code": "4b2db81e",
+        "challenge": {
+          "approve": "zggot217w_RdAw0MFpIb4WOtXMUrlqy9WBs1hddwUnE",
+          "reject": "69SxNWCKTJPIno86GLIYZcmKkxM1a0nSVVBEgyIHwog"
+        }
+      }
+    },
+    {
+      "name": "shop_agent snapshot",
+      "input": {
+        "continue_url": "https://shop.example/checkouts/cn/TEST0002",
+        "checkout_id": "gid://shopify/Checkout/TEST0002?key=TESTKEY0002",
+        "completer_seed_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+        "snapshot": {
+          "v": 2,
+          "approval": "ap_TEST0004",
+          "nonce": "EBESExQVFhcYGRobHB0eHw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "total_kind": "max",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+          "completion_mode": "shop_agent",
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "total_estimated": true
+        }
+      },
+      "expected": {
+        "jcs": "{\"approval\":\"ap_TEST0004\",\"checkout_ref_hash\":\"sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344\",\"completer_keyid\":\"gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s\",\"completion_mode\":\"shop_agent\",\"continue_url_hash\":\"sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019\",\"expires_at\":\"2026-10-16T12:15:00Z\",\"item\":{\"title\":\"Trail Runner 3\",\"variant\":\"US 10 / Blue\"},\"merchant\":{\"domain\":\"shop.example\",\"name\":\"Test Shop\"},\"merchant_origin\":\"https://shop.example\",\"nonce\":\"EBESExQVFhcYGRobHB0eHw\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"},\"shipping\":{\"amount_minor\":500,\"currency\":\"USD\"},\"total\":{\"amount_minor\":13600,\"currency\":\"USD\"},\"total_estimated\":true,\"total_kind\":\"max\",\"unit_price\":{\"amount_minor\":12000,\"currency\":\"USD\"},\"v\":2,\"variant_ref\":\"gid://shopify/ProductVariant/1001\"}",
+        "snapshot_hash": "cf4804a4c83a43293218ca3ab6c847265c125bef3fe4dcc6047dd30ab98c2eb9",
+        "check_code": "cf4804a4",
+        "challenge": {
+          "approve": "TRUo7r8JPlXFW4TPkOjBMzzSDQIQTuSLOw-5L-WLpgc",
+          "reject": "20Oca4dUqSLm5PVRZuvfW_mje2OgSbiS7joO_nV3hqg"
+        }
+      }
+    }
+  ]
+}

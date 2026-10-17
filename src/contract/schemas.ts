@@ -1,11 +1,15 @@
 // zod schemas for every `components.schemas` entry of contract/gateway-api.v1.yaml (Intent Cloud public contract
-// 1.5.0), one export per spec name, each with its inferred type under the same name.
+// 1.6.0), one export per spec name, each with its inferred type under the same name.
 //
-// Strictness follows the spec exactly: every object in 1.5.0 says `additionalProperties: false`, so every object here
+// Strictness follows the spec exactly: every object in 1.6.0 says `additionalProperties: false`, so every object here
 // is a z.strictObject and rejects unknown keys. That includes the `x-provisional` schemas (RateLimited, GatewayLimits,
 // DeliveryEstimate, Rating, ReturnsPolicy) and the provisional `Meta.enrol_origin`: "provisional" means a later minor
-// version may change them, not that 1.5.0 allows extra keys. A changed provisional item arrives with a new vendored
+// version may change them, not that 1.6.0 allows extra keys. A changed provisional item arrives with a new vendored
 // contract, and the parity test then fails until this file follows it.
+//
+// The 1.6.0 fields of Offer, CartRequest, Cart and ApprovalStatus are optional here because the spec, which describes
+// both served versions, makes them optional. The gateway requires them where it relies on them, and refuses a v1
+// snapshot from a 1.6 host (src/gateway).
 //
 // Integers use z.int(), which also caps them at ±(2^53−1): the JCS integer profile (Appendix A) rejects anything wider.
 // Patterns are copied from the spec verbatim; schemas.test.ts compares this file with the spec keyword by keyword.
@@ -54,6 +58,25 @@ export type GatewayKeyId = z.infer<typeof GatewayKeyId>;
 export const TotalKind = z.enum(["exact", "max"]);
 export type TotalKind = z.infer<typeof TotalKind>;
 
+/** How payment happens after the passkey approval (1.6.0, Appendix A v2). */
+export const CompletionMode = z.enum(["handoff", "shop_agent"]);
+export type CompletionMode = z.infer<typeof CompletionMode>;
+
+/** `https://` + merchant.domain in Appendix G's host grammar: ASCII labels of 1–63, no port, no path (1.6.0). */
+export const MerchantOrigin = z
+  .string()
+  .max(261)
+  .regex(/^https:\/\/(?:[a-z0-9]|[a-z0-9][a-z0-9-]{0,61}[a-z0-9])(?:\.(?:[a-z0-9]|[a-z0-9][a-z0-9-]{0,61}[a-z0-9]))*$/);
+export type MerchantOrigin = z.infer<typeof MerchantOrigin>;
+
+/** The merchant's variant reference, such as `gid://shopify/ProductVariant/<n>` (1.6.0). */
+export const VariantRef = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9:/._-]+$/);
+export type VariantRef = z.infer<typeof VariantRef>;
+
 export const ApprovalState = z.enum(["pending", "approved", "rejected", "expired", "handed_off", "ordered"]);
 export type ApprovalState = z.infer<typeof ApprovalState>;
 
@@ -66,7 +89,7 @@ export const ErrorBody = z.strictObject({
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;
 
-/** The body of a 429. Provisional in 1.5.0, still strict (see the header). */
+/** The body of a 429. Provisional, still strict (see the header). */
 export const RateLimited = z.strictObject({
   error: z.literal("rate_limited"),
   message: z.string().max(200),
@@ -217,6 +240,7 @@ export const Offer = z.strictObject({
   delivery: DeliveryEstimate.optional(),
   rating: Rating.optional(),
   returns: ReturnsPolicy.optional(),
+  variant_ref: VariantRef.optional(),
 });
 export type Offer = z.infer<typeof Offer>;
 
@@ -225,12 +249,27 @@ export type SearchResponse = z.infer<typeof SearchResponse>;
 
 // ---- Carts and approvals --------------------------------------------------------------------------------------
 
+/** Usable completion modes in preference order (1.6.0): 1 or 2 distinct values. Absent means [handoff]. */
+const CompletionAccepts = z
+  .array(CompletionMode)
+  .min(1)
+  .max(2)
+  .refine((modes) => new Set(modes).size === modes.length, "completion_accepts holds a mode twice")
+  .meta({ uniqueItems: true });
+
 export const CartRequest = z.strictObject({
   offer_handle: OfferHandle,
   quantity: z.int().min(1).max(3),
   ship_to: ShipTo,
+  /** The per-approval completer key (1.6.0, Appendix C): new for every cart, never the signing keyid or an earlier approval's. */
+  completer_keyid: GatewayKeyId,
+  completion_accepts: CompletionAccepts.optional(),
 });
 export type CartRequest = z.infer<typeof CartRequest>;
+
+/** The released 1.5.0 cart request, for the fake's 1.5.0 answers only. Not a spec schema. */
+export const CartRequestV1 = z.strictObject({ offer_handle: OfferHandle, quantity: z.int().min(1).max(3), ship_to: ShipTo });
+export type CartRequestV1 = z.infer<typeof CartRequestV1>;
 
 export const Cart = z.strictObject({
   cart_handle: CartHandle,
@@ -243,11 +282,19 @@ export const Cart = z.strictObject({
   total_kind: TotalKind,
   expires_at: Timestamp,
   image_url: ImageUrl.optional(),
+  completion_mode: CompletionMode.optional(),
+  merchant_origin: MerchantOrigin.optional(),
+  variant_ref: VariantRef.optional(),
+  total_estimated: z.boolean().optional(),
 });
 export type Cart = z.infer<typeof Cart>;
 
-/** The purchase snapshot S (Appendix A): exactly these fields. */
-export const Snapshot = z.strictObject({
+/**
+ * The released 1.5.0 snapshot S (v1, the 3-digit ZIP prefix). Not in the 1.6.0 spec, so not in SCHEMAS: kept to read
+ * chains written by 1.5.0 gateways (`intent verify` re-checks their proofs, vectors a1, a2 and e1) and for the fake's
+ * 1.5.0 answers. A 1.6.0 host never serves it, and the gateway refuses it from one.
+ */
+export const SnapshotV1 = z.strictObject({
   v: z.literal(1),
   approval: z.string().min(1),
   nonce: z.string().regex(/^[A-Za-z0-9_-]{21}[AQgw]$/),
@@ -263,13 +310,45 @@ export const Snapshot = z.strictObject({
   rule_version: z.string().min(1),
   expires_at: Timestamp,
 });
-export type Snapshot = z.infer<typeof Snapshot>;
+export type SnapshotV1 = z.infer<typeof SnapshotV1>;
+
+/**
+ * The purchase snapshot v2 (Appendix A "Snapshot v2", 1.6.0): every v1 fact with the 5-digit ZIP instead of the
+ * 3-digit prefix, plus the merchant origin, variant, checkout hash, completion mode, completer key and estimated flag.
+ */
+export const SnapshotV2 = z.strictObject({
+  v: z.literal(2),
+  approval: z.string().min(1),
+  nonce: z.string().regex(/^[A-Za-z0-9_-]{21}[AQgw]$/),
+  merchant: Merchant,
+  item: Item,
+  quantity: z.int().min(1).max(3),
+  unit_price: Money,
+  shipping: Money,
+  total: Money,
+  total_kind: TotalKind,
+  ship_to: ShipTo,
+  continue_url_hash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  rule_version: z.string().min(1),
+  expires_at: Timestamp,
+  merchant_origin: MerchantOrigin,
+  variant_ref: VariantRef,
+  checkout_ref_hash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  completion_mode: CompletionMode,
+  completer_keyid: GatewayKeyId,
+  total_estimated: z.boolean(),
+});
+export type SnapshotV2 = z.infer<typeof SnapshotV2>;
+
+/** Either snapshot version, for reading chains that may hold 1.5.0 approvals; they differ in `v`. Not a spec schema. */
+export const AnySnapshot = z.discriminatedUnion("v", [SnapshotV1, SnapshotV2]);
+export type AnySnapshot = z.infer<typeof AnySnapshot>;
 
 /** `POST /v1/carts/{cart_handle}/approvals` 201. */
 export const ApprovalCreated = z.strictObject({
   approval_handle: ApprovalHandle,
   approval_link_path: z.string().regex(/^\/c\/[A-Za-z0-9_-]{16,64}$/),
-  snapshot: Snapshot,
+  snapshot: SnapshotV2,
   snapshot_hash: z.string().regex(/^[0-9a-f]{64}$/),
   check_code: z.string().regex(/^[0-9a-f]{8}$/),
   state: ApprovalState,
@@ -315,7 +394,7 @@ export type Rs256Jwk = z.infer<typeof Rs256Jwk>;
 export const CredentialPublicKey = z.discriminatedUnion("kty", [Es256Jwk, Rs256Jwk]);
 export type CredentialPublicKey = z.infer<typeof CredentialPublicKey>;
 
-/** The approval's `approved` entry in Intent Cloud's approval ledger (Appendix B). */
+/** An entry in Intent Cloud's approval ledger (Appendix B), named by `seq` and `entry_hash`. */
 export const LedgerRef = z.strictObject({
   seq: z.int().min(1).max(MAX_SAFE),
   entry_hash: z.string().regex(/^[0-9a-f]{64}$/),
@@ -326,7 +405,7 @@ export type LedgerRef = z.infer<typeof LedgerRef>;
 export const ApprovalProof = z.strictObject({
   v: z.literal(1),
   approval_handle: ApprovalHandle,
-  snapshot: Snapshot,
+  snapshot: SnapshotV2,
   snapshot_hash: z.string().regex(/^[0-9a-f]{64}$/),
   assertion: WebAuthnAssertion,
   credential_public_key: CredentialPublicKey,
@@ -337,15 +416,186 @@ export const ApprovalProof = z.strictObject({
 });
 export type ApprovalProof = z.infer<typeof ApprovalProof>;
 
+/** The released 1.5.0 proof (a v1 snapshot), for chains written by 1.5.0 gateways only. Not a spec schema. */
+export const ApprovalProofV1 = ApprovalProof.extend({ snapshot: SnapshotV1 });
+export type ApprovalProofV1 = z.infer<typeof ApprovalProofV1>;
+
+/** Either proof form; `intent verify` accepts the v1 form only for an approval chained without step 7's `sent`. */
+export const AnyApprovalProof = z.union([ApprovalProof, ApprovalProofV1]);
+export type AnyApprovalProof = z.infer<typeof AnyApprovalProof>;
+
+// ---- Outcomes (1.6.0, Appendix G) ----------------------------------------------------------------------------
+
+/** An order number (`#1001`) or a Shopify order id (`gid://shopify/Order/<n>`). Never an email or a name. */
+export const OrderRef = z
+  .string()
+  .max(64)
+  .regex(/^(?:[A-Za-z0-9#-]{1,64}|gid:\/\/shopify\/Order\/[0-9]{1,20})$/);
+export type OrderRef = z.infer<typeof OrderRef>;
+
+export const OutcomeState = z.enum([
+  "handed_off",
+  "completing",
+  "ordered",
+  "mismatch",
+  "failed",
+  "checkout_expired",
+  "indeterminate",
+  "reported",
+]);
+export type OutcomeState = z.infer<typeof OutcomeState>;
+
+export const OutcomeSource = z.enum([
+  "shop_api",
+  "gateway_precheck",
+  "merchant_api",
+  "signed_webhook",
+  "staging_webhook",
+  "checkout_page",
+  "gateway_report",
+]);
+export type OutcomeSource = z.infer<typeof OutcomeSource>;
+
+export const BindingCheck = z.enum(["match", "differs", "unknown"]);
+export type BindingCheck = z.infer<typeof BindingCheck>;
+
+/** binding-v1: five checks of an observed order against the approved snapshot. No observed value is copied in. */
+export const Binding = z.strictObject({
+  rule_version: z.literal("binding-v1"),
+  result: z.enum(["ok", "mismatch", "incomplete"]),
+  checks: z.strictObject({
+    merchant_origin: BindingCheck,
+    checkout_ref: BindingCheck,
+    line: BindingCheck,
+    ship_to: BindingCheck,
+    total: BindingCheck,
+  }),
+});
+export type Binding = z.infer<typeof Binding>;
+
+/** What a gateway reported and Intent Cloud could not verify (Appendix G R5). */
+export const OutcomeReported = z.strictObject({
+  state: z.enum(["completing", "indeterminate", "ordered", "mismatch", "failed"]),
+  source: z.enum(["shop_api", "gateway_precheck"]),
+  order_ref: OrderRef.optional(),
+  final_total: Money.optional(),
+  binding: Binding.optional(),
+});
+export type OutcomeReported = z.infer<typeof OutcomeReported>;
+
+// The spec's conditional rules (JSON Schema `allOf` of if/then) cannot be built from zod types, so each schema below
+// declares the spec's `allOf` verbatim in `.meta` (the parity test compares it with the spec, keyword by keyword) and
+// enforces the same rules in `.superRefine` (schemas.test.ts has one case per rule). The rules read fields through
+// these small schemas, so no code reads a property named `binding` (src/'s lint reserves that name).
+const has = (value: object, key: string): boolean => Object.hasOwn(value, key) && (value as Record<string, unknown>)[key] !== undefined;
+const ORDER_FIELDS = ["order_ref", "final_total", "binding"] as const;
+const VerifiedOk = z.object({ assurance: z.literal("verified"), binding: z.object({ result: z.literal("ok") }) });
+
+/** What happened after the approval. Rule O1 and the field rules of Appendix G are enforced here too. */
+export const Outcome = z
+  .strictObject({
+    state: OutcomeState,
+    source: OutcomeSource,
+    assurance: z.enum(["verified", "reported"]),
+    order_ref: OrderRef.optional(),
+    final_total: Money.optional(),
+    binding: Binding.optional(),
+    observed_at: Timestamp,
+    reported: OutcomeReported.optional(),
+  })
+  .superRefine((o, ctx) => {
+    const fail = (message: string): void => {
+      ctx.addIssue({ code: "custom", message });
+    };
+    if ((o.state === "ordered" || o.state === "mismatch") && !ORDER_FIELDS.every((k) => has(o, k))) fail(`${o.state} needs order_ref, final_total and binding`);
+    if (o.state === "ordered" && !VerifiedOk.safeParse(o).success) fail("ordered must be verified with binding ok (rule O1)");
+    if (o.state === "reported" && o.assurance !== "reported") fail("reported is reported assurance");
+    if ((o.source === "gateway_report") !== has(o, "reported")) fail("reported is present exactly when the source is gateway_report");
+    if ((o.source === "checkout_page" || o.source === "gateway_report") && o.assurance !== "reported") fail(`${o.source} is reported assurance at most`);
+  })
+  .meta({
+    allOf: [
+      {
+        if: { properties: { state: { const: "ordered" } } },
+        then: { required: ["order_ref", "final_total", "binding"], properties: { assurance: { const: "verified" }, binding: { properties: { result: { const: "ok" } } } } },
+      },
+      { if: { properties: { state: { const: "mismatch" } } }, then: { required: ["order_ref", "final_total", "binding"] } },
+      { if: { properties: { state: { const: "reported" } } }, then: { properties: { assurance: { const: "reported" } } } },
+      { if: { properties: { source: { const: "gateway_report" } } }, then: { required: ["reported"] }, else: { not: { required: ["reported"] } } },
+      { if: { properties: { source: { enum: ["checkout_page", "gateway_report"] } } }, then: { properties: { assurance: { const: "reported" } } } },
+    ],
+  });
+export type Outcome = z.infer<typeof Outcome>;
+
+/** Intent Cloud's signed statement of an outcome. Schema only; its signature is the trust module's to check. */
+export const OutcomeStatement = z.strictObject({
+  v: z.literal(1),
+  approval_handle: ApprovalHandle,
+  snapshot_hash: z.string().regex(/^[0-9a-f]{64}$/),
+  outcome: Outcome,
+  ledger: LedgerRef,
+  issued_at: Timestamp,
+  kid: z.string().regex(/^cloud-approval-[0-9]{6}$/),
+  cloud_signature: Ed25519Signature,
+});
+export type OutcomeStatement = z.infer<typeof OutcomeStatement>;
+
+const ReportId = z.string().regex(/^or_[A-Za-z0-9_-]{22,32}$/);
+
+/**
+ * `POST /v1/approvals/{approval_handle}/outcome-reports`: `checkout_ref_hash` (never the raw checkout id) for
+ * `completing`, `completing_report_id` for every other state, `order_ref`, `final_total` and `binding` for `ordered`
+ * and `mismatch`, and `source: gateway_precheck` only with `failed`.
+ */
+export const OutcomeReport = z
+  .strictObject({
+    report_id: ReportId,
+    completing_report_id: ReportId.optional(),
+    state: z.enum(["completing", "ordered", "mismatch", "failed", "indeterminate"]),
+    source: z.enum(["shop_api", "gateway_precheck"]),
+    checkout_ref_hash: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(),
+    order_ref: OrderRef.optional(),
+    final_total: Money.optional(),
+    binding: Binding.optional(),
+    observed_at: Timestamp,
+  })
+  .superRefine((r, ctx) => {
+    const fail = (message: string): void => {
+      ctx.addIssue({ code: "custom", message });
+    };
+    if (r.state === "completing" ? !has(r, "checkout_ref_hash") : !has(r, "completing_report_id")) {
+      fail(r.state === "completing" ? "completing needs checkout_ref_hash" : `${r.state} needs completing_report_id`);
+    }
+    if ((r.state === "ordered" || r.state === "mismatch") && !ORDER_FIELDS.every((k) => has(r, k))) fail(`${r.state} needs order_ref, final_total and binding`);
+    if (r.source === "gateway_precheck" && r.state !== "failed") fail("gateway_precheck reports only failed");
+  })
+  .meta({
+    allOf: [
+      { if: { properties: { state: { const: "completing" } } }, then: { required: ["checkout_ref_hash"] }, else: { required: ["completing_report_id"] } },
+      { if: { properties: { state: { enum: ["ordered", "mismatch"] } } }, then: { required: ["order_ref", "final_total", "binding"] } },
+      { if: { properties: { source: { const: "gateway_precheck" } } }, then: { properties: { state: { const: "failed" } } } },
+    ],
+  });
+export type OutcomeReport = z.infer<typeof OutcomeReport>;
+
+export const OutcomeReportAccepted = z.strictObject({
+  accepted: z.literal(true),
+  outcome: Outcome,
+});
+export type OutcomeReportAccepted = z.infer<typeof OutcomeReportAccepted>;
+
 /**
  * `GET /v1/approvals/{approval_handle}`. `proof` is optional in the schema, as in the spec; the spec's prose (present
  * once `approved`, `handed_off` or `ordered`) is a rule for the gateway use case to enforce, not a schema constraint.
+ * `outcome` and `outcome_statement` are 1.6.0 (Appendix G).
  */
 export const ApprovalStatus = z.strictObject({
   state: ApprovalState,
   display: ApprovalDisplay,
   order_number: z.string().min(1).max(40).optional(),
   proof: ApprovalProof.optional(),
+  outcome: Outcome.optional(),
+  outcome_statement: OutcomeStatement.optional(),
 });
 export type ApprovalStatus = z.infer<typeof ApprovalStatus>;
 
@@ -395,7 +645,6 @@ export const SCHEMAS = {
   RateLimited,
   Money,
   ShipTo,
-  ShipToArea,
   Merchant,
   Item,
   TotalKind,
@@ -418,7 +667,20 @@ export const SCHEMAS = {
   SearchResponse,
   CartRequest,
   Cart,
-  Snapshot,
+  SnapshotV2,
+  CompletionMode,
+  MerchantOrigin,
+  VariantRef,
+  OrderRef,
+  OutcomeState,
+  OutcomeSource,
+  BindingCheck,
+  Binding,
+  OutcomeReported,
+  Outcome,
+  OutcomeStatement,
+  OutcomeReport,
+  OutcomeReportAccepted,
   ApprovalCreated,
   ApprovalDisplay,
   ApprovalStatus,

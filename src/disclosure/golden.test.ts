@@ -83,6 +83,7 @@ function scriptedCloud(script: Outcome[]): IntentCloud {
     createCart: (r, o) => call(prepared("createCart", "POST", "/v1/carts", r), {}, o),
     createApproval: (h, o) => call(prepared("createApproval", "POST", `/v1/carts/${h}/approvals`, {}), {}, o),
     getApproval: (h, o) => call(prepared("getApproval", "GET", `/v1/approvals/${h}`, undefined), {}, o),
+    reportOutcome: (h, r, o) => call(prepared("reportOutcome", "POST", `/v1/approvals/${h}/outcome-reports`, r), {}, o),
   };
 }
 
@@ -116,7 +117,8 @@ describe("golden chain", () => {
     await cloud.keyStatement();
     keySet = KEYS;
     await cloud.search({ ship_to: { postal_code: "94110", country: "US" }, product: "trail shoe" });
-    await cloud.createCart({ offer_handle: "of_TEST0001", quantity: 1, ship_to: { country: "US", postal_code: "94110" } });
+    // The pre-1.6 request body, kept so the golden chain stays byte for byte; this fake adapter does not validate it.
+    await cloud.createCart({ offer_handle: "of_TEST0001", quantity: 1, ship_to: { country: "US", postal_code: "94110" } } as never);
     await cloud.createApproval("ct_TEST0001");
     await cloud.getApproval("ap_TEST0001");
     await cloud.getApproval("ap_TEST0001"); // 502, no version: unacknowledged

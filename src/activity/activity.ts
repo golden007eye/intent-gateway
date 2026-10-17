@@ -27,7 +27,7 @@ import { bodyValue, findIdentity, isSecretKey, markerDigest } from "../privacy/i
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
 /** What one action was. */
-export const ACTION_KINDS = ["start", "keys", "search", "cart", "status", "approval", "blocked", "pin", "flagged", "wallet", "call", "unreadable"] as const;
+export const ACTION_KINDS = ["start", "keys", "search", "cart", "status", "outcome", "approval", "blocked", "pin", "flagged", "wallet", "call", "unreadable"] as const;
 export type ActionKind = (typeof ACTION_KINDS)[number];
 
 /**
@@ -303,6 +303,9 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
           activity = last("cart", (a) => !a.requests.some((r) => r.endpoint === "createApproval")) ?? open(item, "cart");
         } else if (endpoint === "getApproval") {
           activity = open(item, "status", handleFromPath(request.path));
+        } else if (endpoint === "reportOutcome") {
+          // The gateway's own outcome report (contract 1.6.0): what it sent, never what Intent Cloud then did.
+          activity = open(item, "outcome", handleFromPath(request.path));
         } else {
           activity = open(item, "keys");
         }
@@ -752,7 +755,7 @@ function shipTo(f: Readonly<Record<string, unknown>>): ActivityFacts {
 
 /** `/v1/approvals/ap_x` → its handle. */
 function handleFromPath(path: string | null): ActivityFacts {
-  const handle = path === null ? undefined : /\/approvals\/([^/?#]+)$/.exec(path)?.[1];
+  const handle = path === null ? undefined : /\/approvals\/([^/?#]+)(?:\/outcome-reports)?$/.exec(path)?.[1];
   return handle === undefined ? {} : { approval_handle: decodeURIComponent(handle) };
 }
 

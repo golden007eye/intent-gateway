@@ -1,0 +1,198 @@
+{
+  "id": "B2",
+  "appendix": "B",
+  "description": "A ledger chain with every 1.6.0 event: completing and each outcome:* event. Outcome events carry rule_version binding-v1; the approval events (pending, approved, handed_off, completing) keep recheck-v1. Each entry is E plus its entry_hash; the chain verifies.",
+  "input": {
+    "entries": [
+      {
+        "seq": 1,
+        "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "approval": "ap_TEST0003",
+        "event": "pending",
+        "snapshot_hash": "4b2db81e360c18267ea114c833835b424dc1c0963b6545ba791af91eef96c8d7",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:01:00Z"
+      },
+      {
+        "seq": 2,
+        "prev_hash": "9cc1288cf7a75df32d2376d89b29b4a49026b22aca8833a431d905a0a9fb82b2",
+        "approval": "ap_TEST0003",
+        "event": "approved",
+        "snapshot_hash": "4b2db81e360c18267ea114c833835b424dc1c0963b6545ba791af91eef96c8d7",
+        "credential_id": "Y3JlZC0x",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:02:00Z"
+      },
+      {
+        "seq": 3,
+        "prev_hash": "8dc17fbfdcc155e1e02139504d472cb83ef86eeee7dace2120201db420199373",
+        "approval": "ap_TEST0003",
+        "event": "handed_off",
+        "snapshot_hash": "4b2db81e360c18267ea114c833835b424dc1c0963b6545ba791af91eef96c8d7",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:03:00Z"
+      },
+      {
+        "seq": 4,
+        "prev_hash": "c2a40f48f68c0ae9bd8925e4a04cb7a114a72dcdbb3bff7ced408efd0292164c",
+        "approval": "ap_TEST0003",
+        "event": "outcome:reported",
+        "snapshot_hash": "4b2db81e360c18267ea114c833835b424dc1c0963b6545ba791af91eef96c8d7",
+        "rule_version": "binding-v1",
+        "recorded_at": "2026-10-16T12:04:00Z"
+      },
+      {
+        "seq": 5,
+        "prev_hash": "2e88ab15e93dfd3ec65a291b4fc066496ee1176d3e1b0f7cbea3f838a67a7c74",
+        "approval": "ap_TEST0003",
+        "event": "outcome:ordered",
+        "snapshot_hash": "4b2db81e360c18267ea114c833835b424dc1c0963b6545ba791af91eef96c8d7",
+        "rule_version": "binding-v1",
+        "recorded_at": "2026-10-16T12:05:00Z"
+      },
+      {
+        "seq": 6,
+        "prev_hash": "25eab364ca03a0419d825c251cf9fa04814ebafc49faa8358493711fc5252426",
+        "approval": "ap_TEST0004",
+        "event": "pending",
+        "snapshot_hash": "cf4804a4c83a43293218ca3ab6c847265c125bef3fe4dcc6047dd30ab98c2eb9",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:06:00Z"
+      },
+      {
+        "seq": 7,
+        "prev_hash": "443945d5cbfbbf7b78014b899b795ee5b989ed2df3b3ae84a1a66915d0546165",
+        "approval": "ap_TEST0004",
+        "event": "approved",
+        "snapshot_hash": "cf4804a4c83a43293218ca3ab6c847265c125bef3fe4dcc6047dd30ab98c2eb9",
+        "credential_id": "Y3JlZC0x",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:07:00Z"
+      },
+      {
+        "seq": 8,
+        "prev_hash": "5962153803714e4efdd49f5fa695830ef1bd2a386dc76bc9df4b86e71f89ef1c",
+        "approval": "ap_TEST0004",
+        "event": "completing",
+        "snapshot_hash": "cf4804a4c83a43293218ca3ab6c847265c125bef3fe4dcc6047dd30ab98c2eb9",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:08:00Z"
+      },
+      {
+        "seq": 9,
+        "prev_hash": "dc1d5109e6123a1e056fe1cc2dd6926f884e060f8e917ffb0837337f2f6f6056",
+        "approval": "ap_TEST0004",
+        "event": "outcome:indeterminate",
+        "snapshot_hash": "cf4804a4c83a43293218ca3ab6c847265c125bef3fe4dcc6047dd30ab98c2eb9",
+        "rule_version": "binding-v1",
+        "recorded_at": "2026-10-16T12:09:00Z"
+      },
+      {
+        "seq": 10,
+        "prev_hash": "a42dc5cbb8e43f292bd39c44bd6646f43778b8186f589f5921a45f29bd66b369",
+        "approval": "ap_TEST0004",
+        "event": "outcome:mismatch",
+        "snapshot_hash": "cf4804a4c83a43293218ca3ab6c847265c125bef3fe4dcc6047dd30ab98c2eb9",
+        "rule_version": "binding-v1",
+        "recorded_at": "2026-10-16T12:10:00Z"
+      },
+      {
+        "seq": 11,
+        "prev_hash": "61848e195e321a206e0d3f10e73282977d14e52c66e502eef6681f80890395da",
+        "approval": "ap_TEST0005",
+        "event": "pending",
+        "snapshot_hash": "0549ac0fc39f41e3dfd62198f8769b66f31c9fbe51901d198935d9746cb62bea",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:11:00Z"
+      },
+      {
+        "seq": 12,
+        "prev_hash": "0076bd52caeb1a107cf5fec609f33a1422994d0763a50e24e092d4d8282a48a3",
+        "approval": "ap_TEST0005",
+        "event": "approved",
+        "snapshot_hash": "0549ac0fc39f41e3dfd62198f8769b66f31c9fbe51901d198935d9746cb62bea",
+        "credential_id": "Y3JlZC0x",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:12:00Z"
+      },
+      {
+        "seq": 13,
+        "prev_hash": "3f2acdf0d2a00b991d3305549e490bab6a29a8cd01487c7d77b8bb5c6ebce5a6",
+        "approval": "ap_TEST0005",
+        "event": "handed_off",
+        "snapshot_hash": "0549ac0fc39f41e3dfd62198f8769b66f31c9fbe51901d198935d9746cb62bea",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:13:00Z"
+      },
+      {
+        "seq": 14,
+        "prev_hash": "04ca16c5cef3cb5c5bbee023228594e64595ebbf675708b2a68dcf8c7e9f3031",
+        "approval": "ap_TEST0005",
+        "event": "outcome:checkout_expired",
+        "snapshot_hash": "0549ac0fc39f41e3dfd62198f8769b66f31c9fbe51901d198935d9746cb62bea",
+        "rule_version": "binding-v1",
+        "recorded_at": "2026-10-16T12:14:00Z"
+      },
+      {
+        "seq": 15,
+        "prev_hash": "7f43a3ea44fde2adbbdf8ce633322583c82f36be5544355350fba0d60754f535",
+        "approval": "ap_TEST0006",
+        "event": "pending",
+        "snapshot_hash": "a57fc2eacd693dc145b600f79bf441ff87d221519f86ba4797f316462274093d",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:15:00Z"
+      },
+      {
+        "seq": 16,
+        "prev_hash": "5afa79d41f1724b8e03c3d1143d85042dc59ee166974ae28ca92a012fa4314ab",
+        "approval": "ap_TEST0006",
+        "event": "approved",
+        "snapshot_hash": "a57fc2eacd693dc145b600f79bf441ff87d221519f86ba4797f316462274093d",
+        "credential_id": "Y3JlZC0x",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:16:00Z"
+      },
+      {
+        "seq": 17,
+        "prev_hash": "fa6ddc00a74005c198e188588a3a52384bfdad17d4708b19719d7a9aa435c5e1",
+        "approval": "ap_TEST0006",
+        "event": "completing",
+        "snapshot_hash": "a57fc2eacd693dc145b600f79bf441ff87d221519f86ba4797f316462274093d",
+        "rule_version": "recheck-v1",
+        "recorded_at": "2026-10-16T12:17:00Z"
+      },
+      {
+        "seq": 18,
+        "prev_hash": "846bce844933e553c93e6b611c9d14d1baebd192bf782117cac38f5eda7e9d9d",
+        "approval": "ap_TEST0006",
+        "event": "outcome:failed",
+        "snapshot_hash": "a57fc2eacd693dc145b600f79bf441ff87d221519f86ba4797f316462274093d",
+        "rule_version": "binding-v1",
+        "recorded_at": "2026-10-16T12:18:00Z"
+      }
+    ]
+  },
+  "expected": {
+    "entry_hashes": [
+      "9cc1288cf7a75df32d2376d89b29b4a49026b22aca8833a431d905a0a9fb82b2",
+      "8dc17fbfdcc155e1e02139504d472cb83ef86eeee7dace2120201db420199373",
+      "c2a40f48f68c0ae9bd8925e4a04cb7a114a72dcdbb3bff7ced408efd0292164c",
+      "2e88ab15e93dfd3ec65a291b4fc066496ee1176d3e1b0f7cbea3f838a67a7c74",
+      "25eab364ca03a0419d825c251cf9fa04814ebafc49faa8358493711fc5252426",
+      "443945d5cbfbbf7b78014b899b795ee5b989ed2df3b3ae84a1a66915d0546165",
+      "5962153803714e4efdd49f5fa695830ef1bd2a386dc76bc9df4b86e71f89ef1c",
+      "dc1d5109e6123a1e056fe1cc2dd6926f884e060f8e917ffb0837337f2f6f6056",
+      "a42dc5cbb8e43f292bd39c44bd6646f43778b8186f589f5921a45f29bd66b369",
+      "61848e195e321a206e0d3f10e73282977d14e52c66e502eef6681f80890395da",
+      "0076bd52caeb1a107cf5fec609f33a1422994d0763a50e24e092d4d8282a48a3",
+      "3f2acdf0d2a00b991d3305549e490bab6a29a8cd01487c7d77b8bb5c6ebce5a6",
+      "04ca16c5cef3cb5c5bbee023228594e64595ebbf675708b2a68dcf8c7e9f3031",
+      "7f43a3ea44fde2adbbdf8ce633322583c82f36be5544355350fba0d60754f535",
+      "5afa79d41f1724b8e03c3d1143d85042dc59ee166974ae28ca92a012fa4314ab",
+      "fa6ddc00a74005c198e188588a3a52384bfdad17d4708b19719d7a9aa435c5e1",
+      "846bce844933e553c93e6b611c9d14d1baebd192bf782117cac38f5eda7e9d9d",
+      "86500ff08e9b8409459dfc40b6fda588c3be62380303afcaaed8f61d4024da2d"
+    ],
+    "broken_seq": null
+  }
+}

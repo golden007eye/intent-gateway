@@ -37,7 +37,20 @@ import {
   type IntentCloud,
   type PreparedRequest,
 } from "../cloud/index.ts";
-import type { ApprovalCreated, ApprovalStatus, Cart, CartRequest, Jwks, KeyStatement, Meta, SearchRequest, SearchResponse } from "../contract/index.ts";
+import type {
+  ApprovalCreated,
+  ApprovalStatus,
+  Cart,
+  CartRequest,
+  Jwks,
+  KeyStatement,
+  Meta,
+  OutcomeReport,
+  OutcomeReportAccepted,
+  SearchRequest,
+  SearchResponse,
+} from "../contract/index.ts";
+import type { Session } from "../signing/index.ts";
 import type { Store } from "../store/index.ts";
 import { type KeySet, type SentRequest, verifyReceipt } from "../trust/index.ts";
 import { createDisclosureCore, INTENT_CLOUD, type OutboundRequest, registerCore } from "./core.ts";
@@ -45,7 +58,11 @@ import { createDisclosureCore, INTENT_CLOUD, type OutboundRequest, registerCore 
 /** A result as the adapter returned it, plus the seq of the `disclosure` entry that logged its request. */
 export type DisclosedResult<T> = CloudResult<T> & { readonly disclosureSeq: number };
 
-/** The same operations as IntentCloud; each call is logged before it is sent. */
+/**
+ * The same operations as IntentCloud; each call is logged before it is sent. `signer` signs one approval call with
+ * that approval's completer key instead of the session key (contract 1.6.0, Appendix G R1/R7); the logged `keyid`
+ * is then the completer's.
+ */
 export interface DisclosedCloud {
   meta(): Promise<DisclosedResult<Meta>>;
   signatureKeys(): Promise<DisclosedResult<Jwks>>;
@@ -53,7 +70,8 @@ export interface DisclosedCloud {
   search(request: SearchRequest): Promise<DisclosedResult<SearchResponse>>;
   createCart(request: CartRequest): Promise<DisclosedResult<Cart>>;
   createApproval(cartHandle: string): Promise<DisclosedResult<ApprovalCreated>>;
-  getApproval(approvalHandle: string): Promise<DisclosedResult<ApprovalStatus>>;
+  getApproval(approvalHandle: string, signer?: Session): Promise<DisclosedResult<ApprovalStatus>>;
+  reportOutcome(approvalHandle: string, report: OutcomeReport, signer?: Session): Promise<DisclosedResult<OutcomeReportAccepted>>;
 }
 
 export interface DisclosureOptions {
@@ -175,10 +193,16 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
     search: (request) => disclosed(true, (beforeSend) => cloud.search(request, { beforeSend })),
     createCart: (request) => disclosed(true, (beforeSend) => cloud.createCart(request, { beforeSend })),
     createApproval: (handle) => disclosed(true, (beforeSend) => cloud.createApproval(handle, { beforeSend })),
-    getApproval: (handle) => disclosed(true, (beforeSend) => cloud.getApproval(handle, { beforeSend })),
+    getApproval: (handle, signer) => disclosed(true, (beforeSend) => cloud.getApproval(handle, { beforeSend, ...signedBy(signer) })),
+    reportOutcome: (handle, report, signer) =>
+      disclosed(true, (beforeSend) => cloud.reportOutcome(handle, report, { beforeSend, ...signedBy(signer) })),
   };
   registerCore(disclosedCloud, core);
   return disclosedCloud;
+}
+
+function signedBy(signer: Session | undefined): { session?: Session } {
+  return signer === undefined ? {} : { session: signer };
 }
 
 function disclosureBody(request: OutboundRequest, fields: string[]) {
