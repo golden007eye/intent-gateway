@@ -21,11 +21,14 @@ export function statusState(outcome: OutcomeState, mode: CompletionMode): Approv
 
 /**
  * Why a 1.6.0 status's `state` and `outcome` disagree, or null when they agree: with an outcome, `state` must be
- * statusState(outcome, mode), and an `ordered` outcome must be verified with binding ok (rule O1). Without one,
- * `state` behaves as in 1.5.0 (Appendix G), so there is nothing to compare.
+ * statusState(outcome, mode), and an `ordered` outcome must be verified with binding ok (rule O1). In 1.6.0 the
+ * post-approval states `handed_off` and `ordered` come only from an outcome (Appendix G's table), so either one
+ * without an outcome claims what nothing backs.
  */
 export function statusProblem(state: ApprovalState, outcome: Outcome | undefined, mode: CompletionMode): string | null {
-  if (outcome === undefined) return null;
+  if (outcome === undefined) {
+    return state === "handed_off" || state === "ordered" ? `state is ${state}, but the status carries no outcome` : null;
+  }
   const expected = statusState(outcome.state, mode);
   if (state !== expected) return `state is ${state}, but a ${mode} outcome ${outcome.state} means ${expected}`;
   if (outcome.state === "ordered" && !VerifiedOk.safeParse(outcome).success) {

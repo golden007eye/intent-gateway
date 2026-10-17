@@ -5,15 +5,16 @@
 // - with no such entry, an hour after it was made: the cart was refused, or the gateway stopped before chaining the
 //   approval, so no chained purchase can ever need it (the hour spares a key whose cart is still on its way);
 // - for a purchase never approved (no `approval` entry and no status that showed one), at `expires_at`;
-// - for an approved hand-off purchase, once Intent Cloud reports a terminal outcome for it (there is nothing left to
+// - for an approved hand-off purchase, once a consistent status reports a terminal outcome for it (nothing left to
 //   read or report);
 // - for an approved `shop_agent` purchase, once a terminal outcome report the key signed got a 201 with a verified
 //   receipt, which is the last request the key signs;
 // - in every case, at the end of Intent Cloud's completer read window, 48 h after the later of `expires_at` and the
 //   terminal outcome (Appendix G R7): Intent Cloud accepts nothing the key signs after that.
+import type { OutcomeState } from "../contract/index.ts";
 import type { CompleterKey } from "../signing/index.ts";
 import type { Entry } from "../store/index.ts";
-import { PROOF_STATES, TERMINAL_OUTCOMES } from "./status-state.ts";
+import { PROOF_STATES, statusState, TERMINAL_OUTCOMES } from "./status-state.ts";
 
 export const ORPHAN_GRACE_MS = 3_600_000;
 export const READ_WINDOW_MS = 48 * 3_600_000;
@@ -56,7 +57,9 @@ function keepFor(chain: readonly Entry[], entry: Entry, now: number): boolean {
   let terminalAt: number | null = null;
   let done = false;
   if (mode === "handoff") {
-    const terminal = seen.find((s) => TERMINAL_OUTCOMES.has(s.outcome as never));
+    // Only a consistent status counts (state = the table's state for its outcome), so a status that names a terminal
+    // outcome under the wrong state cannot delete the key early.
+    const terminal = seen.find((s) => TERMINAL_OUTCOMES.has(s.outcome as never) && s.state === statusState(s.outcome as OutcomeState, "handoff"));
     if (terminal !== undefined) {
       terminalAt = terminal.at;
       done = true;

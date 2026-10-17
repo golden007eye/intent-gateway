@@ -59,6 +59,16 @@ describe("completer key retention", () => {
     expect(gone(chain, T0 + 60_000)).toBe(true);
   });
 
+  it.each([
+    ["ordered under state approved", "approved", "ordered"],
+    ["checkout_expired under state ordered", "ordered", "checkout_expired"],
+    ["mismatch under state approved", "approved", "mismatch"],
+  ])("attack: an inconsistent status (%s) does not delete a hand-off key early", (_name, state, outcome) => {
+    const chain = chainOf(pending(), approval, observed(state, outcome, T0 + 60_000));
+    expect(gone(chain, T0 + 60_000)).toBe(false);
+    expect(gone(chain, EXPIRES + READ_WINDOW_MS)).toBe(true);
+  });
+
   it("a shop_agent purchase: kept while its terminal report has no 201; gone once one does", () => {
     const sent = chainOf(pending("shop_agent"), approval, reportOf("ordered", T0 + 60_000));
     expect(gone(sent, T0 + 60_000)).toBe(false);

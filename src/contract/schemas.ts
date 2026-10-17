@@ -411,10 +411,27 @@ export type ApprovalProof = z.infer<typeof ApprovalProof>;
 export const OrderRef = z.string().regex(/^[A-Za-z0-9#-]{1,64}$/);
 export type OrderRef = z.infer<typeof OrderRef>;
 
-export const OutcomeState = z.enum(["handed_off", "completing", "ordered", "mismatch", "failed", "checkout_expired", "indeterminate", "reported"]);
+export const OutcomeState = z.enum([
+  "handed_off",
+  "completing",
+  "ordered",
+  "mismatch",
+  "failed",
+  "checkout_expired",
+  "indeterminate",
+  "reported",
+]);
 export type OutcomeState = z.infer<typeof OutcomeState>;
 
-export const OutcomeSource = z.enum(["shop_api", "gateway_precheck", "merchant_api", "signed_webhook", "staging_webhook", "checkout_page", "gateway_report"]);
+export const OutcomeSource = z.enum([
+  "shop_api",
+  "gateway_precheck",
+  "merchant_api",
+  "signed_webhook",
+  "staging_webhook",
+  "checkout_page",
+  "gateway_report",
+]);
 export type OutcomeSource = z.infer<typeof OutcomeSource>;
 
 export const BindingCheck = z.enum(["match", "differs", "unknown"]);

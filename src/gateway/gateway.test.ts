@@ -1324,6 +1324,54 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     expect(bodies(h, "observed").at(-1)).toMatchObject({ endpoint: "getApproval", outcome_state: outcome });
   });
 
+  it.each(["ordered", "handed_off"] as const)("attack (invariant 5): a 1.6.0 status %s with no outcome is not repeated, and the key stays", async (state) => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    h.patch.getApproval = async (handle, signer) => {
+      const r = await h.real.getApproval(handle, signer);
+      return r.ok ? { ...r, body: { ...omit(r.body, ["outcome"]), state, order_number: "ORD-1" } } : r;
+    };
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result.status).toBe("approved");
+    expect(result).not.toHaveProperty("cloud_reported");
+    expect(result).not.toHaveProperty("order_number");
+    expect(result.message).not.toContain("placed the order");
+    expect(result.message).toContain("inconsistently");
+    expect(await keyFiles(h)).toEqual([keyidOf(h, approval)]);
+  });
+
+  it("attack: a mid-session answer in another contract version is not used", async () => {
+    const h = await setup();
+    h.patch.search = async (r) => ({ ...(await h.real.search(r)), contractVersion: "1.5.0" });
+    const result = await h.gateway.findOffers(SHOES);
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("answered in contract 1.5.0, not 1.6.0");
+    expect(bodies(h, "observed")).toHaveLength(0);
+    // A cart whose answer comes back downgraded asks for no approval and keeps no key.
+    delete h.patch.search;
+    const offer = await offerHandle(h, "Trail Runner 3");
+    h.patch.createCart = async (r) => ({ ...(await h.real.createCart(r)), contractVersion: "1.5.0" });
+    expect((await h.gateway.createCart({ offer_handle: offer })).status).toBe("error");
+    expect(h.sends.createApproval).toBe(0);
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it("attack: an offer without variant_ref is refused before any key is made or cart sent", async () => {
+    const h = await setup();
+    h.patch.search = async (r) => {
+      const res = await h.real.search(r);
+      return res.ok ? { ...res, body: { offers: res.body.offers.map((o) => omit(o, ["variant_ref"])) } } : res;
+    };
+    const offer = await offerHandle(h, "Trail Runner 3");
+    const result = await h.gateway.createCart({ offer_handle: offer });
+    expect(result.status).toBe("refused");
+    expect(result.message).toContain("no variant_ref");
+    expect(h.sends.createCart).toBe(0);
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
   it("attack: a status whose state claims more than its outcome is not repeated", async () => {
     const h = await setup();
     const approval = await pendingPurchase(h, "Trail Runner 3");

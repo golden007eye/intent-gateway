@@ -1,7 +1,8 @@
 // The one HTTP adapter to Intent Cloud. Every request carries exactly the fixed header set of plan §3.1, plus
-// `intent-contract-version: 1.6.0` (contract 1.6.0 §V1), in a fixed order, on a fresh connection that is closed afterwards, so what the disclosure log records is byte for byte what
-// left the machine. A caller's beforeSend hook sees the final request before any byte is written; when it throws,
-// nothing is sent (invariant 2 is kept by src/disclosure through that hook).
+// `intent-contract-version: 1.6.0` (contract 1.6.0 §V1), in a fixed order, on a fresh connection that is closed
+// afterwards, so what the disclosure log records is byte for byte what left the machine. A caller's beforeSend hook
+// sees the final request before any byte is written; when it throws, nothing is sent (invariant 2 is kept by
+// src/disclosure through that hook).
 import { type Agent, type IncomingMessage, request as httpRequest, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { z } from "zod";

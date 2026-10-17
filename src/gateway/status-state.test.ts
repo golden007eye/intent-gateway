@@ -43,8 +43,14 @@ describe("vector o3", () => {
 });
 
 describe("statusProblem", () => {
-  it("passes a status without an outcome, as 1.5.0 states behave", () => {
-    for (const state of ApprovalState.options) expect(statusProblem(state, undefined, "handoff")).toBeNull();
+  it("passes a status without an outcome only before one could exist (pending, approved, rejected, expired)", () => {
+    for (const state of ["pending", "approved", "rejected", "expired"] as const) expect(statusProblem(state, undefined, "handoff")).toBeNull();
+  });
+
+  // Attack: in 1.6.0, handed_off and ordered come only from an outcome; without one they claim what nothing backs.
+  it.each(["handed_off", "ordered"] as const)("refuses %s without an outcome", (state) => {
+    expect(statusProblem(state, undefined, "handoff")).toMatch(/no outcome/);
+    expect(statusProblem(state, undefined, "shop_agent")).toMatch(/no outcome/);
   });
 
   // Attack cases: Intent Cloud's state must never claim more than its outcome.

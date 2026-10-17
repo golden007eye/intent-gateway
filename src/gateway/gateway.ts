@@ -341,6 +341,15 @@ export function createGateway(options: GatewayOptions): Gateway {
       if (error instanceof CloudRequestError) return refuse("invalid", `Not sent: ${error.message}`);
       throw error;
     }
+    // Every answer must be in this gateway's contract version, not only Meta at start: an answer in another version
+    // (a host that downgraded mid-session) is parsed under rules it does not follow, so its content is not used.
+    // An answer with no version header at all is a non-2xx from in front of the edge, handled below.
+    if (result.contractVersion !== CONTRACT_VERSION && (result.ok || result.contractVersion !== null)) {
+      return refuse(
+        "error",
+        `Intent Cloud answered in contract ${result.contractVersion ?? "(none)"}, not ${CONTRACT_VERSION}, so the gateway did not use the answer. Restart the gateway to check the host again.`,
+      );
+    }
     if (result.ok) return { ok: true, body: result.body, seq: result.disclosureSeq };
     const said = result.body === null ? "" : `: ${result.body.message}`;
     const retry = result.retryAfter === null ? "" : ` Try again in ${String(result.retryAfter)} s.`;
@@ -613,6 +622,12 @@ export function createGateway(options: GatewayOptions): Gateway {
         { title: known.offer.title, merchant: known.offer.merchant.name, quantity });
     }
 
+    // A 1.6.0 offer names its variant, which the cart and the snapshot must repeat (offer = cart = snapshot). Without
+    // it there is nothing to check them against, so nothing is sent and no completer key is made.
+    if (known.offer.variant_ref === undefined) {
+      return block("createCart", inputFields(request), ["offer: no variant_ref"], fromSeq, "refused",
+        "Not sent: the offer names no variant_ref, so the gateway cannot check that the cart is the item offered. Search again.");
+    }
     const fresh = await currentKeys(fromSeq);
     if (!fresh.ok) return fresh.refused;
     const keys = fresh.keys;
@@ -931,11 +946,10 @@ function cartV16Problems(cart: Cart, offer: CloudOffer, accepts: readonly CloudC
   const missing = (["completion_mode", "merchant_origin", "variant_ref", "total_estimated"] as const).filter((k) => cart[k] === undefined);
   if (missing.length > 0) return [`cart lacks ${missing.join(", ")}, which a 1.6.0 host sends`];
   const problems: string[] = [];
-  if (cart.completion_mode !== undefined && !accepts.includes(cart.completion_mode)) {
-    problems.push(`completion mode ${cart.completion_mode} was not offered (completion_accepts ${accepts.join(", ")})`);
-  }
-  if (offer.variant_ref === undefined) problems.push("the offer named no variant_ref");
-  else if (cart.variant_ref !== offer.variant_ref) problems.push("variant_ref differs from the offer");
+  const mode = cart.completion_mode as CloudCompletionMode; // present: `missing` above is empty
+  if (!accepts.includes(mode)) problems.push(`completion mode ${mode} was not offered (completion_accepts ${accepts.join(", ")})`);
+  // createCart refused an offer without variant_ref before anything was sent, so this compares two values.
+  if (cart.variant_ref !== offer.variant_ref) problems.push("variant_ref differs from the offer");
   const domain = cart.merchant.domain;
   // eslint-disable-next-line no-control-regex
   if (!/^[\x00-\x7f]+$/.test(domain) || cart.merchant_origin !== `https://${domain.toLowerCase()}`) {
