@@ -69,10 +69,31 @@ The actions group the chain's entries:
 - `approval`: an Approval the gateway checked and chained, with the approver pin written with it, if it was the first.
 - `blocked`: a request the gateway held back; nothing was sent. `facts.block_kind` says what held it: a gateway `policy` rule, buyer `identity` in the body, or a `logging` rule, as the block entry's `rule` records it (a block without `rule` is read from its reasons); for a wallet destination, `facts.destination` names it.
 - `pin`: an approver pin written by `intent approver accept`. `flagged`: a passkey flagged as not the pinned approver.
-- `wallet`: a wallet change on this machine: the Shop wallet linked, or unlinked (`intent wallet unlink shop` deletes its vault file) with whether Shop confirmed revoking the token (`token revoked at Shop`) or not (`token not revoked (deleted here only)`).
+- `wallet`: a wallet change on this machine: the Shop wallet linked, or unlinked (`intent wallet unlink shop` deletes its vault file) with whether Shop confirmed revoking the token (`token revoked at Shop`) or not (`token not revoked (deleted here only)`); or a Shop check (`intent wallet check shop`, [below](#orders-the-log-does-not-name)): how many orders Shop reported and how many no purchase in the log names.
 - `call`: one request to a wallet destination (Shop) and its response entry: the operation, its argument names, and the status that came back. A call has no receipt; one without a response entry is `maybe sent`.
 
 A cart or status check the gateway refused after an answer (the cart, snapshot or proof did not match) carries outcome `refused` and the reasons in `blocked`.
+
+## Orders the log does not name
+
+<!-- feature: wallet-check -->
+!!! planned "Checking Shop for orders the log does not name"
+    `intent wallet check shop` is in the CLI, but it cannot run for you yet: it needs a registered Shop client (`INTENT_SHOP_CLIENT_ID`; none is built in) and a linked wallet, and the fields it reads from Shop's order list (`created_at`, `totals`, `pagination.has_next_page`) wait to be confirmed against a real Shop account. Until then an order whose fields differ comes back with no total, origin or time, never with buyer details.
+
+The log shows what went through this gateway. A linked Shop account can also be spent from in other ways: in the Shop app, by another agent, or by Shop's own agent payments. `intent wallet check shop` compares the two, on demand; nothing polls in the background.
+
+```sh
+intent wallet check shop             # the last 7 days
+intent wallet check shop --since 30d # or a date: --since 2026-10-01
+```
+
+It asks Shop for the account's recent orders with one `search_orders` request. Like every Shop request, it is appended to the log before it leaves, and the answer is logged only as a status, a sha256 and a size. From each order Shop reported, the gateway keeps four values: its order reference, its total, the merchant's storefront origin and its creation time. Everything else in the answer is dropped on receipt, so the buyer's name, email, phone, addresses and the order's line text are never printed, logged or kept.
+
+The output says how many orders Shop reported in the period, how many a purchase in this log names (an `outcome` entry with that order reference), and lists the rest with their total, merchant origin and time, under "Not matched". An unmatched order is one this log does not name; the check cannot say how it was placed. No part of the gateway writes `outcome` entries yet (they arrive with one-tap purchases), so today every order Shop reported shows as not matched. Totals are summed in USD; an order Shop reported without a USD total is counted and left out of the sum. The gateway asks for one page of up to 50 orders: when Shop says more exist, or returns a full page of 50, the output says the counts cover only the orders it returned, the unmatched line reads "Not matched among the orders returned", and the entry records `complete: false`.
+
+Each check is chained as a `wallet` entry `{rail, action: "checked", since, order_count, unmatched_count, unmatched_total_minor, complete}`: counts and a total, never an order. `intent verify` fails a `checked` entry with any other key. `intent log` shows it as `Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (21.49 USD)`, and the panel's feed shows the same line, as a warning when any order is unmatched or the check covers only part of the orders.
+
+What it can't see: orders Shop does not report to the gateway's token, orders older than the period or beyond the first page, and anything about an order beyond the four values above. The command needs a Shop client (`INTENT_SHOP_CLIENT_ID`) and a linked wallet (`intent wallet link shop`); without either it says so, exits 1 and sends nothing.
 
 ## What came back
 
@@ -112,12 +133,12 @@ Each line is one action. Fields are always present; `null` means the chain does 
 
 | Field | Meaning |
 |---|---|
-| `v` | The format version, 2. A field is only ever added within a version. Version 2 added `requests[].observed`, the facts from observations and `held`, and the outcomes `rejected` and `expired`; every version 1 field is unchanged, so a reader of version 1 can read version 2 lines. Wallet destinations added, within version 2, the action `call`, the delivery and outcome `answered`, the response kind `response`, `requests[].destination`, `requests[].redacted`, `response.bytes`, `response.body_sha256` and the facts `destination` and `block_kind`. A chain written before observations prints version 2 lines with `observed: null` and none of the new facts. |
+| `v` | The format version, 2. A field is only ever added within a version. Version 2 added `requests[].observed`, the facts from observations and `held`, and the outcomes `rejected` and `expired`; every version 1 field is unchanged, so a reader of version 1 can read version 2 lines. Wallet destinations added, within version 2, the action `call`, the delivery and outcome `answered`, the response kind `response`, `requests[].destination`, `requests[].redacted`, `response.bytes`, `response.body_sha256` and the facts `destination` and `block_kind`; the Shop check added the `check_*` facts. A chain written before observations prints version 2 lines with `observed: null` and none of the new facts. |
 | `time`, `seq` | The `ts` and seq of the action's first entry. |
 | `seqs` | Every entry of the action, in chain order. |
 | `action` | One of the kinds above. |
 | `outcome` | For requests, the worst `delivery` of the action's requests (`answered` for a call); otherwise `blocked`, `refused`, `approval_asked`, `approved`, `pinned`, `flagged` or `recorded` (a key statement, a session start with no request, or a wallet change). A status check whose observation says `rejected` or `expired` has that outcome. |
-| `facts` | The readable facts the action's entries hold, each present only when held: `category`, `product`, `must_haves`, `budget_minor`, `currency`, `zip`, `country`, `offer_handle`, `quantity`, `approval_handle`, `approval_url`, `total_minor`, `expires_at`, `fingerprint`, `pinned`, `flag_reason`, `key_kid`, `keys_expire_at`, `session_id`, `wallet_rail`, `wallet_action` and `revoked` (of a wallet change), `destination` and `endpoint` (of a call, and of a blocked request to a wallet destination), `endpoint`, `field_names` and `block_kind` (of a blocked request), `held` (the values a policy block held back), and from observations `offers_count`, `offers_hidden`, `offers`, `title`, `merchant` and `approval_state` (the latest state Intent Cloud returns for the approval; on a cart too). |
+| `facts` | The readable facts the action's entries hold, each present only when held: `category`, `product`, `must_haves`, `budget_minor`, `currency`, `zip`, `country`, `offer_handle`, `quantity`, `approval_handle`, `approval_url`, `total_minor`, `expires_at`, `fingerprint`, `pinned`, `flag_reason`, `key_kid`, `keys_expire_at`, `session_id`, `wallet_rail`, `wallet_action` and `revoked` (of a wallet change), `check_since`, `check_orders`, `check_unmatched`, `check_unmatched_total_minor` and `check_complete` (of a Shop check), `destination` and `endpoint` (of a call, and of a blocked request to a wallet destination), `endpoint`, `field_names` and `block_kind` (of a blocked request), `held` (the values a policy block held back), and from observations `offers_count`, `offers_hidden`, `offers`, `title`, `merchant` and `approval_state` (the latest state Intent Cloud returns for the approval; on a cart too). |
 | `blocked` | What held a request back, or why an answer was refused. |
 | `requests[]` | Each request the action logged. |
 | `requests[].destination` | `intent_cloud`, or the wallet destination the request went to (`shop`). |

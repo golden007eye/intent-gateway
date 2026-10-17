@@ -3,7 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { WalletRailError } from "../wallet/index.ts";
 import { createHash } from "node:crypto";
-import { asksForAddressFields, checkoutRefOf, projectAccount, projectCheckout, readToolAnswer } from "./project.ts";
+import { findIdentity } from "../privacy/index.ts";
+import { asksForAddressFields, checkoutRefOf, ORDERS_PAGE, projectAccount, projectCheckout, projectOrders, readToolAnswer } from "./project.ts";
 
 const json = (value: unknown, status = 200, type = "application/json") => ({
   status,
@@ -125,5 +126,65 @@ describe("asksForAddressFields", () => {
     expect(asksForAddressFields({ messages: [{ type: "error", code: "missing", path: "$.checkout.fulfillment.methods[0].destinations[0].address1" }] })).toBe(true);
     expect(asksForAddressFields({ checkout: { messages: [{ type: "error", code: "address_required" }] } })).toBe(true);
     expect(asksForAddressFields({ messages: [{ type: "warning", path: "$.fulfillment" }, { type: "error", code: "out_of_stock", path: "$.line_items[0]" }] })).toBe(false);
+  });
+});
+
+describe("projectOrders (plan G12)", () => {
+  const PII = {
+    name: "Jane Doe-Fakename",
+    email: "jane.doe@buyer.example",
+    phone: "+1 415 555 2671",
+    address1: "123 Main St",
+    city: "Springfield",
+  };
+  const address = { first_name: "Jane", last_name: "Doe-Fakename", address1: PII.address1, city: PII.city, postal_code: "94107", phone: PII.phone };
+  /** An order as Shop's history might hold it: identity in every field the gateway does not keep, and in some it does. */
+  const hostile = (id: unknown, extra: Record<string, unknown> = {}) => ({
+    id,
+    name: `#1001 for ${PII.name}`,
+    created_at: "2026-10-12T09:30:00-07:00",
+    currency: "USD",
+    totals: [
+      { type: "subtotal", amount: 500 },
+      { type: "total", amount: 899 },
+    ],
+    merchant: { domain: "sticker-store.myshopify.com", url: `https://stickers.example/account?email=${PII.email}`, name: `${PII.name}'s favourite shop` },
+    customer: { first_name: "Jane", last_name: "Doe-Fakename", email: PII.email, phone: PII.phone },
+    email: PII.email,
+    phone: PII.phone,
+    shipping_address: address,
+    billing_address: address,
+    line_items: [{ item: { id: "gid://shopify/ProductVariant/1", title: `Engraved: ${PII.name}, ${PII.address1}` }, quantity: 1 }],
+    note: `Call ${PII.phone}`,
+    ...extra,
+  });
+
+  it("attack: keeps only {order_ref, total, merchant_origin, created_at}; every identity string is dropped", () => {
+    const projected = projectOrders({ orders: [hostile("gid://shopify/Order/1001")], buyer: { ...PII }, pagination: { has_next_page: false } });
+    expect(projected).toEqual({
+      orders: [{ orderRef: "gid://shopify/Order/1001", total: { amountMinor: 899, currency: "USD" }, merchantOrigin: "https://stickers.example", createdAt: "2026-10-12T16:30:00.000Z" }],
+      complete: true,
+    });
+    expect(findIdentity(projected)).toEqual([]);
+    const text = JSON.stringify(projected);
+    for (const value of [...Object.values(PII), "Jane", "94107"]) expect(text).not.toContain(value);
+  });
+
+  it("attack: an order whose id is not a plain reference (a query, an email) is dropped whole", () => {
+    const projected = projectOrders({ orders: [hostile("gid://shopify/Order/1?key=secret"), hostile(PII.email), hostile(42), hostile("gid://shopify/Order/2")] });
+    expect(projected.orders.map((o) => o.orderRef)).toEqual(["gid://shopify/Order/2"]);
+  });
+
+  it("a missing or odd total, origin or time becomes null, never a guess", () => {
+    const [o] = projectOrders({
+      orders: [hostile("gid://shopify/Order/3", { totals: [{ type: "total", amount: -5 }], merchant: { url: "http://plain.example" }, created_at: "yesterday" })],
+    }).orders;
+    expect(o).toEqual({ orderRef: "gid://shopify/Order/3", total: null, merchantOrigin: null, createdAt: null });
+  });
+
+  it("is incomplete when Shop says another page exists, or returned a full page", () => {
+    expect(projectOrders({ orders: [], pagination: { has_next_page: true } }).complete).toBe(false);
+    expect(projectOrders({ orders: Array.from({ length: ORDERS_PAGE }, (_, i) => hostile(`gid://shopify/Order/${String(i)}`)) }).complete).toBe(false);
+    expect(projectOrders({})).toEqual({ orders: [], complete: true });
   });
 });

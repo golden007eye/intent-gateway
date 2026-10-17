@@ -174,6 +174,42 @@ describe("runVerify: wallet entries (plan G6)", () => {
     expect(text).not.toContain("SECRET");
     expect(text).not.toContain("a@b.example");
   });
+
+  const CHECKED = { rail: "shop", action: "checked", since: "2026-10-10T00:00:00.000Z", order_count: 3, unmatched_count: 2, unmatched_total_minor: 2149, complete: true };
+
+  it("passes a checked entry (plan G12) that holds exactly its seven keys", async () => {
+    const dir = await chain(async (s) => {
+      await s.append("wallet", CHECKED);
+    });
+    expect(failed(await verify(dir))).toEqual([]);
+  });
+
+  it.each([
+    ["the unmatched orders", { ...CHECKED, orders: ["gid://shopify/Order/7001"] }, "orders"],
+    ["the buyer's email", { ...CHECKED, email: "a@b.example" }, "email"],
+    ["a revoked flag", { ...CHECKED, revoked: false }, "revoked"],
+  ])("attack: a checked entry with an extra key (%s) fails, naming the key but never its value", async (_name, body, key) => {
+    const dir = await chain(async (s) => {
+      await s.append("wallet", body);
+    });
+    const report = await verify(dir);
+    expect(report.exitCode).toBe(1);
+    const text = formatReport(report);
+    expect(text).toContain(`seq 0: the wallet entry holds fields a wallet entry never has (${key})`);
+    expect(text).not.toContain("a@b.example");
+    expect(text).not.toContain("Order/7001");
+  });
+
+  it("attack: a checked entry with a key deleted (not set to undefined) fails", async () => {
+    const withoutComplete: Record<string, unknown> = { ...CHECKED };
+    delete withoutComplete.complete;
+    const dir = await chain(async (s) => {
+      await s.append("wallet", withoutComplete);
+    });
+    const report = await verify(dir);
+    expect(report.exitCode).toBe(1);
+    expect(formatReport(report)).toContain("seq 0: the wallet entry has no boolean complete");
+  });
 });
 
 describe("runVerify: a gateway that stopped mid-request (F-l)", () => {

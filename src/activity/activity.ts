@@ -13,7 +13,8 @@
 // - response (the follow-up of a destination that signs no receipt): disclosure_seq, status, body_sha256, bytes.
 // - block: endpoint, destination, fields, blocked, held (the values a policy block held back; absent on older chains,
 //   and never read for an identity block or a logging refusal, which hold no values).
-// - wallet: rail, action (linked, unlinked), revoked.
+// - wallet: rail, action (linked, unlinked, checked), revoked; a check: since, order_count, unmatched_count,
+//   unmatched_total_minor, complete.
 // Entries of the kinds completion, complete_attempt and outcome (the one-tap completion) are not read yet: they slot
 // in as purchase steps once the outcome module writes them.
 // - observed: what Intent Cloud returned for one acknowledged request (src/observation's ObservedBody), joined to
@@ -139,6 +140,12 @@ export interface ActivityFacts {
   wallet_rail?: string;
   wallet_action?: string;
   revoked?: boolean;
+  /** wallet `checked` (plan G12): the period's start, the orders the rail reported, how many no outcome names and their USD total, and whether the rail returned every order. */
+  check_since?: string;
+  check_orders?: number;
+  check_unmatched?: number;
+  check_unmatched_total_minor?: number;
+  check_complete?: boolean;
   key_kid?: string;
   keys_expire_at?: string;
   session_id?: string;
@@ -403,7 +410,20 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
         break;
       }
       case "wallet":
-        open(item, "wallet", { wallet_rail: text(b.rail), wallet_action: text(b.action), ...(typeof b.revoked === "boolean" ? { revoked: b.revoked } : {}) });
+        open(item, "wallet", {
+          wallet_rail: text(b.rail),
+          wallet_action: text(b.action),
+          ...(typeof b.revoked === "boolean" ? { revoked: b.revoked } : {}),
+          ...(b.action !== "checked"
+            ? {}
+            : {
+                check_since: text(b.since),
+                ...(typeof b.order_count === "number" ? { check_orders: b.order_count } : {}),
+                ...(typeof b.unmatched_count === "number" ? { check_unmatched: b.unmatched_count } : {}),
+                ...(typeof b.unmatched_total_minor === "number" ? { check_unmatched_total_minor: b.unmatched_total_minor } : {}),
+                ...(typeof b.complete === "boolean" ? { check_complete: b.complete } : {}),
+              }),
+        });
         break;
       case "approver_flag":
         open(item, "flagged", { fingerprint: text(b.fingerprint), ...(typeof b.reason === "string" ? { flag_reason: b.reason } : {}) }, "flagged");
@@ -610,6 +630,23 @@ export function blockKind(block: Readonly<Record<string, unknown>>): BlockKind {
   if (reasons.some((r) => LOGGING_REFUSAL.test(r))) return "logging";
   if (reasons.some((r) => IDENTITY_REASON.test(r))) return "identity";
   return "policy";
+}
+
+/**
+ * A wallet check (plan G12) in words, one part per fact: what the rail reported and how many orders no outcome in the
+ * log names, never what the rail did (invariant 5). Empty for any other wallet action.
+ */
+export function walletCheckWords(f: Readonly<ActivityFacts>): string[] {
+  if (f.wallet_action !== "checked") return [];
+  const rail = destinationLabel(f.wallet_rail ?? "");
+  const n = f.check_orders ?? 0;
+  const day = (f.check_since ?? "").slice(0, 10);
+  const total = f.check_unmatched_total_minor === undefined ? "" : ` (${(f.check_unmatched_total_minor / 100).toFixed(2)} USD)`;
+  return [
+    `${rail} reported ${String(n)} order${n === 1 ? "" : "s"}${day === "" ? "" : ` since ${day}`}`,
+    `${String(f.check_unmatched ?? 0)} not matched to a purchase in this log${total}`,
+    f.check_complete === false ? `${rail} said more orders exist, or returned a full page of 50: counts cover only the orders it returned` : "",
+  ].filter((p) => p !== "");
 }
 
 /** `intent_cloud` → `Intent Cloud`, `shop` → `Shop`, `shop_accounts` → `Shop accounts`: a destination in words. */

@@ -3,7 +3,7 @@
 // this file: each reader below copies out only the fields it names, so any field Shop adds is dropped by default.
 //
 // Kept: the budget left; the checkout's sha256 reference (the id itself may hold a credential), its status, lines {variant_ref, quantity, title}, store domain, merchant
-// origin, total and order id. The ship-to ZIP is compared here, in memory, and only `match | differs | unknown`
+// origin, total and order id; from search_orders, each order's id, total, merchant origin and creation time only. The ship-to ZIP is compared here, in memory, and only `match | differs | unknown`
 // is kept. The saved-address id is kept inside the adapter (it is how delivery is chosen) and never returned.
 // From an error, only the JSON-RPC numeric code and a fixed local label are kept: Shop's message can carry
 // identity and never reaches a tool result, stderr or the chain.
@@ -12,7 +12,17 @@
 // address id's exact shape is pending the S1 spike's captured answers (plan G0 questions 2 and 9).
 import { createHash } from "node:crypto";
 import { findIdentity } from "../privacy/index.ts";
-import { type ShipToMatch, type WalletAccount, type WalletCheckout, type WalletCheckoutStatus, type WalletLine, type WalletMoney, WalletRailError } from "../wallet/index.ts";
+import {
+  type ShipToMatch,
+  type WalletAccount,
+  type WalletCheckout,
+  type WalletCheckoutStatus,
+  type WalletLine,
+  type WalletMoney,
+  type WalletOrder,
+  type WalletOrders,
+  WalletRailError,
+} from "../wallet/index.ts";
 import type { WireResponse } from "./rpc.ts";
 
 type Json = Record<string, unknown>;
@@ -215,6 +225,38 @@ function shipTo(checkout: Json, expected: string | undefined): ShipToMatch {
   const zips = destinations.map((d) => d?.postal_code).filter((z): z is string => typeof z === "string");
   if (expected === undefined || zips.length !== 1) return "unknown";
   return (zips[0] ?? "").trim().slice(0, 5) === expected.slice(0, 5) ? "match" : "differs";
+}
+
+/** How many orders `intent wallet check` asks search_orders for: one page, never a cursor (plan G12). */
+export const ORDERS_PAGE = 50;
+
+/**
+ * search_orders' answer in our terms (plan G12): for each order only {order_ref, total, merchant_origin, created_at}.
+ * Shop's orders carry the shipping address, the buyer's email and phone, and line text; none of it is read. An order
+ * whose id is not a plain reference (a query, identity text) is dropped whole: it cannot be matched or shown safely.
+ * `complete` is false when Shop says another page exists, or returned a full page.
+ */
+export function projectOrders(content: Json): WalletOrders {
+  const raw = Array.isArray(content.orders) ? (content.orders as unknown[]).map(record) : [];
+  const orders = raw.flatMap((order): WalletOrder[] => {
+    const id = order?.id;
+    if (order === null || typeof id !== "string" || !REF.test(id) || findIdentity(id).length > 0) return [];
+    const merchant = record(order.merchant) ?? record(order.seller) ?? record(order.shop);
+    // An origin is printed to the developer: one that reads as identity (a personal domain, an email-like host) is dropped.
+    const merchantOrigin = origin(merchant?.url);
+    const safeOrigin = merchantOrigin !== null && findIdentity(merchantOrigin).length === 0 ? merchantOrigin : null;
+    return [{ orderRef: id, total: total(order) ?? money(record(order.total)), merchantOrigin: safeOrigin, createdAt: instant(order.created_at) }];
+  });
+  const page = record(content.pagination) ?? record(content.page_info);
+  const more = page?.has_next_page === true || page?.hasNextPage === true || raw.length >= ORDERS_PAGE;
+  return { orders, complete: !more };
+}
+
+/** A creation time as ISO 8601 UTC, or null when it is not a date and time. */
+function instant(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
 }
 
 /** An address-related error message on a tool answer: the rail asks for address fields (plan K4). */

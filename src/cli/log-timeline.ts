@@ -7,7 +7,7 @@
 // a wallet destination (Shop) says "answered" with the status its `response` entry recorded, never "receipt": a wallet
 // signs none. The "Sent to … only" lines name each destination apart, from what its logged requests carried.
 // `intent verify` re-checks every signature. Pure; the golden test pins it.
-import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, INTENT_CLOUD, summarise } from "../activity/index.ts";
+import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, INTENT_CLOUD, summarise, walletCheckWords } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 import { printable } from "../ui/index.ts";
 
@@ -386,11 +386,14 @@ function argumentNames(a: Activity): string {
   return fields.join(", ");
 }
 
-/** `Shop wallet linked`, `Shop wallet unlinked · token revoked at Shop`, `… · token not revoked (deleted here only)`. */
+/**
+ * `Shop wallet linked`, `Shop wallet unlinked · token revoked at Shop`, `… · token not revoked (deleted here only)`,
+ * `Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (17.98 USD)`.
+ */
 export function walletWords(f: Activity["facts"], sep: string): string {
   const rail = destinationLabel(f.wallet_rail ?? "");
   const revoked = f.wallet_action !== "unlinked" ? "" : f.revoked === true ? `token revoked at ${rail}` : f.revoked === false ? "token not revoked (deleted here only)" : "";
-  return [`${rail} wallet ${f.wallet_action ?? ""}`.trim(), revoked].filter((v) => v !== "").join(sep);
+  return [`${rail} wallet ${f.wallet_action ?? ""}`.trim(), revoked, ...walletCheckWords(f)].filter((v) => v !== "").join(sep);
 }
 
 function counts(summary: ActivitySummary, shown: number, total: number, g: Glyphs, paint: (tone: Tone, s: string) => string): string {

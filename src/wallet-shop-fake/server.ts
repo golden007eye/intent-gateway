@@ -70,6 +70,20 @@ export interface FakeShopFaults {
   deviceExpiresIn?: number;
   /** The token answer carries no refresh token (Shop documents none for a public client). */
   noRefreshToken?: boolean;
+  /** search_orders says another page of orders exists. */
+  moreOrders?: boolean;
+}
+
+/**
+ * An order search_orders returns. Each one is answered with the buyer's name, email, phone, shipping address and line
+ * text besides these fields, as Shop's order history holds them.
+ */
+export interface FakeOrder {
+  readonly id: string;
+  readonly totalMinor: number;
+  readonly currency?: string;
+  /** ISO 8601. */
+  readonly createdAt: string;
 }
 
 export type DeviceAnswer = "ok" | "authorization_pending" | "slow_down" | "expired_token" | "access_denied";
@@ -116,6 +130,8 @@ export interface FakeShop {
   readonly protocolErrors: string[];
   /** How many complete_checkout calls reached the fake (whatever their answer). */
   readonly completeCount: number;
+  /** The account's order history, as search_orders answers it; a completed checkout adds its order. Tests may replace it. */
+  orders: FakeOrder[];
   close(): Promise<void>;
 }
 
@@ -189,6 +205,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
     get completeCount() {
       return completeCount;
     },
+    orders: [{ id: "gid://shopify/Order/4001", totalMinor: 899, createdAt: new Date(Date.now() - 86_400_000).toISOString() }],
     close: () => Promise.resolve(),
   };
 
@@ -282,7 +299,24 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       case "create_spend_request":
         return result({ card: { number: FAKE_PAN } });
       case "search_orders":
-        return result({ orders: [{ id: "gid://shopify/Order/4001", shipping_address: address(), email: FAKE_BUYER.email }] });
+        return result({
+          orders: shop.orders.map((o) => ({
+            id: o.id,
+            name: `#${o.id.split("/").at(-1) ?? ""}`,
+            created_at: o.createdAt,
+            currency: o.currency ?? "USD",
+            totals: [{ type: "total", amount: o.totalMinor }],
+            merchant: { domain: FAKE_STORE, url: `${FAKE_STOREFRONT}/orders?customer=${encodeURIComponent(FAKE_BUYER.email)}` },
+            customer: { first_name: FAKE_BUYER.first_name, last_name: FAKE_BUYER.last_name, email: FAKE_BUYER.email, phone: FAKE_BUYER.phone },
+            email: FAKE_BUYER.email,
+            shipping_address: address(),
+            billing_address: address(),
+            line_items: [{ item: { id: FAKE_VARIANT, title: `Engraved for ${FAKE_BUYER.first_name} ${FAKE_BUYER.last_name}` }, quantity: 1 }],
+            note: `Leave at ${FAKE_BUYER.address1}, call ${FAKE_BUYER.phone}`,
+          })),
+          pagination: { has_next_page: shop.faults.moreOrders === true },
+          ...identity(),
+        });
       case "create_checkout": {
         if (typeof key !== "string" || !UUID.test(key)) return toolError("invalid", "$.meta.idempotency-key", "idempotency-key must be a uuid");
         if (typeof args.shop !== "string" || !/\.myshopify\.com$/.test(args.shop)) return toolError("invalid", "$.shop", "unknown shop");
@@ -323,6 +357,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
           else {
             c.status = "completed";
             c.orderId = `gid://shopify/Order/${String(++orders)}`;
+            shop.orders.push({ id: c.orderId, totalMinor: UNIT_PRICE_MINOR * c.quantity + SHIPPING_MINOR + (shop.faults.totalAboveMinor ?? 0), createdAt: new Date().toISOString() });
           }
           return result(view(c));
         });

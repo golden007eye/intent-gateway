@@ -345,7 +345,53 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
     const empty = connectShop(openWalletSession(store), { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText: "not json" });
     expect(await empty.revoke()).toBe("not_sent");
     await expect(empty.account()).rejects.toBeInstanceOf(WalletRailError);
+    await expect(empty.orders()).rejects.toBeInstanceOf(WalletRailError);
     expect(shop.revocations).toEqual([]);
+    expect(shop.calls).toEqual([]);
+  });
+});
+
+describe("search_orders (plan G12, wallet check)", () => {
+  it("attack (identity): orders full of the buyer's identity come back as {order_ref, total, merchant_origin, created_at} only; nothing of it is chained", async () => {
+    const { wallet } = await setup({ identityEverywhere: true, moreOrders: true });
+    shop.orders = [
+      { id: "gid://shopify/Order/7001", totalMinor: 1250, createdAt: "2026-10-15T09:00:00.000Z" },
+      { id: "gid://shopify/Order/7002", totalMinor: 700, currency: "CAD", createdAt: "2026-10-16T09:00:00.000Z" },
+    ];
+    const reported = await wallet.orders();
+    expect(reported).toEqual({
+      orders: [
+        { orderRef: "gid://shopify/Order/7001", total: { amountMinor: 1250, currency: "USD" }, merchantOrigin: FAKE_STOREFRONT, createdAt: "2026-10-15T09:00:00.000Z" },
+        { orderRef: "gid://shopify/Order/7002", total: { amountMinor: 700, currency: "CAD" }, merchantOrigin: FAKE_STOREFRONT, createdAt: "2026-10-16T09:00:00.000Z" },
+      ],
+      complete: false,
+    });
+    const seen = JSON.stringify(reported);
+    const chain = audit();
+    for (const value of [...buyerStrings, "Engraved"]) {
+      expect(seen).not.toContain(value);
+      expect(chain).not.toContain(value);
+    }
+    for (const entry of store.entries()) expect(findIdentity(entry.body), entry.kind).toEqual([]);
+    // Logged before it was sent: the disclosure, then the response (a digest and a size only).
+    expect(store.entries().map((e) => e.kind)).toEqual(["session", "disclosure", "response"]);
+    expect(sentTools()).toEqual(["search_orders"]);
+    expect(loggedBodies()[0]).toContain('"arguments":{"pagination":{"limit":50}}');
+    await verified();
+  });
+
+  it("attack (invariant 2): when the disclosure cannot be appended, search_orders never reaches Shop", async () => {
+    await setup();
+    const failing = new Proxy(store, {
+      get(target, prop, receiver) {
+        if (prop === "append") return () => Promise.reject(new Error("disk full"));
+        const value: unknown = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const vaultText = shopCredentialsText({ clientId: shop.clientId, accessToken: shop.accessToken, refreshToken: shop.refreshToken });
+    const wallet = connectShop(openWalletSession(failing), { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText });
+    await expect(wallet.orders()).rejects.toThrow("disk full");
     expect(shop.calls).toEqual([]);
   });
 });

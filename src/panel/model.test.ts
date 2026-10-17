@@ -314,6 +314,24 @@ describe("buildModel: wallet destinations, refusals and wallet entries (ADR-0014
     expect(html).not.toContain("jane");
   });
 
+  it("a wallet check (plan G12): what Shop reported and how many orders no purchase names, a warning when any; the server log keeps counts", () => {
+    const check = (unmatched: number, total: number, complete: boolean) => ({
+      rail: "shop",
+      action: "checked",
+      since: "2026-10-10T12:00:00.000Z",
+      order_count: 3,
+      unmatched_count: unmatched,
+      unmatched_total_minor: total,
+      complete,
+    });
+    const cm = buildModel(input({ items: chain([["wallet", check(2, 2149, true), at("10:21")], ["wallet", check(0, 0, false), at("10:22")]]), now: Date.parse(at("10:30")) }));
+    expect(cm.feed.map((l) => [l.label, l.tone, l.text])).toEqual([
+      ["wallet", "warn", "Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 0 not matched to a purchase in this log (0.00 USD) · Shop said more orders exist, or returned a full page of 50: counts cover only the orders it returned"],
+      ["wallet", "warn", "Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (21.49 USD)"],
+    ]);
+    expect(cm.log.map((r) => r.summary)).toEqual(["Shop wallet checked · 3 reported · 2 unmatched · 21.49 USD", "Shop wallet checked · 3 reported · 0 unmatched · 0.00 USD · partial"]);
+  });
+
   it("attack: the server log of a hand-edited, re-hashed chain never shows a credential in clear, in a header or in the body", () => {
     const TOKEN = "shop-access-token-SECRET-0123456789";
     const REFRESH = "shop-refresh-token-SECRET-9876543210";

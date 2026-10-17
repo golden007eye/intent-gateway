@@ -15,7 +15,7 @@ import { logFlags } from "./log-flags.ts";
 import { policyAdd, policyShow, policyTest } from "./policy.ts";
 import { serve } from "./serve.ts";
 import { init } from "./init.ts";
-import { walletLink, walletStatus, walletUnlink } from "./wallet.ts";
+import { walletCheck, walletLink, walletStatus, walletUnlink } from "./wallet.ts";
 import type { Demo } from "../demo/index.ts";
 import { activePolicy, cliConfig, PACKAGE_ROOT, startDemoFor, trustedKeys } from "./setup.ts";
 import { printable, printableLines } from "../ui/index.ts";
@@ -60,10 +60,11 @@ const COMMANDS: Readonly<Record<string, Options>> = {
   "wallet status": {},
   "wallet link": {},
   "wallet unlink": {},
+  "wallet check": { since: { type: "string" } },
 };
 
 /** How many positional arguments follow the command words. */
-const ARGUMENTS: Readonly<Record<string, readonly string[]>> = { "policy test": ["<cases.yaml>"], "policy add": ["<name>"], "wallet link": ["<rail>"], "wallet unlink": ["<rail>"] };
+const ARGUMENTS: Readonly<Record<string, readonly string[]>> = { "policy test": ["<cases.yaml>"], "policy add": ["<name>"], "wallet link": ["<rail>"], "wallet unlink": ["<rail>"], "wallet check": ["<rail>"] };
 
 /** The commands that take a subcommand word: `policy show`, `approver list`, `wallet status`. */
 const GROUPS: ReadonlySet<string> = new Set(["policy", "approver", "wallet"]);
@@ -219,6 +220,8 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
       return { code: await walletLink(io, config, arg(0)) };
     case "wallet unlink":
       return { code: await walletUnlink(io, config, arg(0)) };
+    case "wallet check":
+      return { code: await walletCheck(io, config, arg(0), str("since")) };
     default:
       throw new CliError(`unknown command "${command}"`, 2);
   }

@@ -21,7 +21,18 @@ import {
   type WalletCheckout,
   WalletRailError,
 } from "../wallet/index.ts";
-import { asksForAddressFields, checkoutOf, projectAccount, projectCheckout, readToolAnswer, record, STORE_DOMAIN, type ToolAnswer } from "./project.ts";
+import {
+  asksForAddressFields,
+  checkoutOf,
+  ORDERS_PAGE,
+  projectAccount,
+  projectCheckout,
+  projectOrders,
+  readToolAnswer,
+  record,
+  STORE_DOMAIN,
+  type ToolAnswer,
+} from "./project.ts";
 import { REVOKE, type ShopTool, type WireResponse } from "./rpc.ts";
 
 /** A disclosed caller (src/disclosure's DisclosedWallet in shape): logs, then sends, one request. */
@@ -192,6 +203,14 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
       const answer = await tool("get_checkout", { shop: checkout.storeDomain, id: held(checkout) }, purchase);
       refused(answer);
       return hold(answer, checkout.storeDomain, shipToPostalCode);
+    },
+
+    async orders() {
+      // One page and no filter: whether search_orders takes a date filter waits for S1, and a cursor would be a
+      // value from Shop sent back unread. The period is applied to the projected times (src/wallet checkOrders).
+      const answer = await tool("search_orders", { pagination: { limit: ORDERS_PAGE } });
+      refused(answer);
+      return projectOrders(answer.content);
     },
 
     async revoke() {
