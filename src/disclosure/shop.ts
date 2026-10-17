@@ -30,7 +30,7 @@ export interface ShopConnection {
   readonly timeoutMs?: number;
   /** Makes each create_checkout idempotency key (a UUID v4); random by default, fixed by tests. */
   readonly newKey?: () => string;
-  /** Where Shop's raw checkout ids are kept between processes (the encrypted checkout vault, ADR-0018); memory by default. */
+  /** Where Shop's raw checkout ids are kept between processes (the encrypted checkout vault, ADR-0019); memory by default. */
   readonly checkoutIds?: CheckoutIdStore;
 }
 

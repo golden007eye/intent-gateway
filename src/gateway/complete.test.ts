@@ -19,6 +19,7 @@ import { type Entry, openStore, type Store } from "../store/index.ts";
 import { runVerify } from "../verify/index.ts";
 import { openCheckoutVault, WalletKey } from "../wallet/index.ts";
 import { FAKE_BUYER, FAKE_OTHER_VARIANT, FAKE_STORE, FAKE_STOREFRONT, FAKE_VARIANT, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
+import { ATTEMPT_WINDOW_MS } from "./complete.ts";
 import { type ApprovalStatusResult, type CompletionStep, createGateway, type Gateway } from "./index.ts";
 import { spendHistory } from "./history.ts";
 
@@ -62,6 +63,12 @@ interface Proc {
 
 interface ProcOptions {
   hook?: (step: CompletionStep) => void | Promise<void>;
+  /** The process's policy, in place of the base's. */
+  policy?: string;
+  /** Wraps the disclosed cloud the gateway calls (the wallet still logs through the real one's core). */
+  wrapCloud?: (real: DisclosedCloud) => DisclosedCloud;
+  /** The wallet's store for a storefront origin (default: the fake storefront's store). */
+  storeFor?: (origin: string) => string | null;
   /** Wraps the store the gateway writes through (a crash or a failing disk). */
   wrap?: (store: Store) => Store;
 }
@@ -94,16 +101,16 @@ async function proc(base: Base, options: ProcOptions = {}): Promise<Proc> {
   const gateway = createGateway({
     cloud: (keySet) => {
       holder.real = connectCloud({ baseUrl: base.fake.url, session, now: base.now }, store, { keySet, now: base.now });
-      return holder.real;
+      return options.wrapCloud?.(holder.real) ?? holder.real;
     },
     store,
     completerKeys: openCompleterKeys(base.dir, { now: base.now }),
     oneTap: {
-      connect: (cloud) => connectShop(cloud, { mcpUrl: base.shop.mcpUrl, authUrl: base.shop.authUrl, vaultText, checkoutIds }),
-      storeFor: (origin) => (origin === FAKE_STOREFRONT ? FAKE_STORE : null),
+      connect: (cloud) => connectShop(holder.real ?? cloud, { mcpUrl: base.shop.mcpUrl, authUrl: base.shop.authUrl, vaultText, checkoutIds }),
+      storeFor: options.storeFor ?? ((origin) => (origin === FAKE_STOREFRONT ? FAKE_STORE : null)),
       ...(options.hook === undefined ? {} : { hook: options.hook }),
     },
-    policy: loadPolicy(base.policy),
+    policy: loadPolicy(options.policy ?? base.policy),
     pinnedRootKeys: [base.fake.keys.rootPin],
     now: base.now,
     logger: { warn: () => undefined },
@@ -166,6 +173,21 @@ const panelState = async (base: Base) => {
   return [p?.state, p?.tone];
 };
 const keyFiles = async (base: Base): Promise<string[]> => (await fsp.readdir(join(base.dir, "completer")).catch(() => [] as string[])).filter((f) => f.endsWith(".key"));
+
+/**
+ * Re-writes the chain into a fresh data dir (new hashes), letting `extra` append after any entry, and runs verify
+ * over the copy: a hand-written chain, as an attacker or a bug would leave it.
+ */
+async function verifyCopy(base: Base, extra: (e: Entry, out: Store) => Promise<unknown> | null) {
+  const copy = join(await fsp.mkdtemp(join(tmpdir(), "one-tap-copy-")), "data");
+  const out = await openStore(copy, { clock: base.now });
+  for (const e of await chainOf(base)) {
+    await out.append(e.kind, e.body);
+    await extra(e, out);
+  }
+  await out.close();
+  return runVerify({ dataDir: copy, pinnedRootKeys: [base.fake.keys.rootPin], now: new Date(base.now()), skipSupplyChain: true });
+}
 
 /** Approves, then makes the first read back chain the approval with get_account failing, so nothing is redeemed. */
 async function chainedApproval(base: Base, p: Proc): Promise<string> {
@@ -289,6 +311,9 @@ describe.each([true, false])("restart matrix (Shop idempotency %s)", (idempotenc
     await p1.store.close();
     const shopCalls = base.shop.calls.length;
     const p2 = await proc(base);
+    // Within the attempt window a live owner may still send: a wait, never a verdict (M1).
+    expect(completionOf(await status(p2, handle)).state).toBe("completing");
+    base.clock.at += ATTEMPT_WINDOW_MS;
     expect(completionOf(await status(p2, handle))).toMatchObject({ state: "failed", source: "gateway_precheck", reason: "not_sent" });
     expect(base.shop.calls.length).toBe(shopCalls);
     expect(base.shop.completeCount).toBe(0);
@@ -300,23 +325,22 @@ describe.each([true, false])("restart matrix (Shop idempotency %s)", (idempotenc
     expect((await verify(base)).exitCode).toBe(0);
   });
 
-  it("verify fails closed on not_sent: any complete_checkout logged after the approval, whatever purchase it names, refutes it", async () => {
+  it("verify on not_sent uses the shared rule: a send naming this purchase or none refutes it, another purchase's does not", async () => {
     const base = await setup({ faults: { idempotency } });
     const p1 = await proc(base, { hook: crashAt("attempt") });
     const handle = await approvedCart(base, p1);
     await expect(status(p1, handle)).rejects.toThrow();
     await p1.store.close();
+    base.clock.at += ATTEMPT_WINDOW_MS;
     expect(completionOf(await status(await proc(base), handle)).reason).toBe("not_sent");
-    // The same chain re-written into another data dir, with another purchase's complete_checkout after the approval.
-    const copy = join(await fsp.mkdtemp(join(tmpdir(), "one-tap-copy-")), "data");
-    const out = await openStore(copy, { clock: base.now });
-    for (const e of await chainOf(base)) {
-      await out.append(e.kind, e.body);
-      if (e.kind === "approval") await out.append("disclosure", { endpoint: "complete_checkout", destination: "shop", purchase: "ap_another000" });
-    }
-    await out.close();
-    const report = await runVerify({ dataDir: copy, pinnedRootKeys: [base.fake.keys.rootPin], now: new Date(base.now()), skipSupplyChain: true });
-    expect(report.checks.find((c) => c.name === "outcomes")?.details.join("\n")).toContain("says nothing was sent, but a complete_checkout disclosure is logged after its approval");
+    const refutes = "says nothing was sent, but a complete_checkout disclosure for it (or naming no purchase) is logged after its approval";
+    const withSend = async (extra: Record<string, unknown>): Promise<string> => {
+      const report = await verifyCopy(base, (e, out) => (e.kind === "approval" ? out.append("disclosure", { endpoint: "complete_checkout", destination: "shop", ...extra }) : null));
+      return report.checks.find((c) => c.name === "outcomes")?.details.join("\n") ?? "";
+    };
+    expect(await withSend({})).toContain(refutes);
+    expect(await withSend({ purchase: handle })).toContain(refutes);
+    expect(await withSend({ purchase: "ap_another000" })).not.toContain(refutes);
   });
 
   it("an open checkout after a possible send: indeterminate, reservation held past expires_at, never re-sent on three later calls", async () => {
@@ -439,6 +463,8 @@ describe("races between processes", () => {
     await p1.store.append("complete_attempt", { handle, owner: "an-owner-from-another-process", idempotency_key: completion?.idempotency_key });
     await p1.store.close();
     const p2 = await proc(base);
+    expect(completionOf(await status(p2, handle)).state).toBe("completing");
+    base.clock.at += ATTEMPT_WINDOW_MS;
     const seen = completionOf(await status(p2, handle));
     expect(completeSends(await chainOf(base))).toHaveLength(0);
     expect(base.shop.completeCount).toBe(0);
@@ -520,6 +546,9 @@ describe("refusals before any complete_checkout", () => {
     expect(completeSends(chain)).toHaveLength(0);
     expect(reportsAt(base, handle)).toEqual([]);
     expect(counted(base, chain)).toBe(0);
+    // Nothing is left to read or report: the completer key (L5) and the quote's checkout id (L6) are gone.
+    expect(await keyFiles(base)).toEqual([]);
+    expect(await fsp.readdir(join(base.dir, "wallet", "shop-checkouts")).catch(() => [])).toEqual([]);
     expect((await verify(base)).exitCode).toBe(0);
   });
 
@@ -622,5 +651,171 @@ describe("terminal report retry across a restart (G3 acceptance test 14)", () =>
     expect(ordered).toHaveLength(2);
     expect(ordered[1]?.body_b64).toBe(ordered[0]?.body_b64);
     expect(await keyFiles(base)).toEqual([]);
+  });
+});
+
+describe("security review fixes", () => {
+  it("M1: while A is between 6a and 6b, B's call is a wait, not not_sent; A then sends once → ordered", async () => {
+    const base = await setup();
+    let b: Proc | null = null;
+    let seenByB: ApprovalStatusResult | null = null;
+    let handle = "";
+    const a = await proc(base, {
+      hook: async (s) => {
+        if (s === "attempt" && b !== null) seenByB = await status(b, handle);
+      },
+    });
+    b = await proc(base);
+    handle = await approvedCart(base, a);
+    expect(completionOf(await status(a, handle)).state).toBe("ordered");
+    expect(completionOf(seenByB as unknown as ApprovalStatusResult).state).toBe("completing");
+    expect(localOutcomes(await chainOf(base)).some((o) => o.reason === "not_sent")).toBe(false);
+    expect(base.shop.completeCount).toBe(1);
+  });
+
+  it("M1: the owner refuses to send once the attempt window has passed", async () => {
+    const base = await setup();
+    const a = await proc(base, {
+      hook: (s) => {
+        if (s === "attempt") base.clock.at += ATTEMPT_WINDOW_MS;
+      },
+    });
+    const handle = await approvedCart(base, a);
+    expect(completionOf(await status(a, handle))).toMatchObject({ state: "failed", reason: "not_sent" });
+    expect(base.shop.completeCount).toBe(0);
+    expect(completeSends(await chainOf(base))).toHaveLength(0);
+  });
+
+  it("M2: H1 crashed after 6a, then H2 sent: H1 is still provably unsent (not stranded indeterminate)", async () => {
+    const base = await setup();
+    const p1 = await proc(base, { hook: crashAt("attempt") });
+    const h1 = await approvedCart(base, p1);
+    await expect(status(p1, h1)).rejects.toThrow();
+    await p1.store.close();
+    const p2 = await proc(base);
+    const h2 = await approvedCart(base, p2);
+    expect(completionOf(await status(p2, h2)).state).toBe("ordered");
+    base.clock.at += ATTEMPT_WINDOW_MS;
+    expect(completionOf(await status(p2, h1))).toMatchObject({ state: "failed", reason: "not_sent" });
+    expect(base.shop.completeCount).toBe(1);
+    expect(counted(base, await chainOf(base))).toBe(1);
+    expect((await verify(base)).exitCode).toBe(0);
+  });
+
+  it("M2: an earlier precheck refusal is not re-counted after a later, unrelated send", async () => {
+    const base = await setup({ faults: { totalAboveMinor: 1 } });
+    const p = await proc(base);
+    const h1 = await approvedCart(base, p);
+    expect(completionOf(await status(p, h1)).reason).toBe("precheck:total");
+    delete base.shop.faults.totalAboveMinor;
+    const h2 = await approvedCart(base, p);
+    expect(completionOf(await status(p, h2)).state).toBe("ordered");
+    const chain = await chainOf(base);
+    expect(counted(base, chain)).toBe(1);
+    expect((await verify(base)).exitCode).toBe(0);
+  });
+
+  it("M2: a complete_checkout send without its purchase or its send condition is refused before anything is logged", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const shop = connectShop(p.real, { mcpUrl: base.shop.mcpUrl, authUrl: base.shop.authUrl, vaultText: "{}" });
+    const before = (await chainOf(base)).length;
+    await expect(
+      shop.completeCheckout({ storeDomain: FAKE_STORE, checkoutRef: `sha256:${"0".repeat(64)}` }, "ap_TEST0001", "6f1c4a1e-0000-4000-8000-000000000000", {
+        sendUnless: undefined as unknown as () => boolean,
+      }),
+    ).rejects.toThrow();
+    expect((await chainOf(base)).length).toBe(before);
+  });
+
+  it("M3 attack: a hand-written chain with two complete_checkout sends for one purchase → verify exits 1", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    const twice = await verifyCopy(base, (e, out) => (e.kind === "disclosure" && body(e).endpoint === "complete_checkout" ? out.append("disclosure", e.body) : null));
+    expect(twice.exitCode).toBe(1);
+    expect(twice.checks.find((c) => c.name === "outcomes")?.details.join("\n")).toContain(`a second complete_checkout disclosure for ${handle}`);
+    const unnamed = await verifyCopy(base, (e, out) =>
+      e.kind === "complete_attempt" ? out.append("disclosure", { endpoint: "complete_checkout", destination: "shop" }) : null,
+    );
+    expect(unnamed.exitCode).toBe(1);
+    expect(unnamed.checks.find((c) => c.name === "outcomes")?.details.join("\n")).toContain("names no purchase");
+  });
+
+  it("M4: two concurrent carts in two processes cannot both fit under the daily cap", async () => {
+    const base = await setup({ policy: `${BASE_POLICY}spend:\n  per_day_usd: 15\n` });
+    // Both approval requests are answered before either cart goes on, so both pass every check made before the
+    // reserving entry: only the compare-and-append of approval_pending can stop the second.
+    let arrived = 0;
+    let both = (): void => undefined;
+    const met = new Promise<void>((resolve) => {
+      both = resolve;
+    });
+    const barrier = (real: DisclosedCloud): DisclosedCloud => ({
+      ...real,
+      createApproval: async (h) => {
+        const answer = await real.createApproval(h);
+        if (++arrived === 2) both();
+        await met;
+        return answer;
+      },
+    });
+    const p1 = await proc(base, { wrapCloud: barrier });
+    const p2 = await proc(base, { wrapCloud: barrier });
+    const offer = async (p: Proc): Promise<string> => {
+      const found = await p.gateway.findOffers(SEARCH);
+      if (found.status !== "offers" || found.offers[0] === undefined) throw new Error("no offers");
+      return found.offers[0].offer_handle;
+    };
+    const [o1, o2] = [await offer(p1), await offer(p2)];
+    const results = await Promise.all([p1.gateway.createCart({ offer_handle: o1 }), p2.gateway.createCart({ offer_handle: o2 })]);
+    expect(results.map((r) => r.status).sort()).toEqual(["approval_needed", "refused"]);
+    expect(ofKind(await chainOf(base), "approval_pending")).toHaveLength(1);
+  });
+
+  it("M4: step 4 re-checks the caps with the redemption: over the cap now, failed (cap) and nothing redeemed", async () => {
+    const base = await setup();
+    const p1 = await proc(base);
+    const handle = await chainedApproval(base, p1);
+    await p1.store.close();
+    const tight = await proc(base, { policy: `${BASE_POLICY}spend:\n  per_day_usd: 5\n` });
+    expect(completionOf(await status(tight, handle))).toMatchObject({ state: "failed", reason: "cap" });
+    expect(ofKind(await chainOf(base), "completion")).toHaveLength(0);
+    expect(base.shop.completeCount).toBe(0);
+  });
+
+  it("L2: a 429 to completing leaves it open (retried), never a refusal", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    base.fake.tamper.reportStatus(429);
+    expect(completionOf(await status(p, handle)).state).toBe("completing");
+    base.fake.tamper.reportStatus(null);
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    expect(base.shop.completeCount).toBe(1);
+  });
+
+  it("L4: a merchant whose Shop store cannot be named is offered hand-off only, so the cart is handed off", async () => {
+    const base = await setup();
+    const p = await proc(base, { storeFor: () => null });
+    const found = await p.gateway.findOffers(SEARCH);
+    if (found.status !== "offers" || found.offers[0] === undefined) throw new Error("no offers");
+    const cart = await p.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
+    if (cart.status !== "approval_needed") throw new Error(cart.message);
+    expect(cart.cart.completion_mode).toBe("handoff");
+    const logged = ofKind(await chainOf(base), "disclosure").find((d) => d.endpoint === "createCart");
+    expect((JSON.parse(Buffer.from(String(logged?.body_b64), "base64").toString("utf8")) as { completion_accepts: unknown }).completion_accepts).toEqual(["handoff"]);
+  });
+
+  it("L6: a quote lost in the step-4 race forgets its checkout id", async () => {
+    const base = await setup();
+    const p1 = await proc(base);
+    const p2 = await proc(base);
+    const handle = await chainedApproval(base, p1);
+    await Promise.all([status(p1, handle), status(p2, handle)]);
+    expect(completionOf(await status(p2, handle)).state).toBe("ordered");
+    // The winner's id is released at the terminal outcome, the loser's at once: none is left.
+    expect(await fsp.readdir(join(base.dir, "wallet", "shop-checkouts")).catch(() => [])).toEqual([]);
   });
 });

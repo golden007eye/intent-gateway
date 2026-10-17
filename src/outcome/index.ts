@@ -17,7 +17,16 @@ export {
   shipToOptional,
   totalMatches,
 } from "./binding.ts";
-export { chargedNothing, CloudOutcomeEntry, LocalOutcomeEntry, OutcomeEntry, type OutcomeChainEntry, outcomesFor } from "./entry.ts";
+export {
+  chargedNothing,
+  CloudOutcomeEntry,
+  COMPLETE_CHECKOUT,
+  LocalOutcomeEntry,
+  mayHaveSent,
+  OutcomeEntry,
+  type OutcomeChainEntry,
+  outcomesFor,
+} from "./entry.ts";
 export {
   CLOUD_SOURCES,
   GATEWAY_SOURCES,

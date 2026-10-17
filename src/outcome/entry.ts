@@ -7,7 +7,7 @@
 //   TLS): written by the one-tap completion (plan G7b). Its binding inputs never hold a raw checkout id, only its hash.
 // Only a `local` outcome can free spend-cap room, never a `cloud` one (contract §6). Pure.
 import { z } from "zod";
-import { Binding, OutcomeSource, OutcomeState } from "../contract/index.ts";
+import { ApprovalHandle, Binding, OutcomeSource, OutcomeState } from "../contract/index.ts";
 
 const Hex64 = z.string().regex(/^[0-9a-f]{64}$/);
 const Minor = z.int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -72,21 +72,34 @@ export function outcomesFor(entries: readonly OutcomeChainEntry[], handle: strin
   return found;
 }
 
+/** The wallet operation that pays: the one send per purchase the double-charge rules count. */
+export const COMPLETE_CHECKOUT = "complete_checkout";
+
+/**
+ * The one rule for "this purchase may have been sent to the wallet" (ADR-0019), shared by the completion step machine,
+ * chargedNothing and `intent verify`: a `disclosure` of complete_checkout logged after the purchase's `approval`
+ * entry (every one, when there is none) whose local `purchase` field names the purchase, or names no valid approval
+ * handle at all (ambiguous, so it fails closed). Another purchase's send, named as such, does not count.
+ */
+export function mayHaveSent(entries: readonly OutcomeChainEntry[], handle: string): boolean {
+  const approvedAt = entries.findIndex((e) => e.kind === "approval" && (e.body as { handle?: unknown } | null)?.handle === handle);
+  return entries.some((e, i) => {
+    if (i <= approvedAt || e.kind !== "disclosure" || typeof e.body !== "object" || e.body === null) return false;
+    const { endpoint, purchase } = e.body as { endpoint?: unknown; purchase?: unknown };
+    if (endpoint !== COMPLETE_CHECKOUT) return false;
+    return purchase === handle || !ApprovalHandle.safeParse(purchase).success;
+  });
+}
+
 /**
  * Whether the gateway holds local evidence that an approved purchase charged nothing, so its reservation may be freed
  * (contract §6): its latest `local` outcome is `failed`, read from Shop (`shop_api`: the checkout is terminal and not
- * completed), or its own precheck refusal (`gateway_precheck`) while no `complete_checkout` disclosure at all was
- * logged after the purchase's approval (log-before-send proves nothing was sent). The precheck branch fails closed: it
- * does not rely on a disclosure naming its purchase, so any such send after the approval keeps the room. A `cloud`
- * outcome never frees room: a compromised Intent Cloud must not widen spending.
+ * completed), or its own precheck refusal (`gateway_precheck`) while mayHaveSent is false (log-before-send proves
+ * nothing was sent). A `cloud` outcome never frees room: a compromised Intent Cloud must not widen spending.
  */
 export function chargedNothing(entries: readonly OutcomeChainEntry[], handle: string): boolean {
   const local = outcomesFor(entries, handle).filter((o): o is LocalOutcomeEntry => o.basis === "local").at(-1);
   if (local?.state !== "failed") return false;
   if (local.source === "shop_api") return true;
-  const approvedAt = entries.findIndex((e) => e.kind === "approval" && (e.body as { handle?: unknown } | null)?.handle === handle);
-  return !entries.some((e, i) => {
-    if (i < approvedAt || e.kind !== "disclosure" || typeof e.body !== "object" || e.body === null) return false;
-    return (e.body as { endpoint?: unknown }).endpoint === "complete_checkout";
-  });
+  return !mayHaveSent(entries, handle);
 }

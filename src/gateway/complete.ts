@@ -1,4 +1,4 @@
-// One-tap completion (plan G7b; contract 1.6.0 Appendix G; ADR-0018): the step machine that redeems a verified
+// One-tap completion (plan G7b; contract 1.6.0 Appendix G; ADR-0019): the step machine that redeems a verified
 // `shop_agent` approval with the developer's linked wallet. It runs inside get_approval_status, never in the
 // background, and resumes from the chain on every later call, in this process or a restarted one.
 //
@@ -8,15 +8,16 @@
 // 3. Quote and precheck: create the wallet checkout; binding-v1 checks 1, 3, 4 and 5 against it (check 2 is the
 //    checkout's own hash). A title is advisory only.
 // 4. Redeem: compare-and-append `completion` {handle, checkout_ref, report_id, idempotency_key, …} unless one exists
-//    for the handle. A conflict means another process owns the purchase: stop.
+//    for the handle (another process owns the purchase: stop) or the caps no longer fit (failed, cap).
 // 5. Report `completing` (its body is fixed by the completion entry, so every retry is byte-identical). A 409/410
 //    before acceptance is a local outcome only, and frees the reservation (no complete_attempt exists).
 // 6. Complete, only before S.expires_at: 6a compare-and-append `complete_attempt` {handle, owner} with an owner token
 //    held in memory only; 6b the completer precheck on a fresh get_checkout (Appendix G), then complete_checkout,
-//    whose disclosure is itself compare-and-appended: only the attempt's owner, only once, only with no outcome yet.
-// 7. Reconcile: an attempt with no complete_checkout disclosure was never sent (log before send) → failed
-//    (gateway_precheck, not_sent). One with a disclosure may have been sent: get_checkout only, never a second
-//    complete_checkout; open, not found or an error → indeterminate, reservation held.
+//    whose disclosure is itself compare-and-appended: only the attempt's owner, within the attempt window, only once,
+//    only with no outcome yet.
+// 7. Reconcile: past the attempt window, an attempt for which outcome's mayHaveSent is false was never sent (log
+//    before send) → failed (gateway_precheck, not_sent); within it, a wait. One that may have been sent: get_checkout
+//    only, never a second complete_checkout; open, not found or an error → indeterminate, reservation held.
 // 8. Report the latest outcome; a report that got no answer is retried on later calls from its logged bytes.
 //
 // Cap room comes back only from local evidence (outcome's chargedNothing); nothing Intent Cloud says frees it.
@@ -25,7 +26,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ApprovalProof, Binding, OutcomeReport, SnapshotV2 } from "../contract/index.ts";
 import { type DisclosedCloud, DisclosureConflictError } from "../disclosure/index.ts";
-import { bindingV1, type LocalOutcomeEntry, outcomesFor, shipToOptional } from "../outcome/index.ts";
+import { bindingV1, type LocalOutcomeEntry, mayHaveSent, outcomesFor, shipToOptional } from "../outcome/index.ts";
 import type { Session } from "../signing/index.ts";
 import { type Entry, type Store, StoreConflictError } from "../store/index.ts";
 import { type ChainEntry, type KeySet, verifyApprovalProof } from "../trust/index.ts";
@@ -39,6 +40,11 @@ export interface CompletionContext {
   readonly wallet: WalletAdapter | null;
   /** The rail's name for the merchant at this storefront origin (Shop: its myshopify domain), or null when unknown. */
   readonly storeFor: (merchantOrigin: string) => string | null;
+  /**
+   * The policy's spend caps over `chain` for this purchase, counted once (atomic reservation): true when it no longer
+   * fits, as when another cart took the room meanwhile. Evaluated under the store lease with the completion entry.
+   */
+  readonly overCap?: (chain: readonly Entry[]) => boolean;
   /** Whether the policy, met with Intent Cloud's baseline, allows one_tap. */
   readonly oneTapAllowed: boolean;
   /** The policy's per-order cap in cents, or null when it sets none. */
@@ -80,9 +86,14 @@ type Body = Record<string, unknown>;
 const asBody = (value: unknown): Body => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Body) : {});
 const TERMINAL = new Set(["ordered", "mismatch", "failed"]);
 const REPORT_PATH = (handle: string): string => `/v1/approvals/${handle}/outcome-reports`;
-const COMPLETE = "complete_checkout";
 /** The whole run is bounded (plan D2): a slow wallet answer ends the call in a wait state, resumed on the next one. */
 export const COMPLETION_BUDGET_MS = 20_000;
+/**
+ * How long a complete_attempt may stay without its send before another process may call it never sent: the run's
+ * budget plus the wallet transport's 30 s timeout, rounded up. Within it a live owner may still be between 6a and 6b;
+ * after it the owner itself refuses to send, so the two verdicts never meet.
+ */
+export const ATTEMPT_WINDOW_MS = 60_000;
 
 /** `or_` + 22 base64url characters: 132 bits from the CSPRNG (Appendix G R4). */
 export function newReportId(): string {
@@ -98,19 +109,15 @@ function completionOf(entries: readonly Entry[], handle: string): Body | null {
 const attemptsOf = (entries: readonly ChainEntry[], handle: string): Body[] =>
   entries.filter((e) => e.kind === "complete_attempt" && asBody(e.body).handle === handle).map((e) => asBody(e.body));
 
-/** Whether a complete_checkout disclosure for this purchase (its local `purchase` field) is logged: the send's own uniqueness. */
-function completeLogged(entries: readonly ChainEntry[], handle: string): boolean {
-  return entries.some((e) => e.kind === "disclosure" && asBody(e.body).purchase === handle && asBody(e.body).endpoint === COMPLETE);
+/** When the purchase's complete_attempt was chained (its entry's ts, milliseconds), or null when there is none. */
+function attemptAt(entries: readonly ChainEntry[], handle: string): number | null {
+  const found = entries.find((e) => e.kind === "complete_attempt" && asBody(e.body).handle === handle) as { ts?: unknown } | undefined;
+  const at = typeof found?.ts === "string" ? Date.parse(found.ts) : Number.NaN;
+  return found === undefined ? null : Number.isFinite(at) ? at : 0;
 }
 
-/**
- * Whether this purchase may have been sent to the wallet, fail closed as outcome's chargedNothing and `intent verify`:
- * any complete_checkout logged after its approval, whichever purchase it names, means it is not provably unsent.
- */
-export function maybeSent(entries: readonly ChainEntry[], handle: string): boolean {
-  const approvedAt = entries.findIndex((e) => e.kind === "approval" && asBody(e.body).handle === handle);
-  return entries.some((e, i) => i > approvedAt && e.kind === "disclosure" && asBody(e.body).endpoint === COMPLETE);
-}
+/** outcome's mayHaveSent: the one shared rule for "complete_checkout may have left for this purchase" (ADR-0019). */
+const maybeSent = mayHaveSent;
 
 const localOutcomes = (entries: readonly ChainEntry[], handle: string): LocalOutcomeEntry[] =>
   outcomesFor(entries, handle).filter((o): o is LocalOutcomeEntry => o.basis === "local");
@@ -124,9 +131,14 @@ interface LoggedReport {
 
 function reportsOf(entries: readonly Entry[], handle: string): LoggedReport[] {
   const statusBySeq = new Map<number, number>();
+  const discarded = new Set<unknown>();
+  for (const e of entries) if (e.kind === "discarded") discarded.add(asBody(e.body).disclosure_seq);
   for (const e of entries) {
     const b = asBody(e.body);
-    if (e.kind === "receipt" && b.verified === true && typeof b.disclosure_seq === "number" && typeof b.status === "number") statusBySeq.set(b.disclosure_seq, b.status);
+    // A discarded answer is no answer at all, whatever else names the disclosure.
+    if (e.kind === "receipt" && b.verified === true && typeof b.disclosure_seq === "number" && typeof b.status === "number" && !discarded.has(b.disclosure_seq)) {
+      statusBySeq.set(b.disclosure_seq, b.status);
+    }
   }
   const found: LoggedReport[] = [];
   for (const e of entries) {
@@ -143,11 +155,14 @@ function reportsOf(entries: readonly Entry[], handle: string): LoggedReport[] {
   return found;
 }
 
-/** A report with this id that Intent Cloud accepted (201, receipt verified); or refused with a 4xx; or neither yet. */
+/** The answers that refuse a report for good (Appendix G R1–R4); 401, 429 and 5xx leave it open, to retry. */
+const REFUSING = new Set([400, 404, 409, 410]);
+
+/** A report with this id that Intent Cloud accepted (201, receipt verified, not discarded); refused for good; or neither yet. */
 function reportFate(reports: readonly LoggedReport[], reportId: unknown): "accepted" | "refused" | "open" {
   const mine = reports.filter((r) => r.report.report_id === reportId);
   if (mine.some((r) => r.status === 201)) return "accepted";
-  if (mine.some((r) => r.status !== null && r.status >= 400 && r.status < 500)) return "refused";
+  if (mine.some((r) => r.status !== null && REFUSING.has(r.status))) return "refused";
   return "open";
 }
 
@@ -252,7 +267,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     const reports = reportsOf(entries, handle);
     if (reportFate(reports, completion.report_id) !== "accepted") return;
     const same = reports.filter((r) => r.report.state === latest.state && r.report.completing_report_id === completion.report_id);
-    if (same.some((r) => r.status !== null && r.status >= 200 && r.status < 500)) return;
+    if (same.some((r) => r.status === 201 || (r.status !== null && REFUSING.has(r.status)))) return;
     // Once a terminal state was accepted no other report may follow (R4).
     if (reports.some((r) => r.status === 201 && TERMINAL.has(String(r.report.state)))) return;
     const first = same[0];
@@ -350,7 +365,12 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     const { observed, context, verdict: binding } = bind(snapshot, quote, quote.checkoutRef);
     if (titleDiffers(snapshot, quote)) advisory.push("title_differs");
     const problem = precheckProblem(binding);
-    if (problem !== null) return refuse(problem, "gateway_precheck", { binding_inputs: { observed, context }, local_binding: binding });
+    // A quote that goes no further: its checkout id is forgotten at once (nothing will read that checkout again).
+    const forget = (): Promise<void> => wallet.release({ storeDomain: quote.storeDomain, checkoutRef: quote.checkoutRef }).catch(() => undefined);
+    if (problem !== null) {
+      await forget();
+      return refuse(problem, "gateway_precheck", { binding_inputs: { observed, context }, local_binding: binding });
+    }
     const body = {
       handle,
       checkout_ref: quote.checkoutRef,
@@ -360,12 +380,20 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
       total_minor: totalMinor,
       observed_at: timestamp(now()),
     };
+    // The reservation is atomic: the caps are re-checked over the chain under the lease, with the redemption itself.
+    const room = { over: false };
     try {
-      await store.appendUnless("completion", body, (chain) => completionOf(chain, handle) !== null);
+      await store.appendUnless("completion", body, (chain) => {
+        if (completionOf(chain, handle) !== null) return true;
+        room.over = ctx.overCap?.(chain) === true;
+        return room.over;
+      });
     } catch (error) {
+      if (!(error instanceof StoreConflictError)) throw error;
+      await forget();
+      if (room.over) return refuse("cap");
       // Another process redeemed this purchase first: it owns it.
-      if (error instanceof StoreConflictError) return { state: "completing", ...(advisory.length === 0 ? {} : { advisory }) };
-      throw error;
+      return { state: "completing", ...(advisory.length === 0 ? {} : { advisory }) };
     }
     await ctx.hook?.("completion");
     entries = store.entries();
@@ -427,8 +455,10 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
 
   // ---- Step 7: reconcile ---------------------------------------------------------------------------------------------
   if (!maybeSent(store.entries(), handle)) {
-    // No disclosure: log-before-send proves complete_checkout was never sent. The outcome is compare-and-appended
-    // against a disclosure, so a live owner's send and this verdict exclude each other.
+    // No disclosure: log-before-send proves complete_checkout was never sent so far. A live owner may still be between
+    // 6a and 6b: within the attempt window this is a wait, never a verdict (the owner stops sending after it).
+    if (now() - (attemptAt(store.entries(), handle) ?? 0) < ATTEMPT_WINDOW_MS) return finish(completion, advisory);
+    // The outcome is compare-and-appended against a disclosure, so a send and this verdict exclude each other.
     const chained = await local({ state: "failed", source: "gateway_precheck", reason: "not_sent" }, (chain) => maybeSent(chain, handle));
     if (chained) return finish(completion, advisory);
   }
@@ -466,7 +496,9 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     };
     const sendUnless = (chain: readonly ChainEntry[]): boolean => {
       const attempts = attemptsOf(chain, handle);
-      return attempts.length !== 1 || attempts[0]?.owner !== owner || completeLogged(chain, handle) || localOutcomes(chain, handle).length > 0;
+      // Past the attempt window another process may call the attempt never sent: the owner no longer sends.
+      const stale = now() - (attemptAt(chain, handle) ?? 0) >= ATTEMPT_WINDOW_MS;
+      return attempts.length !== 1 || attempts[0]?.owner !== owner || stale || maybeSent(chain, handle) || localOutcomes(chain, handle).length > 0;
     };
     let answer: WalletCheckout;
     try {
@@ -474,12 +506,12 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     } catch (error) {
       if (error instanceof CompletionRefusedError || error instanceof AddressFieldsRequiredError) {
         const reason = error instanceof CompletionRefusedError ? error.reason : "address_fields";
-        const chained = await local({ state: "failed", source: "gateway_precheck", reason }, (chain) => completeLogged(chain, handle));
+        const chained = await local({ state: "failed", source: "gateway_precheck", reason }, (chain) => maybeSent(chain, handle));
         return chained ? "settled" : "reconcile";
       }
       if (error instanceof DisclosureConflictError) return "reconcile";
       // Logged and maybe sent, with no usable answer: indeterminate, never re-sent. Not logged: never sent.
-      if (completeLogged(store.entries(), handle)) {
+      if (maybeSent(store.entries(), handle)) {
         await local({ state: "indeterminate", source: "shop_api", reason: "no_answer" });
         return "settled";
       }

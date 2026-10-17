@@ -98,7 +98,7 @@ export interface ShopAdapterOptions {
   /** A UUID v4 for create_checkout; tests may fix it. */
   readonly newKey?: () => string;
   /**
-   * Where Shop's raw checkout ids are kept between processes (ADR-0018): the encrypted checkout vault in production,
+   * Where Shop's raw checkout ids are kept between processes (ADR-0019): the encrypted checkout vault in production,
    * so a restarted gateway can still reconcile a checkout it may have completed. In memory only by default.
    */
   readonly checkoutIds?: CheckoutIdStore;
@@ -188,7 +188,7 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
       return hold(answer, request.storeDomain, request.shipToPostalCode);
     },
 
-    async completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, completeOptions: CompleteOptions = {}) {
+    async completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, completeOptions: CompleteOptions) {
       const { shipToPostalCode, precheck, sendUnless } = completeOptions;
       checkStore(checkout.storeDomain);
       if (!UUID_V4.test(idempotencyKey)) throw new TypeError("a Shop idempotency key is a UUID v4");

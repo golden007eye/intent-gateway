@@ -81,6 +81,11 @@ export function createDisclosedWallet(transport: DestinationTransport, cloud: Di
     async call(operation, payload, callOptions = {}) {
       const { purchase, unless } = callOptions;
       if (purchase !== undefined && !PURCHASE.test(purchase)) throw new TypeError(`not an approval handle: ${JSON.stringify(purchase)}`);
+      // The double-charge rules (ADR-0019) count a payment by its purchase and admit it only by compare-and-append:
+      // a complete_checkout without both is refused before anything is logged or sent.
+      if (operation === "complete_checkout" && (purchase === undefined || unless === undefined)) {
+        throw new TypeError("a complete_checkout send needs its purchase and its send condition (unless)");
+      }
       core.assertOpen();
       const request = transport.prepare(operation, payload);
       const { result, seq } = await core.disclose(

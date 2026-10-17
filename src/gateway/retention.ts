@@ -10,7 +10,8 @@
 //   report. An outcome the gateway did not verify deletes nothing, so a forged terminal outcome cannot drop the key
 //   early;
 // - for an approved `shop_agent` purchase, once a terminal outcome report the key signed got a 201 with a verified
-//   receipt, which is the last request the key signs;
+//   receipt, which is the last request the key signs; or once the gateway chained a terminal local outcome while no
+//   report the key signed was ever accepted (a refusal before redemption is local only: nothing is left to report);
 // - in every case, at `expires_at` + 48 h at the latest: never later than Intent Cloud's completer read window (R7,
 //   48 h after the later of `expires_at` and a terminal outcome), after which it accepts nothing the key signs.
 import { outcomesFor, TERMINAL_STATES } from "../outcome/index.ts";
@@ -56,7 +57,7 @@ function keepFor(chain: readonly Entry[], entry: Entry, now: number): boolean {
     return now < expiresAt + (shownApproved ? READ_WINDOW_MS : 0);
   }
 
-  const done = mode === "handoff" ? verifiedTerminal(chain, handle) : terminalReport(chain, handle);
+  const done = mode === "handoff" ? verifiedTerminal(chain, handle) : terminalReport(chain, handle) || refusedUnreported(chain, handle);
   if (done) return false;
   // Every terminal outcome the gateway knows of deletes the key above, so no known terminal ever extends the window:
   // the key goes at expires_at + 48 h, which is never later than Intent Cloud's R7 limit (amendment item 8). A
@@ -76,10 +77,23 @@ function observedStatuses(chain: readonly Entry[], handle: string): { state: unk
     .map((e) => ({ state: asBody(e.body).state }));
 }
 
+/** A terminal local outcome with no outcome report of the purchase ever accepted (201): nothing will be reported. */
+function refusedUnreported(chain: readonly Entry[], handle: string): boolean {
+  const latest = outcomesFor(chain, handle).filter((o) => o.basis === "local").at(-1);
+  if (latest === undefined || !TERMINAL_STATES.has(latest.state)) return false;
+  return reportStates(chain, handle).length === 0;
+}
+
 /** Whether a terminal outcome report the gateway logged for a handle got a 201 with a verified receipt. */
 function terminalReport(chain: readonly Entry[], handle: string): boolean {
+  return reportStates(chain, handle).some((state) => TERMINAL_REPORTS.has(state));
+}
+
+/** The states of the outcome reports the gateway logged for a handle that got a 201 with a verified receipt. */
+function reportStates(chain: readonly Entry[], handle: string): string[] {
   const path = `/v1/approvals/${handle}/outcome-reports`;
   const accepted201 = new Set<number>();
+  const states: string[] = [];
   for (const e of chain) {
     const b = asBody(e.body);
     if (e.kind === "receipt" && b.status === 201 && b.verified === true && typeof b.disclosure_seq === "number") accepted201.add(b.disclosure_seq);
@@ -93,7 +107,7 @@ function terminalReport(chain: readonly Entry[], handle: string): boolean {
     } catch {
       continue;
     }
-    if (typeof state === "string" && TERMINAL_REPORTS.has(state) && accepted201.has(e.seq)) return true;
+    if (typeof state === "string" && accepted201.has(e.seq)) states.push(state);
   }
-  return false;
+  return states;
 }

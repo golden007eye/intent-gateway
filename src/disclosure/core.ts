@@ -197,6 +197,7 @@ export function createDisclosureCore(store: Store): DisclosureCore {
   const session = { id: randomUUID(), next: 0, open: new Set<number>() };
   let sessionEntry: Promise<unknown> | null = null;
   let stopped: string | null = null;
+  let numbering: Promise<void> = Promise.resolve();
 
   /** Stops every later send, for good (the first reason is kept), and returns the error that says so. */
   function stop(reason: string, cause: unknown): DisclosureStoppedError {
@@ -249,34 +250,44 @@ export function createDisclosureCore(store: Store): DisclosureCore {
         stop("the session entry could not be logged", error);
         throw error;
       }
-      // From here to the append call nothing awaits, so the store's FIFO queue keeps n in chain order.
-      const n = session.next++;
-      const body = {
-        ...steps.body(kept, fields),
-        ...elsewhere,
-        ...(redacted.length === 0 ? {} : { redacted }),
-        ...(options.purchase === undefined ? {} : { purchase: options.purchase }),
-        session: { id: session.id, n, open: [...session.open].sort((a, b) => a - b) },
-      };
-      session.open.add(n);
-      let entry;
+      // One send at a time from numbering to its append (numbering): a send whose `unless` condition holds gives its
+      // number back before the next send takes one, so the session's numbers never have a gap and a lost race never
+      // stops the core. In turn, nothing awaits before the append call, so the store's FIFO queue keeps n in order.
+      const prior = numbering;
+      let release = (): void => undefined;
+      numbering = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await prior;
       try {
-        entry = options.unless === undefined ? await store.append("disclosure", body) : await store.appendUnless("disclosure", body, options.unless);
-      } catch (error) {
-        if (error instanceof StoreConflictError) {
-          // Nothing was written or sent. Its number n is given back, so the session's disclosures stay numbered without
-          // a gap (intent verify checks that); if a later disclosure already took n + 1, the numbering cannot be kept,
-          // and the core stops rather than leave a gap that would read as a missing disclosure.
-          session.open.delete(n);
-          if (session.next !== n + 1) throw stop(`a request to ${request.operation} lost its precondition while another was numbered`, error);
-          session.next = n;
-          throw new DisclosureConflictError(request.operation);
+        assertOpen();
+        const n = session.next++;
+        const body = {
+          ...steps.body(kept, fields),
+          ...elsewhere,
+          ...(redacted.length === 0 ? {} : { redacted }),
+          ...(options.purchase === undefined ? {} : { purchase: options.purchase }),
+          session: { id: session.id, n, open: [...session.open].sort((a, b) => a - b) },
+        };
+        session.open.add(n);
+        let entry;
+        try {
+          entry = options.unless === undefined ? await store.append("disclosure", body) : await store.appendUnless("disclosure", body, options.unless);
+        } catch (error) {
+          if (error instanceof StoreConflictError) {
+            // Nothing was written or sent, and no other send was numbered meanwhile: n is given back.
+            session.open.delete(n);
+            session.next = n;
+            throw new DisclosureConflictError(request.operation);
+          }
+          stop(`a request to ${request.operation} could not be logged, so it was not sent`, error);
+          throw error;
         }
-        stop(`a request to ${request.operation} could not be logged, so it was not sent`, error);
-        throw error;
+        logged.entry = { seq: entry.seq, body };
+        logged.n = n;
+      } finally {
+        release();
       }
-      logged.entry = { seq: entry.seq, body };
-      logged.n = n;
     };
 
     /** Appends the follow-up; if that fails, nothing is sent again (the disclosure must stay last in its session). */

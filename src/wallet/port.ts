@@ -141,7 +141,7 @@ export interface WalletAdapter {
    * `idempotencyKey` is a UUID v4. Throws AddressFieldsRequiredError, with no completion sent, when completing
    * would forward a postal address (a billing address on the payment instrument).
    */
-  completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, options?: CompleteOptions): Promise<WalletCheckout>;
+  completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, options: CompleteOptions): Promise<WalletCheckout>;
   getCheckout(checkout: CheckoutLocator, purchase: string, shipToPostalCode?: string): Promise<WalletCheckout>;
   /**
    * Forgets the checkout's id (memory and the encrypted checkout store), once the purchase has a terminal outcome and
@@ -182,7 +182,7 @@ export interface CompleteOptions {
    */
   readonly precheck?: (fresh: WalletCheckout) => string | null;
   /** The condition of the complete_checkout send itself (SendCondition). */
-  readonly sendUnless?: SendCondition;
+  readonly sendUnless: SendCondition;
 }
 
 /** The completer precheck refused the fresh checkout read: complete_checkout was not sent. */
@@ -199,7 +199,7 @@ export class CompletionRefusedError extends Error {
 }
 
 /**
- * Where an adapter keeps a rail's raw checkout ids between processes, by checkout ref (ADR-0018): an id can carry a
+ * Where an adapter keeps a rail's raw checkout ids between processes, by checkout ref (ADR-0019): an id can carry a
  * credential (`?key=`), so it is never in the chain; it sits encrypted beside the wallet's token, so a restarted
  * gateway can still read the checkout it may have completed.
  */

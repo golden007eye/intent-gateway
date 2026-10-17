@@ -233,7 +233,7 @@ const CHECKOUT_REF = /^sha256:([0-9a-f]{64})$/;
 /** How long a checkout id is kept at most: the completer read window (48 h) after a 15-minute snapshot, plus a day. */
 export const CHECKOUT_ID_MAX_AGE_MS = 73 * 3_600_000;
 
-/** `<data>/wallet/<rail>-checkouts`: one encrypted file per checkout id (ADR-0018). */
+/** `<data>/wallet/<rail>-checkouts`: one encrypted file per checkout id (ADR-0019). */
 export function checkoutVaultDir(dataDir: string, rail: WalletRail): string {
   return join(dataDir, "wallet", `${rail}-checkouts`);
 }
@@ -241,7 +241,7 @@ export function checkoutVaultDir(dataDir: string, rail: WalletRail): string {
 /**
  * The rail's raw checkout ids, each AES-256-GCM sealed under the wallet key in its own 0600 file named by the
  * checkout ref's hex (never the id), with the AAD naming the rail and the ref: a file copied under another ref's
- * name does not open (ADR-0018). Opening it deletes files older than CHECKOUT_ID_MAX_AGE_MS, by which time no
+ * name does not open (ADR-0019). Opening it deletes files older than CHECKOUT_ID_MAX_AGE_MS, by which time no
  * completer key can read the approval any more.
  */
 export async function openCheckoutVault(dataDir: string, rail: WalletRail, key: WalletKey, now: () => number = Date.now): Promise<CheckoutIdStore> {

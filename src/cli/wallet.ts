@@ -322,7 +322,7 @@ function warn(io: Io, config: Config): void {
 
 /**
  * One-tap for `intent serve` (plan G7b): the linked Shop wallet behind the gateway's disclosed cloud, with its checkout
- * ids in the encrypted checkout vault (ADR-0018). Null, with nothing sent, when no Shop client is set, no wallet is
+ * ids in the encrypted checkout vault (ADR-0019). Null, with nothing sent, when no Shop client is set, no wallet is
  * linked, or the vault does not open (said on stderr): purchases are then handed off.
  */
 export async function oneTapFor(io: Io, config: Config, dataDir: string): Promise<OneTapOptions | null> {
