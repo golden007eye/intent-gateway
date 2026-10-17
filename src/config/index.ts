@@ -131,6 +131,12 @@ export interface WalletConfig {
   /** INTENT_SHOP_MCP_URL, INTENT_SHOP_AUTH_URL: the Shop endpoints, null until set (the Shop adapter names defaults). */
   shopMcpUrl: string | null;
   shopAuthUrl: string | null;
+  /**
+   * INTENT_SHOP_CLIENT_ID: the Shop OAuth client the gateway signs in as, a client id or the https URL of a client-ID
+   * metadata document. No default: the gateway ships no Shop client of its own yet, so without it one-tap with Shop
+   * is unavailable and purchases are handed off (ADR-0017).
+   */
+  shopClientId: string | null;
 }
 
 export interface LoadOptions {
@@ -168,6 +174,7 @@ const KNOWN_VARIABLES = new Set([
   "INTENT_WALLET_KEY",
   "INTENT_SHOP_MCP_URL",
   "INTENT_SHOP_AUTH_URL",
+  "INTENT_SHOP_CLIENT_ID",
 ]);
 
 /**
@@ -278,7 +285,17 @@ function walletConfig(intent: Readonly<Record<string, string>>, at: WalletPlace)
     envKeyIgnored: envKey !== undefined && key.kind === "file",
     shopMcpUrl: shopUrl("INTENT_SHOP_MCP_URL", intent.INTENT_SHOP_MCP_URL),
     shopAuthUrl: shopUrl("INTENT_SHOP_AUTH_URL", intent.INTENT_SHOP_AUTH_URL),
+    shopClientId: shopClientId(intent.INTENT_SHOP_CLIENT_ID),
   };
+}
+
+/** A Shop OAuth client id: an opaque id (letters, digits, `-`, `_`, `.`), or the https URL of a client-ID metadata document. */
+function shopClientId(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  const value = raw.trim();
+  if (/^[A-Za-z0-9._-]{1,128}$/.test(value)) return value;
+  if (/^[a-z]+:/i.test(value)) return shopUrl("INTENT_SHOP_CLIENT_ID", value);
+  throw new ConfigError("INTENT_SHOP_CLIENT_ID must be a Shop client id or the https URL of a client-ID metadata document");
 }
 
 /** Whether `file` is `dir` itself or lies under it. */

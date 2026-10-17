@@ -7,17 +7,20 @@
 //
 // Per call, through the adapter's beforeSend hook on the final request bytes:
 // 1. Refusals, each a `block` entry (names and reasons, never values) and DisclosureRefusedError, nothing sent:
+//    - to any destination, a request with more than one content-type header (the body is read by it);
 //    - to a wallet destination, a body that is not exactly JSON.stringify of its own parse (duplicate keys, spacing,
+//      escapes), or, for a form body (an OAuth endpoint's), URLSearchParams of its own parse (repeated names, other
 //      escapes): what is logged and scanned must be what is sent, and a redacted body is logged re-serialised;
 //    - to a wallet destination, a path whose query names a secret key (`?access_token=`), which cannot be digested;
 //    - to Intent Cloud, any credential: its requests are logged byte for byte, never redacted, so their
 //      content_digest and receipts stay checkable against the logged bytes.
-// 2. findIdentity on the outbound JSON body (an MCP tool name exempt for wallets): a finding appends a `block` entry
-//    and throws DisclosureBlockedError.
+// 2. findIdentity on the outbound body, JSON or form (the MCP envelope's tool and client names exempt for wallets):
+//    a finding appends a `block` entry and throws DisclosureBlockedError.
 // 3. Credentials are digested in what is logged, never in what is sent: a credential header (privacy's
 //    CREDENTIAL_HEADERS), every body value under a secret key (privacy's isSecretKey) and every value at one of the
 //    caller's secretPaths becomes `[redacted sha256:<hex>]`, and `redacted: [{at, sha256}]` lists them. A body with a
-//    redacted value is logged as the JSON text of the redacted value; every other byte is logged exactly as sent.
+//    redacted value is logged as the JSON (or form) text of the redacted value; every other byte is logged exactly
+//    as sent.
 // 4. The gateway session's `session` entry (once), then the `disclosure` entry; if either append throws, beforeSend
 //    throws, the adapter sends nothing, and the core stops for good. A disclosure to a destination other than Intent
 //    Cloud carries `destination`, and may carry the local field `purchase` (never sent).
@@ -26,10 +29,13 @@
 import { randomUUID } from "node:crypto";
 import { CloudNetworkError, CloudResponseError, type HeaderPair } from "../cloud/index.ts";
 import {
+  bodyText,
+  bodyValue,
   type Finding,
   findIdentity,
   formatPath,
   isCredentialHeader,
+  isFormBody,
   isSecretKey,
   markerDigest,
   type PathSegment,
@@ -197,7 +203,13 @@ export function createDisclosureCore(store: Store): DisclosureCore {
     const logged: { entry: Logged<B> | null; n: number } = { entry: null, n: -1 };
     const beforeSend = async (request: OutboundRequest): Promise<void> => {
       assertOpen();
-      const json = parseBody(request.body);
+      // The body is read by its content-type; with two of them the core and the transport could read different ones.
+      if (request.headers.filter(([name]) => name.toLowerCase() === "content-type").length > 1) {
+        const reasons = ["the request has more than one content-type header, so its body could not be logged as sent"];
+        await store.append("block", { endpoint: request.operation, ...elsewhere, fields: [], blocked: reasons });
+        throw new DisclosureRefusedError(request.operation, reasons);
+      }
+      const json = bodyValue(request.headers, request.body);
       const fields = fieldNames(json);
       const { request: kept, redacted } = redact(request, json, options.secretPaths ?? []);
       const refusals = refusalsOf(destination, request, json, redacted);
@@ -205,7 +217,7 @@ export function createDisclosureCore(store: Store): DisclosureCore {
         await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: refusals });
         throw new DisclosureRefusedError(request.operation, refusals);
       }
-      const findings = findIdentity(json, { mcpToolName: destination !== INTENT_CLOUD });
+      const findings = findIdentity(json, { mcpEnvelope: destination !== INTENT_CLOUD });
       if (findings.length > 0) {
         await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: findings.map(describe) });
         throw new DisclosureBlockedError(request.operation, findings);
@@ -286,8 +298,13 @@ function refusalsOf(destination: Destination, request: OutboundRequest, json: un
     return redacted.map((r) => `a credential at ${r.at}: requests to Intent Cloud are logged byte for byte and never carry one`);
   }
   const reasons: string[] = [];
-  if (request.body.length > 0 && !Buffer.from(JSON.stringify(json), "utf8").equals(Buffer.from(request.body))) {
-    reasons.push("the body is not plain JSON as the gateway writes it (duplicate keys, spacing or escapes), so it could not be logged as sent");
+  const form = isFormBody(request.headers);
+  if (request.body.length > 0 && !Buffer.from(bodyText(json, form), "utf8").equals(Buffer.from(request.body))) {
+    reasons.push(
+      form
+        ? "the form body is not written as the gateway writes it (repeated names or other escapes), so it could not be logged as sent"
+        : "the body is not plain JSON as the gateway writes it (duplicate keys, spacing or escapes), so it could not be logged as sent",
+    );
   }
   for (const name of secretQueryKeys(request.path)) reasons.push(`a credential in the query (${name}), which the log cannot digest`);
   return reasons;
@@ -312,7 +329,7 @@ function redact(
   let body = request.body;
   const before = redacted.length;
   const kept = redactValues(json, [], secretPaths, redacted);
-  if (redacted.length > before) body = Buffer.from(JSON.stringify(kept), "utf8");
+  if (redacted.length > before) body = Buffer.from(bodyText(kept, isFormBody(request.headers)), "utf8");
   return redacted.length === 0 ? { request, redacted } : { request: { ...request, headers, body }, redacted };
 }
 
@@ -344,11 +361,6 @@ function noResponseReason(error: unknown): string {
     return typeof reason === "string" ? `${error.name}: ${reason}` : error.name;
   }
   return "unknown failure";
-}
-
-/** The outbound body as JSON; an empty body (a GET, or a POST without one) is null. */
-function parseBody(body: Uint8Array): unknown {
-  return body.length === 0 ? null : (JSON.parse(Buffer.from(body).toString("utf8")) as unknown);
 }
 
 /** Every object key in the body as a dotted path, arrays written as `[]`: `ship_to`, `ship_to.postal_code`. */

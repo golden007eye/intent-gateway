@@ -16,7 +16,8 @@ A change that touches an invariant carries a test that fails if the invariant br
 
 - TypeScript strict, ESM only, pnpm (ADR-0002).
 - One module = one folder under `src/` with an `index.ts` that is its only public interface; other modules import only that file (`pnpm boundaries` enforces it). Why: modules stay separable and agents cannot tangle them.
-- Each outside system (Intent Cloud, the merchant checkout) sits behind one adapter in our own terms, with a fake used by tests. Why: tests run offline and a provider changes in one place.
+- Each outside system (Intent Cloud, a wallet such as the developer's Shop account, the merchant checkout) sits behind one adapter in our own terms, with a fake used by tests. Why: tests run offline and a provider changes in one place.
+- A wallet adapter is the developer's own payment rail and may live in the gateway; merchant integrations stay in Intent Cloud (ADR-0017). Why: a wallet's terms allow only the account holder's own agent, and the gateway is that agent.
 - Runtime dependencies must carry a licence compatible with Apache-2.0 (`pnpm licence-check`), because the gateway ships under Apache-2.0. They are compiled into `dist/` (ADR-0013), so add them with `pnpm add -D`; the published package has no `dependencies`.
 
 ## Keeping the repo public-safe

@@ -4,8 +4,12 @@
 // - A credential header: one of CREDENTIAL_HEADERS, compared case-insensitively.
 // - A secret key: a body key at any depth (holding anything but null), or a query parameter name, whose words
 //   (split on `_`, `-`, spaces and camelCase, lower-cased, joined with `_`) are one of SECRET_KEYS:
-//   `accessToken`, `Refresh_Token` and `api-key` are secret keys. `code` is one only beside an OAuth sibling
-//   (`grant_type`, `redirect_uri`, `code_verifier` or `client_id`), so a product or promo `code` is not.
+//   `accessToken`, `Refresh_Token` and `api-key` are secret keys. So is every key whose last word is `token` or
+//   `bearer` (`session_token`, `authToken`, `bearer`; ADR-0017): a compound token name is still a token. `code` is
+//   one only beside an OAuth sibling (`grant_type`, `redirect_uri`, `code_verifier` or `client_id`), so a product or
+//   promo `code` is not.
+// - A body is JSON, or a form (`content-type: application/x-www-form-urlencoded`, as OAuth endpoints take) read as
+//   {name: value}; bodyValue reads both the same way for the disclosure core and for `intent verify`.
 // A redacted value is the text `[redacted sha256:<hex>]`, where hex is the sha256 of the value as sent (a string's
 // UTF-8 bytes; any other value's JSON text). Paths into the logged request read `headers.<name>` or
 // `body.<path>`, where a path is a run of `.key` (key of letters, digits, `_`, `$` or `-`), `["any key"]` (JSON
@@ -25,6 +29,8 @@ export const SECRET_KEYS: readonly string[] = [
   "password",
   "api_key",
 ];
+/** A key whose last word is one of these is secret too (`session_token`, `authToken`, `x_bearer`). */
+const SECRET_LAST_WORDS: readonly string[] = ["token", "bearer"];
 /** Keys beside which `code` is an OAuth authorization code. */
 const OAUTH_SIBLINGS: readonly string[] = ["grant_type", "redirect_uri", "code_verifier", "client_id"];
 
@@ -61,7 +67,7 @@ function normalKey(key: string): string {
 /** Whether `key` names a secret; `siblings` are the other keys of the same object (or query), for `code`. */
 export function isSecretKey(key: string, siblings: readonly string[] = []): boolean {
   const normal = normalKey(key);
-  if (SECRET_KEYS.includes(normal)) return true;
+  if (SECRET_KEYS.includes(normal) || SECRET_LAST_WORDS.includes(normal.split("_").at(-1) ?? "")) return true;
   return normal === "code" && siblings.some((s) => OAUTH_SIBLINGS.includes(normalKey(s)));
 }
 
@@ -156,4 +162,34 @@ export function unredactedSecrets(body: unknown, segments: PathSegment[] = [], o
     }
   }
   return out;
+}
+
+/** The content type of a form body (RFC 7009 revocation, OAuth token requests). */
+export const FORM_CONTENT_TYPE = "application/x-www-form-urlencoded";
+
+/** Whether the request's `content-type` header names a form body. */
+export function isFormBody(headers: readonly (readonly [string, string])[]): boolean {
+  const type = headers.find(([name]) => name.toLowerCase() === "content-type")?.[1] ?? "";
+  return type.split(";")[0]?.trim().toLowerCase() === FORM_CONTENT_TYPE;
+}
+
+/**
+ * A request body as a value: null when empty, a form as {name: value} (a repeated name keeps its last value, which
+ * bodyText then cannot reproduce), anything else parsed as JSON. Throws on a body that is not JSON.
+ */
+export function bodyValue(headers: readonly (readonly [string, string])[], bytes: Uint8Array): unknown {
+  if (bytes.length === 0) return null;
+  const text = Buffer.from(bytes).toString("utf8");
+  if (isFormBody(headers)) return Object.fromEntries(new URLSearchParams(text));
+  return JSON.parse(text) as unknown;
+}
+
+/**
+ * A body value as the gateway writes it: a form with URLSearchParams, anything else with JSON.stringify. A request
+ * whose bytes are not bodyText of their own bodyValue cannot be logged as sent (ADR-0014).
+ */
+export function bodyText(value: unknown, form: boolean): string {
+  if (!form) return JSON.stringify(value);
+  const entries = Object.entries(value as Record<string, unknown>).map(([k, v]): [string, string] => [k, typeof v === "string" ? v : JSON.stringify(v)]);
+  return new URLSearchParams(entries).toString();
 }

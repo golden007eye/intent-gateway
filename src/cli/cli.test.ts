@@ -19,6 +19,7 @@ import {
   connectCloud,
   type DisclosedCloud,
   DisclosureBlockedError,
+  DisclosureRefusedError,
   DisclosureDiscardedError,
   DisclosureNoKeysError,
 } from "../disclosure/index.ts";
@@ -1104,6 +1105,7 @@ describe("describeError: every error class is one line with a fix", () => {
     ["CloudRequestError", new CloudRequestError("bad base URL")],
     ["DisclosureDiscardedError", new DisclosureDiscardedError(4, 200, "no receipt")],
     ["DisclosureBlockedError", new DisclosureBlockedError("searchCatalog", [])],
+    ["DisclosureRefusedError", new DisclosureRefusedError("revoke", ["a credential in the query (access_token), which the log cannot digest"])],
     ["DisclosureNoKeysError", new DisclosureNoKeysError("no verified key statement yet")],
     ["McpHttpError", new McpHttpError("the HTTP token is too short")],
     ["PanelError", new PanelError("the data directory /d does not exist; start the gateway once to create it")],

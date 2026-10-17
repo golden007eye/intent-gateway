@@ -52,10 +52,25 @@ export type ShipToMatch = "match" | "differs" | "unknown";
 /** A checkout's state in our terms. `buyer_review`: the rail asks the buyer before it completes. */
 export type WalletCheckoutStatus = "open" | "processing" | "buyer_review" | "completed" | "failed" | "not_found";
 
-export interface WalletCheckout {
+/**
+ * Where a checkout lives on the rail. Shop names a store by its `*.myshopify.com` domain, which is not the storefront
+ * origin an offer shows; the adapter records the domain the rail reports and never compares it with an origin (that
+ * binding check is the gateway's, ADR-0017).
+ */
+export interface CheckoutLocator {
+  readonly storeDomain: string;
+  /**
+   * `sha256:<hex>` of the rail's checkout id, never the id: a UCP checkout id can carry a credential (`?key=`). This
+   * is what the gateway records (G7b's `checkout_ref`). The adapter holds the id itself in memory only, so a
+   * reference from before a restart no longer reaches the checkout (ADR-0017).
+   */
   readonly checkoutRef: string;
+}
+
+export interface WalletCheckout extends CheckoutLocator {
   readonly status: WalletCheckoutStatus;
-  readonly merchantOrigin: string;
+  /** The storefront origin the rail reports for the merchant (https only), or null when it reports none. */
+  readonly merchantOrigin: string | null;
   readonly lines: readonly WalletLine[];
   readonly total: WalletMoney | null;
   readonly shipTo: ShipToMatch;
@@ -66,7 +81,8 @@ export interface WalletCheckout {
 export interface CheckoutRequest {
   /** The approval handle of the purchase: kept locally with each send, never sent (plan G7b step 6b). */
   readonly purchase: string;
-  readonly merchantOrigin: string;
+  /** The store as the rail names it (Shop: `*.myshopify.com`). */
+  readonly storeDomain: string;
   readonly lines: readonly { readonly variantRef: string; readonly quantity: number }[];
   /** The signed snapshot's 5-digit ZIP, compared inside the adapter. */
   readonly shipToPostalCode: string;
@@ -74,15 +90,65 @@ export interface CheckoutRequest {
 
 /**
  * One wallet rail. Each call that reaches the rail goes through the disclosure log first (invariant 2); the adapter
- * returns only the projections above, never the rail's own words.
+ * returns only the projections above, never the rail's own words. `shipToPostalCode` is the signed snapshot's ZIP,
+ * compared inside the adapter; without it `shipTo` is `unknown`.
  */
 export interface WalletAdapter {
   readonly rail: WalletRail;
   account(): Promise<WalletAccount>;
+  /**
+   * Delivery is chosen by the account's saved-address id only. Throws AddressFieldsRequiredError, with nothing sent
+   * to create the checkout, when the rail would need address fields.
+   */
   createCheckout(request: CheckoutRequest): Promise<WalletCheckout>;
-  /** Sent at most once per purchase (plan G7b step 6); a lost answer is reconciled with getCheckout, never re-sent. */
-  completeCheckout(checkoutRef: string, purchase: string, idempotencyKey: string): Promise<WalletCheckout>;
-  getCheckout(checkoutRef: string, purchase: string): Promise<WalletCheckout>;
-  /** Asks the rail to revoke the gateway's token. True when the rail confirmed it. */
-  revoke(): Promise<boolean>;
+  /**
+   * Sent at most once per purchase (plan G7b step 6); a lost answer is reconciled with getCheckout, never re-sent.
+   * `idempotencyKey` is a UUID v4. Throws AddressFieldsRequiredError, with no completion sent, when completing
+   * would forward a postal address (a billing address on the payment instrument).
+   */
+  completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, shipToPostalCode?: string): Promise<WalletCheckout>;
+  getCheckout(checkout: CheckoutLocator, purchase: string, shipToPostalCode?: string): Promise<WalletCheckout>;
+  /**
+   * Asks the rail to revoke the gateway's token. `revoked` only when the rail acknowledged it; `not_sent` when there
+   * was no token or client to revoke with, so nothing was sent (invariant 5: say only what was sent and answered).
+   */
+  revoke(): Promise<RevokeResult>;
+}
+
+export type RevokeResult = "revoked" | "not_revoked" | "not_sent";
+
+/**
+ * The rail would need the buyer's postal address (invariant 3; plan kill criterion K4): delivery chosen by address
+ * fields rather than a saved-address id, or a payment instrument that carries a billing address. Nothing was sent
+ * for the step it names; the purchase can still be handed off.
+ */
+export class AddressFieldsRequiredError extends Error {
+  override name = "AddressFieldsRequiredError";
+  readonly step: "delivery" | "payment";
+  constructor(step: "delivery" | "payment") {
+    super(
+      step === "delivery"
+        ? "not sent: the wallet would need the buyer's address fields to choose delivery, and the gateway sends only a saved-address id"
+        : "not sent: completing would forward the payment instrument's billing address, which the gateway never sends",
+    );
+    this.step = step;
+  }
+}
+
+/**
+ * The rail answered with an error. Only a numeric code and a fixed local label are kept: the rail's own message can
+ * carry buyer identity and never reaches a tool result, stderr or the chain.
+ */
+export class WalletRailError extends Error {
+  override name = "WalletRailError";
+  /** The JSON-RPC error code, or null for an HTTP-level or tool-level error. */
+  readonly code: number | null;
+  readonly label: string;
+  readonly httpStatus: number;
+  constructor(httpStatus: number, code: number | null, label: string) {
+    super(`the wallet answered an error: ${label} (HTTP ${String(httpStatus)}${code === null ? "" : `, code ${String(code)}`})`);
+    this.httpStatus = httpStatus;
+    this.code = code;
+    this.label = label;
+  }
 }

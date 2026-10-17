@@ -234,12 +234,13 @@ describe("wallet key sources", () => {
     const source: WalletKeySource = { kind: "env", value: new Secret(b64) };
     const key = await loadWalletKey(source, { create: false });
     expect(key?.source).toBe("INTENT_WALLET_KEY");
-    const warnings = walletKeyWarnings({ key: source, envKeyIgnored: false, shopMcpUrl: null, shopAuthUrl: null });
+    const shop = { shopMcpUrl: null, shopAuthUrl: null, shopClientId: null };
+    const warnings = walletKeyWarnings({ key: source, envKeyIgnored: false, ...shop });
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("INTENT_WALLET_KEY_FILE");
     expect(warnings[0]).not.toContain(b64);
-    expect(walletKeyWarnings({ key: { kind: "file", path: "/k" }, envKeyIgnored: true, shopMcpUrl: null, shopAuthUrl: null })[0]).toContain("unset INTENT_WALLET_KEY");
-    expect(walletKeyWarnings({ key: { kind: "file", path: "/k" }, envKeyIgnored: false, shopMcpUrl: null, shopAuthUrl: null })).toEqual([]);
+    expect(walletKeyWarnings({ key: { kind: "file", path: "/k" }, envKeyIgnored: true, ...shop })[0]).toContain("unset INTENT_WALLET_KEY");
+    expect(walletKeyWarnings({ key: { kind: "file", path: "/k" }, envKeyIgnored: false, ...shop })).toEqual([]);
   });
 
   it("refuses with the reason when there is no safe source", async () => {

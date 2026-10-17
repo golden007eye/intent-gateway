@@ -8,6 +8,7 @@ import {
   DisclosureBlockedError,
   DisclosureDiscardedError,
   DisclosureNoKeysError,
+  DisclosureRefusedError,
   DisclosureStoppedError,
 } from "../disclosure/index.ts";
 import { GatewayNotStartedError, GatewayStartError } from "../gateway/index.ts";
@@ -114,6 +115,8 @@ function worded(error: unknown, ctx: ErrorContext): string {
   }
   if (error instanceof CloudRequestError) return `request refused before sending: ${message}; check INTENT_CLOUD_URL`;
   if (error instanceof DisclosureBlockedError) return `${message}; remove the buyer's identity from the request`;
+  // Its message already says "not sent" and why; the request itself must change, so the fix is to report it.
+  if (error instanceof DisclosureRefusedError) return `${message}; nothing was sent. This is a gateway defect: report it at https://github.com/golden007eye/intent-gateway/issues`;
   if (error instanceof DisclosureNoKeysError) return `${message}; run ${INTENT} doctor`;
   if (error instanceof McpHttpError) return `MCP over HTTP: ${message}; set INTENT_HTTP_TOKEN or INTENT_HTTP_HOST=127.0.0.1`;
   if (error instanceof PanelError) return `panel: ${message}`; // its messages already name the fix

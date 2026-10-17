@@ -1,6 +1,6 @@
 # ADR-0014: Log before send to every outside destination
 
-Status: accepted · 2026-10-16
+Status: accepted · 2026-10-16 · amended by [ADR-0017](0017-wallet-adapters-in-the-gateway.md) (compound token names, form bodies)
 
 ## Context
 

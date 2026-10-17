@@ -1,7 +1,10 @@
 // Wallet rails: the port a wallet adapter implements, and the encrypted vault that keeps its token (plan G6).
 export {
+  AddressFieldsRequiredError,
+  type CheckoutLocator,
   type CheckoutRequest,
   isWalletRail,
+  type RevokeResult,
   type ShipToMatch,
   type WalletAccount,
   type WalletAdapter,
@@ -13,6 +16,7 @@ export {
   WALLET_ACTIONS,
   WALLET_RAILS,
   walletEntryProblem,
+  WalletRailError,
 } from "./port.ts";
 export {
   deleteSecret,

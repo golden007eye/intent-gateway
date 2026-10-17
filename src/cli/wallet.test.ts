@@ -6,12 +6,14 @@ import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { readChain } from "../store/index.ts";
 import { saveSecret, vaultPath, WalletKey } from "../wallet/index.ts";
+import { type FakeShop, startFakeShop } from "../wallet-shop-fake/index.ts";
 import { type Io, main } from "./index.ts";
 
 const TOKEN = "shop-refresh-token-do-not-print-0123456789";
+const UNAVAILABLE = "Shop one-tap: unavailable, no Shop client is set (INTENT_SHOP_CLIENT_ID); purchases are handed off to the merchant's checkout";
 
 interface Setup {
   dir: string;
@@ -48,10 +50,12 @@ function setup(): Setup {
 }
 
 describe("intent wallet status", () => {
-  it("says not linked when there is no vault", async () => {
+  it("says not linked when there is no vault, and that one-tap needs a Shop client (none is built in)", async () => {
     const s = setup();
     const r = await s.run(["wallet", "status"]);
-    expect(r).toMatchObject({ code: 0, out: "Shop wallet: not linked\n", err: "" });
+    expect(r).toMatchObject({ code: 0, out: `Shop wallet: not linked\n${UNAVAILABLE}\n`, err: "" });
+    const withClient = await s.run(["wallet", "status"], { INTENT_SHOP_CLIENT_ID: "my-gateway-client" });
+    expect(withClient).toMatchObject({ code: 0, out: "Shop wallet: not linked\n", err: "" });
   });
 
   it("says linked when the vault opens, and prints neither the token nor the key", async () => {
@@ -111,7 +115,7 @@ describe("intent wallet unlink shop", () => {
     }
 
     const status = await s.run(["wallet", "status"]);
-    expect(status.out).toBe("Shop wallet: not linked\n");
+    expect(status.out).toBe(`Shop wallet: not linked\n${UNAVAILABLE}\n`);
     const log = await s.run(["log", "-v"]);
     expect(log.code).toBe(0);
     expect(log.out).toContain("shop wallet unlinked, token not revoked");
@@ -131,6 +135,80 @@ describe("intent wallet unlink shop", () => {
     expect(r.err).toContain("symbolic link");
     expect(existsSync(vaultPath(s.dir, "shop"))).toBe(true);
     expect(r.out + r.err).not.toContain(TOKEN);
+  });
+
+  describe("revokes at Shop first (plan G7a test 4), logged before it is sent", () => {
+    let shop: FakeShop;
+    afterEach(async () => {
+      await shop.close();
+    });
+    const vaultText = (s: FakeShop) => JSON.stringify({ v: 1, client_id: s.clientId, access_token: s.accessToken, refresh_token: s.refreshToken });
+    const linked = async (s: Setup, fake: FakeShop) => {
+      await saveSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"), vaultText(fake));
+    };
+    const env = (s: Setup, fake: FakeShop): Record<string, string> => ({
+      INTENT_WALLET_KEY_FILE: join(s.dir, "..", "wallet.key"),
+      INTENT_SHOP_AUTH_URL: fake.authUrl,
+      INTENT_SHOP_MCP_URL: fake.mcpUrl,
+    });
+
+    it("revoked: Shop acknowledged (HTTP 200), then the file is deleted and the chain says revoked:true; no token in the chain", async () => {
+      shop = await startFakeShop();
+      const s = setup();
+      await linked(s, shop);
+      const r = await s.run(["wallet", "unlink", "shop"], env(s, shop));
+      expect(r.code, r.err).toBe(0);
+      expect(shop.revocations).toEqual([{ token: shop.refreshToken, tokenTypeHint: "refresh_token", clientId: shop.clientId, contentType: "application/x-www-form-urlencoded" }]);
+      expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
+      expect(r.out).toContain("Shop acknowledged the revocation of the gateway's token (HTTP 200)");
+      expect(r.err).toBe("");
+
+      const chain = readChain(s.dir) as { kind: string; body: Record<string, unknown> }[];
+      expect(chain.map((e) => e.kind)).toEqual(["session", "disclosure", "response", "wallet"]);
+      expect(chain[1]?.body).toMatchObject({ endpoint: "revoke", destination: "shop_accounts", fields: ["client_id", "token", "token_type_hint"] });
+      expect(chain[3]?.body).toEqual({ rail: "shop", action: "unlinked", revoked: true });
+      const audit = readFileSync(join(s.dir, "audit.jsonl"), "utf8");
+      for (const secret of [shop.refreshToken, shop.accessToken, s.keyText]) {
+        expect(audit).not.toContain(secret);
+        expect(audit).not.toContain(Buffer.from(secret).toString("base64").slice(0, 16));
+        expect(r.out + r.err).not.toContain(secret);
+      }
+      const verify = await s.run(["verify", "--skip-install-check"]);
+      expect(verify.code, verify.out + verify.err).toBe(0);
+      expect(verify.out).toContain("credentials digested in the log");
+    });
+
+    it("revoke answers 500: the file is still deleted, stderr names the Shop setting, and the chain says revoked:false", async () => {
+      shop = await startFakeShop({ faults: { revokeStatus: 500 } });
+      const s = setup();
+      await linked(s, shop);
+      const r = await s.run(["wallet", "unlink", "shop"], env(s, shop));
+      expect(r.code).toBe(0);
+      expect(shop.revocations).toHaveLength(1);
+      expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
+      expect(r.err).toContain("Shop answered the revocation with an error");
+      expect(r.err).toContain("Account › Connections");
+      const chain = readChain(s.dir) as { kind: string; body: unknown }[];
+      expect(chain.at(-1)?.body).toEqual({ rail: "shop", action: "unlinked", revoked: false });
+      expect(chain.map((e) => e.kind)).toEqual(["session", "disclosure", "response", "wallet"]);
+      expect(readFileSync(join(s.dir, "audit.jsonl"), "utf8")).not.toContain(shop.refreshToken);
+    });
+
+    it("Shop unreachable: logged as not sent, the file is deleted, revoked:false", async () => {
+      shop = await startFakeShop();
+      const s = setup();
+      await linked(s, shop);
+      const authUrl = shop.authUrl;
+      await shop.close();
+      const r = await s.run(["wallet", "unlink", "shop"], { ...env(s, shop), INTENT_SHOP_AUTH_URL: authUrl });
+      expect(r.code).toBe(0);
+      expect(r.err).toContain("could not revoke the Shop token");
+      expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
+      const chain = readChain(s.dir) as { kind: string; body: Record<string, unknown> }[];
+      expect(chain.map((e) => e.kind)).toEqual(["session", "disclosure", "unacknowledged", "wallet"]);
+      expect(String(chain[2]?.body.reason)).toMatch(/^CloudNetworkError: not sent \(no connection/);
+      expect(chain.at(-1)?.body).toEqual({ rail: "shop", action: "unlinked", revoked: false });
+    });
   });
 
   it("chains nothing when no wallet was linked", async () => {

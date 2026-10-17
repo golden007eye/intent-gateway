@@ -31,7 +31,11 @@
 // Credentials (credentials.ts) are the other thing a logged request must never hold in clear: the disclosure core
 // digests them before the log append, and `intent verify` refuses an unredacted one (ADR-0014).
 export {
+  bodyText,
+  bodyValue,
+  FORM_CONTENT_TYPE,
   formatPath,
+  isFormBody,
   isCredentialHeader,
   isSecretKey,
   markerDigest,
@@ -56,21 +60,42 @@ export interface Finding {
 
 export interface IdentityOptions {
   /**
-   * Exempt an MCP tool name: drops only the banned_key finding at exactly `$.params.name`, and only when the
-   * top-level `method` is `tools/call` and that name matches MCP_TOOL_NAME. Its value is still scanned. For bodies
-   * to MCP destinations (a wallet), never Intent Cloud.
+   * Exempt the two names an MCP request envelope carries, for bodies to MCP destinations (a wallet), never Intent
+   * Cloud. Each drops only the banned_key finding at exactly its path; its value is still scanned:
+   * - the tool name at `$.params.name`, when the top-level `method` is `tools/call` and the name matches MCP_TOOL_NAME;
+   * - the client's own name at `$.params._meta["io.modelcontextprotocol/clientInfo"].name` (MCP 2026-07-28 carries
+   *   it on every request), when the top-level `jsonrpc` is "2.0" and the name is exactly MCP_CLIENT_NAME.
    */
-  mcpToolName?: boolean;
+  mcpEnvelope?: boolean;
 }
 
-/** An MCP tool name the identity check lets through under `$.params.name` (IdentityOptions.mcpToolName). */
+/** An MCP tool name the identity check lets through under `$.params.name` (IdentityOptions.mcpEnvelope). */
 export const MCP_TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+/** The gateway's own MCP client name, the only one let through under a request's clientInfo (IdentityOptions.mcpEnvelope). */
+export const MCP_CLIENT_NAME = "intent-gateway";
+const CLIENT_INFO = "io.modelcontextprotocol/clientInfo";
+const CLIENT_NAME_PATH = `$.params._meta[${JSON.stringify(CLIENT_INFO)}].name`;
 
 export function findIdentity(value: unknown, options: IdentityOptions = {}): Finding[] {
   const findings: Finding[] = [];
   walk(value, "$", findings);
-  if (options.mcpToolName !== true || !isToolCall(value)) return findings;
-  return findings.filter((f) => !(f.kind === "banned_key" && f.path === "$.params.name"));
+  if (options.mcpEnvelope !== true) return findings;
+  const toolName = isToolCall(value);
+  const clientName = isClientNamed(value);
+  return findings.filter(
+    (f) => !(f.kind === "banned_key" && ((toolName && f.path === "$.params.name") || (clientName && f.path === CLIENT_NAME_PATH))),
+  );
+}
+
+function isClientNamed(value: unknown): boolean {
+  const top = record(value);
+  if (top?.jsonrpc !== "2.0") return false;
+  const name = record(record(record(top.params)?._meta)?.[CLIENT_INFO])?.name;
+  return name === MCP_CLIENT_NAME;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 function isToolCall(value: unknown): boolean {

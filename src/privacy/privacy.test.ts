@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findIdentity, type Finding, type FindingKind } from "./index.ts";
+import { bodyText, bodyValue, findIdentity, type Finding, type FindingKind, isSecretKey } from "./index.ts";
 
 // Invariant 3 (no buyer identity in the gateway): each positive is identity an agent might try to send out.
 const positives: [label: string, body: unknown, expected: Finding][] = [
@@ -156,5 +156,21 @@ describe("findIdentity reporting", () => {
 
   it("scans a bare top-level string at $", () => {
     expect(findIdentity("4111-1111-1111-1111")).toEqual([{ path: "$", kind: "card" }]);
+  });
+});
+
+describe("credentials (ADR-0014, widened by ADR-0017)", () => {
+  it("treats a key whose last word is token or bearer as secret, and keeps hints and counts readable", () => {
+    for (const key of ["token", "session_token", "authToken", "Shop-Access-Token", "bearer", "x_bearer", "refresh_token"]) expect(isSecretKey(key)).toBe(true);
+    for (const key of ["token_type_hint", "token_type", "tokens", "idempotency-key", "bearer_type", "code"]) expect(isSecretKey(key)).toBe(false);
+  });
+
+  it("reads a form body by its content-type and writes it back the same way", () => {
+    const headers: [string, string][] = [["Content-Type", "application/x-www-form-urlencoded; charset=utf-8"]];
+    const bytes = Buffer.from("token=a%2Bb&client_id=gw", "utf8");
+    expect(bodyValue(headers, bytes)).toEqual({ token: "a+b", client_id: "gw" });
+    expect(bodyText(bodyValue(headers, bytes), true)).toBe("token=a%2Bb&client_id=gw");
+    expect(bodyValue([["content-type", "application/json"]], Buffer.from('{"a":1}'))).toEqual({ a: 1 });
+    expect(bodyValue(headers, new Uint8Array(0))).toBeNull();
   });
 });
