@@ -24,6 +24,7 @@ const outbound = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("cart"),
     offer: z.strictObject({ merchant: text, category: text, price_usd: z.number(), quantity: z.number() }),
+    completion_mode: z.enum(["handoff", "one_tap"]).optional(),
   }),
 ]);
 

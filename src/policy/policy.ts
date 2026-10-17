@@ -9,6 +9,14 @@ export const MAX_QUANTITY = 3;
 
 export type ShipTo = "postcode_only" | "none";
 
+/**
+ * How a purchase may be completed once the buyer approved it: `handoff` (the buyer pays at the merchant's
+ * checkout) or `one_tap` (a wallet adapter of the gateway completes it; the gateway maps it onto the contract's
+ * completion modes, `shop_agent` today). The policy decides which modes a purchase may use.
+ */
+export type CompletionMode = "handoff" | "one_tap";
+export const COMPLETION_MODES: readonly CompletionMode[] = Object.freeze(["handoff", "one_tap"]);
+
 export interface Spend {
   readonly per_order_usd?: number;
   readonly per_day_usd?: number;
@@ -25,6 +33,8 @@ export interface Policy {
   readonly merchants: { readonly allow?: readonly string[]; readonly block: readonly string[] };
   readonly categories: { readonly block: readonly string[] };
   readonly approval: "passkey";
+  /** The completion modes a purchase may use: one or both, sorted. */
+  readonly completion: readonly CompletionMode[];
 }
 
 /**
@@ -108,6 +118,7 @@ function freezePolicy(p: {
   allow: Iterable<string> | undefined;
   block: Iterable<string>;
   categories: Iterable<string>;
+  completion: Iterable<CompletionMode>;
 }): Policy {
   const spend: { -readonly [K in keyof Spend]: number } = {};
   for (const key of ["per_order_usd", "per_day_usd", "per_week_usd"] as const) {
@@ -123,6 +134,7 @@ function freezePolicy(p: {
     merchants: Object.freeze(merchants),
     categories: Object.freeze({ block: sorted(p.categories) }),
     approval: "passkey",
+    completion: sorted(p.completion) as readonly CompletionMode[],
   });
 }
 
@@ -135,6 +147,7 @@ export const CLOUD_BASELINE: Policy = freezePolicy({
   allow: undefined,
   block: [],
   categories: EXCLUDED_CATEGORIES,
+  completion: COMPLETION_MODES,
 });
 
 const usd = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -153,6 +166,7 @@ const schema = z.strictObject({
   merchants: z.strictObject({ allow: names.optional(), block: names.optional() }).optional(),
   categories: z.strictObject({ block: names.optional() }).optional(),
   approval: z.literal("passkey"),
+  completion: z.array(z.enum(["handoff", "one_tap"])).min(1).max(2).optional(),
 });
 
 // Sections whose every wrong value could loosen a Cloud rule (or be read as "no limit") by some reader.
@@ -161,6 +175,7 @@ const GUARDED: Record<string, string> = {
   share: "share.ship_to must be postcode_only or none, and share.history must be false",
   spend: "spend limits must be positive whole USD amounts",
   quantity: `quantity.max must be a whole number from 1 to ${String(MAX_QUANTITY)}`,
+  completion: `completion must list one or both of ${COMPLETION_MODES.join(", ")}`,
 };
 
 function toPolicyError(issue: z.core.$ZodIssue): PolicyError {
@@ -174,6 +189,10 @@ function toPolicyError(issue: z.core.$ZodIssue): PolicyError {
     return new PolicyError("POLICY_LOOSENS", at, message);
   }
   const top = String(issue.path[0] ?? "");
+  // An empty list narrows to no mode at all: not a loosening, but a policy no purchase could ever pass.
+  if (top === "completion" && issue.code === "too_small") {
+    return new PolicyError("POLICY_INVALID", path, "completion must list at least one mode; a policy cannot allow none");
+  }
   const guarded = GUARDED[top];
   if (guarded !== undefined) return new PolicyError("POLICY_LOOSENS", path, guarded);
   return new PolicyError("POLICY_INVALID", path === "" ? DOCUMENT : path, issue.message);
@@ -212,6 +231,7 @@ export function loadPolicy(text: string): Policy {
     allow,
     block,
     categories,
+    completion: d.completion ?? CLOUD_BASELINE.completion,
   });
 }
 
@@ -225,8 +245,20 @@ function intersectAllow(a: readonly string[] | undefined, b: readonly string[] |
   return [...a.filter((m) => merchantMatches(m, b)), ...b.filter((m) => merchantMatches(m, a))];
 }
 
-/** The narrowest combination of two policies: lower limits, both block lists, only merchants both allow. */
+/**
+ * The narrowest combination of two policies: lower limits, both block lists, only merchants both allow, only
+ * completion modes both allow. Throws PolicyError (POLICY_INVALID at `completion`) when the two share no
+ * completion mode, since no purchase could pass the result.
+ */
 export function meet(a: Policy, b: Policy): Policy {
+  const completion = a.completion.filter((mode) => b.completion.includes(mode));
+  if (completion.length === 0) {
+    throw new PolicyError(
+      "POLICY_INVALID",
+      "completion",
+      `the two policies share no completion mode (${a.completion.join(", ")} and ${b.completion.join(", ")}), so no purchase could pass both`,
+    );
+  }
   return freezePolicy({
     ship_to: a.share.ship_to === "none" || b.share.ship_to === "none" ? "none" : "postcode_only",
     spend: {
@@ -238,6 +270,7 @@ export function meet(a: Policy, b: Policy): Policy {
     allow: intersectAllow(a.merchants.allow, b.merchants.allow),
     block: [...a.merchants.block, ...b.merchants.block],
     categories: [...a.categories.block, ...b.categories.block],
+    completion,
   });
 }
 

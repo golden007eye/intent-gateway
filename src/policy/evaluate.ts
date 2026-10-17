@@ -1,6 +1,6 @@
 // Decides whether one outbound request may leave the gateway under a policy. The input types are the policy's
 // own small view of a request; the gateway maps the contract's request and offer types onto them.
-import { CLOUD_BASELINE, categoryBlocked, meet, merchantMatches, normalizeMerchant, type Policy } from "./policy.ts";
+import { CLOUD_BASELINE, categoryBlocked, type CompletionMode, meet, merchantMatches, normalizeMerchant, type Policy } from "./policy.ts";
 
 /** A search the agent asks the gateway to send to Intent Cloud. */
 export interface SearchRequest {
@@ -24,6 +24,8 @@ export interface Offer {
 export interface CartRequest {
   readonly kind: "cart";
   readonly offer: Offer;
+  /** How the purchase would be completed. Absent means `handoff`, the only mode a cart has before one-tap. */
+  readonly completion_mode?: CompletionMode;
 }
 
 export type Outbound = SearchRequest | CartRequest;
@@ -96,6 +98,18 @@ function checkSearch(p: Policy, s: SearchRequest, out: Blocked[]): void {
   }
 }
 
+function checkCompletion(p: Policy, mode: CompletionMode | undefined, out: Blocked[]): void {
+  const m = mode ?? "handoff";
+  // `includes` on the policy's own list, so a mode outside the schema (a typo, `auto`) is refused, never allowed.
+  if (!p.completion.includes(m)) {
+    out.push({
+      path: "completion_mode",
+      rule: "completion",
+      reason: `completion mode "${m}" is not allowed; the policy allows ${p.completion.join(", ")}`,
+    });
+  }
+}
+
 function checkCart(p: Policy, o: Offer, history: readonly Purchase[], now: number, out: Blocked[]): void {
   if (normalizeMerchant(o.merchant) === undefined) {
     out.push({ path: "offer.merchant", rule: "offer.merchant", reason: `merchant "${o.merchant}" is not a hostname` });
@@ -150,6 +164,9 @@ export function evaluate(
   // A bad history already refuses the request; the caps then run on none rather than on the bad entries.
   const purchases = blocked.length === 0 ? history : [];
   if (outbound.kind === "search") checkSearch(effective, outbound, blocked);
-  else checkCart(effective, outbound.offer, purchases, now, blocked);
+  else {
+    checkCart(effective, outbound.offer, purchases, now, blocked);
+    checkCompletion(effective, outbound.completion_mode, blocked);
+  }
   return { send: blocked.length === 0, blocked };
 }

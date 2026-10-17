@@ -87,11 +87,18 @@ export interface AddFlags {
 
 export async function policyAdd(io: Io, config: Config, name: string, flags: AddFlags): Promise<number> {
   const { policyPath } = config;
-  const plan = await planPolicy(name, {
-    policyPath,
-    ...(flags.commit === undefined ? {} : { commit: flags.commit }),
-    ...io.library,
-  });
+  let plan;
+  try {
+    plan = await planPolicy(name, {
+      policyPath,
+      ...(flags.commit === undefined ? {} : { commit: flags.commit }),
+      ...io.library,
+    });
+  } catch (error) {
+    // A policy that cannot be used (the current file, or its meet with the library policy): exit 2, as policy test.
+    if (error instanceof PolicyError) throw new CliError(describeError(error, { policyPath }), 2);
+    throw error;
+  }
   line(io.stdout, `policy add ${name}, from ${lockOrigin(plan.lock)}, into ${policyPath}:`);
   if (plan.before === plan.after) {
     line(io.stdout, `no change: ${policyPath} is already at least as strict as ${name}; recording it in policy.lock`);
@@ -148,6 +155,10 @@ export async function policyShow(io: Io, config: Config): Promise<number> {
   }
   const note = noShipToNote(active.policy);
   if (note !== null) line(io.stdout, `note: ${note}; ${shipToFix(policyPath)}`);
+  line(io.stdout, `completion modes allowed: ${active.policy.completion.join(", ")}`);
+  if (!active.policy.completion.includes("handoff")) {
+    line(io.stdout, "note: the gateway completes every purchase by hand-off today, so this policy refuses every cart until one-tap purchases arrive");
+  }
   // The commit the bundled library policies come from, as the build recorded it (never a guessed one).
   line(io.stdout, `gateway: ${describeBuild(BUILD)}`);
   line(io.stdout, "---");

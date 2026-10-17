@@ -10,10 +10,13 @@ export class PolicyError extends Error {
   override readonly name = "PolicyError";
   readonly code: PolicyErrorCode;
   readonly path: string;
-  constructor(code: PolicyErrorCode, path: string, message: string) {
+  /** The fix, when it is not "correct that key in the file" (two policies that conflict, say). */
+  readonly fix: string | undefined;
+  constructor(code: PolicyErrorCode, path: string, message: string, fix?: string) {
     super(`${path}: ${message}`);
     this.code = code;
     this.path = path;
+    this.fix = fix;
   }
 }
 

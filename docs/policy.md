@@ -38,11 +38,25 @@ merchants:
   block: [dropship.example]   # these hostnames and their subdomains
 categories:
   block: [electronics]        # a category blocks its subcategories (electronics/headphones)
+completion: [handoff]         # handoff, one_tap, or both (the default)
 ```
 
 The offers Intent Cloud returns carry no category of their own, so the gateway checks each offer and cart against the category of the search that found it. When `categories.block` lists anything, a search must therefore name a category. A search for a product alone is not sent; `find_offers` asks the agent for the category.
 
-The **baseline** is the loosest policy the gateway will run, and every loaded policy is combined with it: passkey approval, at most 3 items per cart, a 5-digit US ZIP as the only ship-to detail, and the categories excluded under the rules Intent Cloud enforces (health and medical; alcohol, tobacco, cannabis, adult and weapons; gift cards, crypto, subscriptions and digital goods).
+The **baseline** is the loosest policy the gateway will run, and every loaded policy is combined with it: passkey approval, at most 3 items per cart, a 5-digit US ZIP as the only ship-to detail, the categories excluded under the rules Intent Cloud enforces (health and medical; alcohol, tobacco, cannabis, adult and weapons; gift cards, crypto, subscriptions and digital goods), and both completion modes.
+
+### Completion modes
+
+`completion` lists how an approved purchase may be completed:
+
+- `handoff`: the buyer leaves the confirm page for the merchant's checkout and pays there. A cart that names no mode is a hand-off.
+- `one_tap`: a wallet adapter in the gateway will complete the purchase with the developer's own wallet account (planned, see below).
+
+Absent means both. `completion: [handoff]` keeps every purchase a hand-off; a cart for any other mode is refused with the rule `completion`. Like every other list, `completion` only narrows: combining two policies keeps the modes both allow, and `intent policy add` refuses a library policy that shares no mode with yours. Every purchase still needs your passkey Approval, whatever the mode.
+
+<!-- feature: one-tap -->
+!!! planned "One-tap purchases"
+    The gateway completes every purchase by hand-off today, so a policy without `handoff` (`completion: [one_tap]`) refuses every cart until one-tap purchases arrive. `one_tap` is accepted now so that a policy written today keeps its meaning later.
 
 ## What is refused at load time
 
@@ -54,6 +68,8 @@ A policy file is read strictly, so it cannot mean one thing to the gateway and a
 | `share.ship_to` other than `postcode_only` or `none`; `share.history: true` | Nothing beyond a ZIP can be shared. |
 | `quantity.max` above 3; a spend limit that is zero, negative or not a whole number | It would loosen, or read as "no limit". |
 | `categories.allow` | A policy can only block categories. |
+| A `completion` mode other than `handoff` or `one_tap`, or a list of more than two | An unknown mode could be read as "any way at all". |
+| `completion: []` (refused as invalid) | A policy that allows no mode could never complete a purchase. |
 | Unknown keys, duplicate keys, YAML merge keys (`<<`), more than 16 aliases, files over 64 KiB | A file that parses two ways could hide a loosened rule. |
 | A merchant that is not a bare hostname (a scheme, port, path or `*`) | Hostnames are compared after Unicode and IDN normalisation, so look-alikes match. |
 
@@ -91,7 +107,7 @@ $ intent policy test cases.yaml --policy other.yaml
   expect: {send: false, blocked: [spend.per_order_usd]}
 ```
 
-An `outbound` is a `search` (`category`, `must_haves`, `budget_usd`, `ship_to_zip`) or a `cart` (`offer` with `merchant`, `category`, `price_usd`, `quantity`). A case may add `now` and a `history` of earlier purchases (`{at, total_usd}`) for the daily and weekly limits. `blocked` lists the rules expected to refuse it. The command prints `ok` or `FAIL` per case and exits 0 only when all pass.
+An `outbound` is a `search` (`category`, `must_haves`, `budget_usd`, `ship_to_zip`) or a `cart` (`offer` with `merchant`, `category`, `price_usd`, `quantity`; beside it an optional `completion_mode`, `handoff` when absent). A case may add `now` and a `history` of earlier purchases (`{at, total_usd}`) for the daily and weekly limits. `blocked` lists the rules expected to refuse it. The command prints `ok` or `FAIL` per case and exits 0 only when all pass.
 
 ## What a policy cannot do
 
