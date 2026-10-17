@@ -6,7 +6,8 @@
 // proof only. Every refusal names the appendix step it failed (`step`, null for the gateway's own rules) and why.
 //
 // Chain bodies the caller writes, so the others can rely on them:
-// - approval_pending: `{handle, approval_url, snapshot_hash}`; verifyApprovalProof reads `handle` and `snapshot_hash`.
+// - approval_pending: `{handle, approval_url, snapshot_hash, sent?}`; verifyApprovalProof reads `handle`,
+//   `snapshot_hash` and, from contract 1.6.0, `sent` (SentPurchase), which Appendix E step 7 matches the snapshot to.
 // - approval: `{handle, sign_count, …}`; a handle with an approval entry is a replay. `sign_count` is the verified
 //   credential's `signCount`; checkApprover compares the next approval's counter with it (absent = unknown).
 // - approver_pin, approver_flag: the `entry.body` checkApprover returns, `{fingerprint, credential_id,
@@ -15,5 +16,6 @@ export { approvalChallenge, type ApprovalFailure, type ApprovalResult, type Chai
 export { type ApproverBody, type ApproverCheck, checkApprover, type FlagReason } from "./approver.ts";
 export { approverFingerprint } from "./fingerprint.ts";
 export { type ReceiptFailure, type ReceiptResponse, type ReceiptResult, type SentRequest, verifyReceipt } from "./receipt.ts";
+export { readSent, SENT_FIELDS, SENT_WORDS, SentPurchase, type SentReason, sentProblems } from "./sent.ts";
 export { isTestRoot, onlyTestRoot, TEST_ROOT_KEY } from "./test-root.ts";
 export { type KeySet, MAX_CLOCK_SKEW_MS, type PinnedRootKey, type StatementFailure, type StatementResult, verifyStatement } from "./statement.ts";

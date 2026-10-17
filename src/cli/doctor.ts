@@ -61,7 +61,7 @@ export async function doctor(io: Io, config: Config): Promise<number> {
   } else {
     let pins: readonly RootKey[] | null = null;
     try {
-      pins = await rootKeys(config);
+      pins = await rootKeys(config, { contacts: true });
       report("ok", `root key: ${pins.map((k) => k.kid).join(", ")} (${config.cloud.trust.kind === "file" ? "from --trust-keys" : "pinned in this build"})`);
     } catch (error) {
       report("fail", `root key: ${describeError(error)}`);

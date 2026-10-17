@@ -67,6 +67,9 @@ import {
   onlyTestRoot,
   type PinnedRootKey,
   verifyApprovalProof,
+  SENT_WORDS,
+  type SentPurchase,
+  sentProblems,
   verifyStatement,
 } from "../trust/index.ts";
 import { disclosedSince, spendHistory, summaryLine } from "./history.ts";
@@ -641,7 +644,9 @@ export function createGateway(options: GatewayOptions): Gateway {
     // still leave a key that can read it. Its keyid is regenerated in the rare case it looks like identity.
     let completer: Session;
     try {
-      completer = await completerKeys.create((keyid) => findIdentity({ completer_keyid: keyid }).length === 0);
+      // Never an earlier approval's key (amendment M5); a fresh key repeats one only by a fault, refused all the same.
+      const earlier = new Set(store.entries().flatMap((e) => (e.kind === "approval_pending" ? [bodyOf(e).completer_keyid] : [])));
+      completer = await completerKeys.create((keyid) => !earlier.has(keyid) && findIdentity({ completer_keyid: keyid }).length === 0);
     } catch (error) {
       return { status: "error", message: `Not sent: the completer key could not be saved (${(error as Error).message}).`, summary: summary(fromSeq) };
     }
@@ -692,8 +697,15 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (!approvalCall.ok) return approvalCall.refused;
     const created = approvalCall.body;
     await store.append("observed", observeApproval(approvalCall.seq, created));
+    // What step 7 matches the snapshot to, now and when the approval is accepted (chained below). The cart checks
+    // above made sure the offer and the cart name a variant and the cart an origin.
+    const sent: SentPurchase = {
+      cart_request: request,
+      offer: { variant_ref: known.offer.variant_ref ?? "" },
+      cart: { merchant_origin: cart.merchant_origin ?? "", variant_ref: cart.variant_ref ?? "" },
+    };
     const snapshotProblems = [
-      ...checkSnapshot(created, cart, known.zip, request.completer_keyid),
+      ...checkSnapshot(created, cart, sent),
       ...spendCheck(policyOffer(created.snapshot.merchant.domain, known.category, created.snapshot.total, null, created.snapshot.quantity), mode).map(
         (b) => b.reason,
       ),
@@ -713,6 +725,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       expires_at: created.snapshot.expires_at,
       completion_mode: mode,
       completer_keyid: request.completer_keyid,
+      sent,
     });
     createdHere.add(created.approval_handle);
     return {
@@ -959,10 +972,11 @@ function cartV16Problems(cart: Cart, offer: CloudOffer, accepts: readonly CloudC
 }
 
 /**
- * The snapshot must be the cart, for the ZIP sent, under the hash Intent Cloud gave (Appendix A), and, from a 1.6.0
- * host, a v2 snapshot that names the completer key this gateway made for the cart.
+ * The snapshot must be the cart under the hash Intent Cloud gave (Appendix A) and, from a 1.6.0 host, a v2 snapshot
+ * that passes Appendix E step 7 against what was sent and received (`sent`, trust's sentProblems): the same check
+ * the approval must pass again when it is accepted.
  */
-function checkSnapshot(created: ApprovalCreated, cart: Cart, zip: string, completerKeyid: string): string[] {
+function checkSnapshot(created: ApprovalCreated, cart: Cart, sent: SentPurchase): string[] {
   const s = created.snapshot;
   const problems: string[] = [];
   if (sha256Hex(canonicalize(s)) !== created.snapshot_hash) problems.push("snapshot_hash is not the snapshot's hash");
@@ -973,15 +987,12 @@ function checkSnapshot(created: ApprovalCreated, cart: Cart, zip: string, comple
   for (const key of ["merchant", "item", "quantity", "unit_price", "shipping", "total", "total_kind"] as const) {
     if (!same(s[key], cart[key])) problems.push(`${key} differs from the cart`);
   }
-  if (s.v !== 2) {
-    problems.push("snapshot is v1, which binds only a ZIP prefix; a 1.6.0 host sends v2");
-    return problems;
+  if (s.v === 2) {
+    for (const key of ["completion_mode", "total_estimated"] as const) {
+      if (s[key] !== cart[key]) problems.push(`${key} differs from the cart`);
+    }
   }
-  if (s.ship_to.postal_code !== zip) problems.push("ship_to differs from the ZIP sent");
-  for (const key of ["merchant_origin", "variant_ref", "completion_mode", "total_estimated"] as const) {
-    if (s[key] !== cart[key]) problems.push(`${key} differs from the cart`);
-  }
-  if (s.completer_keyid !== completerKeyid) problems.push("completer_keyid is not the key this gateway made for the cart");
+  problems.push(...sentProblems(s, sent).map((reason) => SENT_WORDS[reason]));
   return problems;
 }
 

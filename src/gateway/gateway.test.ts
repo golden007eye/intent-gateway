@@ -16,7 +16,7 @@ import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { loadPolicy } from "../policy/index.ts";
 import { type CompleterKeys, createSession, openCompleterKeys } from "../signing/index.ts";
 import { type Entry, openStore, type Store, verifyChain } from "../store/index.ts";
-import type { PinnedRootKey } from "../trust/index.ts";
+import { type PinnedRootKey, verifyApprovalProof, verifyStatement } from "../trust/index.ts";
 import { runVerify } from "../verify/index.ts";
 import {
   type ApprovalStatusResult,
@@ -533,6 +533,17 @@ describe("createCart snapshot checks", () => {
       expires_at: view?.snapshot.expires_at,
       completion_mode: "handoff",
       completer_keyid: view?.snapshot.v === 2 ? view.snapshot.completer_keyid : "v1",
+      sent: {
+        cart_request: {
+          offer_handle: bodies(h, "observed").find((o) => o.endpoint === "searchCatalog") === undefined ? "" : (JSON.parse(Buffer.from(String(bodies(h, "disclosure").find((d) => d.endpoint === "createCart")?.body_b64), "base64").toString("utf8")) as { offer_handle: string }).offer_handle,
+          quantity: 2,
+          ship_to: { country: "US", postal_code: SHOES.zip },
+          completer_keyid: view?.snapshot.v === 2 ? view.snapshot.completer_keyid : "v1",
+          completion_accepts: ["handoff"],
+        },
+        offer: { variant_ref: view?.snapshot.v === 2 ? view.snapshot.variant_ref : "v1" },
+        cart: { merchant_origin: "https://shop.example", variant_ref: view?.snapshot.v === 2 ? view.snapshot.variant_ref : "v1" },
+      },
     });
     expect(result.summary).toBe(
       "Sent: createCart (completer_keyid, completion_accepts, offer_handle, quantity, ship_to.country, ship_to.postal_code; receipt verified); " +
@@ -1191,11 +1202,14 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     expect(h.sends.createApproval).toBe(0);
   });
 
+  // Appendix E step 7 (amendment H2) at approval-request time, one attack per fact, plus the cart-equality ones.
   it.each([
-    ["origin https://evil.example for domain shop.example", { merchant_origin: "https://evil.example" }, "merchant_origin differs from the cart"],
+    ["quantity 2 when 1 was requested", { quantity: 2 }, "quantity is not the quantity requested"],
+    ["origin https://evil.example for domain shop.example", { merchant_origin: "https://evil.example" }, "merchant_origin is not the cart's"],
     ["ZIP 94104 when 94103 was sent", { ship_to: { country: "US", postal_code: "94104" } as const }, "ship_to differs from the ZIP sent"],
-    ["another variant", { variant_ref: "gid://shopify/ProductVariant/2" }, "variant_ref differs from the cart"],
-    ["another completion mode", { completion_mode: "shop_agent" as const }, "completion_mode differs from the cart"],
+    ["another variant", { variant_ref: "gid://shopify/ProductVariant/2" }, "variant_ref is not the offer's and the cart's"],
+    ["a completion mode the cart request did not offer", { completion_mode: "shop_agent" as const }, "completion_mode is not one the cart request offered"],
+    ["another completion mode than the cart's", { completion_mode: "shop_agent" as const }, "completion_mode differs from the cart"],
     ["an estimated total the cart did not have", { total_estimated: true }, "total_estimated differs from the cart"],
     ["another completer key", { completer_keyid: createSession().keyid }, "completer_keyid is not the key this gateway made for the cart"],
   ])("attack: a snapshot with %s is refused: no approval_pending, no key left", async (_name, patch, reason) => {
@@ -1206,6 +1220,64 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     expect(result.message).toContain(reason);
     expect(bodies(h, "approval_pending")).toHaveLength(0);
     expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it.each([
+    ["quantity", { quantity: 2 }],
+    ["ship_to", { ship_to: { country: "US", postal_code: "94104" } }],
+    ["completer_keyid", { completer_keyid: createSession().keyid }],
+    ["completion_mode", { completion_accepts: ["shop_agent"] }],
+  ] as const)("attack (H2): at acceptance, step 7 refuses a proof whose snapshot is not the chained request's %s", async (field, change) => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    const status = await h.real.getApproval(approval);
+    if (!status.ok) throw new Error("status failed");
+    const entry = h.store.entries().find((e) => e.kind === "approval_pending" && (e.body as { handle?: unknown }).handle === approval);
+    if (entry === undefined) throw new Error("no pending");
+    const keySet = verifyStatement(h.fake.statement, [h.fake.keys.rootPin], new Date(h.now()));
+    if (!keySet.ok) throw new Error("statement");
+    // The chained entry passes; the same proof against a request that asked for something else fails at step 7.
+    expect(verifyApprovalProof(status.body, entry, keySet.keySet, [], new Date(h.now())).ok).toBe(true);
+    const body = entry.body as { sent: { cart_request: object } };
+    const forged = { ...entry, body: { ...body, sent: { ...body.sent, cart_request: { ...body.sent.cart_request, ...change } } } };
+    expect(verifyApprovalProof(status.body, forged, keySet.keySet, [], new Date(h.now()))).toMatchObject({ ok: false, step: 7, reason: field });
+  });
+
+  it("attack (H2): at acceptance, step 7 refuses another variant or origin than the offer's and the cart's", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    const status = await h.real.getApproval(approval);
+    if (!status.ok) throw new Error("status failed");
+    const entry = h.store.entries().find((e) => e.kind === "approval_pending" && (e.body as { handle?: unknown }).handle === approval);
+    const keySet = verifyStatement(h.fake.statement, [h.fake.keys.rootPin], new Date(h.now()));
+    if (entry === undefined || !keySet.ok) throw new Error("setup");
+    const body = entry.body as { sent: { offer: object; cart: object } };
+    const check = (sent: object) => verifyApprovalProof(status.body, { ...entry, body: { ...body, sent: { ...body.sent, ...sent } } }, keySet.keySet, [], new Date(h.now()));
+    expect(check({ offer: { variant_ref: "gid://shopify/ProductVariant/9" } })).toMatchObject({ step: 7, reason: "variant_ref" });
+    expect(check({ cart: { ...body.sent.cart, merchant_origin: "https://evil.example" } })).toMatchObject({ step: 7, reason: "merchant_origin" });
+  });
+
+  it("M5: the gateway's key choice refuses an earlier approval's keyid", async () => {
+    const h = await setup();
+    const first = await pendingPurchase(h, "Trail Runner 3");
+    const accepted: boolean[] = [];
+    const keys = h.completerKeys;
+    const wrapped: CompleterKeys = { ...keys, create: (accept) => (accepted.push(accept?.(keyidOf(h, first)) ?? true), keys.create(accept)) };
+    const restarted = await build({ fake: h.fake, store: h.store, dir: h.dir, clock: { at: h.now() }, now: h.now }, { completerKeys: wrapped });
+    approvalOf(await restarted.gateway.createCart({ offer_handle: await offerHandle(restarted, "Road Runner 2") }));
+    expect(accepted).toEqual([false]);
+  });
+
+  it("M5: a cart never reuses an earlier approval's completer key, and Intent Cloud refuses one that does", async () => {
+    const h = await setup();
+    const first = await pendingPurchase(h, "Trail Runner 3");
+    const reused = keyidOf(h, first);
+    h.patch.createCart = (r) => h.real.createCart({ ...r, completer_keyid: reused });
+    const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Road Runner 2") });
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("completer_keyid belongs to an earlier approval");
   });
 
   it("attack (AC-G4): a proof whose snapshot completion_mode differs from the pending one is not_pending_snapshot", async () => {

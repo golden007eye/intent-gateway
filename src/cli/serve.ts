@@ -23,7 +23,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
     line(io.stderr, text);
   };
   const baseUrl = demo?.cloudUrl ?? config.cloud.url;
-  const pinnedRootKeys = demo?.trustKeys.rootKeys ?? (await rootKeys(config));
+  const pinnedRootKeys = demo?.trustKeys.rootKeys ?? (await rootKeys(config, { contacts: true }));
   const dataDir = demo?.dataDir ?? config.dataDir;
   const { policy, bundled } = await activePolicy(config.policyPath);
   // Printed once the gateway is serving, like the connect line, so a start that fails prints no line to act on.

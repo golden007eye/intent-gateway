@@ -1,0 +1,23 @@
+// The checkout ref hash (contract 1.6.0 hardening amendment L1): over the checkout id up to its first "?".
+import { createHash } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { checkoutRefHash } from "./index.ts";
+
+const raw = (text: string): string => `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
+
+describe("checkoutRefHash", () => {
+  it("hashes an id without a query as it is", () => {
+    expect(checkoutRefHash("gid://shopify/Checkout/TEST0001")).toBe(raw("gid://shopify/Checkout/TEST0001"));
+  });
+
+  it("drops everything from the first '?': a checkout URL's key never decides the hash", () => {
+    const bare = checkoutRefHash("gid://shopify/Checkout/TEST0001");
+    expect(checkoutRefHash("gid://shopify/Checkout/TEST0001?key=TESTKEY0001")).toBe(bare);
+    expect(checkoutRefHash("gid://shopify/Checkout/TEST0001?key=other?x=1")).toBe(bare);
+    expect(checkoutRefHash("gid://shopify/Checkout/TEST0001?key=TESTKEY0001")).not.toBe(raw("gid://shopify/Checkout/TEST0001?key=TESTKEY0001"));
+  });
+
+  it("attack: another checkout id is another hash, whatever its query", () => {
+    expect(checkoutRefHash("gid://shopify/Checkout/TEST0002?key=TESTKEY0001")).not.toBe(checkoutRefHash("gid://shopify/Checkout/TEST0001?key=TESTKEY0001"));
+  });
+});

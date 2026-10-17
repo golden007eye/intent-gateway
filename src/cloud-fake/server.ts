@@ -23,6 +23,7 @@ import {
   type CredentialPublicKey,
   ApprovalHandle,
   CartRequest,
+  checkoutRefHash,
   CONTRACT_VERSION,
   type KeyStatement,
   type Offer,
@@ -478,6 +479,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       const live = at - cart.createdAt < REPLAY_WINDOW && at < cart.expiresAt;
       if (same && live && (cart.latest === undefined || cart.latest.state === "pending")) return { status: 201, body: cart.body };
     }
+    // Amendment M5: a completer key names one approval; an earlier approval's key is refused (a replay returned above).
+    if (v16 && [...approvals.values()].some((a) => a.snapshot.v === 2 && a.snapshot.completer_keyid === request.completer_keyid)) {
+      return fail(400, "bad_request", "completer_keyid belongs to an earlier approval");
+    }
     if (request.quantity > offer.item.stock) return fail(409, "conflict", "not enough stock");
     const mode = v16 ? chooseMode(offer.item, request.completion_accepts ?? ["handoff"]) : "handoff";
     if (mode === null) return fail(409, "conflict", "no completion mode in common");
@@ -571,7 +576,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         ship_to: { country: "US", postal_code: cart.shipTo.postal_code },
         merchant_origin: body.merchant_origin,
         variant_ref: body.variant_ref,
-        checkout_ref_hash: `sha256:${sha256Hex(`gid://shopify/Checkout/${cart.handle}`)}`,
+        // The checkout URL's query (`?key=…`) is not part of the hash (amendment L1).
+        checkout_ref_hash: checkoutRefHash(`gid://shopify/Checkout/${cart.handle}?key=${randomBytes(8).toString("hex")}`),
         completion_mode: body.completion_mode,
         completer_keyid: cart.completer,
         total_estimated: body.total_estimated ?? false,

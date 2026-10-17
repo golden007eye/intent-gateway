@@ -3,3 +3,4 @@
 export * from "./schemas.ts";
 export { approvalPath, approvalsPath, CONTRACT_VERSION, ENDPOINTS, errorBody, HEADERS, outcomeReportsPath } from "./endpoints.ts";
 export type { Endpoint, OperationId } from "./endpoints.ts";
+export { checkoutRefHash } from "./checkout.ts";

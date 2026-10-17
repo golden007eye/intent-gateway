@@ -6,6 +6,7 @@ import { type AnySnapshot, ApprovalProof, ApprovalState, type CredentialPublicKe
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { approverFingerprint } from "./fingerprint.ts";
 import { fromBase64Url, utf8 } from "./bytes.ts";
+import { readSent, type SentReason, sentProblems } from "./sent.ts";
 import { type KeySet, trustedKeys } from "./statement.ts";
 
 /** A chain entry as the store returns it; trust reads only `kind` and `body`. */
@@ -45,7 +46,8 @@ export type ApprovalFailure =
   | { ok: false; step: 3; reason: "snapshot_hash_mismatch" | "not_pending_snapshot" }
   | { ok: false; step: 4; reason: "bad_client_data" | "wrong_type" | "wrong_challenge" | "wrong_origin" | "cross_origin" }
   | { ok: false; step: 5; reason: "bad_authenticator_data" | "wrong_rp_id" | "user_not_present" | "user_not_verified" }
-  | { ok: false; step: 6; reason: "bad_credential_key" | "bad_assertion_signature" };
+  | { ok: false; step: 6; reason: "bad_credential_key" | "bad_assertion_signature" }
+  | { ok: false; step: 7; reason: SentReason | "bad_sent" };
 
 export type ApprovalResult = VerifiedApproval | ApprovalFailure;
 
@@ -136,6 +138,15 @@ export function verifyApprovalProof(
     return fail(6, "bad_assertion_signature");
   }
 
+  // Step 7 (contract 1.6.0, H2): a pending entry the gateway chained with `sent` (every 1.6.0 cart) is matched
+  // fact by fact against the signed snapshot; a v1 snapshot there is refused. Entries from before 1.6.0 have none.
+  if (pending.sent !== undefined) {
+    const sent = readSent(pending.sent);
+    if (sent === null) return fail(7, "bad_sent");
+    const reason = sentProblems(proof.snapshot, sent)[0];
+    if (reason !== undefined) return fail(7, reason);
+  }
+
   const credential: VerifiedCredential = Object.freeze({
     id: proof.assertion.credential_id,
     publicKey: Object.freeze({ ...proof.credential_public_key }),
@@ -168,11 +179,11 @@ function jcsOrNull(value: unknown): string | null {
   }
 }
 
-function readPending(entry: ChainEntry): { handle: string; snapshotHash: string } | null {
+function readPending(entry: ChainEntry): { handle: string; snapshotHash: string; sent?: unknown } | null {
   if (entry.kind !== "approval_pending" || typeof entry.body !== "object" || entry.body === null) return null;
-  const { handle, snapshot_hash } = entry.body as { handle?: unknown; snapshot_hash?: unknown };
+  const { handle, snapshot_hash, sent } = entry.body as { handle?: unknown; snapshot_hash?: unknown; sent?: unknown };
   if (typeof handle !== "string" || typeof snapshot_hash !== "string" || !/^[0-9a-f]{64}$/.test(snapshot_hash)) return null;
-  return { handle, snapshotHash: snapshot_hash };
+  return { handle, snapshotHash: snapshot_hash, ...(sent === undefined ? {} : { sent }) };
 }
 
 function bodyHandle(body: unknown): unknown {

@@ -9,6 +9,7 @@ import { connectCloud, type DisclosedCloud, type DisclosureOptions, type HttpClo
 import { loadPolicy, type Policy } from "../policy/index.ts";
 import { createSession } from "../signing/index.ts";
 import type { Store } from "../store/index.ts";
+import { isTestRoot } from "../trust/index.ts";
 import { CliError, type Io } from "./io.ts";
 
 /** The package root: `policies/` and `package.json` sit here, beside both `src/` and `dist/`. */
@@ -77,8 +78,12 @@ const TrustFile = z.strictObject({
     .min(1),
 });
 
-/** The root keys to trust for the configured host: the build's pin, or the `--trust-keys` file. */
-export async function rootKeys(config: Config): Promise<readonly RootKey[]> {
+/**
+ * The root keys to trust for the configured host: the build's pin, or the `--trust-keys` file. `contacts` is true
+ * for a command that reaches the host (serve, doctor): only then is the published test root refused for a host on
+ * the network (L5). Reading the local chain (verify, panel) trusts no host.
+ */
+export async function rootKeys(config: Config, options: { contacts?: boolean } = {}): Promise<readonly RootKey[]> {
   const { trust } = config.cloud;
   if (trust.kind === "pinned") return trust.rootKeys;
   if (trust.kind === "unpinned") throw new ConfigError(trust.reason);
@@ -96,7 +101,26 @@ export async function rootKeys(config: Config): Promise<readonly RootKey[]> {
       2,
     );
   }
+  // Amendment L5: the published test root's private seed is public, so it is trusted only for a local fake
+  // (http on 127.0.0.1 or [::1], as in demo mode and tests), never for a host on the network.
+  if (options.contacts === true && keys.data.rootKeys.some(isTestRoot) && !isLoopbackHttp(config.cloud.url)) {
+    throw new CliError(
+      `--trust-keys ${trust.path} holds the published test root key (cloud-root-1 of the test vectors), whose private key is public; ` +
+        `it is trusted only in demo mode or for a local fake on 127.0.0.1, not for ${config.cloud.url}`,
+      2,
+    );
+  }
   return keys.data.rootKeys;
+}
+
+/** http on a loopback address: only a local fake Intent Cloud answers there. */
+function isLoopbackHttp(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" && (u.hostname === "127.0.0.1" || u.hostname === "[::1]");
+  } catch {
+    return false;
+  }
 }
 
 export interface ActivePolicy {
