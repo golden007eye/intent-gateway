@@ -15,8 +15,13 @@ import { randomUUID } from "node:crypto";
 import { findIdentity } from "../privacy/index.ts";
 import {
   AddressFieldsRequiredError,
+  type CheckoutIdStore,
   type CheckoutLocator,
   type CheckoutRequest,
+  type CompleteOptions,
+  CompletionRefusedError,
+  memoryCheckoutIds,
+  type SendCondition,
   type WalletAdapter,
   type WalletCheckout,
   WalletRailError,
@@ -37,7 +42,7 @@ import { REVOKE, type ShopTool, type WireResponse } from "./rpc.ts";
 
 /** A disclosed caller (src/disclosure's DisclosedWallet in shape): logs, then sends, one request. */
 export interface ShopCaller {
-  call(operation: string, payload: unknown, options?: { purchase?: string }): Promise<WireResponse>;
+  call(operation: string, payload: unknown, options?: { purchase?: string; unless?: SendCondition }): Promise<WireResponse>;
 }
 
 /** The linked account's tokens, as the wallet vault keeps them (written by `intent wallet link shop`, plan G8). */
@@ -92,6 +97,11 @@ export interface ShopAdapterOptions {
   readonly credentials: ShopCredentials | null;
   /** A UUID v4 for create_checkout; tests may fix it. */
   readonly newKey?: () => string;
+  /**
+   * Where Shop's raw checkout ids are kept between processes (ADR-0018): the encrypted checkout vault in production,
+   * so a restarted gateway can still reconcile a checkout it may have completed. In memory only by default.
+   */
+  readonly checkoutIds?: CheckoutIdStore;
 }
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -100,9 +110,9 @@ const VARIANT = /^gid:\/\/shopify\/ProductVariant\/[0-9]{1,20}$/;
 export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
   const newKey = options.newKey ?? randomUUID;
 
-  async function tool(name: ShopTool, args: unknown, purchase?: string): Promise<ToolAnswer> {
+  async function tool(name: ShopTool, args: unknown, purchase?: string, unless?: SendCondition): Promise<ToolAnswer> {
     if (options.credentials === null) throw new WalletRailError(0, null, "no Shop token in the wallet vault: link the wallet again");
-    const response = await options.mcp.call(name, args, purchase === undefined ? {} : { purchase });
+    const response = await options.mcp.call(name, args, { ...(purchase === undefined ? {} : { purchase }), ...(unless === undefined ? {} : { unless }) });
     return readToolAnswer(response);
   }
 
@@ -110,19 +120,25 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
     if (answer.isError) throw new WalletRailError(200, null, "Shop refused the request");
   }
 
-  // Shop's checkout ids by their sha256 reference, in memory only: an id can carry a credential (`?key=`), so it is
-  // never returned, recorded or logged in clear (SHOP_SECRET_PATHS digests it in each request).
+  // Shop's checkout ids by their sha256 reference: an id can carry a credential (`?key=`), so it is never returned,
+  // recorded or logged in clear (SHOP_SECRET_PATHS digests it in each request). Held in memory, and in the checkout
+  // id store (encrypted at rest in production) so a restarted gateway can still reach the checkout.
   const checkoutIds = new Map<string, string>();
+  const kept = options.checkoutIds ?? memoryCheckoutIds();
 
-  function hold(answer: ToolAnswer, store: string, shipToPostalCode: string | undefined): WalletCheckout {
+  async function hold(answer: ToolAnswer, store: string, shipToPostalCode: string | undefined): Promise<WalletCheckout> {
     const { checkout, checkoutId } = projectCheckout(answer.content, store, shipToPostalCode);
-    checkoutIds.set(checkout.checkoutRef, checkoutId);
+    if (checkoutIds.get(checkout.checkoutRef) !== checkoutId) {
+      checkoutIds.set(checkout.checkoutRef, checkoutId);
+      await kept.set(checkout.checkoutRef, checkoutId);
+    }
     return checkout;
   }
 
-  function held(checkout: CheckoutLocator): string {
-    const id = checkoutIds.get(checkout.checkoutRef);
-    if (id === undefined) throw new WalletRailError(0, null, "this gateway process does not hold that checkout's id (it is kept in memory only)");
+  async function held(checkout: CheckoutLocator): Promise<string> {
+    const id = checkoutIds.get(checkout.checkoutRef) ?? (await kept.get(checkout.checkoutRef));
+    if (id === null) throw new WalletRailError(0, null, "this gateway does not hold that checkout's id");
+    checkoutIds.set(checkout.checkoutRef, id);
     return id;
   }
 
@@ -172,12 +188,17 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
       return hold(answer, request.storeDomain, request.shipToPostalCode);
     },
 
-    async completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, shipToPostalCode?: string) {
+    async completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, completeOptions: CompleteOptions = {}) {
+      const { shipToPostalCode, precheck, sendUnless } = completeOptions;
       checkStore(checkout.storeDomain);
       if (!UUID_V4.test(idempotencyKey)) throw new TypeError("a Shop idempotency key is a UUID v4");
-      const id = held(checkout);
+      const id = await held(checkout);
+      // The fresh read the completer precheck runs on (contract Appendix G step 1): this process, no cached read.
       const current = await tool("get_checkout", { shop: checkout.storeDomain, id }, purchase);
       refused(current);
+      const fresh = await hold(current, checkout.storeDomain, shipToPostalCode);
+      const refusal = precheck?.(fresh) ?? null;
+      if (refusal !== null) throw new CompletionRefusedError(refusal, fresh);
       const raw = checkoutOf(current.content);
       const offered = Array.isArray(record(raw.payment)?.instruments) ? (record(raw.payment)?.instruments as unknown[]).map(record) : [];
       const instrument = offered.find((i) => i?.selected === true) ?? offered[0] ?? null;
@@ -193,6 +214,7 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
           meta: { "idempotency-key": idempotencyKey },
         },
         purchase,
+        sendUnless,
       );
       refused(answer);
       return hold(answer, checkout.storeDomain, shipToPostalCode);
@@ -200,9 +222,14 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
 
     async getCheckout(checkout: CheckoutLocator, purchase: string, shipToPostalCode?: string) {
       checkStore(checkout.storeDomain);
-      const answer = await tool("get_checkout", { shop: checkout.storeDomain, id: held(checkout) }, purchase);
+      const answer = await tool("get_checkout", { shop: checkout.storeDomain, id: await held(checkout) }, purchase);
       refused(answer);
       return hold(answer, checkout.storeDomain, shipToPostalCode);
+    },
+
+    async release(checkout: CheckoutLocator) {
+      checkoutIds.delete(checkout.checkoutRef);
+      await kept.delete(checkout.checkoutRef);
     },
 
     async orders() {

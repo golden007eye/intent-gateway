@@ -141,8 +141,13 @@ export interface WalletAdapter {
    * `idempotencyKey` is a UUID v4. Throws AddressFieldsRequiredError, with no completion sent, when completing
    * would forward a postal address (a billing address on the payment instrument).
    */
-  completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, shipToPostalCode?: string): Promise<WalletCheckout>;
+  completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, options?: CompleteOptions): Promise<WalletCheckout>;
   getCheckout(checkout: CheckoutLocator, purchase: string, shipToPostalCode?: string): Promise<WalletCheckout>;
+  /**
+   * Forgets the checkout's id (memory and the encrypted checkout store), once the purchase has a terminal outcome and
+   * nothing needs to reach the checkout again. Sends nothing.
+   */
+  release(checkout: CheckoutLocator): Promise<void>;
   /** The account's recent orders as the rail reports them, projected (plan G12, `intent wallet check`). */
   orders(): Promise<WalletOrders>;
   /**
@@ -153,6 +158,72 @@ export interface WalletAdapter {
 }
 
 export type RevokeResult = "revoked" | "not_revoked" | "not_sent";
+
+/** A chain entry as a send condition reads it (src/store's Entry fits). */
+export interface ChainEntryView {
+  readonly kind: string;
+  readonly body: unknown;
+}
+
+/**
+ * Compare-and-append for one send (plan G7b step 6b): the send's `disclosure` entry is appended, and the request
+ * sent, only if this returns false over the chain, evaluated under the store lease. True means another process or
+ * an earlier run owns the step: nothing is logged or sent.
+ */
+export type SendCondition = (entries: readonly ChainEntryView[]) => boolean;
+
+export interface CompleteOptions {
+  /** The signed snapshot's ZIP, compared inside the adapter. */
+  readonly shipToPostalCode?: string;
+  /**
+   * The completer precheck (contract Appendix G): called with the checkout as read by a fresh get_checkout, in this
+   * process and immediately before complete_checkout. A non-null answer is the refusal's reason: complete_checkout is
+   * then never sent, and CompletionRefusedError carries the reason.
+   */
+  readonly precheck?: (fresh: WalletCheckout) => string | null;
+  /** The condition of the complete_checkout send itself (SendCondition). */
+  readonly sendUnless?: SendCondition;
+}
+
+/** The completer precheck refused the fresh checkout read: complete_checkout was not sent. */
+export class CompletionRefusedError extends Error {
+  override name = "CompletionRefusedError";
+  readonly reason: string;
+  /** The fresh read the precheck refused. */
+  readonly checkout: WalletCheckout;
+  constructor(reason: string, checkout: WalletCheckout) {
+    super(`complete_checkout not sent: the completer precheck refused the checkout (${reason})`);
+    this.reason = reason;
+    this.checkout = checkout;
+  }
+}
+
+/**
+ * Where an adapter keeps a rail's raw checkout ids between processes, by checkout ref (ADR-0018): an id can carry a
+ * credential (`?key=`), so it is never in the chain; it sits encrypted beside the wallet's token, so a restarted
+ * gateway can still read the checkout it may have completed.
+ */
+export interface CheckoutIdStore {
+  get(checkoutRef: string): Promise<string | null>;
+  set(checkoutRef: string, checkoutId: string): Promise<void>;
+  delete(checkoutRef: string): Promise<void>;
+}
+
+/** A CheckoutIdStore held in memory only (a process that never restarts mid-purchase, or tests). */
+export function memoryCheckoutIds(): CheckoutIdStore {
+  const ids = new Map<string, string>();
+  return {
+    get: (ref) => Promise.resolve(ids.get(ref) ?? null),
+    set: (ref, id) => {
+      ids.set(ref, id);
+      return Promise.resolve();
+    },
+    delete: (ref) => {
+      ids.delete(ref);
+      return Promise.resolve();
+    },
+  };
+}
 
 /**
  * The rail would need the buyer's postal address (invariant 3; plan kill criterion K4): delivery chosen by address

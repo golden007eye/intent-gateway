@@ -10,7 +10,7 @@
 //
 // The field names follow Shop's published tool schemas (UCP checkout) as of 2026-10-16; the budget's and the
 // address id's exact shape is pending the S1 spike's captured answers (plan G0 questions 2 and 9).
-import { createHash } from "node:crypto";
+import { checkoutRefHash } from "../contract/index.ts";
 import { findIdentity } from "../privacy/index.ts";
 import {
   type ShipToMatch,
@@ -129,11 +129,12 @@ const REF = /^[A-Za-z0-9:/_.-]{1,256}$/;
 const CHECKOUT_ID = /^[A-Za-z0-9:/_.?=&%-]{1,512}$/;
 
 /**
- * How a checkout is named wherever it is kept or shown: `sha256:` and the hex SHA-256 of the id's UTF-8 bytes. The
- * id itself can hold a credential (UCP's `?key=`), so it is held in memory only, for the next call to Shop.
+ * How a checkout is named wherever it is kept or shown: the contract's checkout ref hash, `sha256:` and the hex
+ * SHA-256 of the id up to its first `?` (Appendix G, amendment L1). The query can hold a credential (UCP's `?key=`)
+ * and can differ between reads; the part before it names the checkout. An id with nothing before `?` has no ref.
  */
-export function checkoutRefOf(checkoutId: string): string {
-  return `sha256:${createHash("sha256").update(checkoutId, "utf8").digest("hex")}`;
+export function checkoutRefOf(checkoutId: string): string | null {
+  return checkoutRefHash(checkoutId);
 }
 
 /** The raw checkout object of an answer (`checkout`, or the answer itself). */
@@ -153,8 +154,9 @@ export function projectCheckout(
 ): { checkout: WalletCheckout; checkoutId: string } {
   const checkout = checkoutOf(content);
   const checkoutId = checkout.id;
-  if (typeof checkoutId !== "string" || !CHECKOUT_ID.test(checkoutId)) throw new WalletRailError(200, null, "Shop's checkout has no usable id");
-  return { checkout: projected(checkout, checkoutRefOf(checkoutId), requestedStore, shipToPostalCode), checkoutId };
+  const ref = typeof checkoutId === "string" && CHECKOUT_ID.test(checkoutId) ? checkoutRefOf(checkoutId) : null;
+  if (typeof checkoutId !== "string" || ref === null) throw new WalletRailError(200, null, "Shop's checkout has no usable id");
+  return { checkout: projected(checkout, ref, requestedStore, shipToPostalCode), checkoutId };
 }
 
 function projected(checkout: Json, checkoutRef: string, requestedStore: string, shipToPostalCode: string | undefined): WalletCheckout {

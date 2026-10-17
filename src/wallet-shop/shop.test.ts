@@ -139,7 +139,7 @@ describe("a purchase's Shop calls", () => {
     expect((args.meta as Json)["idempotency-key"]).toBe(CREATE_UUID);
     expect(CREATE_UUID).toMatch(UUID_V4);
 
-    const done = await wallet.completeCheckout(created, purchase, KEY, ZIP);
+    const done = await wallet.completeCheckout(created, purchase, KEY, { shipToPostalCode: ZIP });
     expect(done).toMatchObject({ status: "completed", orderRef: expect.stringMatching(/^gid:\/\/shopify\/Order\/\d+$/) as unknown, shipTo: "match" });
     expect(shop.completeCount).toBe(1);
     const complete = shop.calls.find((c) => c.tool === "complete_checkout")?.body.params as Json;
@@ -190,7 +190,7 @@ describe("invariant 3: Shop's buyer identity never gets past the projection", ()
     const outputs: unknown[] = [];
     outputs.push(await wallet.account());
     const created = await wallet.createCheckout(request);
-    outputs.push(created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, ZIP));
+    outputs.push(created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, { shipToPostalCode: ZIP }));
     // A checkout reference this process does not hold: refused locally, its error naming nothing.
     const missing = await wallet.getCheckout({ storeDomain: FAKE_STORE, checkoutRef: "gid://shopify/Checkout/0" }, purchase).catch((e: unknown) => e);
     expect(missing).toBeInstanceOf(WalletRailError);
@@ -325,7 +325,7 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
   it("attack: a checkout id carrying ?key= flows through create, get and complete; the key is never in the chain, a result or an error", async () => {
     const { wallet } = await setup({ checkoutKey: "SECRET-CHECKOUT-KEY" });
     const created = await wallet.createCheckout(request);
-    const outputs: unknown[] = [created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, ZIP)];
+    const outputs: unknown[] = [created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, { shipToPostalCode: ZIP })];
     // It did reach Shop, which needs it: the fake got the full id back on each call.
     const ids = shop.calls.filter((c) => c.tool === "get_checkout" || c.tool === "complete_checkout").map((c) => ((c.body.params as Json).arguments as Json).id);
     expect(ids.every((id) => typeof id === "string" && id.endsWith("?key=SECRET-CHECKOUT-KEY"))).toBe(true);

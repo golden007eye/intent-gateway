@@ -72,6 +72,18 @@ export interface FakeShopFaults {
   noRefreshToken?: boolean;
   /** search_orders says another page of orders exists. */
   moreOrders?: boolean;
+  /** complete_checkout waits this long before it completes and answers (plan G7b test 4a). */
+  completeDelayMs?: number;
+  /** complete_checkout cuts the connection before it completes anything: the checkout stays open. */
+  dropCompleteUnapplied?: boolean;
+  /** These tools are answered with the given HTTP status and no result (`{get_checkout: 500}`). */
+  toolHttpStatus?: Readonly<Record<string, number>>;
+  /** Every checkout read reports this storefront URL, ZIP or variant instead of its own (a checkout changed after its quote). */
+  merchantUrl?: string;
+  shipToZip?: string;
+  viewVariant?: string;
+  /** get_checkout answers not_found for every checkout. */
+  forgetCheckouts?: boolean;
 }
 
 /**
@@ -262,15 +274,24 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         id: c.id,
         status: c.status,
         currency: "USD",
-        line_items: [{ id: "li_1", item: { id: c.variant, title: "Holographic sticker" }, quantity: c.quantity }],
+        line_items: [{ id: "li_1", item: { id: shop.faults.viewVariant ?? c.variant, title: "Holographic sticker" }, quantity: c.quantity }],
         totals: [
           { type: "subtotal", amount },
           { type: "fulfillment", amount: SHIPPING_MINOR },
           { type: "total", amount: amount + SHIPPING_MINOR + (shop.faults.totalAboveMinor ?? 0) },
         ],
-        merchant: { domain: c.shop, url: FAKE_STOREFRONT },
+        merchant: { domain: c.shop, url: shop.faults.merchantUrl ?? FAKE_STOREFRONT },
         // Shop echoes the chosen destination's address fields.
-        fulfillment: { methods: [{ id: "m1", type: "shipping", destinations: [{ id: c.destinationId, type: "shipping_address", ...address() }], selected_destination_id: c.destinationId }] },
+        fulfillment: {
+          methods: [
+            {
+              id: "m1",
+              type: "shipping",
+              destinations: [{ id: c.destinationId, type: "shipping_address", ...address(), ...(shop.faults.shipToZip === undefined ? {} : { postal_code: shop.faults.shipToZip }) }],
+              selected_destination_id: c.destinationId,
+            },
+          ],
+        },
         payment: { instruments: [instrument] },
         ...(c.orderId === null ? {} : { order: { id: c.orderId, permalink_url: `${FAKE_STOREFRONT}/orders/1` } }),
         ...identity(),
@@ -344,7 +365,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         });
       }
       case "get_checkout": {
-        const c = checkouts.get(String(args.id));
+        const c = shop.faults.forgetCheckouts === true ? undefined : checkouts.get(String(args.id));
         return c === undefined ? toolError("not_found", "$.id", "checkout not found") : result(view(c));
       }
       case "complete_checkout": {
@@ -479,6 +500,20 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
     if (bearer === undefined || !grants.some((g) => g.access === bearer) || revoked.has(bearer)) {
       send(401, rpcError(body.id, -32001, "invalid token"), { "www-authenticate": 'Bearer error="invalid_token"' });
       return;
+    }
+    const forced = shop.faults.toolHttpStatus?.[tool];
+    if (forced !== undefined) {
+      send(forced, { error: "server_error" });
+      return;
+    }
+    if (tool === "complete_checkout") {
+      if (shop.faults.dropCompleteUnapplied === true) {
+        completeCount++;
+        res.socket?.destroy();
+        return;
+      }
+      const delay = shop.faults.completeDelayMs ?? 0;
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     }
     const answer = callTool(tool, (params.arguments ?? {}) as Record<string, unknown>);
     if (answer === null) {
