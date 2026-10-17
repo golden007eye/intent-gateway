@@ -14,7 +14,7 @@ export function formatReport(report: Report): string {
     for (const detail of check.details) lines.push(`  ${detail}`);
   }
   lines.push(`head: seq ${String(report.head.seq)} hash ${report.head.hash}`);
-  lines.push("  Compare this head with a copy of the chain taken earlier, or with your receipts.");
+  lines.push(`  ${report.headNote ?? "Compare this head with a copy of the chain taken earlier, or with your receipts."}`);
   lines.push(report.exitCode === 2 ? "verify: usage error" : `verify: ${report.ok ? "ok" : "FAILED"}`);
   return lines.join("\n") + "\n";
 }

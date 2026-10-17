@@ -56,6 +56,10 @@ Before each request to Intent Cloud, the gateway appends the exact request to th
 
 `intent verify` proves what the gateway sent and what Intent Cloud acknowledged receiving. It cannot show what happens to that data afterwards, and these docs do not claim otherwise.
 
+## One purchase, for someone else
+
+`intent evidence <approval handle>` writes one purchase's entries, with the hashes of the rest of the chain, as an [evidence pack](evidence.md). Whoever receives it checks it offline with `intent verify --evidence <file>`, which runs the checks above on that purchase alone.
+
 ## The head seq and hash
 
 Dropping whole entries from the end of the file leaves a valid, shorter chain, so the file alone cannot show it. That needs evidence from outside the file:

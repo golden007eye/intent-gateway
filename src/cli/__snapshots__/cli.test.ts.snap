@@ -15,8 +15,8 @@ Commands:
   intent init [--yes]               first run: check the setup, offer Shop one-tap, print the connect line
   intent log                        each action: the values it sent, what came back, what was blocked
                                     (-v, --json, --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
-  intent verify                     re-check the chain, receipts, approvals and this install
-                                    (--skip-install-check: chain only, for offline use)
+  intent verify                     re-check the chain, receipts, approvals, this install (--skip-install-check: chain only)
+  intent evidence <approval handle> one purchase's evidence pack (--out <file>); check it: verify --evidence <file>
   intent panel [--port <n>]         read-only local page: activity, purchases, approvals, policy, log, verify
   intent doctor                     check the setup; each problem comes with its fix
   intent policy show                the active policy and its policy.lock
