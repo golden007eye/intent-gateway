@@ -12,6 +12,7 @@ export {
   FAKE_STOREFRONT,
   FAKE_VARIANT,
   type FakeOAuthRequest,
+  type FakeOrder,
   type FakeRevocation,
   type FakeShop,
   type FakeShopCall,

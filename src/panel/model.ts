@@ -20,6 +20,7 @@ import {
   leafFields,
   loggedValues,
   type Purchase,
+  walletCheckWords,
 } from "../activity/index.ts";
 import { withheldAt } from "../observation/index.ts";
 import { isCredentialHeader, markerDigest } from "../privacy/index.ts";
@@ -362,7 +363,9 @@ function feedLine(a: Activity, time: Clock): Line {
     case "wallet": {
       const rail = destinationLabel(f.wallet_rail ?? "");
       const revoked = f.wallet_action !== "unlinked" ? "" : f.revoked === true ? `token revoked at ${rail}` : f.revoked === false ? "token not revoked (deleted here only)" : "";
-      return { ...base, label: "wallet", tone: "plain", text: join([`${rail} wallet ${f.wallet_action ?? ""}`.trim(), revoked]) };
+      // A check with unmatched orders asks for a look: Shop reported orders no purchase in this log names (plan G12).
+      const tone = f.wallet_action === "checked" && (f.check_unmatched ?? 0) > 0 ? "warn" : "plain";
+      return { ...base, label: "wallet", tone, text: join([`${rail} wallet ${f.wallet_action ?? ""}`.trim(), revoked, ...walletCheckWords(f)]) };
     }
     case "call": {
       const status = a.requests[0]?.response?.status ?? null;
@@ -629,6 +632,11 @@ function entrySummary(kind: string, b: Record<string, unknown>): string {
       return join([`refused before sending${to} ${text(b.endpoint)}`, strings(b.blocked).join("; "), ...held]);
     }
     case "wallet":
+      if (b.action === "checked") {
+        const count = (v: unknown): string => (typeof v === "number" ? String(v) : "?");
+        const total = typeof b.unmatched_total_minor === "number" ? `${(b.unmatched_total_minor / 100).toFixed(2)} USD` : "";
+        return join([`${destinationLabel(text(b.rail))} wallet checked`, `${count(b.order_count)} reported`, `${count(b.unmatched_count)} unmatched`, total, b.complete === false ? "partial" : ""]);
+      }
       return join([`${destinationLabel(text(b.rail))} wallet ${text(b.action)}`, b.action !== "unlinked" ? "" : b.revoked === true ? "token revoked" : "token not revoked"]);
     case "observed": {
       // What came back for one request, recorded here after its receipt; never sent.

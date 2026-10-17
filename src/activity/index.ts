@@ -28,5 +28,6 @@ export {
   loggedValues,
   type Outcome,
   summarise,
+  walletCheckWords,
 } from "./activity.ts";
 export { buildPurchases, type Purchase, type PurchaseState } from "./purchases.ts";

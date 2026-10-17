@@ -25,8 +25,8 @@ Commands:
   intent approver list              approver pins and flagged passkeys
   intent approver accept            make a flagged passkey the approver (at a terminal)
   intent wallet status              whether a Shop wallet is linked and its encrypted vault opens
-  intent wallet link shop           link your Shop account (for one-tap purchases, coming later)
-  intent wallet unlink shop         revoke the gateway's Shop token and delete its vault file
+  intent wallet link|unlink shop    link your Shop account (one-tap, coming later), or revoke its token and delete it
+  intent wallet check shop          Shop orders that no purchase in the log names (--since 7d)
   intent demo [--http]              run against a local demo Intent Cloud (HTTP when typed in a terminal)
 
 Options for every command (and --help, --version):

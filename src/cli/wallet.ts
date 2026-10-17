@@ -7,12 +7,17 @@
 // unlink first asks the rail to revoke the token (a disclosed send, logged before it leaves), then deletes the vault
 // file and chains `wallet {rail, action: "unlinked", revoked}`. `revoked` is true only when the rail acknowledged the
 // revocation (HTTP 200, RFC 7009); otherwise the output says where to revoke it by hand (invariant 5).
+// check (plan G12) asks the rail for recent orders, through the log, and says which ones no chained outcome names.
 import { type Config, INTENT } from "../config/index.ts";
 import { connectShop, type DeviceGrantPrompt, linkShop, openWalletSession, ShopLinkError, type WalletSession } from "../disclosure/index.ts";
 import { approvalQr } from "../gateway/index.ts";
 import { openStore } from "../store/index.ts";
 import { printable, printableLines } from "../ui/index.ts";
 import {
+  CHECK_CURRENCY,
+  chainedOrderRefs,
+  checkedEntry,
+  checkOrders,
   deleteSecret,
   describeKeySource,
   hasSecret,
@@ -21,12 +26,14 @@ import {
   loadWalletKey,
   saveSecret,
   vaultPath,
+  type WalletCheck,
   WALLET_RAILS,
   type WalletRail,
   walletKeyWarnings,
   WalletVaultError,
 } from "../wallet/index.ts";
 import { CliError, type Io, line } from "./io.ts";
+import { parseSince } from "./log-flags.ts";
 import { leaseNotice } from "./waiting.ts";
 
 const RAIL_NAMES: Readonly<Record<WalletRail, string>> = { shop: "Shop" };
@@ -236,6 +243,75 @@ async function revoke(io: Io, config: Config, rail: WalletRail, session: WalletS
     line(io.stderr, printable(`intent: could not revoke the ${name} token: ${error instanceof Error ? error.message : String(error)}`));
     return false;
   }
+}
+
+/** The period `wallet check` looks at when --since is not given. */
+export const CHECK_DEFAULT_SINCE = "7d";
+
+/**
+ * `intent wallet check shop [--since 7d]` (plan G12): asks Shop for the account's recent orders (search_orders, a
+ * disclosed send: logged before it leaves), keeps each order's reference, total, merchant origin and time only, and
+ * lists the orders in the period that no `outcome` entry of this chain names. Chains `wallet {rail, action:
+ * "checked", since, order_count, unmatched_count, unmatched_total_minor, complete}`: counts and a total, no order.
+ * Exit 1, with nothing sent, when no Shop client is set or no wallet is linked.
+ */
+export async function walletCheck(io: Io, config: Config, rail: string, sinceText: string | undefined): Promise<number> {
+  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
+  const name = RAIL_NAMES[rail];
+  const since = parseSince(sinceText ?? CHECK_DEFAULT_SINCE, (io.now ?? Date.now)(), false);
+  if (config.wallet.shopClientId === null) {
+    line(io.stderr, `intent: ${name} is not set up: no registered ${name} client is set (INTENT_SHOP_CLIENT_ID); nothing was sent to ${name}`);
+    return 1;
+  }
+  if (!(await hasSecret(config.dataDir, rail))) {
+    line(io.stderr, `intent: no ${name} wallet is linked, so there is nothing to check; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail}`);
+    return 1;
+  }
+  warn(io, config);
+  const key = await loadWalletKey(config.wallet.key, { create: false });
+  if (key === null) throw new CliError(`the ${name} vault cannot be opened: its key file ${describeKeySource(config.wallet.key)} is missing; nothing was sent to ${name}`);
+  const vaultText = await loadSecret(config.dataDir, rail, key);
+  if (vaultText === null) throw new CliError(`no ${name} wallet is linked; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail}`);
+  const store = await openStore(config.dataDir, {
+    onWait: leaseNotice((text) => {
+      line(io.stderr, `intent: ${text}`);
+    }, io.now),
+  });
+  let check: WalletCheck;
+  let seq: number;
+  try {
+    const chained = chainedOrderRefs(store.entries());
+    const wallet = connectShop(openWalletSession(store), { mcpUrl: config.wallet.shopMcpUrl, authUrl: config.wallet.shopAuthUrl, vaultText });
+    check = checkOrders(await wallet.orders(), chained, since);
+    seq = (await store.append("wallet", checkedEntry(rail, check))).seq;
+  } finally {
+    await store.close();
+  }
+  printCheck(io, name, check, seq);
+  return 0;
+}
+
+/** The check in words: what Shop reported and what this chain names, never what Shop did (invariant 5). */
+function printCheck(io: Io, name: string, check: WalletCheck, seq: number): void {
+  const usd = (minor: number): string => `${(minor / 100).toFixed(2)} ${CHECK_CURRENCY}`;
+  const orders = (n: number): string => `${String(n)} order${n === 1 ? "" : "s"}`;
+  line(io.stdout, `${name} reported ${orders(check.orders.length)} since ${check.since}`);
+  if (!check.complete) line(io.stdout, `${name} reported more orders than it returned in one answer: these counts cover only the orders it returned`);
+  line(io.stdout, `Matched to a purchase in this gateway's chain: ${String(check.orders.length - check.unmatched.length)}`);
+  const untotalled = check.unmatchedUntotalled === 0 ? "" : ` (${String(check.unmatchedUntotalled)} without a ${CHECK_CURRENCY} total, not in the sum)`;
+  line(io.stdout, `Not matched: ${String(check.unmatched.length)}, totalling ${usd(check.unmatchedTotalMinor)}${untotalled}`);
+  for (const order of check.unmatched) {
+    const total = order.total === null ? "no total" : `${(order.total.amountMinor / 100).toFixed(2)} ${order.total.currency}`;
+    const row = [order.createdAt ?? "no time", order.orderRef, total, order.merchantOrigin ?? "no merchant origin"];
+    line(io.stdout, printable(`  ${row.join("  ")}`));
+  }
+  if (check.unmatched.length > 0) {
+    line(
+      io.stdout,
+      `Unmatched means no outcome in this chain names the order: it went through some other way (for example the ${name} app, another agent, or ${name}'s own agent payments) or through another gateway's chain`,
+    );
+  }
+  line(io.stdout, `Recorded as entry #${String(seq)} (counts and the total only; no order details are kept)`);
 }
 
 function warn(io: Io, config: Config): void {

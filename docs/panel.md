@@ -24,7 +24,7 @@ The side navigation (a row of tabs on a narrow window) switches between six view
 
 The values the drawers and the server log show are the ones the gateway already sent and logged: a search's category, budget and ZIP code, a cart's offer and quantity. The gateway never holds your name, postal address or card, so the panel cannot show them.
 
-The activity feed also lists each call to a wallet destination (`Shop get_checkout · answered 200, unsigned`), each wallet change (`Shop wallet linked`, `Shop wallet unlinked · token revoked at Shop`, or `token not revoked (deleted here only)`), and each request refused before sending, with its reason and "nothing sent": a policy rule, buyer identity (never its value), or a request the gateway would not log as it was. A credential shows as `redacted (sha256 1a2b3c4d…)`, never as its value.
+The activity feed also lists each call to a wallet destination (`Shop get_checkout · answered 200, unsigned`), each wallet change (`Shop wallet linked`, `Shop wallet unlinked · token revoked at Shop`, or `token not revoked (deleted here only)`), each Shop check (`Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (21.49 USD)`, a warning when any order is unmatched; see [orders the log does not name](log.md#orders-the-log-does-not-name)), and each request refused before sending, with its reason and "nothing sent": a policy rule, buyer identity (never its value), or a request the gateway would not log as it was. A credential shows as `redacted (sha256 1a2b3c4d…)`, never as its value.
 
 ## Why it is safe to leave open
 

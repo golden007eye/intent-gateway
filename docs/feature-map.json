@@ -20,6 +20,7 @@
     "approval-proof": { "test": "src/trust/approval.test.ts" },
     "receipts": { "test": "src/trust/receipt.test.ts" },
     "self-check": { "test": "src/supplychain/npm.test.ts" },
-    "claims-rule": { "test": "scripts/claims.test.ts" }
+    "claims-rule": { "test": "scripts/claims.test.ts" },
+    "wallet-check": { "test": "src/cli/check.test.ts" }
   }
 }
