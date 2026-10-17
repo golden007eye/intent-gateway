@@ -8,7 +8,8 @@
 // - card: a run of 13–19 digits, alone or in groups split by one to three of space, ".", "/" or "-", that passes
 //   the Luhn check. The run may be glued to a prefix of one or two letters ("cc4111…"), but not to a longer
 //   word, a digit, "_" or "-" (UUIDs, SKUs like "SKU-4111…-BLK" or "ABC4111…"), and not followed by a letter or
-//   digit. Integer numbers are checked as digits.
+//   digit. Integer numbers are checked as digits. A string whose whole value is a canonical UUID (8-4-4-4-12 ASCII
+//   hex) is never a card: its all-digit groups can form a Luhn-valid run by chance (an idempotency key).
 // - split card: in one array or object, consecutive leaves that are each only digits (a string of digit groups,
 //   or a non-negative integer) with at least 3 digits each; any slice of two or more of them whose concatenated
 //   digits are 13–19 long and pass Luhn is reported at the container's path (["4111","1111","1111","1111"]).
@@ -108,7 +109,7 @@ function isToolCall(value: unknown): boolean {
 
 function walk(value: unknown, path: string, out: Finding[]): void {
   if (typeof value === "string") {
-    for (const kind of scanText(normalize(value))) out.push({ path, kind });
+    for (const kind of scanText(normalize(value), isUuid(value))) out.push({ path, kind });
   } else if (typeof value === "bigint" || (typeof value === "number" && Number.isInteger(value))) {
     if (isCardDigits(value.toString())) out.push({ path, kind: "card" });
   } else if (Array.isArray(value)) {
@@ -123,7 +124,7 @@ function walk(value: unknown, path: string, out: Finding[]): void {
       const keyPath = path + (/^[A-Za-z_$][\w$]*$/.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`);
       const normalKey = normalize(key);
       if (isBannedKey(normalKey)) out.push({ path: keyPath, kind: "banned_key" });
-      for (const kind of scanText(normalKey)) out.push({ path: keyPath, kind });
+      for (const kind of scanText(normalKey, isUuid(key))) out.push({ path: keyPath, kind });
       walk(item, keyPath, out);
     }
     if (hasSplitCard(entries.map(([, item]) => item))) out.push({ path, kind: "card" });
@@ -147,9 +148,18 @@ function asciiDigit(digit: string): string {
   return String(before % 10);
 }
 
-function scanText(text: string): FindingKind[] {
+// A whole value in canonical UUID form (8-4-4-4-12 ASCII hex): an idempotency key or another id. Its all-digit groups
+// can join into a Luhn-valid 13-19 digit run by chance, so it is never read as a card; every other check still runs.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(raw: string): boolean {
+  return UUID.test(raw);
+}
+
+/** `uuid`: the raw value is a canonical UUID, so it is not scanned for a card. */
+function scanText(text: string, uuid: boolean): FindingKind[] {
   const kinds: FindingKind[] = [];
-  if (hasCard(text)) kinds.push("card");
+  if (!uuid && hasCard(text)) kinds.push("card");
   if (EMAIL.test(text)) kinds.push("email");
   if (E164.test(text) || US_PHONE.test(text)) kinds.push("phone");
   if (STREET.test(text)) kinds.push("street_address");
@@ -221,7 +231,7 @@ function hasSplitCard(items: unknown[]): boolean {
 function leafDigits(item: unknown): string | undefined {
   if (typeof item === "bigint") return item >= 0n ? item.toString() : undefined;
   if (typeof item === "number") return Number.isSafeInteger(item) && item >= 0 ? item.toString() : undefined;
-  if (typeof item !== "string") return undefined;
+  if (typeof item !== "string" || isUuid(item)) return undefined;
   const text = normalize(item);
   return GROUPS_ONLY.test(text) ? text.replace(/\D/g, "") : undefined;
 }

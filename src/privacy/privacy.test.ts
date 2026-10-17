@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { bodyText, bodyValue, findIdentity, type Finding, type FindingKind, isSecretKey } from "./index.ts";
 
@@ -172,5 +173,39 @@ describe("credentials (ADR-0014, widened by ADR-0017)", () => {
     expect(bodyText(bodyValue(headers, bytes), true)).toBe("token=a%2Bb&client_id=gw");
     expect(bodyValue([["content-type", "application/json"]], Buffer.from('{"a":1}'))).toEqual({ a: 1 });
     expect(bodyValue(headers, new Uint8Array(0))).toBeNull();
+  });
+});
+
+describe("a canonical UUID is never a card (an idempotency key)", () => {
+  // Their leading all-digit groups join into a Luhn-valid 16-digit run: in free text they read as a card.
+  const tripping = [
+    "52738107-9017-4321-abcd-ef0123456789",
+    "52738115-9017-4321-ABCD-EF0123456789",
+    "87654321-1002-4000-8000-0000000000ab",
+    "87654321-1010-4000-8000-0000000000ab",
+  ];
+
+  it.each(tripping)("%s alone is clean, as a value, a key and in a list", (uuid) => {
+    expect(findIdentity(`ref ${uuid}`).map((f) => f.kind)).toContain("card");
+    expect(findIdentity(uuid)).toEqual([]);
+    expect(findIdentity({ meta: { "idempotency-key": uuid } })).toEqual([]);
+    expect(findIdentity({ [uuid]: 1 })).toEqual([]);
+    expect(findIdentity([uuid, uuid])).toEqual([]);
+  });
+
+  it("still finds a card that is not a whole canonical UUID", () => {
+    expect(findIdentity("4111-1111-1111-1111")).toEqual([{ path: "$", kind: "card" }]);
+    expect(findIdentity({ q: "pay with 4111-1111-1111-1111 please" })).toEqual([{ path: "$.q", kind: "card" }]);
+    // UUID-like but not canonical: a PAN with a UUID-shaped tail, an extra group, or a missing group.
+    expect(findIdentity(`${tripping[0] ?? ""}-1`).map((f) => f.kind)).toContain("card");
+    expect(findIdentity("52738107-9017-4321-abcd").map((f) => f.kind)).toContain("card");
+    expect(findIdentity({ parts: ["4111", "1111", "1111", "1111"] })).toEqual([{ path: "$.parts", kind: "card" }]);
+  });
+
+  it("never finds a card in 20 000 random UUIDs", () => {
+    for (let i = 0; i < 20_000; i++) {
+      const uuid = randomUUID();
+      expect(findIdentity(uuid), uuid).toEqual([]);
+    }
   });
 });
