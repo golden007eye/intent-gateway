@@ -13,6 +13,7 @@ import { containerConnect } from "./connect.ts";
 import { type Io, line, type Outcome } from "./io.ts";
 import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
 import { leaseNotice, slowCloudNotice } from "./waiting.ts";
+import { oneTapFor } from "./wallet.ts";
 
 export async function serve(io: Io, config: Config, options: { http: boolean; demo: Demo | null }): Promise<Outcome> {
   const { demo } = options;
@@ -34,6 +35,8 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
   };
   const now = io.now === undefined ? {} : { now: io.now };
   const banner = demo === null ? {} : { banner: DEMO_BANNER };
+  // One-tap: the demo's fake Shop wallet, or the linked Shop wallet when there is one (else purchases are handed off).
+  const oneTap = demo === null ? await oneTapFor(io, config, dataDir) : demo.oneTap;
   const store = await openStore(dataDir, { onWait: leaseNotice(say, io.now) });
   // Only the start's requests (meta, key statement) say they are still waiting; a slow search later does not.
   let starting = true;
@@ -43,6 +46,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       cloud: (keySet) => cloudFor(io, store, baseUrl, { keySet, ...now }, slow),
       store,
       completerKeys: openCompleterKeys(dataDir, io.now === undefined ? {} : { now: io.now }),
+      ...(oneTap === null ? {} : { oneTap }),
       policy,
       pinnedRootKeys,
       logger: { warn: log },

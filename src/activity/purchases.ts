@@ -9,7 +9,15 @@ import type { Activity, Delivery } from "./activity.ts";
  * says so), `rejected` (a status check's observation says Intent Cloud returned `rejected`), `refused` (the gateway
  * refused what came back), or the cart request's delivery when no approval was asked for.
  */
-export type PurchaseState = "approved" | "waiting" | "expired" | "rejected" | "refused" | Delivery;
+export type PurchaseState = "approved" | OutcomeShown | "waiting" | "expired" | "rejected" | "refused" | Delivery;
+
+/**
+ * What happened after the approval, as the chain shows it (plan G5): the gateway's own one-tap evidence, else Intent
+ * Cloud's verified statement (the `outcome` entry's state_shown, never more).
+ */
+export const OUTCOME_SHOWN = ["completing", "indeterminate", "ordered", "mismatch", "failed", "handed_off", "checkout_expired", "reported"] as const;
+export type OutcomeShown = (typeof OUTCOME_SHOWN)[number];
+const SHOWN: ReadonlySet<string> = new Set(OUTCOME_SHOWN);
 
 export interface Purchase {
   /** The cart action's first seq. */
@@ -44,7 +52,10 @@ export function buildPurchases(activities: readonly Activity[], now: number): Pu
 
 function stateOf(cart: Activity, approval: Activity | null, now: number): PurchaseState {
   if (cart.outcome === "refused") return "refused";
-  if (approval !== null) return "approved";
+  if (approval !== null) {
+    const shown = approval.facts.outcome_state;
+    return shown !== undefined && SHOWN.has(shown) ? (shown as OutcomeShown) : "approved";
+  }
   // The latest approval state an observation recorded (src/activity's observe); absent on chains without observations.
   if (cart.facts.approval_state === "rejected") return "rejected";
   if (cart.facts.approval_state === "expired") return "expired";

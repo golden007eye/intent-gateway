@@ -78,6 +78,8 @@ import {
   sentProblems,
   verifyStatement,
 } from "../trust/index.ts";
+import type { WalletAdapter } from "../wallet/index.ts";
+import { advanceCompletion, type CompletionStep, type CompletionView } from "./complete.ts";
 import { disclosedSince, spendHistory, summaryLine } from "./history.ts";
 import { type ApprovalQr, approvalQr } from "./qr.ts";
 import { expiredCompleterKeys } from "./retention.ts";
@@ -103,6 +105,12 @@ export interface GatewayOptions {
    * exists, so a cart offers only `handoff`, whatever the policy allows; a linked vault alone is not usable.
    */
   walletModes?: () => readonly CloudCompletionMode[];
+  /**
+   * One-tap with a linked wallet (plan G7b, ADR-0018). `connect` builds the wallet adapter once, behind the disclosed
+   * cloud's log (src/disclosure's connectShop); null when no usable wallet is linked. With a wallet, carts offer its
+   * mode (where the policy allows one_tap), and get_approval_status completes a verified `shop_agent` approval.
+   */
+  oneTap?: OneTapOptions;
   policy: Policy;
   /** The root keys pinned for the Intent Cloud host (config's PINNED_HOSTS, or `--trust-keys`). */
   pinnedRootKeys: readonly PinnedRootKey[];
@@ -121,6 +129,22 @@ export interface GatewayOptions {
     /** A line added to a search that finds no offer, naming what the sample catalog holds ("The demo catalog has: …"). */
     catalogNote?: string;
   };
+}
+
+export interface OneTapOptions {
+  readonly connect: (cloud: DisclosedCloud) => WalletAdapter | null;
+  /** The rail's name for the merchant at a storefront origin (Shop: its myshopify domain); default: the host when it is one. */
+  readonly storeFor?: (merchantOrigin: string) => string | null;
+  /** Test seams (complete.ts). */
+  readonly hook?: (step: CompletionStep) => void | Promise<void>;
+  readonly newReportId?: () => string;
+  readonly newKey?: () => string;
+}
+
+/** A storefront origin that is itself a myshopify host names its Shop store; any other is unknown until the alias rule (S1). */
+export function myshopifyStore(merchantOrigin: string): string | null {
+  const host = /^https:\/\/([a-z0-9][a-z0-9-]{0,62}\.myshopify\.com)$/.exec(merchantOrigin.toLowerCase())?.[1];
+  return host ?? null;
 }
 
 /** The first entry of a demo chain. */
@@ -250,6 +274,8 @@ export type ApprovalStatusResult =
       /** The order the verified statement names, when it shows `ordered`. */
       readonly order_number?: string;
       readonly outcome?: ShownOutcome;
+      /** A one-tap purchase: where the gateway's own completion stands (its evidence, never Intent Cloud's word). */
+      readonly completion?: CompletionView;
       readonly fingerprint: string;
     })
   | (Told & { readonly status: "flagged"; readonly fingerprint: string })
@@ -285,6 +311,12 @@ export function createGateway(options: GatewayOptions): Gateway {
   };
   let keySet: KeySet | null = null;
   const cloud = options.cloud(() => keySet);
+  let wallet: WalletAdapter | null = null;
+  try {
+    wallet = options.oneTap?.connect(cloud) ?? null;
+  } catch (error) {
+    logger.warn(`intent-gateway: the linked wallet cannot be used, so purchases are handed off: ${(error as Error).message}`);
+  }
   const offers = new Map<string, RememberedOffer>();
   /** Approvals whose cart this process's session key created; any other is read with its completer key. */
   const createdHere = new Set<string>();
@@ -799,7 +831,8 @@ export function createGateway(options: GatewayOptions): Gateway {
    */
   function completionAccepts(): CloudCompletionMode[] {
     const allowed = meet(policy, CLOUD_BASELINE).completion.map((m) => CONTRACT_MODE[m]);
-    const wallets = (options.walletModes?.() ?? []).filter((m) => m !== "handoff" && allowed.includes(m));
+    const usable = [...(options.walletModes?.() ?? []), ...(wallet === null ? [] : (["shop_agent"] as const))];
+    const wallets = usable.filter((m) => m !== "handoff" && allowed.includes(m));
     return [...new Set(wallets), ...(allowed.includes("handoff") ? ["handoff" as const] : [])];
   }
 
@@ -828,7 +861,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const fetched = await call(() => cloud.getApproval(handle, signer), fromSeq);
     if (fetched.ok) await store.append("observed", observeStatus(fetched.seq, handle, fetched.body));
     const mode = bodyOf(pending).completion_mode === "shop_agent" ? "shop_agent" : "handoff";
-    if (chained !== undefined) return reportChained(chained, fetched.ok ? fetched.body : null, mode, keys, fromSeq);
+    if (chained !== undefined) return reportChained(chained, pending, fetched.ok ? fetched.body : null, mode, keys, fromSeq);
     if (!fetched.ok) return fetched.refused;
     const status = fetched.body;
 
@@ -879,7 +912,9 @@ export function createGateway(options: GatewayOptions): Gateway {
       logger.warn(`intent-gateway: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
     }
     const shown = await recordOutcome(handle, status, verified.snapshot, verified.snapshotHash, keys);
-    return approved(check.fingerprint, status, mode, shown, fromSeq);
+    const parsedProof = ApprovalProof.safeParse(status.proof);
+    const completion = mode === "shop_agent" && parsedProof.success ? await complete(handle, pending, parsedProof.data, keys) : null;
+    return approved(check.fingerprint, status, mode, shown, fromSeq, completion);
   }
 
   /**
@@ -898,11 +933,52 @@ export function createGateway(options: GatewayOptions): Gateway {
   }
 
   /** A handle already chained: its proof was verified, and its passkey was the pin, when it was chained. */
-  async function reportChained(chained: Entry, status: ApprovalStatus | null, mode: CloudCompletionMode, keys: KeySet, fromSeq: number): Promise<ApprovalStatusResult> {
+  async function reportChained(
+    chained: Entry,
+    pending: Entry,
+    status: ApprovalStatus | null,
+    mode: CloudCompletionMode,
+    keys: KeySet,
+    fromSeq: number,
+  ): Promise<ApprovalStatusResult> {
     const proof = ApprovalProof.safeParse(bodyOf(chained).proof);
     if (!proof.success) return { status: "not_verified", message: `The chained approval is malformed; run ${INTENT} verify.`, summary: summary(fromSeq) };
-    const shown = await recordOutcome(String(bodyOf(chained).handle), status, proof.data.snapshot, proof.data.snapshot_hash, keys);
-    return approved(approverFingerprint(proof.data.credential_public_key), status, mode, shown, fromSeq);
+    const handle = String(bodyOf(chained).handle);
+    const shown = await recordOutcome(handle, status, proof.data.snapshot, proof.data.snapshot_hash, keys);
+    // After a restart every resume comes through here (plan G7b step 6, resume rule).
+    const completion = mode === "shop_agent" ? await complete(handle, pending, proof.data, keys) : null;
+    return approved(approverFingerprint(proof.data.credential_public_key), status, mode, shown, fromSeq, completion);
+  }
+
+  /** Advances a verified `shop_agent` purchase (complete.ts), every Intent Cloud call signed with its completer key. */
+  async function complete(handle: string, pending: Entry, proof: z.infer<typeof ApprovalProof>, keys: KeySet): Promise<CompletionView> {
+    const keyid = bodyOf(pending).completer_keyid;
+    let signer: Session | undefined;
+    try {
+      signer = typeof keyid === "string" ? ((await completerKeys.load(keyid)) ?? undefined) : undefined;
+    } catch {
+      signer = undefined;
+    }
+    const met = meet(policy, CLOUD_BASELINE);
+    const cap = met.spend.per_order_usd;
+    const oneTap = options.oneTap;
+    return advanceCompletion(
+      {
+        store,
+        cloud,
+        wallet,
+        storeFor: oneTap?.storeFor ?? myshopifyStore,
+        oneTapAllowed: met.completion.includes("one_tap"),
+        perOrderCapMinor: cap === undefined ? null : Math.round(cap * 100),
+        signer,
+        keys,
+        now,
+        ...(oneTap?.hook === undefined ? {} : { hook: oneTap.hook }),
+        ...(oneTap?.newReportId === undefined ? {} : { newReportId: oneTap.newReportId }),
+        ...(oneTap?.newKey === undefined ? {} : { newKey: oneTap.newKey }),
+      },
+      { handle, pending, proof },
+    );
   }
 
   /**
@@ -971,8 +1047,26 @@ export function createGateway(options: GatewayOptions): Gateway {
     return { ...words, state_shown: shownState, ...(body.order_ref === undefined ? {} : { order_ref: body.order_ref }) };
   }
 
-  function approved(fingerprint: string, status: ApprovalStatus | null, mode: CloudCompletionMode, shown: ShownOutcome | null, fromSeq: number): ApprovalStatusResult {
+  function approved(
+    fingerprint: string,
+    status: ApprovalStatus | null,
+    mode: CloudCompletionMode,
+    shown: ShownOutcome | null,
+    fromSeq: number,
+    completion: CompletionView | null = null,
+  ): ApprovalStatusResult {
     const base = "Approved: the buyer's pinned passkey signed this purchase, and the gateway verified and logged the proof.";
+    if (completion !== null) {
+      // A one-tap purchase is told from the gateway's own evidence (its chain and Shop's answers), never Intent Cloud's.
+      return {
+        status: "approved",
+        fingerprint,
+        ...(shown === null ? {} : { outcome: shown }),
+        completion,
+        message: `${base} ${completionWords(completion)}`,
+        summary: summary(fromSeq),
+      };
+    }
     // Intent Cloud's word is repeated only when its state and outcome agree (Appendix G; never more than the outcome).
     const inconsistent = status === null ? null : statusProblem(status.state, status.outcome, mode);
     if (inconsistent !== null) {
@@ -990,7 +1084,10 @@ export function createGateway(options: GatewayOptions): Gateway {
     const refusal =
       shown === null || shown.statement_verified
         ? ""
-        : ` Intent Cloud reported ${shown.cloud_state.replace("_", " ")}, but its statement fails ${shown.refused_by ?? "a rule"}; not counted as placed.`;
+        : ` Intent Cloud reported ${shown.cloud_state.replace("_", " ")}, but its statement fails ${shown.refused_by ?? "a rule"}; ${
+            // With an earlier verified outcome kept, "not counted as placed" would read against a kept `ordered`.
+            shown.state_shown === null ? "not counted as placed" : "not acted on"
+          }.`;
     if (shown !== null && shown.state_shown === null) {
       return { status: "approved", fingerprint, outcome: shown, message: base + refusal, summary: summary(fromSeq) };
     }
@@ -1137,6 +1234,29 @@ function outcomeWords(state: OutcomeState, order: string | undefined): string {
       return " Intent Cloud reported an order it could not verify; the gateway does not count it as placed.";
     default:
       return ` Intent Cloud reported the purchase as ${state.replace("_", " ")}.`;
+  }
+}
+
+/** What the gateway says about its own completion of a one-tap purchase: what it sent and what Shop answered. */
+function completionWords(c: CompletionView): string {
+  const again = "Call get_approval_status again until it says ordered, failed or mismatch.";
+  const note = c.advisory?.includes("title_differs") === true ? " Note: Shop's item title differs from the approved one (variant, quantity, ZIP and total match)." : "";
+  switch (c.state) {
+    case "completing":
+      return `The gateway is completing the purchase with the linked Shop wallet. ${again}${note}`;
+    case "indeterminate":
+      return (
+        "The gateway sent the purchase to Shop and does not know the result yet; it will not send it again. " +
+        `The amount stays reserved against the spend caps. Check the order in the Shop app if it does not resolve. ${again}`
+      );
+    case "ordered":
+      return `Shop reported the order${c.order_ref === undefined ? "" : ` (order ${c.order_ref})`}, and it matches what the buyer approved (read from Shop by the gateway).`;
+    case "mismatch":
+      return "Shop reported an order that does not match what the buyer approved (merchant, item, ZIP or total). Check the order in the Shop app.";
+    case "failed":
+      return c.source === "shop_api"
+        ? "Shop reported the checkout as not completed (read from Shop by the gateway). Create a new cart to hand the purchase off to the merchant's checkout."
+        : `The gateway did not send the purchase to Shop (${c.reason ?? "refused"}): no complete_checkout was sent. Create a new cart to hand the purchase off to the merchant's checkout.`;
   }
 }
 

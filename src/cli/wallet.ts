@@ -10,7 +10,7 @@
 // check (plan G12) asks the rail for recent orders, through the log, and says which ones no chained outcome names.
 import { type Config, INTENT } from "../config/index.ts";
 import { connectShop, type DeviceGrantPrompt, linkShop, openWalletSession, ShopLinkError, type WalletSession } from "../disclosure/index.ts";
-import { approvalQr } from "../gateway/index.ts";
+import { approvalQr, type OneTapOptions } from "../gateway/index.ts";
 import { openStore } from "../store/index.ts";
 import { printable, printableLines } from "../ui/index.ts";
 import {
@@ -24,6 +24,7 @@ import {
   isWalletRail,
   loadSecret,
   loadWalletKey,
+  openCheckoutVault,
   saveSecret,
   vaultPath,
   type WalletCheck,
@@ -317,4 +318,26 @@ function printCheck(io: Io, name: string, check: WalletCheck, seq: number): void
 
 function warn(io: Io, config: Config): void {
   for (const text of walletKeyWarnings(config.wallet)) line(io.stderr, `intent: warning: ${text}`);
+}
+
+/**
+ * One-tap for `intent serve` (plan G7b): the linked Shop wallet behind the gateway's disclosed cloud, with its checkout
+ * ids in the encrypted checkout vault (ADR-0018). Null, with nothing sent, when no Shop client is set, no wallet is
+ * linked, or the vault does not open (said on stderr): purchases are then handed off.
+ */
+export async function oneTapFor(io: Io, config: Config, dataDir: string): Promise<OneTapOptions | null> {
+  if (config.wallet.shopClientId === null || !(await hasSecret(dataDir, "shop"))) return null;
+  try {
+    warn(io, config);
+    const key = await loadWalletKey(config.wallet.key, { create: false });
+    const vaultText = key === null ? null : await loadSecret(dataDir, "shop", key);
+    if (key === null || vaultText === null) return null;
+    const checkoutIds = await openCheckoutVault(dataDir, "shop", key, io.now ?? Date.now);
+    const where = { mcpUrl: config.wallet.shopMcpUrl, authUrl: config.wallet.shopAuthUrl };
+    return { connect: (cloud) => connectShop(cloud, { ...where, vaultText, checkoutIds }) };
+  } catch (error) {
+    if (!(error instanceof WalletVaultError)) throw error;
+    line(io.stderr, printable(`intent: Shop one-tap is unavailable, purchases are handed off: ${error.message}`));
+    return null;
+  }
 }

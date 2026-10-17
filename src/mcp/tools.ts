@@ -44,7 +44,8 @@ export const TOOLS = {
     description:
       "Check whether the person approved a purchase with their passkey, using the approval_handle from create_cart. " +
       "Only a passkey approval the gateway verified counts as approved; tell the user what the result says. " +
-      "The result ends with what this gateway sent to Intent Cloud and what it blocked.",
+      "For a one-tap purchase (completed by the gateway's linked wallet), call again until it says ordered, failed or mismatch. " +
+      "The result ends with what this gateway sent (to Intent Cloud, and to the wallet for one-tap) and what it blocked.",
   },
 } as const;
 
@@ -125,7 +126,12 @@ function createCartResult(result: CreateCartResult): CallToolResult {
 
 function approvalStatusResult(result: ApprovalStatusResult): CallToolResult {
   if (result.status === "approved") {
-    return told(result, [`Approver passkey fingerprint: ${result.fingerprint}`]);
+    const c = result.completion;
+    const completion =
+      c === undefined
+        ? []
+        : [`One-tap: ${c.state}${c.source === undefined ? "" : ` (${c.source === "shop_api" ? "read from Shop" : "the gateway's own check"})`}${c.order_ref === undefined ? "" : `, order ${c.order_ref}`}${c.reason === undefined ? "" : `, reason ${c.reason}`}`];
+    return told(result, [...completion, `Approver passkey fingerprint: ${result.fingerprint}`]);
   }
   return told(result);
 }

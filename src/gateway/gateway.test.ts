@@ -1569,7 +1569,7 @@ describe("outcomes: only a verified statement is acted on, and never more than i
     });
     expect(result).not.toHaveProperty("order_number");
     expect(result.message).not.toContain("placed the order");
-    expect(result.message).toContain("Intent Cloud reported ordered, but its statement fails final_total; not counted as placed.");
+    expect(result.message).toContain("Intent Cloud reported ordered, but its statement fails final_total; not acted on.");
     expect(outcomes(h).at(-1)).toMatchObject({ state_shown: null, statement_verified: false, refused_by: "final_total", local_binding: { result: "mismatch" } });
     expect(outcomes(h).some((o) => o.state_shown === "mismatch" || o.state_shown === "ordered")).toBe(false);
     expect((await verify(h)).exitCode).toBe(0);
@@ -1595,7 +1595,7 @@ describe("outcomes: only a verified statement is acted on, and never more than i
     const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
     expect(result).toMatchObject({ outcome: { state_shown: "handed_off", kept_earlier: true, statement_verified: false, refused_by: "cloud_signature" } });
     expect(result).not.toHaveProperty("order_number");
-    expect(result.message).toContain("but its statement fails cloud_signature; not counted as placed.");
+    expect(result.message).toContain("but its statement fails cloud_signature; not acted on.");
     expect(outcomes(h).at(-1)).toMatchObject({ state_shown: null, statement_verified: false });
     expect(outcomes(h).at(-1)).not.toHaveProperty("order_ref");
     expect((await verify(h)).exitCode).toBe(0);

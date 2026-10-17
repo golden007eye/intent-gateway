@@ -439,6 +439,14 @@ function totalWords(a: Activity): string {
 
 const STATE: Record<Purchase["state"], readonly [string, Tone]> = {
   approved: ["Approved", "ok"],
+  completing: ["Completing with Shop", "warn"],
+  indeterminate: ["Sent to Shop, result unknown: check Shop orders", "warn"],
+  ordered: ["Ordered", "ok"],
+  mismatch: ["Order does not match", "bad"],
+  failed: ["Not completed", "plain"],
+  handed_off: ["Handed off to the merchant", "ok"],
+  checkout_expired: ["Checkout expired", "plain"],
+  reported: ["Order reported, not verified", "warn"],
   waiting: ["Waiting for you", "warn"],
   expired: ["Expired", "plain"],
   rejected: ["Rejected", "bad"],

@@ -302,6 +302,22 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
         }
         break;
       }
+      case "completion":
+      case "complete_attempt": {
+        // One-tap redemption (plan G7b): one of each per approval, compare-and-appended, the attempt after its
+        // completion, both naming an approval that verified; the checkout is named by its hash, never its raw id.
+        const handle = typeof body.handle === "string" ? body.handle : null;
+        const earlier = entries.slice(0, index).filter((e) => e.kind === entry.kind && record(e.body).handle === handle);
+        const named = handle === null ? "" : `for ${handle} `;
+        if (handle === null || !approvedProofs.has(handle)) outcomeFailures.push(`${at}: the ${entry.kind} ${named}names no approval that verified earlier in the chain`);
+        else if (earlier.length > 0) outcomeFailures.push(`${at}: a second ${entry.kind} ${named}(only one may exist: compare-and-append)`);
+        else if (entry.kind === "complete_attempt" && !entries.slice(0, index).some((e) => e.kind === "completion" && record(e.body).handle === handle)) {
+          outcomeFailures.push(`${at}: the complete_attempt ${named}comes before any completion`);
+        } else if (entry.kind === "completion" && (typeof body.checkout_ref !== "string" || !/^sha256:[0-9a-f]{64}$/.test(body.checkout_ref))) {
+          outcomeFailures.push(`${at}: the completion ${named}names its checkout by something other than its sha256 checkout ref`);
+        }
+        break;
+      }
       case "approver_flag":
         counts.flags += 1;
         flags.push(
@@ -549,9 +565,12 @@ function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: ApprovalProof["
     }
     if (canonicalize(rerun) !== canonicalize(entry.local_binding ?? null)) return "holds a local binding other than its recorded inputs give";
   }
-  const shopSends = before.filter((e) => e.kind === "disclosure" && record(e.body).purchase === entry.handle && record(e.body).endpoint === "complete_checkout");
+  // Fail closed (as outcome's chargedNothing): any complete_checkout logged after the approval, whichever purchase its
+  // local `purchase` field names, means this purchase was not provably left unsent.
+  const approvedAt = before.findIndex((e) => e.kind === "approval" && record(e.body).handle === entry.handle);
+  const shopSends = before.filter((e, i) => i > approvedAt && e.kind === "disclosure" && record(e.body).endpoint === "complete_checkout");
   if (entry.reason === "not_sent" && shopSends.length > 0) {
-    return "says nothing was sent, but a complete_checkout disclosure for the purchase is logged";
+    return "says nothing was sent, but a complete_checkout disclosure is logged after its approval";
   }
   return null;
 }

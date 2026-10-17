@@ -15,10 +15,11 @@
 //   and never read for an identity block or a logging refusal, which hold no values).
 // - wallet: rail, action (linked, unlinked, checked), revoked; a check: since, order_count, unmatched_count,
 //   unmatched_total_minor, complete.
-// Entries of the kinds completion, complete_attempt and outcome are not read yet. `outcome` entries are written now
-// (src/outcome's OutcomeEntry, ADR-0015: read `state_shown`, never `cloud.state`, for what to show); they slot in as a
-// purchase step with the panel's outcome states (plan G5). completion and complete_attempt come with the one-tap
-// completion (plan G7b).
+// - outcome (src/outcome's OutcomeEntry, ADR-0015): handle, basis, state_shown (never `cloud.state`), source or
+//   cloud.source, order_ref; joined to the approval of its handle as `outcome_*` facts. A `local` outcome (the
+//   gateway's own evidence) wins over a `cloud` one once one exists; a cloud outcome that showed nothing is not read.
+// - completion (one-tap, plan G7b): handle; the approval shows `completing` until an outcome says more.
+//   complete_attempt is not read.
 // - observed: what Intent Cloud returned for one acknowledged request (src/observation's ObservedBody), joined to
 //   that request's action. A chain written before observations existed has none, and its actions read as before.
 // - approval_pending: handle, approval_url, total_minor, expires_at; approval: handle.
@@ -166,6 +167,14 @@ export interface ActivityFacts {
   merchant?: string;
   /** cart or status, observed: the approval state Intent Cloud returned last (`rejected` after a rejection). */
   approval_state?: string;
+  /** approval: what happened after it (an `outcome` entry's state_shown, or `completing` once a one-tap redemption is chained). */
+  outcome_state?: string;
+  /** approval: `local` (the gateway's own evidence) or `cloud` (Intent Cloud's verified statement). */
+  outcome_basis?: string;
+  /** approval: where the outcome was read (`shop_api`, `gateway_precheck`, `merchant_api`, …). */
+  outcome_source?: string;
+  /** approval: the order the outcome names. */
+  order_ref?: string;
   /** block: the values a policy block held back (never sent), e.g. {category: "alcohol"}. */
   held?: Record<string, unknown>;
   /** observed: the number facts an observation withheld as possible buyer identity (`total_minor`); shown as "withheld", never as 0. */
@@ -430,6 +439,31 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
               }),
         });
         break;
+      case "completion":
+      case "outcome": {
+        const approval = last("approval", (a) => a.facts.approval_handle === b.handle);
+        if (approval === undefined) break;
+        const f = approval.facts;
+        if (item.kind === "completion") {
+          join(approval, item);
+          f.outcome_state ??= "completing";
+          break;
+        }
+        const local = b.basis === "local";
+        const shown = typeof b.state_shown === "string" ? b.state_shown : null;
+        // Intent Cloud's word never overrides the gateway's own evidence, and a refused statement shows nothing.
+        if (shown === null || (!local && f.outcome_basis === "local")) break;
+        join(approval, item);
+        const cloud = typeof b.cloud === "object" && b.cloud !== null ? (b.cloud as Record<string, unknown>) : {};
+        const source = local ? b.source : cloud.source;
+        Object.assign(f, {
+          outcome_state: shown,
+          outcome_basis: local ? "local" : "cloud",
+          ...(typeof source === "string" ? { outcome_source: source } : {}),
+        });
+        if (typeof b.order_ref === "string") f.order_ref = b.order_ref;
+        break;
+      }
       case "approver_flag":
         open(item, "flagged", { fingerprint: text(b.fingerprint), ...(typeof b.reason === "string" ? { flag_reason: b.reason } : {}) }, "flagged");
         break;
