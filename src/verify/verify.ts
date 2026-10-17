@@ -43,7 +43,7 @@ export interface VerifyOptions {
 }
 
 export interface Check {
-  name: "usage" | "chain" | "key statements" | "disclosures" | "approvals" | "outcomes" | "approver flags" | "self-check";
+  name: "usage" | "evidence pack" | "purchase" | "chain" | "key statements" | "disclosures" | "approvals" | "outcomes" | "approver flags" | "self-check";
   ok: boolean;
   details: string[];
 }
@@ -147,8 +147,11 @@ interface Disclosure {
   readonly session: SessionMark | null;
 }
 
-/** Checks 2–5 over a chain whose links already verified. */
-function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[], counts: Report["counts"]): Check[] {
+/**
+ * Checks 2–5 over a chain whose links already verified. `partial`: the entries are one purchase's slice of a chain (an
+ * evidence pack), so the disclosures of a gateway session are not all there and their numbering is not checked.
+ */
+export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[], counts: Report["counts"], partial = false): Check[] {
   const keyFailures: string[] = [];
   const disclosureFailures: string[] = [];
   const approvalFailures: string[] = [];
@@ -218,7 +221,7 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
           const last = sessions.get(session.id);
           if (last === undefined) {
             disclosureFailures.push(`${at}: the disclosure names gateway session ${session.id}, which no earlier session entry starts`);
-          } else if (session.n !== last + 1) {
+          } else if (!partial && session.n !== last + 1) {
             disclosureFailures.push(
               `${at}: the disclosure is number ${String(session.n)} of its gateway session, expected ${String(last + 1)}: a disclosure of that session is missing from the chain`,
             );

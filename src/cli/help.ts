@@ -24,8 +24,8 @@ ${pad("serve [--http]")}MCP server over stdio (the default), or Streamable HTTP
 ${pad("init [--yes]")}first run: check the setup, offer Shop one-tap, print the connect line
 ${pad("log")}each action: the values it sent, what came back, what was blocked
 ${"".padEnd(width)}(-v, --json, --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
-${pad("verify")}re-check the chain, receipts, approvals and this install
-${"".padEnd(width)}(--skip-install-check: chain only, for offline use)
+${pad("verify")}re-check the chain, receipts, approvals, this install (--skip-install-check: chain only)
+${pad("evidence <approval handle>")}one purchase's evidence pack (--out <file>); check it: verify --evidence <file>
 ${pad("panel [--port <n>]")}read-only local page: activity, purchases, approvals, policy, log, verify
 ${pad("doctor")}check the setup; each problem comes with its fix
 ${pad("policy show")}the active policy and its policy.lock

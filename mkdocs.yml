@@ -71,6 +71,7 @@ nav:
   - Gateway policy: policy.md
   - Policy library: policy-library.md
   - Verify: verify.md
+  - Evidence pack: evidence.md
   - The log: log.md
   - Panel: panel.md
   - Threat model: threat-model.md
@@ -94,3 +95,4 @@ nav:
       - "ADR-0015: Outcomes, assurance and binding": adr/0015-outcomes-assurance-binding.md
       - "ADR-0016: Per-approval completer key": adr/0016-per-approval-completer-key.md
       - "ADR-0017: Wallet adapters in the gateway": adr/0017-wallet-adapters-in-the-gateway.md
+      - "ADR-0018: Evidence pack": adr/0018-evidence-pack.md

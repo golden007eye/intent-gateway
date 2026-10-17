@@ -7,6 +7,7 @@ import { answerStdioWithError } from "../mcp/index.ts";
 import { formatReport, type Install, runVerify } from "../verify/index.ts";
 import { approverAccept, approverList } from "./approver.ts";
 import { doctor } from "./doctor.ts";
+import { evidence, verifyEvidenceFile } from "./evidence.ts";
 import { describeError, errorContext, type ErrorContext } from "./errors.ts";
 import { help } from "./help.ts";
 import { CliError, type Io, line, type Outcome } from "./io.ts";
@@ -48,7 +49,9 @@ const COMMANDS: Readonly<Record<string, Options>> = {
     image: { type: "string" },
     version: { type: "string" },
     "skip-install-check": { type: "boolean" },
+    evidence: { type: "string" },
   },
+  evidence: { out: { type: "string" } },
   panel: { port: { type: "string" } },
   doctor: {},
   init: { yes: { type: "boolean", short: "y" } },
@@ -64,7 +67,7 @@ const COMMANDS: Readonly<Record<string, Options>> = {
 };
 
 /** How many positional arguments follow the command words. */
-const ARGUMENTS: Readonly<Record<string, readonly string[]>> = { "policy test": ["<cases.yaml>"], "policy add": ["<name>"], "wallet link": ["<rail>"], "wallet unlink": ["<rail>"], "wallet check": ["<rail>"] };
+const ARGUMENTS: Readonly<Record<string, readonly string[]>> = { evidence: ["<approval handle>"], "policy test": ["<cases.yaml>"], "policy add": ["<name>"], "wallet link": ["<rail>"], "wallet unlink": ["<rail>"], "wallet check": ["<rail>"] };
 
 /** The commands that take a subcommand word: `policy show`, `approver list`, `wallet status`. */
 const GROUPS: ReadonlySet<string> = new Set(["policy", "approver", "wallet"]);
@@ -168,7 +171,15 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
       });
     case "log":
       return logCommand(io, config.dataDir, logFlags(io, values));
+    case "evidence":
+      return { code: await evidence(io, config.dataDir, arg(0), await trustedKeys(config), str("out")) };
     case "verify": {
+      const pack = str("evidence");
+      if (pack !== undefined) {
+        const other = ["install", "pkg-dir", "image", "version", "skip-install-check"].find((name) => values[name] !== undefined);
+        if (other !== undefined) throw new CliError(`--evidence checks a pack file only; it takes no --${other}`, 2);
+        return { code: await verifyEvidenceFile(io, pack, await trustedKeys(config)) };
+      }
       const chosen = install(values, str);
       const report = await runVerify({
         dataDir: config.dataDir,

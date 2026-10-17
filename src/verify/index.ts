@@ -14,5 +14,9 @@
 //   is never a follow-up. block: `held`, when present, holds no buyer identity.
 // - approval: `{handle, proof}`; `proof` is the `proof` member of the approval status that verified. The
 //   `approver_pin` for its passkey, when one is written, comes before it; a flagged approval has no approval entry.
+//
+// `runVerifyEvidence` (`intent verify --evidence`) runs the same entry checks on one purchase's evidence pack, offline,
+// after checking the pack's skeleton and that every entry belongs to the purchase (ADR-0018).
+export { type EvidenceVerifyOptions, runVerifyEvidence } from "./evidence.ts";
 export { formatReport } from "./report.ts";
 export { type Check, type Install, type Report, runVerify, type VerifyOptions } from "./verify.ts";

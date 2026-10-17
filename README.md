@@ -91,6 +91,7 @@ You can check what left your machine instead of taking our word for it.
 - **Disclosure log.** The gateway appends every field it is about to send to a local hash chain before each request leaves for Intent Cloud. A send whose log append fails does not happen.
 - **Disclosure receipts.** Intent Cloud returns a signed receipt over the digest of the bytes it received, which the gateway matches against the log.
 - **`intent verify`** re-checks the hash chain, every receipt and every approval offline, and self-checks the installed package. Independent checks with your own tools (`npm audit signatures`, `cosign verify`) are listed in [Verify](https://github.com/golden007eye/intent-gateway/blob/main/docs/verify.md).
+- **`intent evidence <approval handle>`** writes one purchase's [evidence pack](https://github.com/golden007eye/intent-gateway/blob/main/docs/evidence.md): the requests sent, their receipts, the passkey-signed approval and the outcome statements, which anyone can check offline with `intent verify --evidence <file>`.
 
 What this does **not** cover: `intent verify` proves what the gateway sent and what Intent Cloud acknowledged receiving. It makes no claim about what happens to that data afterwards.
 

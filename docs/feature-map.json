@@ -8,6 +8,7 @@
     "serve": { "command": "intent serve" },
     "disclosure-log": { "command": "intent log" },
     "verify": { "command": "intent verify" },
+    "evidence-pack": { "command": "intent evidence" },
     "panel": { "command": "intent panel" },
     "doctor": { "command": "intent doctor" },
     "policy-show": { "command": "intent policy show" },
