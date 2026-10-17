@@ -11,7 +11,6 @@ export {
   type BindingChecks,
   type BindingContext,
   type BindingResult,
-  checkoutHashOf,
   normaliseOrigin,
   type ObservedOrder,
   SHIP_TO_OPTIONAL,

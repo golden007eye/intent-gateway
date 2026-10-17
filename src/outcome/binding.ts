@@ -70,11 +70,6 @@ export function normaliseOrigin(value: string): string | null {
   return host === undefined || host.length > 253 ? null : `https://${host}`;
 }
 
-/** The checkout ref hash of a raw checkout id, or null when the part before its first `?` is empty (no hash; differs). */
-export function checkoutHashOf(id: string): string | null {
-  return id.split("?", 1)[0] === "" ? null : checkoutRefHash(id);
-}
-
 /** Rule 25 in integers (`recheck-v1`): USD, `5·R ≥ 4·A` and `R ≤ A`, so exactly `ceil(0.8·A) ≤ R ≤ A`. */
 export function totalMatches(approvedMinor: number, final: unknown): boolean {
   if (typeof final !== "object" || final === null) return false;
@@ -119,7 +114,8 @@ function checkCheckout(s: SnapshotV2, o: ObservedOrder, m: BindingContext): Bind
   let observed: string | null;
   if (!absent(o.checkout_ref)) {
     if (typeof o.checkout_ref !== "string") return "differs";
-    observed = checkoutHashOf(o.checkout_ref);
+    // Null for an id with nothing before its "?": no checkout ref hash, so differs (Update 2 item 7).
+    observed = checkoutRefHash(o.checkout_ref);
   } else if (!absent(o.checkout_ref_hash)) {
     observed = typeof o.checkout_ref_hash === "string" && HASH.test(o.checkout_ref_hash) ? o.checkout_ref_hash : null;
   } else {
