@@ -44,7 +44,7 @@ import {
   secretDigest,
   secretQueryKeys,
 } from "../privacy/index.ts";
-import { NOT_SENT_REASON, type Store } from "../store/index.ts";
+import { type Entry, NOT_SENT_REASON, type Store, StoreConflictError } from "../store/index.ts";
 
 /** Where a request goes: `intent_cloud`, or a wallet destination such as `shop`. A disclosure without `destination` went to Intent Cloud. */
 export type Destination = string;
@@ -121,6 +121,19 @@ export class DisclosureStoppedError extends Error {
   override name = "DisclosureStoppedError";
 }
 
+/**
+ * The send's precondition failed (DiscloseOptions.unless, plan G7b step 6b): the `disclosure` entry was not appended
+ * and nothing was sent. A lost race, not a failure: the core keeps sending.
+ */
+export class DisclosureConflictError extends Error {
+  override name = "DisclosureConflictError";
+  readonly endpoint: string;
+  constructor(endpoint: string) {
+    super(`${endpoint} not sent: its precondition no longer holds in the chain`);
+    this.endpoint = endpoint;
+  }
+}
+
 /** What the core logged for one request: its seq and the body of its `disclosure` entry. */
 export interface Logged<B> {
   readonly seq: number;
@@ -145,6 +158,11 @@ export interface DiscloseOptions {
   readonly secretPaths?: readonly (readonly PathSegment[])[];
   /** The approval handle a wallet send belongs to, kept in the disclosure entry only; never sent. */
   readonly purchase?: string;
+  /**
+   * Compare-and-append (plan G7b step 6b): the `disclosure` entry is appended only if this returns false over the
+   * chain, evaluated under the store lease; otherwise nothing is logged or sent and DisclosureConflictError is thrown.
+   */
+  readonly unless?: (entries: readonly Entry[]) => boolean;
 }
 
 export interface DisclosureCore {
@@ -243,8 +261,17 @@ export function createDisclosureCore(store: Store): DisclosureCore {
       session.open.add(n);
       let entry;
       try {
-        entry = await store.append("disclosure", body);
+        entry = options.unless === undefined ? await store.append("disclosure", body) : await store.appendUnless("disclosure", body, options.unless);
       } catch (error) {
+        if (error instanceof StoreConflictError) {
+          // Nothing was written or sent. Its number n is given back, so the session's disclosures stay numbered without
+          // a gap (intent verify checks that); if a later disclosure already took n + 1, the numbering cannot be kept,
+          // and the core stops rather than leave a gap that would read as a missing disclosure.
+          session.open.delete(n);
+          if (session.next !== n + 1) throw stop(`a request to ${request.operation} lost its precondition while another was numbered`, error);
+          session.next = n;
+          throw new DisclosureConflictError(request.operation);
+        }
         stop(`a request to ${request.operation} could not be logged, so it was not sent`, error);
         throw error;
       }

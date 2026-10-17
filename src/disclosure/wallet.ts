@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { parsePath } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
-import type { Store } from "../store/index.ts";
+import type { Entry, Store } from "../store/index.ts";
 import {
   coreOf,
   createDisclosureCore,
@@ -41,7 +41,7 @@ export interface DisclosedWallet {
    * Prepares, logs, then sends one request. `purchase` is the approval handle the call belongs to: it is kept in the
    * disclosure entry and never sent.
    */
-  call(operation: string, payload: unknown, options?: { purchase?: string }): Promise<WalletResult>;
+  call(operation: string, payload: unknown, options?: { purchase?: string; unless?: (entries: readonly Entry[]) => boolean }): Promise<WalletResult>;
 }
 
 const PURCHASE = /^[A-Za-z0-9_-]{1,128}$/;
@@ -79,7 +79,7 @@ export function createDisclosedWallet(transport: DestinationTransport, cloud: Di
   return {
     destination,
     async call(operation, payload, callOptions = {}) {
-      const { purchase } = callOptions;
+      const { purchase, unless } = callOptions;
       if (purchase !== undefined && !PURCHASE.test(purchase)) throw new TypeError(`not an approval handle: ${JSON.stringify(purchase)}`);
       core.assertOpen();
       const request = transport.prepare(operation, payload);
@@ -103,7 +103,7 @@ export function createDisclosedWallet(transport: DestinationTransport, cloud: Di
           },
           discard: (logged, _response, reason) => new Error(`response to disclosure #${String(logged.seq)} discarded: ${reason}`),
         },
-        { secretPaths, ...(purchase === undefined ? {} : { purchase }) },
+        { secretPaths, ...(purchase === undefined ? {} : { purchase }), ...(unless === undefined ? {} : { unless }) },
       );
       return { ...result, disclosureSeq: seq };
     },

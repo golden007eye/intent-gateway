@@ -16,6 +16,7 @@ import {
   createDisclosedWallet,
   type DestinationTransport,
   DisclosureBlockedError,
+  DisclosureConflictError,
   DisclosureRefusedError,
   DisclosureStoppedError,
   type IntentCloud,
@@ -376,5 +377,23 @@ describe("review fixes: wider redaction, refusals, the MCP tool name", () => {
       ["banned_key at $.params.name"],
       ["card at $.params.name"],
     ]);
+  });
+});
+
+describe("compare-and-append on a wallet send (plan G7b step 6b)", () => {
+  it("a send whose condition holds in the chain is neither logged nor sent; the core keeps sending, numbered without a gap", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    await shop.call("get_checkout", rpc("get_checkout", { shop: "s" }), { purchase: "ap_TEST0001" });
+    const blocked = shop.call("complete_checkout", rpc("complete_checkout", { shop: "s" }), { purchase: "ap_TEST0001", unless: () => true });
+    await expect(blocked).rejects.toBeInstanceOf(DisclosureConflictError);
+    expect(sent).toHaveLength(1);
+    expect(logged().filter((e) => e.kind === "disclosure").map((e) => bodyOf(e).endpoint)).toEqual(["get_checkout"]);
+    await shop.call("complete_checkout", rpc("complete_checkout", { shop: "s" }), { purchase: "ap_TEST0001", unless: () => false });
+    expect(sent).toHaveLength(2);
+    const numbers = logged().filter((e) => e.kind === "disclosure").map((e) => (bodyOf(e).session as { n: number }).n);
+    expect(numbers).toEqual([0, 1]);
+    expect(logged().filter((e) => e.kind === "disclosure").every((e) => bodyOf(e).purchase === "ap_TEST0001")).toBe(true);
   });
 });

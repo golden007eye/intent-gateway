@@ -14,6 +14,7 @@ export {
 export {
   type DestinationTransport,
   DisclosureBlockedError,
+  DisclosureConflictError,
   DisclosureRefusedError,
   DisclosureStoppedError,
   type OutboundRequest,

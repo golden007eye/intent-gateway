@@ -72,6 +72,13 @@ export interface LeaseWait {
 export interface Store {
   /** Appends one entry and resolves once it is fdatasync'd and confirmed as the chain's tail. */
   append(kind: EntryKind, body: unknown): Promise<Entry>;
+  /**
+   * Compare-and-append: appends one entry unless `conflict` returns true over the verified chain, evaluated while this
+   * handle holds the lease, after it has read every entry other writers appended and checked the tail, and before the
+   * write. On a conflict it throws StoreConflictError, writes nothing, and the handle stays usable: a lost race is an
+   * answer, not a broken writer (plan G7b).
+   */
+  appendUnless(kind: EntryKind, body: unknown, conflict: (entries: readonly Entry[]) => boolean): Promise<Entry>;
   /** Every entry in the file, unverified (see verifyChain). Throws StoreCorruptError on a line that is not an entry. */
   entries(): Entry[];
   /** Waits for queued appends, then releases the lease. */
@@ -81,6 +88,11 @@ export interface Store {
 /** The handle lost its lease or the chain moved under it; it refuses all further appends. */
 export class StoreFencedError extends Error {
   override name = "StoreFencedError";
+}
+
+/** appendUnless found its conflict in the chain, so it wrote nothing. The handle stays usable. */
+export class StoreConflictError extends Error {
+  override name = "StoreConflictError";
 }
 
 /** The file holds a line that is not a valid entry, or the chain is broken, so the store will not extend it. */
@@ -213,14 +225,22 @@ class FileStore implements Store {
     this.#waitNoticeMs = opts.waitNoticeMs ?? DEFAULT_WAIT_NOTICE_MS;
   }
 
-  async append(kind: EntryKind, body: unknown): Promise<Entry> {
+  append(kind: EntryKind, body: unknown): Promise<Entry> {
+    return this.#enqueue(kind, body, null);
+  }
+
+  appendUnless(kind: EntryKind, body: unknown, conflict: (entries: readonly Entry[]) => boolean): Promise<Entry> {
+    return this.#enqueue(kind, body, conflict);
+  }
+
+  async #enqueue(kind: EntryKind, body: unknown, conflict: ((entries: readonly Entry[]) => boolean) | null): Promise<Entry> {
     // Checked synchronously, before anything is queued, so a refused entry never touches the lease or the file.
     if (this.#closed) throw new Error("store is closed");
     if (!isEntryKind(kind)) throw new TypeError(`unknown entry kind: ${String(kind)}`);
     canonicalize(body);
     this.#pending++;
     const run = this.#queue
-      .then(() => this.#appendOne(kind, body))
+      .then(() => this.#appendOne(kind, body, conflict))
       .finally(async () => {
         if (--this.#pending === 0) await this.#release();
       });
@@ -240,12 +260,14 @@ class FileStore implements Store {
     await this.#queue;
   }
 
-  async #appendOne(kind: EntryKind, body: unknown): Promise<Entry> {
+  async #appendOne(kind: EntryKind, body: unknown, conflict: ((entries: readonly Entry[]) => boolean) | null): Promise<Entry> {
     if (this.#broken !== null) throw new StoreCorruptError(`handle refused after: ${this.#broken}`);
     if (this.#fenced !== null) throw new StoreFencedError(`handle refused after: ${this.#fenced}`);
     try {
-      return await this.#appendChecked(kind, body);
+      return await this.#appendChecked(kind, body, conflict);
     } catch (error) {
+      // A conflict is a normal answer, found before anything was written: the handle stays usable.
+      if (error instanceof StoreConflictError) throw error;
       // Any failure fences the handle, whatever threw it (an open() refused with EMFILE, a lease file that cannot be
       // read): a caller that saw one append fail must not see a later one succeed, or a disclosure whose answer was
       // never recorded would sit inside the chain with later sends after it.
@@ -255,10 +277,13 @@ class FileStore implements Store {
     }
   }
 
-  async #appendChecked(kind: EntryKind, body: unknown): Promise<Entry> {
+  async #appendChecked(kind: EntryKind, body: unknown, conflict: ((entries: readonly Entry[]) => boolean) | null): Promise<Entry> {
     if (this.#lease === null) await this.#acquire();
     else if (this.#lease.expires_at - this.#clock() < this.#leaseMs / 2) await this.#renew();
     await this.#checkFence();
+    // Under the lease, with every other writer's entries verified on acquire and the tail just checked: no other
+    // writer can append between this read and the write below.
+    if (conflict !== null && conflict(this.entries())) throw new StoreConflictError(`a ${kind} entry conflicts with the chain`);
 
     const before = this.#tail;
     const fields = { seq: before.seq + 1, prev: before.hash, ts: new Date(this.#clock()).toISOString(), kind, body };
