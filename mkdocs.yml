@@ -90,3 +90,4 @@ nav:
       - "ADR-0011: Approver pin": adr/0011-approver-pin.md
       - "ADR-0012: Node support": adr/0012-node-support.md
       - "ADR-0013: Bundled dependencies": adr/0013-bundled-dependencies.md
+      - "ADR-0014: Log before send, every destination": adr/0014-log-before-send-every-destination.md

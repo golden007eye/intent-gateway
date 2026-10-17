@@ -27,6 +27,23 @@
 //   product and merchant keys of NAME_ALLOWED (product_name, merchant_name, brand_name, category_name,
 //   store_name), which name a thing for sale or its seller, never the buyer.
 // A 5-digit ZIP or ZIP+4 alone is not identity: the policy may share a postcode.
+//
+// Credentials (credentials.ts) are the other thing a logged request must never hold in clear: the disclosure core
+// digests them before the log append, and `intent verify` refuses an unredacted one (ADR-0014).
+export {
+  formatPath,
+  isCredentialHeader,
+  isSecretKey,
+  markerDigest,
+  parsePath,
+  type PathSegment,
+  redactionHeld,
+  redactionMarker,
+  SECRET_KEYS,
+  secretDigest,
+  unredactedSecrets,
+  valueAt,
+} from "./credentials.ts";
 
 export type FindingKind = "card" | "email" | "phone" | "street_address" | "banned_key";
 

@@ -49,7 +49,7 @@ describe("entry format", () => {
     expect(second).toMatchObject({ prev: hash, seq: 1 });
   });
 
-  it("lists exactly the twelve entry kinds", () => {
+  it("lists exactly the seventeen entry kinds", () => {
     expect([...ENTRY_KINDS].sort()).toEqual(
       [
         "approval",
@@ -64,6 +64,11 @@ describe("entry format", () => {
         "receipt",
         "session",
         "unacknowledged",
+        "response",
+        "completion",
+        "complete_attempt",
+        "outcome",
+        "wallet",
       ].sort(),
     );
   });

@@ -40,7 +40,7 @@ import {
 import type { ApprovalCreated, ApprovalStatus, Cart, CartRequest, Jwks, KeyStatement, Meta, SearchRequest, SearchResponse } from "../contract/index.ts";
 import type { Store } from "../store/index.ts";
 import { type KeySet, type SentRequest, verifyReceipt } from "../trust/index.ts";
-import { createDisclosureCore, type OutboundRequest } from "./core.ts";
+import { createDisclosureCore, INTENT_CLOUD, type OutboundRequest, registerCore } from "./core.ts";
 
 /** A result as the adapter returned it, plus the seq of the `disclosure` entry that logged its request. */
 export type DisclosedResult<T> = CloudResult<T> & { readonly disclosureSeq: number };
@@ -122,7 +122,7 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
       // Fail closed before anything is logged: every receipt of a send made now would be discarded anyway.
       if (now() >= keySet.expiresAt.getTime()) throw new DisclosureKeysExpiredError(keySet.expiresAt);
     }
-    const { result, seq } = await core.disclose("intent_cloud", {
+    const { result, seq } = await core.disclose(INTENT_CLOUD, {
       run,
       body: disclosureBody,
       answered: (logged, ack) => acknowledge(logged.seq, sentRequest(logged.body), ack),
@@ -168,7 +168,7 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
     return success ? reason : null;
   }
 
-  return {
+  const disclosedCloud: DisclosedCloud = {
     meta: () => disclosed(false, (beforeSend) => cloud.meta({ beforeSend })),
     signatureKeys: () => disclosed(false, (beforeSend) => cloud.signatureKeys({ beforeSend })),
     keyStatement: () => disclosed(false, (beforeSend) => cloud.keyStatement({ beforeSend })),
@@ -177,6 +177,8 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
     createApproval: (handle) => disclosed(true, (beforeSend) => cloud.createApproval(handle, { beforeSend })),
     getApproval: (handle) => disclosed(true, (beforeSend) => cloud.getApproval(handle, { beforeSend })),
   };
+  registerCore(disclosedCloud, core);
+  return disclosedCloud;
 }
 
 function disclosureBody(request: OutboundRequest, fields: string[]) {
