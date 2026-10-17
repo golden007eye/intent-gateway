@@ -235,6 +235,10 @@ function rawRow(a: Activity, g: Glyphs): Row {
         outcome: f.flag_reason === "sign_count" ? `${g.bad} signature counter did not go up: not approved` : `${g.bad} not the pinned approver: not approved (${INTENT} approver accept)`,
         outcomeTone: "bad",
       };
+    case "wallet": {
+      const revoked = f.revoked === true ? "token revoked" : f.revoked === false ? "token not revoked" : "";
+      return { verb: "wallet", verbTone: "dim", values: [`${f.wallet_rail ?? ""} wallet ${f.wallet_action ?? ""}`, revoked].filter((v) => v !== "").join(sep), outcome: `${g.ok} recorded`, outcomeTone: "good" };
+    }
     case "unreadable":
       return { verb: "broken", verbTone: "bad", values: `line ${String(f.line ?? "?")} is not an entry (torn or edited)`, outcome: `${g.bad} run ${INTENT} verify`, outcomeTone: "bad" };
   }

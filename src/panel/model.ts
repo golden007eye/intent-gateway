@@ -319,6 +319,8 @@ function feedLine(a: Activity, time: Clock): Line {
       return { ...base, label: "pin", tone: "plain", text: `Approver pinned: passkey ${f.fingerprint ?? ""}` };
     case "flagged":
       return { ...base, label: "flagged", tone: "bad", text: join([`Passkey ${f.fingerprint ?? ""} flagged`, f.flag_reason === "sign_count" ? "its signature counter went back" : "it is not your pinned approver"]) };
+    case "wallet":
+      return { ...base, label: "wallet", tone: "plain", text: join([`Wallet ${f.wallet_rail ?? ""} ${f.wallet_action ?? ""}`, f.revoked === true ? "token revoked" : f.revoked === false ? "token not revoked" : ""]) };
     case "unreadable":
       return { ...base, label: "unreadable", tone: "bad", text: `Line ${String(f.line ?? "?")} is not an entry (a torn or edited line)` };
   }

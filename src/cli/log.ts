@@ -283,6 +283,10 @@ function describe(item: Item, demo: boolean): [string, string, Tone] {
       return b.reason === "sign_count"
         ? ["FLAGGED", `${text(b.fingerprint)} signed with a signature counter that did not go up; the passkey may have been copied`, "bad"]
         : ["FLAGGED", `${text(b.fingerprint)} is not the pinned approver; if it is your passkey, run ${INTENT} approver accept`, "bad"];
+    case "wallet": {
+      const revoked = b.revoked === true ? ", token revoked" : b.revoked === false ? ", token not revoked" : "";
+      return ["wallet", `${text(b.rail)} wallet ${text(b.action)}${revoked}`, null];
+    }
     case "session":
       return ["session", b.mode === "demo" ? "demo chain (test keys, sample catalog)" : `gateway session ${text(b.id)} started (a local id, never sent)`, null];
     default:

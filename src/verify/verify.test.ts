@@ -147,6 +147,35 @@ describe("runVerify: a clean chain", () => {
   });
 });
 
+describe("runVerify: wallet entries (plan G6)", () => {
+  it("passes a wallet entry that is exactly {rail, action, revoked}", async () => {
+    const dir = await chain(async (s) => {
+      await s.append("wallet", { rail: "shop", action: "unlinked", revoked: false });
+    });
+    expect(failed(await verify(dir))).toEqual([]);
+  });
+
+  it.each([
+    ["a token", { rail: "shop", action: "linked", revoked: false, refresh_token: "rt-SECRET-123" }, "refresh_token"],
+    ["a nested account", { rail: "shop", action: "linked", revoked: false, account: { email: "a@b.example" } }, "account"],
+    ["an unknown rail", { rail: "paypal", action: "unlinked", revoked: false }, "no known wallet rail"],
+    ["an unknown action", { rail: "shop", action: "spent", revoked: false }, "no known action"],
+    ["no revoked", { rail: "shop", action: "unlinked" }, "no boolean revoked"],
+    ["a non-object body", "rt-SECRET-123", "is not an object"],
+  ])("attack: a wallet entry holding %s fails, naming the field but never its value", async (_name, body, said) => {
+    const dir = await chain(async (s) => {
+      await s.append("wallet", body);
+    });
+    const report = await verify(dir);
+    expect(report.exitCode).toBe(1);
+    const text = formatReport(report);
+    expect(text).toContain("seq 0: the wallet entry");
+    expect(text).toContain(said);
+    expect(text).not.toContain("SECRET");
+    expect(text).not.toContain("a@b.example");
+  });
+});
+
 describe("runVerify: a gateway that stopped mid-request (F-l)", () => {
   /** What a gateway killed after logging a send and before recording its answer leaves: a disclosure, then nothing. */
   async function killedMidRequest(after: (s: Store) => Promise<unknown> = () => Promise.resolve()): Promise<string> {

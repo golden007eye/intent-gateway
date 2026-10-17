@@ -5,6 +5,7 @@ import type { JsonWebKey } from "node:crypto";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
 import { readBuild, type Build } from "./build.ts";
 import { containerDemo, containerRef, dockerExec, IMAGE_TRUST_KEYS, invocation } from "./invocation.ts";
 
@@ -84,6 +85,52 @@ export interface Config {
   quietToken: boolean;
   /** In the Docker image, the file its entrypoint keeps the HTTP token in (<data>/http-token); null on a host. */
   tokenFile: string | null;
+  wallet: WalletConfig;
+}
+
+/**
+ * A secret setting's value. It prints as `[redacted]` (String, JSON, util.inspect), so a Config logged or put in an
+ * error message never carries it; only `reveal()` returns the value.
+ */
+export class Secret {
+  readonly #value: string;
+  constructor(value: string) {
+    this.#value = value;
+  }
+  reveal(): string {
+    return this.#value;
+  }
+  toString(): string {
+    return "[redacted]";
+  }
+  toJSON(): string {
+    return "[redacted]";
+  }
+  [inspect.custom](): string {
+    return "[redacted]";
+  }
+}
+
+/**
+ * Where the wallet vault's key comes from (plan D4), in this order: `INTENT_WALLET_KEY_FILE` (a Docker secret;
+ * preferred), else `INTENT_WALLET_KEY` (its value is visible in /proc/<pid>/environ and docker inspect, so using it
+ * warns), else a key file the gateway generates in the per-user config folder, outside the data dir. `none` when
+ * there is no safe default: in the Docker image (a container's home does not outlive it) or when the default
+ * would sit inside the data dir.
+ */
+export type WalletKeySource =
+  | { kind: "file"; path: string }
+  | { kind: "env"; value: Secret }
+  | { kind: "default"; path: string }
+  | { kind: "none"; reason: string };
+
+export interface WalletConfig {
+  key: WalletKeySource;
+  /** INTENT_WALLET_KEY is set but INTENT_WALLET_KEY_FILE wins; the env value is still exposed, so the CLI warns. */
+  envKeyIgnored: boolean;
+  /** INTENT_SHOP_MCP_URL, INTENT_SHOP_AUTH_URL: the Shop endpoints, null until set (the Shop adapter names defaults). */
+  shopMcpUrl: string | null;
+  shopAuthUrl: string | null;
 }
 
 export interface LoadOptions {
@@ -117,6 +164,10 @@ const KNOWN_VARIABLES = new Set([
   "INTENT_DEMO",
   "INTENT_DEBUG",
   "INTENT_QUIET_TOKEN",
+  "INTENT_WALLET_KEY_FILE",
+  "INTENT_WALLET_KEY",
+  "INTENT_SHOP_MCP_URL",
+  "INTENT_SHOP_AUTH_URL",
 ]);
 
 /**
@@ -180,7 +231,92 @@ export function loadConfig(
     debug: flag("INTENT_DEBUG", intent.INTENT_DEBUG),
     quietToken: flag("INTENT_QUIET_TOKEN", intent.INTENT_QUIET_TOKEN),
     tokenFile: runtime === "container" ? path.join(dataDir, "http-token") : null,
+    wallet: walletConfig(intent, { platform, path, env, home, cwd, runtime, dataDir }),
   };
+}
+
+interface WalletPlace {
+  platform: NodeJS.Platform;
+  path: typeof posix;
+  env: Readonly<Record<string, string | undefined>>;
+  home: string;
+  cwd: string;
+  runtime: Config["runtime"];
+  dataDir: string;
+}
+
+/** The wallet vault key as text: 32 random bytes, as base64 (`openssl rand -base64 32`), base64url or 64 hex digits. */
+export const WALLET_KEY_TEXT = /^(?:[A-Za-z0-9+/]{43}=|[A-Za-z0-9_-]{43}|[0-9a-fA-F]{64})$/;
+
+function walletConfig(intent: Readonly<Record<string, string>>, at: WalletPlace): WalletConfig {
+  const { path } = at;
+  const envKey = intent.INTENT_WALLET_KEY?.trim();
+  // Never echo the value: it is a key.
+  if (envKey !== undefined && !WALLET_KEY_TEXT.test(envKey)) {
+    throw new ConfigError("INTENT_WALLET_KEY must be 32 random bytes as base64 (openssl rand -base64 32); prefer INTENT_WALLET_KEY_FILE");
+  }
+  let key: WalletKeySource;
+  if (intent.INTENT_WALLET_KEY_FILE !== undefined) {
+    const file = path.resolve(at.cwd, userPath("INTENT_WALLET_KEY_FILE", intent.INTENT_WALLET_KEY_FILE));
+    // A key beside the vault it opens protects nothing: whoever copies the data dir has both.
+    if (inside(path, at.dataDir, file)) {
+      throw new ConfigError(`INTENT_WALLET_KEY_FILE (${file}) is inside the data dir ${at.dataDir}; keep the wallet key outside it`);
+    }
+    key = { kind: "file", path: file };
+  } else if (envKey !== undefined) {
+    key = { kind: "env", value: new Secret(envKey) };
+  } else if (at.runtime === "container") {
+    key = { kind: "none", reason: "in the Docker image the wallet key must come from a secret: mount one and set INTENT_WALLET_KEY_FILE" };
+  } else {
+    const file = path.join(defaultConfigDir(at), "wallet-key");
+    key = inside(path, at.dataDir, file)
+      ? { kind: "none", reason: `the default wallet key file ${file} would sit inside the data dir; set INTENT_WALLET_KEY_FILE to a file outside it` }
+      : { kind: "default", path: file };
+  }
+  return {
+    key,
+    envKeyIgnored: envKey !== undefined && key.kind === "file",
+    shopMcpUrl: shopUrl("INTENT_SHOP_MCP_URL", intent.INTENT_SHOP_MCP_URL),
+    shopAuthUrl: shopUrl("INTENT_SHOP_AUTH_URL", intent.INTENT_SHOP_AUTH_URL),
+  };
+}
+
+/** Whether `file` is `dir` itself or lies under it. */
+function inside(path: typeof posix, dir: string, file: string): boolean {
+  const rel = path.relative(dir, file);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/** The per-user config folder, apart from the data dir so the wallet key never sits beside the vault. */
+function defaultConfigDir({ platform, path, env, home }: WalletPlace): string {
+  if (platform === "darwin") return path.join(home, "Library", "Preferences", "intent-gateway");
+  if (platform === "win32") {
+    const roaming = env.APPDATA;
+    const base = roaming !== undefined && roaming !== "" && path.isAbsolute(roaming) ? roaming : path.join(home, "AppData", "Roaming");
+    return path.join(base, "intent-gateway");
+  }
+  const xdg = env.XDG_CONFIG_HOME;
+  return path.join(xdg !== undefined && xdg !== "" && path.isAbsolute(xdg) ? xdg : path.join(home, ".config"), "intent-gateway");
+}
+
+/** A Shop endpoint: https, or http on a loopback host (a fake Shop in tests). */
+function shopUrl(name: string, raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    // Not echoed: a mistyped value may carry a credential.
+    throw new ConfigError(`${name} is not a URL; give a full https URL`);
+  }
+  const loopback = isLoopback(url.hostname.replace(/^\[(.*)\]$/, "$1"));
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new ConfigError(`${name} must use https (http only on a loopback host), got ${url.protocol}`);
+  }
+  if (url.username !== "" || url.password !== "" || url.hash !== "") {
+    throw new ConfigError(`${name} must not carry credentials or a fragment`);
+  }
+  return url.href;
 }
 
 function flag(name: string, value: string | undefined): boolean {

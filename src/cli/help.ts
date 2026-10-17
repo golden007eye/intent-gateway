@@ -33,6 +33,8 @@ ${pad("policy add <name> [--yes]")}narrow the policy with a library policy (show
 ${pad("policy test <cases.yaml>")}run test cases against the active policy
 ${pad("approver list")}approver pins and flagged passkeys
 ${pad("approver accept")}make a flagged passkey the approver (at a terminal)
+${pad("wallet status")}whether a Shop wallet is linked and its encrypted vault opens
+${pad("wallet unlink shop")}delete the Shop wallet's vault file on this machine
 ${pad("demo [--http]")}run against a local demo Intent Cloud (HTTP when typed in a terminal)
 
 Options for every command:
@@ -45,6 +47,6 @@ ${intent} policy add per-order-60 (or another library policy) narrows it, here t
 
 Settings: INTENT_DATA_DIR, INTENT_POLICY, INTENT_CLOUD_URL, INTENT_HTTP_HOST, INTENT_HTTP_PORT,
 INTENT_HTTP_TOKEN, INTENT_DEMO=1, INTENT_DEMO_CONFIRM_PORT (demo confirm page, default 8788),
-INTENT_DEBUG=1 (stack traces).
+INTENT_DEBUG=1 (stack traces), INTENT_WALLET_KEY_FILE (the wallet vault's key file).
 `;
 }

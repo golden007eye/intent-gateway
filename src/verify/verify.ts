@@ -12,6 +12,7 @@ import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
 import { checkApprover, type KeySet, type PinnedRootKey, type ReceiptResponse, type SentRequest, verifyApprovalProof, verifyReceipt, verifyStatement } from "../trust/index.ts";
+import { walletEntryProblem } from "../wallet/index.ts";
 
 export type Install = { kind: "npm"; pkgDir: string } | { kind: "image"; ref: string; version: string };
 
@@ -244,6 +245,12 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       case "block": {
         const found = findIdentity(body.held ?? null);
         if (found.length > 0) disclosureFailures.push(`${at}: the block entry keeps what looks like buyer identity in held (${found.map((f) => f.kind).join(", ")})`);
+        break;
+      }
+      case "wallet": {
+        // The token never enters the chain: a wallet entry holds exactly {rail, action, revoked}.
+        const problem = walletEntryProblem(entry.body);
+        if (problem !== null) disclosureFailures.push(`${at}: the wallet entry ${problem}`);
         break;
       }
       case "approval_pending":
