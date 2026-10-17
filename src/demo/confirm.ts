@@ -161,16 +161,18 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     const total = money(s.total.amount_minor);
     const check = view.snapshot_hash.slice(0, 8);
     const short = handle.length > 12 ? `${handle.slice(0, 7)}…${handle.slice(-3)}` : handle;
+    // A v2 snapshot (contract 1.6.0) binds the 5-digit ZIP; a v1 snapshot its 3-digit prefix.
+    const zip = s.v === 2 ? s.ship_to.postal_code : `${s.ship_to.postal_prefix}xx`;
 
     const receipt =
       `<div class="total"><span class="k">${s.total_kind === "max" ? "Total, at most" : "Total"}</span>` +
       `<span class="v">${total}</span>` +
-      `<span class="to">to ${esc(s.merchant.name)} · ships to ZIP ${esc(s.ship_to.postal_prefix)}xx</span></div>` +
+      `<span class="to">to ${esc(s.merchant.name)} · ships to ZIP ${esc(zip)}</span></div>` +
       `<dl class="lines dash">` +
       `<div class="item"><dt>${String(s.quantity)} × ${esc(s.item.title)} (${esc(s.item.variant)})</dt><dd class="amt">${amount(s.unit_price.amount_minor * s.quantity)}</dd></div>` +
       `<div><dt>${s.total_kind === "max" ? "Shipping, up to" : "Shipping"}</dt><dd class="amt">${amount(s.shipping.amount_minor)}</dd></div>` +
       `<div><dt>Merchant</dt><dd>${esc(s.merchant.domain)}</dd></div>` +
-      `<div><dt>Ship to</dt><dd>US, ZIP ${esc(s.ship_to.postal_prefix)}xx</dd></div>` +
+      `<div><dt>Ship to</dt><dd>US, ZIP ${esc(zip)}</dd></div>` +
       `<div><dt>Check code</dt><dd class="strong check" title="Matches the check code your agent showed">` +
       `<span>${esc(check.slice(0, 4))}</span><span>${esc(check.slice(4))}</span></dd></div>` +
       `<div><dt>Approval</dt><dd title="${esc(handle)}">${esc(short)}</dd></div></dl>`;

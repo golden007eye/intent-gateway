@@ -124,9 +124,18 @@ describe("operations", () => {
   const ENDPOINTS = contract.ENDPOINTS as Record<string, contract.Endpoint>;
   const schemaOf = (body: Obj): z.ZodType => SCHEMAS[refName(((body["content"] as Obj)["application/json"] as Obj)["schema"] as Json)] as z.ZodType;
 
-  it("names exactly the spec's operations: the six gateway endpoints and GET /v1/key-statement", () => {
+  it("names exactly the spec's operations: the seven gateway endpoints and GET /v1/key-statement", () => {
     expect(Object.keys(ENDPOINTS).sort()).toEqual(ops.map((o) => o.op.operationId).sort());
-    expect(ops).toHaveLength(7);
+    expect(ops).toHaveLength(8);
+  });
+
+  it("every operation takes the optional Intent-Contract-Version request header, 1.5.0 or 1.6.0", () => {
+    const param = (components["parameters"] as Record<string, Obj>)["ContractVersion"] as Obj;
+    expect(param).toMatchObject({ name: "Intent-Contract-Version", in: "header", required: false, schema: { enum: ["1.5.0", "1.6.0"] } });
+    for (const { op } of ops) {
+      const params = ((op as unknown as Obj)["parameters"] ?? []) as Obj[];
+      expect(params.map((p) => p["$ref"]), op.operationId).toContain("#/components/parameters/ContractVersion");
+    }
   });
 
   it.each(ops.map((o) => [o.op.operationId, o] as const))("%s matches its method, path, bodies and statuses", (id, { path, method, op }) => {
@@ -172,6 +181,8 @@ describe("operations", () => {
     expect(contract.approvalPath("ap_TEST0001")).toBe("/v1/approvals/ap_TEST0001");
     for (const bad of ["ct_../../v1/meta", "ap_TEST0001", "ct_ab", "ct_EXAMPLE0001?x=1"]) expect(() => contract.approvalsPath(bad)).toThrow();
     for (const bad of ["ap_a/b0000", "ct_TEST0001", ""]) expect(() => contract.approvalPath(bad)).toThrow();
+    expect(contract.outcomeReportsPath("ap_TEST0001")).toBe("/v1/approvals/ap_TEST0001/outcome-reports");
+    for (const bad of ["ap_a/b0000", "ct_TEST0001", ""]) expect(() => contract.outcomeReportsPath(bad)).toThrow();
   });
 });
 
@@ -201,7 +212,12 @@ describe("vectors", () => {
   const VECTORS: Record<string, string> = {
     "a1-snapshot.json": "Snapshot",
     "a2-snapshot-unicode.json": "Snapshot",
+    "a3-snapshot-v2.json": "SnapshotV2 (replayed in snapshot-v2.test.ts)",
     "b1-ledger.json": "LedgerRef (the entry's seq and hash, as a proof names them)",
+    "b2-ledger-outcome.json": "none: Intent Cloud's ledger, which the gateway does not keep",
+    "o1-binding.json": "SnapshotV2 and Binding (binding-v1 itself is G4's)",
+    "o2-outcome-statement.json": "OutcomeStatement (its signature is G4's)",
+    "o3-status-state.json": "OutcomeState and ApprovalState (replayed in src/gateway/status-state.test.ts)",
     "c2-http-signature.json": "CartRequest body and GatewayKeyId",
     "d1-receipt.json": "Receipt",
     "e1-approval-proof.json": "ApprovalProof",
@@ -219,6 +235,41 @@ describe("vectors", () => {
   it.each(["a1-snapshot.json", "a2-snapshot-unicode.json"])("%s: the snapshot parses unchanged", (file) => {
     const snapshot = ((vector(file)["input"] as Obj)["snapshot"]) as Json;
     expect(contract.Snapshot.parse(snapshot)).toEqual(snapshot);
+  });
+
+  it("a3: each v2 snapshot parses unchanged, as SnapshotV2 and as an ApprovalCreated snapshot, and not as v1", () => {
+    for (const c of vector("a3-snapshot-v2.json")["cases"] as Obj[]) {
+      const snapshot = (c["input"] as Obj)["snapshot"] as Json;
+      expect(contract.SnapshotV2.parse(snapshot)).toEqual(snapshot);
+      expect(contract.AnySnapshot.parse(snapshot)).toEqual(snapshot);
+      expect(contract.Snapshot.safeParse(snapshot).success).toBe(false);
+    }
+  });
+
+  it("o1: every snapshot is a SnapshotV2 and every expected binding a Binding", () => {
+    const cases = vector("o1-binding.json")["cases"] as Obj[];
+    expect(cases.length).toBeGreaterThanOrEqual(21);
+    for (const c of cases) {
+      expect(contract.SnapshotV2.safeParse((c["input"] as Obj)["snapshot"]).success, c["name"] as string).toBe(true);
+      expect(contract.Binding.parse(c["expected"]), c["name"] as string).toEqual(c["expected"]);
+    }
+  });
+
+  it("o2: every statement parses as an OutcomeStatement (refusals are signature and hash checks)", () => {
+    for (const c of vector("o2-outcome-statement.json")["cases"] as Obj[]) {
+      expect(contract.OutcomeStatement.parse(c["statement"])).toEqual(c["statement"]);
+    }
+  });
+
+  it("o3: every row names an outcome state and approval states", () => {
+    for (const c of vector("o3-status-state.json")["cases"] as Obj[]) {
+      const input = c["input"] as Obj;
+      const expected = c["expected"] as Obj;
+      expect(contract.OutcomeState.safeParse(input["outcome_state"]).success).toBe(true);
+      expect(contract.CompletionMode.safeParse(input["mode"]).success).toBe(true);
+      expect(contract.ApprovalState.safeParse(expected["1.6.0"]).success).toBe(true);
+      expect(expected["1.5.0"] === null || contract.ApprovalState.safeParse(expected["1.5.0"]).success).toBe(true);
+    }
   });
 
   it("b1: the ledger entry's seq and hash form the LedgerRef that e1's proof names", () => {
@@ -328,6 +379,16 @@ describe("strictness and refinements", () => {
       expect(contract.ReceiptRequest.safeParse(partial).success, `without ${drop}`).toBe(false);
     }
     expect(contract.ReceiptRequest.safeParse({ ...base, path: "/v1/carts?x=1" }).success).toBe(false);
+  });
+
+  it("CartRequest (1.6.0): completion_accepts holds 1 or 2 distinct known modes; completer_keyid is a gw- keyid", () => {
+    const base = { offer_handle: "of_EXAMPLE0001", quantity: 1, ship_to: { country: "US", postal_code: "94110" } };
+    const keyid = "gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc";
+    expect(contract.CartRequest.safeParse({ ...base, completer_keyid: keyid, completion_accepts: ["shop_agent", "handoff"] }).success).toBe(true);
+    for (const accepts of [[], ["handoff", "handoff"], ["auto"], ["handoff", "shop_agent", "handoff"]]) {
+      expect(contract.CartRequest.safeParse({ ...base, completion_accepts: accepts }).success, JSON.stringify(accepts)).toBe(false);
+    }
+    expect(contract.CartRequest.safeParse({ ...base, completer_keyid: "cloud-receipt-202610" }).success).toBe(false);
   });
 
   it("error bodies parse by status", () => {

@@ -3,10 +3,12 @@
 The files in this directory are the Intent Cloud public contract, copied byte for byte. Do not edit them; replace them with a new published version instead.
 
 - Contract: the Intent Cloud public contract
-- Version: 1.5.0
-- sha256 of `SHA256SUMS`: `c6fc6ffea8b7cb9053a74e0a3aa340d73d1c2800fcc4c47669707400d06410d2`
+- Version: 1.6.0
+- sha256 of `SHA256SUMS`: `7e386d25732f64b33718801d251a73d9ee7d13d68ff9615bd6a4c9a5b3ec7304`
 - Licence: Apache-2.0 (`LICENSE` in this directory)
 
 `SHA256SUMS` lists every contract file except `LICENSE` and itself, with paths relative to this directory. `src/contract/vendored.test.ts` checks each listed hash, that the listed set equals the files present, that the sha256 above matches `SHA256SUMS`, and that the spec's `info.version` equals the version above.
 
 Intent Cloud reports the same sha256 as `contract_sums_sha256` from `GET /v1/meta` at https://staging-api.intentai.shop, so a running host can be checked against this copy.
+
+From 1.6.0 a caller names its version with the `Intent-Contract-Version` request header, and a request without it is answered as 1.5.0 (the previous copy here, `SHA256SUMS` sha256 `c6fc6ffea8b7cb9053a74e0a3aa340d73d1c2800fcc4c47669707400d06410d2`). The gateway sends `Intent-Contract-Version: 1.6.0` on every request and refuses a host whose `Meta` reports another version or sums hash.

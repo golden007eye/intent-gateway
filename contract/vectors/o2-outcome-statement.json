@@ -1,0 +1,169 @@
+{
+  "id": "O2",
+  "appendix": "G",
+  "description": "Outcome statements signed by the test approval key cloud-approval-202610 (listed in s1) over \"intent-outcome-v1\\n\" || JCS(statement without cloud_signature), for the approved snapshot approved_snapshot_hash. Only the first verifies; refused_by names the check that fails. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "input": {
+    "statement": "s1-key-statement.json",
+    "valid_at": 1792152000,
+    "approval_key_seed_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "signing_prefix": "intent-outcome-v1\n",
+    "approved_snapshot_hash": "6fdb948f63cfc2867bd98926f822c31d9f40ebf764f5e05edf95a27c99a320b5"
+  },
+  "cases": [
+    {
+      "name": "valid",
+      "statement": {
+        "v": 1,
+        "approval_handle": "ap_TEST0003",
+        "snapshot_hash": "6fdb948f63cfc2867bd98926f822c31d9f40ebf764f5e05edf95a27c99a320b5",
+        "outcome": {
+          "state": "ordered",
+          "source": "staging_webhook",
+          "assurance": "verified",
+          "order_ref": "#1001",
+          "final_total": {
+            "amount_minor": 12500,
+            "currency": "USD"
+          },
+          "binding": {
+            "rule_version": "binding-v1",
+            "result": "ok",
+            "checks": {
+              "merchant_origin": "match",
+              "checkout_ref": "match",
+              "line": "match",
+              "ship_to": "match",
+              "total": "match"
+            }
+          },
+          "observed_at": "2026-10-16T12:05:00Z"
+        },
+        "ledger": {
+          "seq": 5,
+          "entry_hash": "744e5c6c2a84201b458ecf8cb4c48c09d25fe4f00e5f40502474b479160e24fb"
+        },
+        "issued_at": "2026-10-16T12:06:00Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "VR0HEM8qO1wXXax1oKjxJ8lY4XVxc1l_g6uMQukr9w9paite90kxVMs6Ws3X-NDhxfSt5j_gYE_-TiAQEJCBAw"
+      },
+      "verifies": true
+    },
+    {
+      "name": "outcome changed after signing",
+      "statement": {
+        "v": 1,
+        "approval_handle": "ap_TEST0003",
+        "snapshot_hash": "6fdb948f63cfc2867bd98926f822c31d9f40ebf764f5e05edf95a27c99a320b5",
+        "outcome": {
+          "state": "ordered",
+          "source": "staging_webhook",
+          "assurance": "verified",
+          "order_ref": "#1001",
+          "final_total": {
+            "amount_minor": 12400,
+            "currency": "USD"
+          },
+          "binding": {
+            "rule_version": "binding-v1",
+            "result": "ok",
+            "checks": {
+              "merchant_origin": "match",
+              "checkout_ref": "match",
+              "line": "match",
+              "ship_to": "match",
+              "total": "match"
+            }
+          },
+          "observed_at": "2026-10-16T12:05:00Z"
+        },
+        "ledger": {
+          "seq": 5,
+          "entry_hash": "744e5c6c2a84201b458ecf8cb4c48c09d25fe4f00e5f40502474b479160e24fb"
+        },
+        "issued_at": "2026-10-16T12:06:00Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "VR0HEM8qO1wXXax1oKjxJ8lY4XVxc1l_g6uMQukr9w9paite90kxVMs6Ws3X-NDhxfSt5j_gYE_-TiAQEJCBAw"
+      },
+      "verifies": false,
+      "refused_by": "cloud_signature"
+    },
+    {
+      "name": "signed without the prefix",
+      "statement": {
+        "v": 1,
+        "approval_handle": "ap_TEST0003",
+        "snapshot_hash": "6fdb948f63cfc2867bd98926f822c31d9f40ebf764f5e05edf95a27c99a320b5",
+        "outcome": {
+          "state": "ordered",
+          "source": "staging_webhook",
+          "assurance": "verified",
+          "order_ref": "#1001",
+          "final_total": {
+            "amount_minor": 12500,
+            "currency": "USD"
+          },
+          "binding": {
+            "rule_version": "binding-v1",
+            "result": "ok",
+            "checks": {
+              "merchant_origin": "match",
+              "checkout_ref": "match",
+              "line": "match",
+              "ship_to": "match",
+              "total": "match"
+            }
+          },
+          "observed_at": "2026-10-16T12:05:00Z"
+        },
+        "ledger": {
+          "seq": 5,
+          "entry_hash": "744e5c6c2a84201b458ecf8cb4c48c09d25fe4f00e5f40502474b479160e24fb"
+        },
+        "issued_at": "2026-10-16T12:06:00Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "VSLVjBnGoLW1ZFsJwefbEB3nJUy5hxPKgj_tKon99BaOD36j9MjrRQdEjuwFCeHD9KpUFmE-zjRwK2jB0CBoCA"
+      },
+      "verifies": false,
+      "refused_by": "cloud_signature"
+    },
+    {
+      "name": "valid signature, other snapshot_hash",
+      "statement": {
+        "v": 1,
+        "approval_handle": "ap_TEST0003",
+        "snapshot_hash": "6fb1e7418d3f48ffcad82b34097fc6e3d2ac8972a000296dc722e9b47cad4094",
+        "outcome": {
+          "state": "ordered",
+          "source": "staging_webhook",
+          "assurance": "verified",
+          "order_ref": "#1001",
+          "final_total": {
+            "amount_minor": 12500,
+            "currency": "USD"
+          },
+          "binding": {
+            "rule_version": "binding-v1",
+            "result": "ok",
+            "checks": {
+              "merchant_origin": "match",
+              "checkout_ref": "match",
+              "line": "match",
+              "ship_to": "match",
+              "total": "match"
+            }
+          },
+          "observed_at": "2026-10-16T12:05:00Z"
+        },
+        "ledger": {
+          "seq": 5,
+          "entry_hash": "744e5c6c2a84201b458ecf8cb4c48c09d25fe4f00e5f40502474b479160e24fb"
+        },
+        "issued_at": "2026-10-16T12:06:00Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "UfJyKoKbxVf2ewGphZr-xKofoNqfb5EBbijmJogCdmcSoS-Lbh6dpqjucKC3KHjjfGyceFXFOWX4OyTyRebGAQ"
+      },
+      "verifies": false,
+      "refused_by": "snapshot_hash"
+    }
+  ]
+}

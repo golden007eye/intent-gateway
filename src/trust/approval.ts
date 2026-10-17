@@ -2,7 +2,7 @@
 // gateway has verified itself. Intent Cloud's signature is checked, and then the passkey assertion is re-verified
 // against the statement's confirm origin and rp_id, so neither Intent Cloud nor the agent alone can approve.
 import { constants, createHash, createPublicKey, type KeyObject, verify } from "node:crypto";
-import { ApprovalProof, ApprovalState, type CredentialPublicKey, type LedgerRef, type Snapshot } from "../contract/index.ts";
+import { type AnySnapshot, ApprovalProof, ApprovalState, type CredentialPublicKey, type LedgerRef } from "../contract/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { approverFingerprint } from "./fingerprint.ts";
 import { fromBase64Url, utf8 } from "./bytes.ts";
@@ -30,7 +30,7 @@ export interface VerifiedCredential {
 export interface VerifiedApproval {
   ok: true;
   handle: string;
-  snapshot: Snapshot;
+  snapshot: AnySnapshot;
   snapshotHash: string;
   ledger: LedgerRef;
   issuedAt: string;

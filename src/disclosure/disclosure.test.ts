@@ -206,8 +206,9 @@ describe("invariant 2: log before send", () => {
     expect(Buffer.concat([Buffer.from(block, "latin1"), sent]).equals(stub.connections[0] ?? Buffer.alloc(0))).toBe(true);
     expect(sent.equals(stub.bodies[0] ?? Buffer.alloc(0))).toBe(true);
     expect(headers.map(([k]) => k)).toEqual([
-      "host", "content-type", "accept", "content-digest", "signature-input", "signature", "content-length", "connection",
+      "host", "content-type", "accept", "intent-contract-version", "content-digest", "signature-input", "signature", "content-length", "connection",
     ]);
+    expect(headers).toContainEqual(["intent-contract-version", "1.6.0"]);
 
     const signatureInput = (headers.find(([k]) => k === "signature-input") ?? [])[1] ?? "";
     const nonce = /;nonce="([^"]+)"/.exec(signatureInput)?.[1];
@@ -524,6 +525,7 @@ describe("an adapter that misbehaves", () => {
       createCart: (_r, o) => call(o),
       createApproval: (_h, o) => call(o),
       getApproval: (_h, o) => call(o),
+      reportOutcome: (_h, _r, o) => call(o),
     };
   };
 

@@ -1,5 +1,5 @@
-// The one HTTP adapter to Intent Cloud. Every request carries exactly the fixed header set of plan §3.1, in a fixed
-// order, on a fresh connection that is closed afterwards, so what the disclosure log records is byte for byte what
+// The one HTTP adapter to Intent Cloud. Every request carries exactly the fixed header set of plan §3.1, plus
+// `intent-contract-version: 1.6.0` (contract 1.6.0 §V1), in a fixed order, on a fresh connection that is closed afterwards, so what the disclosure log records is byte for byte what
 // left the machine. A caller's beforeSend hook sees the final request before any byte is written; when it throws,
 // nothing is sent (invariant 2 is kept by src/disclosure through that hook).
 import { type Agent, type IncomingMessage, request as httpRequest, type RequestOptions } from "node:http";
@@ -12,6 +12,7 @@ import {
   type ApprovalStatus,
   type Cart,
   type CartRequest,
+  CONTRACT_VERSION,
   ENDPOINTS,
   errorBody,
   type ErrorBody,
@@ -20,6 +21,9 @@ import {
   type KeyStatement,
   type Meta,
   type OperationId,
+  outcomeReportsPath,
+  type OutcomeReport,
+  type OutcomeReportAccepted,
   type RateLimited,
   type SearchRequest,
   type SearchResponse,
@@ -28,6 +32,8 @@ import { canonicalize } from "../jcs/index.ts";
 import { contentDigest, type Session, signRequest } from "../signing/index.ts";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
+/** The request header that names the caller's contract version, as sent (lowercase, like every header here). */
+export const CONTRACT_VERSION_HEADER = "intent-contract-version";
 export const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
 
 export type HeaderPair = readonly [name: string, value: string];
@@ -44,6 +50,11 @@ export interface PreparedRequest {
 export interface CallOptions {
   /** Runs once the request is final and before any byte is sent. If it throws or rejects, nothing is sent. */
   beforeSend?: (request: PreparedRequest) => void | Promise<void>;
+  /**
+   * Signs this one request with another key than the adapter's session: an approval's completer key (contract 1.6.0,
+   * Appendix G R1/R7), which Intent Cloud accepts for reads and reports of that approval only.
+   */
+  session?: Session;
 }
 
 /** The two appendix-D headers as received; trust (G15) verifies them. */
@@ -85,6 +96,7 @@ export interface IntentCloud {
   createCart(request: CartRequest, options?: CallOptions): Promise<CloudResult<Cart>>;
   createApproval(cartHandle: string, options?: CallOptions): Promise<CloudResult<ApprovalCreated>>;
   getApproval(approvalHandle: string, options?: CallOptions): Promise<CloudResult<ApprovalStatus>>;
+  reportOutcome(approvalHandle: string, report: OutcomeReport, options?: CallOptions): Promise<CloudResult<OutcomeReportAccepted>>;
 }
 
 export interface HttpCloudOptions {
@@ -265,7 +277,7 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 
-  function prepare(operation: OperationId, path: string, payload: unknown): PreparedRequest {
+  function prepare(operation: OperationId, path: string, payload: unknown, session: Session): PreparedRequest {
     const endpoint = ENDPOINTS[operation];
     let body: Uint8Array = new Uint8Array(0);
     if (endpoint.request !== null) {
@@ -275,9 +287,10 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
     }
     const headers: HeaderPair[] = [["host", target.host]];
     if (endpoint.request !== null) headers.push(["content-type", "application/json"]);
-    headers.push(["accept", "application/json"]);
+    // The caller's contract version (1.6.0 §V1): unsigned, logged with the rest of the header set.
+    headers.push(["accept", "application/json"], [CONTRACT_VERSION_HEADER, CONTRACT_VERSION]);
     if (endpoint.signed) {
-      const signed = signRequest(options.session, { method: endpoint.method, path, body, created: Math.floor(now() / 1000) });
+      const signed = signRequest(session, { method: endpoint.method, path, body, created: Math.floor(now() / 1000) });
       headers.push(
         ["content-digest", signed["content-digest"]],
         ["signature-input", signed["signature-input"]],
@@ -372,7 +385,7 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
   }
 
   async function call<T>(operation: OperationId, path: string, payload: unknown, callOptions?: CallOptions): Promise<CloudResult<T>> {
-    const request = prepare(operation, path, payload);
+    const request = prepare(operation, path, payload, callOptions?.session ?? options.session);
     // Every refusal comes before beforeSend, so a request that never leaves is never logged as sent.
     const agent = requestAgent();
     try {
@@ -426,5 +439,6 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
     createCart: (r, o) => call<Cart>("createCart", ENDPOINTS.createCart.path, r, o),
     createApproval: async (h, o) => call<ApprovalCreated>("createApproval", handlePath(approvalsPath, h), undefined, o),
     getApproval: async (h, o) => call<ApprovalStatus>("getApproval", handlePath(approvalPath, h), undefined, o),
+    reportOutcome: async (h, r, o) => call<OutcomeReportAccepted>("reportOutcome", handlePath(outcomeReportsPath, h), r, o),
   };
 }

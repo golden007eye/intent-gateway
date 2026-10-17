@@ -8,13 +8,13 @@ import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
+import { type FakeCloud, type FakeCloudOptions, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
 import type { ApprovalCreated, ApprovalStatus } from "../contract/index.ts";
 import { INTENT } from "../config/index.ts";
 import { CloudNetworkError, connectCloud, type DisclosedCloud, DisclosureRefusedError, DisclosureStoppedError } from "../disclosure/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { loadPolicy } from "../policy/index.ts";
-import { createSession } from "../signing/index.ts";
+import { type CompleterKeys, createSession, openCompleterKeys } from "../signing/index.ts";
 import { type Entry, openStore, type Store, verifyChain } from "../store/index.ts";
 import type { PinnedRootKey } from "../trust/index.ts";
 import { runVerify } from "../verify/index.ts";
@@ -49,9 +49,15 @@ interface Harness {
   /** Replaces one disclosed-cloud operation; the replacement may call the real one. */
   patch: Partial<DisclosedCloud>;
   real: DisclosedCloud;
+  /** The completer keys in the data dir. */
+  completerKeys: CompleterKeys;
+  /** The keyid each approval read or report was signed with, in order. */
+  signers: { op: "getApproval" | "reportOutcome"; keyid: string | null }[];
   advance(ms: number): void;
   kinds(): string[];
   totalSends(): number;
+  /** A new gateway on the same data dir and fake, with a new session key, as after a process restart; started. */
+  restart(): Promise<Harness>;
 }
 
 let open: { fake: FakeCloud; store: Store }[] = [];
@@ -64,18 +70,37 @@ afterEach(async () => {
   open = [];
 });
 
-async function setup(options: { policy?: string; pin?: PinnedRootKey[]; start?: boolean } = {}): Promise<Harness> {
-  let clock = T0;
-  const now = (): number => clock;
-  const fake = await startFakeCloud({ now });
+interface SetupOptions {
+  policy?: string;
+  pin?: PinnedRootKey[];
+  start?: boolean;
+  fake?: FakeCloudOptions;
+  completerKeys?: CompleterKeys;
+  walletModes?: () => readonly ("handoff" | "shop_agent")[];
+}
+
+async function setup(options: SetupOptions = {}): Promise<Harness> {
+  const clock = { at: T0 };
+  const now = (): number => clock.at;
+  const fake = await startFakeCloud({ now, ...options.fake });
   const dir = join(await fsp.mkdtemp(join(tmpdir(), "gateway-")), "data");
   const store = await openStore(dir, { clock: now });
   open.push({ fake, store });
+  return build({ fake, store, dir, clock, now }, options);
+}
+
+async function build(
+  base: { fake: FakeCloud; store: Store; dir: string; clock: { at: number }; now: () => number },
+  options: SetupOptions,
+): Promise<Harness> {
+  const { fake, store, dir, clock, now } = base;
   const session = createSession();
   const warnings: string[] = [];
   const sends = { search: 0, createCart: 0, createApproval: 0, getApproval: 0 };
+  const signers: Harness["signers"] = [];
   const patch: Partial<DisclosedCloud> = {};
   const holder: { real: DisclosedCloud | null } = { real: null };
+  const completerKeys = options.completerKeys ?? openCompleterKeys(dir, { now });
   const gateway = createGateway({
     cloud: (keySet) => {
       const real = connectCloud({ baseUrl: fake.url, session, now }, store, { keySet, now });
@@ -87,10 +112,15 @@ async function setup(options: { policy?: string; pin?: PinnedRootKey[]; start?: 
         search: (r) => (sends.search++, (patch.search ?? real.search)(r)),
         createCart: (r) => (sends.createCart++, (patch.createCart ?? real.createCart)(r)),
         createApproval: (h) => (sends.createApproval++, (patch.createApproval ?? real.createApproval)(h)),
-        getApproval: (h) => (sends.getApproval++, (patch.getApproval ?? real.getApproval)(h)),
+        getApproval: (h, s) => (
+          sends.getApproval++, signers.push({ op: "getApproval", keyid: s?.keyid ?? null }), (patch.getApproval ?? real.getApproval)(h, s)
+        ),
+        reportOutcome: (h, r, s) => (signers.push({ op: "reportOutcome", keyid: s?.keyid ?? null }), (patch.reportOutcome ?? real.reportOutcome)(h, r, s)),
       };
     },
     store,
+    completerKeys,
+    ...(options.walletModes === undefined ? {} : { walletModes: options.walletModes }),
     policy: loadPolicy(options.policy ?? BASE_POLICY),
     pinnedRootKeys: options.pin ?? [fake.keys.rootPin],
     now,
@@ -108,11 +138,14 @@ async function setup(options: { policy?: string; pin?: PinnedRootKey[]; start?: 
     sends,
     patch,
     real: holder.real,
+    completerKeys,
+    signers,
     advance: (ms) => {
-      clock += ms;
+      clock.at += ms;
     },
     kinds: () => store.entries().map((e) => e.kind),
     totalSends: () => OPS.reduce((n, op) => n + sends[op], 0),
+    restart: () => build(base, { ...options, start: true }),
   };
 }
 
@@ -142,6 +175,11 @@ async function approvedPurchase(h: Harness, title: string, passkey: SoftPasskey)
   const approval = await pendingPurchase(h, title);
   expect(h.fake.approveWithPasskey(approval, passkey).status).toBe(200);
   return h.gateway.getApprovalStatus({ approval_handle: approval });
+}
+
+/** `value` without `keys`. */
+function omit<T extends object, K extends keyof T>(value: T, keys: readonly K[]): Omit<T, K> {
+  return Object.fromEntries(Object.entries(value).filter(([k]) => !(keys as readonly PropertyKey[]).includes(k))) as Omit<T, K>;
 }
 
 const bodies = (h: Harness, kind: string): Record<string, unknown>[] =>
@@ -175,7 +213,7 @@ describe("start", () => {
     };
     const failure = h.gateway.start();
     await expect(failure).rejects.toThrow(GatewayStartError);
-    await expect(failure).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.5\.0.*contract_sums_sha256 is 0{64}/);
+    await expect(failure).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.6\.0.*contract_sums_sha256 is 0{64}/);
     expect(bodies(h, "keys")).toHaveLength(0);
     await expect(h.gateway.findOffers(SHOES)).rejects.toThrow(GatewayNotStartedError);
     expect(h.totalSends()).toBe(0);
@@ -183,8 +221,8 @@ describe("start", () => {
 
   it("an Intent-Contract-Version mismatch fails start clearly", async () => {
     const h = await setup({ start: false });
-    h.patch.meta = async () => ({ ...(await h.real.meta()), contractVersion: "1.6.0" });
-    await expect(h.gateway.start()).rejects.toThrow(/Intent-Contract-Version is 1\.6\.0/);
+    h.patch.meta = async () => ({ ...(await h.real.meta()), contractVersion: "1.5.0" });
+    await expect(h.gateway.start()).rejects.toThrow(/Intent-Contract-Version is 1\.5\.0/);
   });
 
   it("a Meta.contract_version mismatch fails start clearly", async () => {
@@ -493,9 +531,11 @@ describe("createCart snapshot checks", () => {
       snapshot_hash: view?.snapshot_hash,
       total_minor: 2 * 8999 + 500,
       expires_at: view?.snapshot.expires_at,
+      completion_mode: "handoff",
+      completer_keyid: view?.snapshot.v === 2 ? view.snapshot.completer_keyid : "v1",
     });
     expect(result.summary).toBe(
-      "Sent: createCart (offer_handle, quantity, ship_to.country, ship_to.postal_code; receipt verified); " +
+      "Sent: createCart (completer_keyid, completion_accepts, offer_handle, quantity, ship_to.country, ship_to.postal_code; receipt verified); " +
         "createApproval (no body fields; receipt verified) / Blocked: nothing",
     );
   });
@@ -518,12 +558,25 @@ describe("createCart snapshot checks", () => {
     expect(result.message).toContain("merchant differs from the cart");
   });
 
-  it("a snapshot whose postal_prefix is not the ZIP sent is refused", async () => {
+  it("a snapshot whose ZIP is not the ZIP sent is refused, even with the same 3-digit prefix", async () => {
     const h = await setup();
-    rewriteApproval(h, (c) => ({ ...c, snapshot: { ...c.snapshot, ship_to: { country: "US", postal_prefix: "100" } } }));
+    rewriteApproval(h, (c) => (c.snapshot.v === 2 ? { ...c, snapshot: { ...c.snapshot, ship_to: { country: "US", postal_code: "94199" } } } : c));
     const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
     expect(result.status).toBe("refused");
     expect(result.message).toContain("ship_to differs from the ZIP sent");
+  });
+
+  it("a v1 snapshot from a 1.6.0 host is refused", async () => {
+    const h = await setup();
+    rewriteApproval(h, (c) => {
+      if (c.snapshot.v !== 2) return c;
+      const v1 = omit(c.snapshot, ["merchant_origin", "variant_ref", "checkout_ref_hash", "completion_mode", "completer_keyid", "total_estimated"]);
+      return { ...c, snapshot: { ...v1, v: 1, ship_to: { country: "US", postal_prefix: "941" } } };
+    });
+    const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
+    expect(result.status).toBe("refused");
+    expect(result.message).toContain("snapshot is v1");
+    expect(bodies(h, "approval_pending")).toHaveLength(0);
   });
 
   it("a snapshot_hash that is not the snapshot's hash is refused", async () => {
@@ -1003,5 +1056,288 @@ describe("the key statement expires while the gateway runs", () => {
     expect(result.message).toMatch(/expired on .*returns now is not a fresh valid one \(the key statement did not verify .*step 2: bad_signature/);
     expect(bodies(h, "keys")).toHaveLength(1);
     expect(h.sends.search).toBe(0);
+  });
+});
+
+// ---- contract 1.6.0 (G3) ------------------------------------------------------------------------------------------
+
+describe("contract 1.6.0: completer key, local checks before any approval request", () => {
+  const pendingBody = (h: Harness, handle: string) => bodies(h, "approval_pending").find((b) => b.handle === handle) ?? {};
+  const keyidOf = (h: Harness, handle: string): string => String(pendingBody(h, handle).completer_keyid);
+  const keyFiles = async (h: Harness): Promise<string[]> => (await h.completerKeys.list()).map((k) => k.keyid);
+  /** The entries after the createCart disclosure's receipt (what the gateway did once the cart came back). */
+  const afterCartReceipt = (h: Harness): Entry[] => {
+    const chain = h.store.entries();
+    const cart = chain.findLast((e) => e.kind === "disclosure" && (e.body as { endpoint?: unknown }).endpoint === "createCart");
+    const receipt = chain.find((e) => e.kind === "receipt" && (e.body as { disclosure_seq?: unknown }).disclosure_seq === cart?.seq);
+    if (receipt === undefined) throw new Error("no cart receipt");
+    return chain.filter((e) => e.seq > receipt.seq);
+  };
+  const BINDING_OK = {
+    rule_version: "binding-v1",
+    result: "ok",
+    checks: { merchant_origin: "match", checkout_ref: "match", line: "match", ship_to: "match", total: "match" },
+  } as const;
+
+  it("the cart request names a fresh completer key, saved 0600 before the request is logged, and the snapshot binds it", async () => {
+    const h = await setup();
+    const offer = await offerHandle(h, "Trail Runner 3");
+    let checked = false;
+    h.patch.createCart = async (r) => {
+      // Before the disclosed call runs (and so before its disclosure is appended), the key is on disk.
+      expect(await keyFiles(h)).toContain(r.completer_keyid);
+      const named = (e: Entry): boolean => e.kind === "disclosure" && Buffer.from(String((e.body as { body_b64?: unknown }).body_b64), "base64").toString().includes(String(r.completer_keyid));
+      expect(h.store.entries().some(named)).toBe(false);
+      checked = true;
+      return h.real.createCart(r);
+    };
+    const result = approvalOf(await h.gateway.createCart({ offer_handle: offer }));
+    expect(checked).toBe(true);
+    const keyid = keyidOf(h, result.approval_handle);
+    expect(await keyFiles(h)).toEqual([keyid]);
+    if (process.platform !== "win32") expect((await fsp.stat(join(h.completerKeys.dir, `${keyid}.key`))).mode & 0o777).toBe(0o600);
+    const snapshot = h.fake.inspect(result.approval_handle)?.snapshot;
+    expect(snapshot).toMatchObject({ v: 2, completer_keyid: keyid, completion_mode: "handoff", ship_to: { postal_code: SHOES.zip } });
+    const logged = bodies(h, "disclosure").find((d) => d.endpoint === "createCart");
+    const sent = JSON.parse(Buffer.from(String(logged?.body_b64), "base64").toString("utf8")) as Record<string, unknown>;
+    expect(sent).toMatchObject({ completer_keyid: keyid, completion_accepts: ["handoff"] });
+    // A second cart gets its own key: a key links no purchases.
+    const second = approvalOf(await h.gateway.createCart({ offer_handle: await offerHandle(h, "Road Runner 2") }));
+    expect(keyidOf(h, second.approval_handle)).not.toBe(keyid);
+  });
+
+  it("only the completer keyid leaves or is logged: the private key is in no disclosure and nowhere in audit.jsonl", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    const keyid = keyidOf(h, approval);
+    const file = JSON.parse(await fsp.readFile(join(h.completerKeys.dir, `${keyid}.key`), "utf8")) as { private_key_pem: string };
+    const der = Buffer.from(file.private_key_pem.replace(/-----[A-Z ]+-----|\s/g, ""), "base64");
+    const audit = await fsp.readFile(join(h.dir, "audit.jsonl"), "utf8");
+    for (const secret of [file.private_key_pem, der.toString("base64"), der.subarray(-32).toString("base64url"), der.subarray(-32).toString("hex")]) {
+      expect(audit).not.toContain(secret);
+    }
+    expect(audit).toContain(keyid);
+    // Requests to Intent Cloud are logged byte for byte (G2b): no redaction, and the version header is kept.
+    for (const d of bodies(h, "disclosure")) {
+      expect(d).not.toHaveProperty("redacted");
+      expect(d.headers).toContainEqual(["intent-contract-version", "1.6.0"]);
+    }
+  });
+
+  it("a usable wallet adds its mode ahead of handoff, only where the policy allows one_tap", async () => {
+    const offered = async (policy: string): Promise<unknown> => {
+      const h = await setup({ policy, walletModes: () => ["shop_agent"] });
+      await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
+      const logged = bodies(h, "disclosure").find((d) => d.endpoint === "createCart");
+      return (JSON.parse(Buffer.from(String(logged?.body_b64), "base64").toString("utf8")) as { completion_accepts?: unknown }).completion_accepts;
+    };
+    expect(await offered(BASE_POLICY)).toEqual(["shop_agent", "handoff"]);
+    expect(await offered(`${BASE_POLICY}completion: [handoff]\n`)).toEqual(["handoff"]);
+  });
+
+  it("attack (AC-G2): policy [handoff], Intent Cloud returns a shop_agent cart: refused, no disclosure after the cart's receipt, no key left", async () => {
+    const h = await setup({ policy: `${BASE_POLICY}completion: [handoff]\n` });
+    h.fake.tamper.cart({ completion_mode: "shop_agent" });
+    const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
+    expect(result.status).toBe("refused");
+    expect(result.message).toContain("completion mode shop_agent was not offered");
+    expect(afterCartReceipt(h).filter((e) => e.kind === "disclosure")).toEqual([]);
+    expect(h.sends.createApproval).toBe(0);
+    expect(bodies(h, "approval_pending")).toHaveLength(0);
+    expect(bodies(h, "block").at(-1)).toMatchObject({ endpoint: "createCart", fields: ["cart"] });
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it("attack: a shop_agent cart is refused under the default policy too, since this gateway has no wallet to offer it", async () => {
+    const h = await setup();
+    h.fake.tamper.cart({ completion_mode: "shop_agent" });
+    const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
+    expect(result.status).toBe("refused");
+    expect(h.sends.createApproval).toBe(0);
+  });
+
+  it("a policy that allows only one_tap hides every hand-off offer, so no cart is sent and no key made", async () => {
+    const h = await setup({ policy: `${BASE_POLICY}completion: [one_tap]\n` });
+    const found = offersOf(await h.gateway.findOffers(SHOES));
+    expect(found.offers).toEqual([]);
+    expect(found.message).toContain("hidden by the gateway policy (completion)");
+    expect(h.sends.createCart).toBe(0);
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it.each([
+    ["a variant_ref other than the offer's", { variant_ref: "gid://shopify/ProductVariant/1" }, "variant_ref differs from the offer"],
+    ["an origin that is not the merchant's", { merchant_origin: "https://evil.example" }, "merchant_origin is not https:// + the merchant's domain"],
+  ])("attack: a cart with %s is refused before any approval request", async (_name, patch, reason) => {
+    const h = await setup();
+    h.fake.tamper.cart(patch);
+    const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
+    expect(result.status).toBe("refused");
+    expect(result.message).toContain(reason);
+    expect(h.sends.createApproval).toBe(0);
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it("a cart without the 1.6.0 fields is refused before any approval request", async () => {
+    const h = await setup();
+    h.patch.createCart = async (r) => {
+      const res = await h.real.createCart(r);
+      if (!res.ok) return res;
+      return { ...res, body: omit(res.body, ["completion_mode", "variant_ref"]) };
+    };
+    const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
+    expect(result.status).toBe("refused");
+    expect(result.message).toContain("cart lacks completion_mode, variant_ref");
+    expect(h.sends.createApproval).toBe(0);
+  });
+
+  it.each([
+    ["origin https://evil.example for domain shop.example", { merchant_origin: "https://evil.example" }, "merchant_origin differs from the cart"],
+    ["ZIP 94104 when 94103 was sent", { ship_to: { country: "US", postal_code: "94104" } as const }, "ship_to differs from the ZIP sent"],
+    ["another variant", { variant_ref: "gid://shopify/ProductVariant/2" }, "variant_ref differs from the cart"],
+    ["another completion mode", { completion_mode: "shop_agent" as const }, "completion_mode differs from the cart"],
+    ["an estimated total the cart did not have", { total_estimated: true }, "total_estimated differs from the cart"],
+    ["another completer key", { completer_keyid: createSession().keyid }, "completer_keyid is not the key this gateway made for the cart"],
+  ])("attack: a snapshot with %s is refused: no approval_pending, no key left", async (_name, patch, reason) => {
+    const h = await setup();
+    h.fake.tamper.snapshot(patch);
+    const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
+    expect(result.status).toBe("refused");
+    expect(result.message).toContain(reason);
+    expect(bodies(h, "approval_pending")).toHaveLength(0);
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it("attack (AC-G4): a proof whose snapshot completion_mode differs from the pending one is not_pending_snapshot", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    h.fake.tamper.proofSnapshot({ completion_mode: "shop_agent" });
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result.status).toBe("not_verified");
+    expect(result.message).toContain("not_pending_snapshot");
+    expect(bodies(h, "approval")).toHaveLength(0);
+  });
+
+  it("restart: a new session key reads the approval with its completer key, and it is approved", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).status).toBe("pending");
+    expect(h.signers.at(-1)).toEqual({ op: "getApproval", keyid: null });
+    const restarted = await h.restart();
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    const result = await restarted.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result.status).toBe("approved");
+    const keyid = keyidOf(h, approval);
+    expect(restarted.signers.at(-1)).toEqual({ op: "getApproval", keyid });
+    // The logged request names the completer key, so `intent verify` checks the receipt against the key that signed.
+    const read = bodies(h, "disclosure").findLast((d) => d.endpoint === "getApproval");
+    expect(read?.keyid).toBe(keyid);
+    const report = await runVerify({ dataDir: h.dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(h.now()), skipSupplyChain: true });
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+  });
+
+  it("restart without the key file: the read goes out under the session key and Intent Cloud answers 404", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    await h.completerKeys.remove(keyidOf(h, approval));
+    const restarted = await h.restart();
+    const result = await restarted.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("404");
+    expect(restarted.signers.at(-1)).toEqual({ op: "getApproval", keyid: null });
+  });
+
+  it("against a host that serves only 1.5.0, start fails with contract mismatch", async () => {
+    const h = await setup({ start: false, fake: { versions: ["1.5.0"] } });
+    await expect(h.gateway.start()).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.6\.0 .*Intent-Contract-Version is 1\.5\.0/);
+  });
+
+  it("the key is gone after a terminal outcome (the merchant's order), read once", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).status).toBe("approved");
+    expect(h.fake.handoff(approval).status).toBe(200);
+    expect(await keyFiles(h)).toEqual([keyidOf(h, approval)]);
+    expect(h.fake.order(approval).status).toBe(200);
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result).toMatchObject({ status: "approved", cloud_reported: "ordered" });
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it("retention with a fake clock: an unapproved cart's key is gone at expires_at", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    const expiresAt = Date.parse(String(pendingBody(h, approval).expires_at));
+    h.advance(expiresAt - h.now() - 1000);
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).status).toBe("pending");
+    expect(await keyFiles(h)).toHaveLength(1);
+    h.advance(1000);
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).status).toBe("expired");
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it("retention: a handed-off key survives to expires_at + 47 h, where a restarted gateway reads a webhook order with it", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).status).toBe("approved");
+    expect(h.fake.handoff(approval).status).toBe(200);
+    expect(await h.gateway.getApprovalStatus({ approval_handle: approval })).toMatchObject({ cloud_reported: "handed_off" });
+    const expiresAt = Date.parse(String(pendingBody(h, approval).expires_at));
+    h.advance(expiresAt + 47 * 3_600_000 - h.now());
+    const restarted = await h.restart();
+    expect(await keyFiles(h)).toEqual([keyidOf(h, approval)]);
+    expect(h.fake.order(approval).status).toBe(200);
+    expect(await restarted.gateway.getApprovalStatus({ approval_handle: approval })).toMatchObject({ status: "approved", cloud_reported: "ordered" });
+    expect(restarted.signers.at(-1)?.keyid).toBe(keyidOf(h, approval));
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it("retention: a handed-off key with no terminal outcome is gone at expires_at + 48 h", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    h.fake.handoff(approval);
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    const expiresAt = Date.parse(String(pendingBody(h, approval).expires_at));
+    h.advance(expiresAt + 48 * 3_600_000 - h.now());
+    await h.restart();
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
+  it.each([
+    ["checkout_expired", "handed_off"],
+    ["mismatch", "handed_off"],
+    ["reported", "handed_off"],
+    ["ordered", "ordered"],
+  ] as const)("o3, hand-off: Intent Cloud's %s outcome is reported as %s", async (outcome, reported) => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    const verified = outcome === "ordered";
+    h.fake.setOutcome(approval, { state: outcome, source: "merchant_api", assurance: verified ? "verified" : "reported", ...(verified ? { binding: BINDING_OK } : {}) });
+    expect(await h.gateway.getApprovalStatus({ approval_handle: approval })).toMatchObject({ status: "approved", cloud_reported: reported });
+    expect(bodies(h, "observed").at(-1)).toMatchObject({ endpoint: "getApproval", outcome_state: outcome });
+  });
+
+  it("attack: a status whose state claims more than its outcome is not repeated", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    h.fake.handoff(approval);
+    h.patch.getApproval = async (handle, signer) => {
+      const r = await h.real.getApproval(handle, signer);
+      return r.ok ? { ...r, body: { ...r.body, state: "ordered", order_number: "ORD-1" } } : r;
+    };
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result.status).toBe("approved");
+    expect(result).not.toHaveProperty("cloud_reported");
+    expect(result.message).toContain("inconsistently");
+    expect(h.warnings.some((w) => w.includes("disagree"))).toBe(true);
   });
 });

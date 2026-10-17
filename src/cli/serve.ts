@@ -7,6 +7,7 @@ import { type Config, DOCKER_EXEC, DOCKER_STOP, INTENT } from "../config/index.t
 import { DEMO_BANNER, type Demo, nextSteps } from "../demo/index.ts";
 import { createGateway } from "../gateway/index.ts";
 import { runHttp, runStdio } from "../mcp/index.ts";
+import { openCompleterKeys } from "../signing/index.ts";
 import { openStore } from "../store/index.ts";
 import { containerConnect } from "./connect.ts";
 import { type Io, line, type Outcome } from "./io.ts";
@@ -41,6 +42,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
     const gateway = createGateway({
       cloud: (keySet) => cloudFor(io, store, baseUrl, { keySet, ...now }, slow),
       store,
+      completerKeys: openCompleterKeys(dataDir, io.now === undefined ? {} : { now: io.now }),
       policy,
       pinnedRootKeys,
       logger: { warn: log },

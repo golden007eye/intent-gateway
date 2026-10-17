@@ -7,7 +7,7 @@
 // it is written, findIdentity runs over it, and any value that looks like buyer identity is replaced with WITHHELD
 // and its path listed in `withheld` (invariant 3: what we never hold, we cannot leak). Pure; no I/O.
 import { z } from "zod";
-import type { ApprovalCreated, ApprovalStatus, Cart, SearchResponse } from "../contract/index.ts";
+import { type ApprovalCreated, type ApprovalStatus, type Cart, CompletionMode, OutcomeState, type SearchResponse } from "../contract/index.ts";
 import { findIdentity } from "../privacy/index.ts";
 
 /** At most this many offers of a search are kept in its observation; `offers_count` still counts them all. */
@@ -51,6 +51,11 @@ export const ObservedBody = z.discriminatedUnion("endpoint", [
     quantity: z.int().min(1).max(3),
     total_minor: Minor,
     currency: z.literal("USD"),
+    /** 1.6.0: how the purchase completes, the merchant origin and whether the total is an estimate. */
+    completion_mode: CompletionMode.optional(),
+    // Any text up to an origin's length, so a value withheld as "[withheld]" still parses.
+    merchant_origin: z.string().min(1).max(261).optional(),
+    total_estimated: z.boolean().optional(),
     withheld: Withheld,
   }),
   z.strictObject({
@@ -70,6 +75,8 @@ export const ObservedBody = z.discriminatedUnion("endpoint", [
     endpoint: z.literal("getApproval"),
     approval_handle: Text,
     state: State,
+    /** 1.6.0: the outcome's state, as Intent Cloud reported it (the completer key's retention reads it). */
+    outcome_state: OutcomeState.optional(),
     title: Text,
     merchant: Text,
     total_minor: Minor,
@@ -109,6 +116,9 @@ export function observeCart(disclosureSeq: number, cart: Cart): ObservedBody {
     quantity: cart.quantity,
     total_minor: cart.total.amount_minor,
     currency: cart.total.currency,
+    ...(cart.completion_mode === undefined ? {} : { completion_mode: cart.completion_mode }),
+    ...(cart.merchant_origin === undefined ? {} : { merchant_origin: cart.merchant_origin }),
+    ...(cart.total_estimated === undefined ? {} : { total_estimated: cart.total_estimated }),
   });
 }
 
@@ -133,6 +143,7 @@ export function observeStatus(disclosureSeq: number, handle: string, status: App
     endpoint: "getApproval",
     approval_handle: handle,
     state: status.state,
+    ...(status.outcome === undefined ? {} : { outcome_state: status.outcome.state }),
     title: status.display.title,
     merchant: status.display.merchant,
     total_minor: status.display.total.amount_minor,

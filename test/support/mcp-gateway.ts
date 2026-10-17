@@ -7,7 +7,7 @@ import { type FakeCloud, startFakeCloud } from "../../src/cloud-fake/index.ts";
 import { connectCloud } from "../../src/disclosure/index.ts";
 import { createGateway, type Gateway } from "../../src/gateway/index.ts";
 import { loadPolicy } from "../../src/policy/index.ts";
-import { createSession } from "../../src/signing/index.ts";
+import { createSession, openCompleterKeys } from "../../src/signing/index.ts";
 import { openStore, type Store } from "../../src/store/index.ts";
 
 export interface TestGateway {
@@ -28,6 +28,7 @@ export async function startTestGateway(options: { log?: (line: string) => void }
   const gateway = createGateway({
     cloud: (keySet) => connectCloud({ baseUrl: fake.url, session }, store, { keySet }),
     store,
+    completerKeys: openCompleterKeys(dir),
     policy: loadPolicy("version: 1\napproval: passkey\n"),
     pinnedRootKeys: [fake.keys.rootPin],
     ...(options.log === undefined ? {} : { logger: { warn: options.log } }),

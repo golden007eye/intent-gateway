@@ -16,9 +16,13 @@
 // - Observations: after each answer whose receipt verified, an `observed` entry records a small summary of what Intent
 //   Cloud returned (offers, the cart, the approval state) with any identity-looking value withheld. It is written after
 //   the receipt, is never sent and answers no request, so log-before-send and `intent verify` are unchanged by it.
-// - Approval: a cart is checked against the offer, the snapshot against the cart, the ship-to area against the ZIP
-//   sent and the total against the caps, before the `approval_pending` entry is chained. "Approved" is reported only
-//   for a proof the trust module verified against that entry, that was chained, and whose passkey is the pin.
+// - Approval: a cart is checked against the offer (merchant, quantity, variant, origin, completion mode) and the
+//   policy before any approval is requested; the snapshot against the cart, the ZIP sent, the completer key made for
+//   it and the caps, before the `approval_pending` entry is chained. "Approved" is reported only for a proof the
+//   trust module verified against that entry, that was chained, and whose passkey is the pin.
+// - Completer key (contract 1.6.0, ADR-0016): each cart gets a fresh Ed25519 key, saved to disk before the cart
+//   request names it, so a restarted gateway (new session key) can still read the approval. A cart that goes no
+//   further deletes it; otherwise the retention rules (retention.ts) do, on start and after each status call.
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import {
@@ -28,6 +32,7 @@ import {
   type ApprovalStatus,
   type Cart,
   type CartRequest as CloudCartRequest,
+  type CompletionMode as CloudCompletionMode,
   CONTRACT_VERSION,
   type KeyStatement,
   type Offer as CloudOffer,
@@ -49,9 +54,10 @@ import {
 } from "../disclosure/index.ts";
 import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
-import { evaluate, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
+import { CLOUD_BASELINE, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
 import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
 import { findIdentity } from "../privacy/index.ts";
+import type { CompleterKeys, Session } from "../signing/index.ts";
 import type { Entry, Store } from "../store/index.ts";
 import {
   approverFingerprint,
@@ -65,6 +71,8 @@ import {
 } from "../trust/index.ts";
 import { disclosedSince, spendHistory, summaryLine } from "./history.ts";
 import { type ApprovalQr, approvalQr } from "./qr.ts";
+import { expiredCompleterKeys } from "./retention.ts";
+import { PROOF_STATES, statusProblem } from "./status-state.ts";
 
 export interface GatewayLogger {
   /** One line for the developer's terminal (stderr): never for the agent. */
@@ -78,6 +86,14 @@ export interface GatewayOptions {
    */
   cloud: (keySet: () => KeySet | null) => DisclosedCloud;
   store: Store;
+  /** The completer keys of open purchases, `<data>/completer` (signing's openCompleterKeys). */
+  completerKeys: CompleterKeys;
+  /**
+   * The gateway-wallet completion modes usable right now: a linked wallet whose adapter can complete a purchase
+   * (`shop_agent` for the Shop wallet). Read at each cart. Default none, and nothing passes it until a wallet adapter
+   * exists, so a cart offers only `handoff`, whatever the policy allows; a linked vault alone is not usable.
+   */
+  walletModes?: () => readonly CloudCompletionMode[];
   policy: Policy;
   /** The root keys pinned for the Intent Cloud host (config's PINNED_HOSTS, or `--trust-keys`). */
   pinnedRootKeys: readonly PinnedRootKey[];
@@ -221,10 +237,11 @@ interface RememberedOffer {
 
 const MAX_REMEMBERED_OFFERS = 500;
 const US_ZIP = /^[0-9]{5}$/;
-const PROOF_STATES = new Set(["approved", "handed_off", "ordered"]);
+/** The contract's completion mode for each policy mode. */
+const CONTRACT_MODE: Readonly<Record<PolicyCompletionMode, CloudCompletionMode>> = { handoff: "handoff", one_tap: "shop_agent" };
 
 export function createGateway(options: GatewayOptions): Gateway {
-  const { store, policy, pinnedRootKeys } = options;
+  const { store, policy, pinnedRootKeys, completerKeys } = options;
   const now = options.now ?? Date.now;
   const logger = options.logger ?? {
     warn: (message: string) => {
@@ -234,6 +251,8 @@ export function createGateway(options: GatewayOptions): Gateway {
   let keySet: KeySet | null = null;
   const cloud = options.cloud(() => keySet);
   const offers = new Map<string, RememberedOffer>();
+  /** Approvals whose cart this process's session key created; any other is read with its completer key. */
+  const createdHere = new Set<string>();
   let stopReported = false;
 
   // One call at a time: the spend caps and the replay check read the chain and then append to it.
@@ -377,6 +396,26 @@ export function createGateway(options: GatewayOptions): Gateway {
     const verified = await chainStatement(statement.body);
     if (typeof verified === "string") throw new GatewayStartError(verified);
     keySet = verified;
+    await collectKeys();
+  }
+
+  /** Deletes the completer keys no purchase needs any more (retention.ts). A failure is said on the terminal only. */
+  async function collectKeys(): Promise<void> {
+    try {
+      const keys = await completerKeys.list();
+      for (const keyid of expiredCompleterKeys(store.entries(), keys, now())) await completerKeys.remove(keyid);
+    } catch (error) {
+      logger.warn(`intent-gateway: could not tidy the completer keys in ${completerKeys.dir}: ${(error as Error).message}`);
+    }
+  }
+
+  /** Deletes one completer key whose cart went no further. A failure is left to the retention rules. */
+  async function dropKey(keyid: string): Promise<void> {
+    try {
+      await completerKeys.remove(keyid);
+    } catch {
+      // The orphan rule of retention.ts deletes it later.
+    }
   }
 
   /** Verifies a served statement against the pin and chains it in a `keys` entry; a string says why it failed. */
@@ -577,14 +616,57 @@ export function createGateway(options: GatewayOptions): Gateway {
     const fresh = await currentKeys(fromSeq);
     if (!fresh.ok) return fresh.refused;
     const keys = fresh.keys;
+    const accepts = completionAccepts();
+    if (accepts.length === 0) {
+      return block("createCart", inputFields(request), ["completion at completion_accepts"], fromSeq, "blocked",
+        "Not sent: no completion mode the gateway policy allows is available here (one-tap needs a linked wallet).");
+    }
+
+    // The completer key is on disk before the cart request names it: a crash after the approval is chained must
+    // still leave a key that can read it. Its keyid is regenerated in the rare case it looks like identity.
+    let completer: Session;
+    try {
+      completer = await completerKeys.create((keyid) => findIdentity({ completer_keyid: keyid }).length === 0);
+    } catch (error) {
+      return { status: "error", message: `Not sent: the completer key could not be saved (${(error as Error).message}).`, summary: summary(fromSeq) };
+    }
+    let keep = false;
+    try {
+      const outcome = await cartAndApproval(
+        { ...request, completer_keyid: completer.keyid, completion_accepts: [...accepts] },
+        known,
+        keys.confirmOrigin,
+        fromSeq,
+      );
+      keep = outcome.status === "approval_needed";
+      return outcome;
+    } finally {
+      if (!keep) await dropKey(completer.keyid);
+    }
+  }
+
+  /**
+   * The cart request, its checks, the approval request and the snapshot's checks, up to the `approval_pending`
+   * entry. Every check of the cart runs before the approval request, so a refused cart reaches no passkey.
+   */
+  async function cartAndApproval(
+    request: CloudCartRequest & { completer_keyid: string; completion_accepts: CloudCompletionMode[] },
+    known: RememberedOffer,
+    confirmOrigin: string,
+    fromSeq: number,
+  ): Promise<CreateCartResult> {
+    const { quantity } = request;
+    const domain = known.offer.merchant.domain;
     const cartCall = await call(() => cloud.createCart(request), fromSeq);
     if (!cartCall.ok) return cartCall.refused;
     const cart = cartCall.body;
     await store.append("observed", observeCart(cartCall.seq, cart));
+    const mode = cart.completion_mode;
     const cartProblems = [
       ...(cart.merchant.domain === domain ? [] : ["merchant differs from the offer"]),
       ...(cart.quantity === quantity ? [] : ["quantity differs from the request"]),
-      ...spendCheck(policyOffer(cart.merchant.domain, known.category, cart.total, null, cart.quantity)).map((b) => b.reason),
+      ...cartV16Problems(cart, known.offer, request.completion_accepts),
+      ...spendCheck(policyOffer(cart.merchant.domain, known.category, cart.total, null, cart.quantity), mode).map((b) => b.reason),
     ];
     if (cartProblems.length > 0) {
       return block("createCart", ["cart"], cartProblems.map((p) => `cart: ${p}`), fromSeq, "refused",
@@ -596,8 +678,10 @@ export function createGateway(options: GatewayOptions): Gateway {
     const created = approvalCall.body;
     await store.append("observed", observeApproval(approvalCall.seq, created));
     const snapshotProblems = [
-      ...checkSnapshot(created, cart, known.zip),
-      ...spendCheck(policyOffer(created.snapshot.merchant.domain, known.category, created.snapshot.total, null, created.snapshot.quantity)).map((b) => b.reason),
+      ...checkSnapshot(created, cart, known.zip, request.completer_keyid),
+      ...spendCheck(policyOffer(created.snapshot.merchant.domain, known.category, created.snapshot.total, null, created.snapshot.quantity), mode).map(
+        (b) => b.reason,
+      ),
     ];
     if (snapshotProblems.length > 0) {
       return block("createApproval", ["snapshot"], snapshotProblems.map((p) => `snapshot: ${p}`), fromSeq, "refused",
@@ -605,14 +689,17 @@ export function createGateway(options: GatewayOptions): Gateway {
     }
 
     // start() admitted the demo base only under the published test root, so a real host's link is never rewritten.
-    const approvalUrl = (options.demo?.confirmBaseUrl ?? keys.confirmOrigin) + created.approval_link_path;
+    const approvalUrl = (options.demo?.confirmBaseUrl ?? confirmOrigin) + created.approval_link_path;
     await store.append("approval_pending", {
       handle: created.approval_handle,
       approval_url: approvalUrl,
       snapshot_hash: created.snapshot_hash,
       total_minor: created.snapshot.total.amount_minor,
       expires_at: created.snapshot.expires_at,
+      completion_mode: mode,
+      completer_keyid: request.completer_keyid,
     });
+    createdHere.add(created.approval_handle);
     return {
       status: "approval_needed",
       approval_handle: created.approval_handle,
@@ -631,10 +718,24 @@ export function createGateway(options: GatewayOptions): Gateway {
     };
   }
 
-  /** The policy's refusals for one purchase, counting what the chain already holds against the caps. */
-  function spendCheck(offer: PolicyOffer) {
+  /**
+   * The policy's refusals for one purchase, counting what the chain already holds against the caps. `mode` is the
+   * contract's completion mode, checked as the policy's (G1); absent means `handoff`.
+   */
+  function spendCheck(offer: PolicyOffer, mode?: CloudCompletionMode) {
     const at = now();
-    return evaluate(policy, { kind: "cart", offer }, spendHistory(store.entries(), at), at).blocked;
+    const completion = mode === undefined ? {} : { completion_mode: policyMode(mode) };
+    return evaluate(policy, { kind: "cart", offer, ...completion }, spendHistory(store.entries(), at), at).blocked;
+  }
+
+  /**
+   * `completion_accepts` for a cart (contract 1.6.0 §3): the modes the policy, met with Intent Cloud's baseline,
+   * allows and this gateway can complete, gateway wallets first and `handoff` last.
+   */
+  function completionAccepts(): CloudCompletionMode[] {
+    const allowed = meet(policy, CLOUD_BASELINE).completion.map((m) => CONTRACT_MODE[m]);
+    const wallets = (options.walletModes?.() ?? []).filter((m) => m !== "handoff" && allowed.includes(m));
+    return [...new Set(wallets), ...(allowed.includes("handoff") ? ["handoff" as const] : [])];
   }
 
   // ---- approval status ------------------------------------------------------------------------------------------
@@ -658,9 +759,11 @@ export function createGateway(options: GatewayOptions): Gateway {
     const fresh = await currentKeys(fromSeq);
     if (!fresh.ok) return fresh.refused;
     const keys = fresh.keys;
-    const fetched = await call(() => cloud.getApproval(handle), fromSeq);
+    const signer = await readSigner(handle, bodyOf(pending));
+    const fetched = await call(() => cloud.getApproval(handle, signer), fromSeq);
     if (fetched.ok) await store.append("observed", observeStatus(fetched.seq, handle, fetched.body));
-    if (chained !== undefined) return reportChained(chained, fetched.ok ? fetched.body : null, fromSeq);
+    const mode = bodyOf(pending).completion_mode === "shop_agent" ? "shop_agent" : "handoff";
+    if (chained !== undefined) return reportChained(chained, fetched.ok ? fetched.body : null, mode, fromSeq);
     if (!fetched.ok) return fetched.refused;
     const status = fetched.body;
 
@@ -701,18 +804,44 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (check.decision === "pin") {
       logger.warn(`intent-gateway: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
     }
-    return approved(check.fingerprint, status, fromSeq);
+    return approved(check.fingerprint, status, mode, fromSeq);
+  }
+
+  /**
+   * The key a status read is signed with: the session key for a cart this process created, else the approval's
+   * completer key (Appendix G R7), so a restarted gateway can still read it. Without a readable key file, the session
+   * key, which Intent Cloud then answers with 404.
+   */
+  async function readSigner(handle: string, pending: Record<string, unknown>): Promise<Session | undefined> {
+    const keyid = pending.completer_keyid;
+    if (createdHere.has(handle) || typeof keyid !== "string") return undefined;
+    try {
+      return (await completerKeys.load(keyid)) ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** A handle already chained: its proof was verified, and its passkey was the pin, when it was chained. */
-  function reportChained(chained: Entry, status: ApprovalStatus | null, fromSeq: number): ApprovalStatusResult {
+  function reportChained(chained: Entry, status: ApprovalStatus | null, mode: CloudCompletionMode, fromSeq: number): ApprovalStatusResult {
     const proof = ApprovalProof.safeParse(bodyOf(chained).proof);
     if (!proof.success) return { status: "not_verified", message: `The chained approval is malformed; run ${INTENT} verify.`, summary: summary(fromSeq) };
-    return approved(approverFingerprint(proof.data.credential_public_key), status, fromSeq);
+    return approved(approverFingerprint(proof.data.credential_public_key), status, mode, fromSeq);
   }
 
-  function approved(fingerprint: string, status: ApprovalStatus | null, fromSeq: number): ApprovalStatusResult {
+  function approved(fingerprint: string, status: ApprovalStatus | null, mode: CloudCompletionMode, fromSeq: number): ApprovalStatusResult {
     const base = "Approved: the buyer's pinned passkey signed this purchase, and the gateway verified and logged the proof.";
+    // Intent Cloud's word is repeated only when its state and outcome agree (Appendix G; never more than the outcome).
+    const inconsistent = status === null ? null : statusProblem(status.state, status.outcome, mode);
+    if (inconsistent !== null) {
+      logger.warn(`intent-gateway: Intent Cloud reported an approval state and an outcome that disagree (${inconsistent}); the gateway does not repeat them.`);
+      return {
+        status: "approved",
+        fingerprint,
+        message: `${base} Intent Cloud reported what happened next inconsistently, so the gateway does not repeat it.`,
+        summary: summary(fromSeq),
+      };
+    }
     const state = status?.state;
     if (state === "handed_off" || state === "ordered") {
       const order = status?.order_number;
@@ -729,7 +858,8 @@ export function createGateway(options: GatewayOptions): Gateway {
         summary: summary(fromSeq),
       };
     }
-    return { status: "approved", fingerprint, message: `${base} The buyer pays at the merchant checkout.`, summary: summary(fromSeq) };
+    const next = mode === "handoff" ? "The buyer pays at the merchant checkout." : "The purchase is to be completed by the gateway's wallet.";
+    return { status: "approved", fingerprint, message: `${base} ${next}`, summary: summary(fromSeq) };
   }
 
   function flagged(fingerprint: string, reason: FlagReason, fromSeq: number): ApprovalStatusResult {
@@ -759,7 +889,14 @@ export function createGateway(options: GatewayOptions): Gateway {
     start: () => serial(start),
     findOffers: (input) => serial(() => findOffers(input)),
     createCart: (input) => serial(() => createCart(input)),
-    getApprovalStatus: (input) => serial(() => getApprovalStatus(input)),
+    getApprovalStatus: (input) =>
+      serial(async () => {
+        try {
+          return await getApprovalStatus(input);
+        } finally {
+          if (keySet !== null) await collectKeys();
+        }
+      }),
   };
 }
 
@@ -779,8 +916,39 @@ function policyOffer(
   return { merchant, category, price_usd: totalMinor / 100 / quantity, quantity };
 }
 
-/** The snapshot must be the cart, for the area sent, under the hash Intent Cloud gave (Appendix A). */
-function checkSnapshot(created: ApprovalCreated, cart: Cart, zip: string): string[] {
+/** The policy's completion mode for a contract mode; an unknown one maps to itself, which the policy refuses. */
+function policyMode(mode: CloudCompletionMode): PolicyCompletionMode {
+  const found = (Object.keys(CONTRACT_MODE) as PolicyCompletionMode[]).find((m) => CONTRACT_MODE[m] === mode);
+  return found ?? (mode as PolicyCompletionMode);
+}
+
+/**
+ * The 1.6.0 checks of a cart against the offer and the request, before any approval is requested (contract 1.6.0
+ * §3, offer = cart = snapshot): every 1.6.0 field present, a completion mode the gateway offered, the offer's
+ * variant, and the origin `https://` + the merchant's domain, lowercased and ASCII only (Appendix G check 1).
+ */
+function cartV16Problems(cart: Cart, offer: CloudOffer, accepts: readonly CloudCompletionMode[]): string[] {
+  const missing = (["completion_mode", "merchant_origin", "variant_ref", "total_estimated"] as const).filter((k) => cart[k] === undefined);
+  if (missing.length > 0) return [`cart lacks ${missing.join(", ")}, which a 1.6.0 host sends`];
+  const problems: string[] = [];
+  if (cart.completion_mode !== undefined && !accepts.includes(cart.completion_mode)) {
+    problems.push(`completion mode ${cart.completion_mode} was not offered (completion_accepts ${accepts.join(", ")})`);
+  }
+  if (offer.variant_ref === undefined) problems.push("the offer named no variant_ref");
+  else if (cart.variant_ref !== offer.variant_ref) problems.push("variant_ref differs from the offer");
+  const domain = cart.merchant.domain;
+  // eslint-disable-next-line no-control-regex
+  if (!/^[\x00-\x7f]+$/.test(domain) || cart.merchant_origin !== `https://${domain.toLowerCase()}`) {
+    problems.push("merchant_origin is not https:// + the merchant's domain");
+  }
+  return problems;
+}
+
+/**
+ * The snapshot must be the cart, for the ZIP sent, under the hash Intent Cloud gave (Appendix A), and, from a 1.6.0
+ * host, a v2 snapshot that names the completer key this gateway made for the cart.
+ */
+function checkSnapshot(created: ApprovalCreated, cart: Cart, zip: string, completerKeyid: string): string[] {
   const s = created.snapshot;
   const problems: string[] = [];
   if (sha256Hex(canonicalize(s)) !== created.snapshot_hash) problems.push("snapshot_hash is not the snapshot's hash");
@@ -791,7 +959,15 @@ function checkSnapshot(created: ApprovalCreated, cart: Cart, zip: string): strin
   for (const key of ["merchant", "item", "quantity", "unit_price", "shipping", "total", "total_kind"] as const) {
     if (!same(s[key], cart[key])) problems.push(`${key} differs from the cart`);
   }
-  if (s.ship_to.postal_prefix !== zip.slice(0, 3)) problems.push("ship_to differs from the ZIP sent");
+  if (s.v !== 2) {
+    problems.push("snapshot is v1, which binds only a ZIP prefix; a 1.6.0 host sends v2");
+    return problems;
+  }
+  if (s.ship_to.postal_code !== zip) problems.push("ship_to differs from the ZIP sent");
+  for (const key of ["merchant_origin", "variant_ref", "completion_mode", "total_estimated"] as const) {
+    if (s[key] !== cart[key]) problems.push(`${key} differs from the cart`);
+  }
+  if (s.completer_keyid !== completerKeyid) problems.push("completer_keyid is not the key this gateway made for the cart");
   return problems;
 }
 

@@ -1,9 +1,12 @@
 // Contract suite, meta and trust (G23, AC-R1): the host serves the contract this gateway vendors, and its key
 // statement verifies against the root key pinned for it. Runs against TARGET (see target.ts).
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CONTRACT_VERSION, Jwks, KeyStatement, Meta } from "../../src/contract/index.ts";
+import { CONTRACT_VERSION, ErrorBody, Jwks, KeyStatement, Meta } from "../../src/contract/index.ts";
 import { type KeySet, verifyStatement } from "../../src/trust/index.ts";
-import { closeTargets, openTarget, receiptProblem, sourceSums, TARGET, type Target, trustedKeySet } from "./target.ts";
+import { closeTargets, openTarget, prepared, receiptProblem, sendRaw, sourceSums, TARGET, type Target, trustedKeySet } from "./target.ts";
+
+/** The released 1.5.0 `SHA256SUMS` sha256 (contract/SOURCE.md). */
+const SUMS_1_5_0 = "c6fc6ffea8b7cb9053a74e0a3aa340d73d1c2800fcc4c47669707400d06410d2";
 
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
@@ -29,6 +32,27 @@ describe(`meta (${TARGET})`, () => {
     expect(meta).not.toHaveProperty("enrol_origin");
     expect(result.contractVersion).toBe(CONTRACT_VERSION);
     expect(receiptProblem(result, keySet, target.now())).toBeNull();
+  });
+
+  // Contract 1.6.0 §V1: the caller picks its version with the header; published 1.5.0 gateways send none.
+  it("answers a request without Intent-Contract-Version as 1.5.0, with the released 1.5.0 sums", async () => {
+    const signed = await prepared((beforeSend) => target.connect().meta({ beforeSend }));
+    const request = { ...signed, headers: signed.headers.filter(([name]) => name !== "host" && name !== "intent-contract-version") };
+    const reply = await sendRaw(target, request);
+    expect(reply.status).toBe(200);
+    expect(reply.headers["intent-contract-version"]).toBe("1.5.0");
+    expect(Meta.parse(reply.json)).toMatchObject({ contract_version: "1.5.0", contract_sums_sha256: SUMS_1_5_0 });
+  });
+
+  it("refuses a version it does not serve with 400 unsupported contract version", async () => {
+    const signed = await prepared((beforeSend) => target.connect().meta({ beforeSend }));
+    const request = {
+      ...signed,
+      headers: signed.headers.filter(([name]) => name !== "host").map(([n, v]) => [n, n === "intent-contract-version" ? "9.9.9" : v] as const),
+    };
+    const reply = await sendRaw(target, request);
+    expect(reply.status).toBe(400);
+    expect(ErrorBody.parse(reply.json)).toEqual({ error: "bad_request", message: "unsupported contract version" });
   });
 });
 

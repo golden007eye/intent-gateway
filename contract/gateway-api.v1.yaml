@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Intent Cloud Gateway API
-  version: 1.5.0
+  version: 1.6.0
   summary: The API the intent gateway uses to reach Intent Cloud for offers, carts and approvals.
   description: |
     Normative. The public subset of the Intent Cloud contract, for the intent gateway.
@@ -18,6 +18,10 @@ info:
       status then carries an approval proof (Appendix E) that the gateway verifies itself.
     - **Key statement.** Receipt and approval keys are listed in a statement signed by the host's
       offline root key (Appendix F), served at `GET /v1/key-statement`.
+    - **Versions (1.6.0).** A caller picks its version with the `Intent-Contract-Version` request
+      header on every request, `GET /v1/meta` included. Without it a request is answered as 1.5.0,
+      byte for byte (the 1.5.0 files, their sums and v1 snapshots). 1.6.0 adds snapshot v2, the
+      completer key, outcomes, outcome statements and outcome reports (Appendix G).
     - **Formats.** Money is integer minor units. The purchase snapshot is Appendix A, the approval
       ledger entry Appendix B. JSON canonicalisation is RFC 8785 (JCS) with integers only.
     - **Limits.** The edge accepts bodies up to 16 KiB (413 above) and rate-limits per IPv4 address
@@ -49,6 +53,8 @@ paths:
       summary: Contract metadata
       description: Cache for 5 minutes.
       tags: [meta]
+      parameters:
+        - $ref: "#/components/parameters/ContractVersion"
       responses:
         "200":
           description: Contract metadata.
@@ -83,6 +89,8 @@ paths:
         The current receipt and approval public keys (Ed25519, `kty=OKP`), for information. The
         gateway trusts a key only when the root-signed key statement (Appendix F) lists it.
       tags: [meta]
+      parameters:
+        - $ref: "#/components/parameters/ContractVersion"
       security: []
       responses:
         "200":
@@ -119,6 +127,8 @@ paths:
         the statement against the root key it pins for this host and fails closed after
         `expires_at`.
       tags: [meta]
+      parameters:
+        - $ref: "#/components/parameters/ContractVersion"
       security: []
       responses:
         "200":
@@ -146,6 +156,8 @@ paths:
         Returns offers in allowed categories only; items in excluded categories are never returned.
         Ranking is the caller's job. Each `offer_handle` is opaque and valid for 30 minutes.
       tags: [catalog]
+      parameters:
+        - $ref: "#/components/parameters/ContractVersion"
       requestBody:
         required: true
         content:
@@ -203,6 +215,8 @@ paths:
         request (`offer_handle`, `quantity` and the ZIP's first 3 digits) gets the same cart again
         while it is unexpired and its approval, if any, is still `pending`.
       tags: [carts]
+      parameters:
+        - $ref: "#/components/parameters/ContractVersion"
       requestBody:
         required: true
         content:
@@ -263,6 +277,7 @@ paths:
         confirm page at the key statement's `confirm_origin` + `approval_link_path`.
       tags: [carts]
       parameters:
+        - $ref: "#/components/parameters/ContractVersion"
         - $ref: "#/components/parameters/CartHandle"
       responses:
         "201":
@@ -300,6 +315,7 @@ paths:
         (Appendix E). `ordered` is what Intent Cloud reported, as the merchant told it.
       tags: [approvals]
       parameters:
+        - $ref: "#/components/parameters/ContractVersion"
         - $ref: "#/components/parameters/ApprovalHandle"
       responses:
         "200":
@@ -321,6 +337,58 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/approvals/{approval_handle}/outcome-reports:
+    post:
+      operationId: reportOutcome
+      summary: Report a shop_agent outcome
+      description: |
+        1.6.0, Appendix G R1-R7. Signed by the approval's `completer_keyid` or by the session that
+        created the cart; any other key gets 403. The first accepted report must be `completing`:
+        it moves the approval to `completing` atomically, and that is the redemption. The same
+        `report_id` with the same body replays the first answer; with another body, or another
+        `report_id` once `completing` or terminal, 409. `completing` after `expires_at`, or when the
+        approval is not `approved`, gets 410. A gateway's `ordered` or `mismatch` is stored as
+        `reported`. Not yet served: until then the edge answers 404.
+      tags: [approvals]
+      parameters:
+        - $ref: "#/components/parameters/ContractVersion"
+        - $ref: "#/components/parameters/ApprovalHandle"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OutcomeReport"
+      responses:
+        "201":
+          description: The report was accepted (or replayed).
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutcomeReportAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
         "413":
           $ref: "#/components/responses/PayloadTooLarge"
         "429":
@@ -359,6 +427,16 @@ components:
         type: integer
         minimum: 1
   parameters:
+    ContractVersion:
+      name: Intent-Contract-Version
+      in: header
+      required: false
+      description: |
+        The contract version the caller speaks (1.6.0). Without it the request is answered as
+        1.5.0, byte for byte. An unsupported value gets 400 `unsupported contract version`.
+      schema:
+        type: string
+        enum: [1.5.0, 1.6.0]
     CartHandle:
       name: cart_handle
       in: path
@@ -413,6 +491,19 @@ components:
             $ref: "#/components/schemas/Error"
     Conflict:
       description: Not enough stock, or the request conflicts with the current state.
+      headers:
+        Intent-Contract-Version:
+          $ref: "#/components/headers/IntentContractVersion"
+        Intent-Receipt:
+          $ref: "#/components/headers/IntentReceipt"
+        Intent-Receipt-Signature:
+          $ref: "#/components/headers/IntentReceiptSignature"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: The signing key may not report for this approval (1.6.0, Appendix G R1).
       headers:
         Intent-Contract-Version:
           $ref: "#/components/headers/IntentContractVersion"
@@ -731,6 +822,8 @@ components:
           $ref: "#/components/schemas/Rating"
         returns:
           $ref: "#/components/schemas/ReturnsPolicy"
+        variant_ref:
+          $ref: "#/components/schemas/VariantRef"
     DeliveryEstimate:
       x-provisional: true
       description: |
@@ -803,6 +896,17 @@ components:
           maximum: 3
         ship_to:
           $ref: "#/components/schemas/ShipTo"
+        completer_keyid:
+          description: Per-approval key that may read and report it (1.6.0); required for 1.6 gateways.
+          $ref: "#/components/schemas/GatewayKeyId"
+        completion_accepts:
+          description: Usable completion modes, preference order (1.6.0); absent means [handoff].
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            $ref: "#/components/schemas/CompletionMode"
     Cart:
       type: object
       additionalProperties: false
@@ -830,6 +934,14 @@ components:
           $ref: "#/components/schemas/Timestamp"
         image_url:
           $ref: "#/components/schemas/ImageUrl"
+        completion_mode:
+          $ref: "#/components/schemas/CompletionMode"
+        merchant_origin:
+          $ref: "#/components/schemas/MerchantOrigin"
+        variant_ref:
+          $ref: "#/components/schemas/VariantRef"
+        total_estimated:
+          type: boolean
     Snapshot:
       description: The purchase snapshot, exactly as Appendix A defines it.
       type: object
@@ -885,7 +997,9 @@ components:
           type: string
           pattern: ^/c/[A-Za-z0-9_-]{16,64}$
         snapshot:
-          $ref: "#/components/schemas/Snapshot"
+          oneOf:
+            - $ref: "#/components/schemas/Snapshot"
+            - $ref: "#/components/schemas/SnapshotV2"
         snapshot_hash:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -930,6 +1044,10 @@ components:
           maxLength: 40
         proof:
           $ref: "#/components/schemas/ApprovalProof"
+        outcome:
+          $ref: "#/components/schemas/Outcome"
+        outcome_statement:
+          $ref: "#/components/schemas/OutcomeStatement"
     Base64Url:
       description: Base64url without padding.
       type: string
@@ -1016,7 +1134,9 @@ components:
         approval_handle:
           $ref: "#/components/schemas/ApprovalHandle"
         snapshot:
-          $ref: "#/components/schemas/Snapshot"
+          oneOf:
+            - $ref: "#/components/schemas/Snapshot"
+            - $ref: "#/components/schemas/SnapshotV2"
         snapshot_hash:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -1092,8 +1212,240 @@ components:
         alg:
           type: string
           const: RS256
+    CompletionMode:
+      description: How payment happens after the passkey approval (1.6.0, Appendix A v2).
+      type: string
+      enum: [handoff, shop_agent]
+    MerchantOrigin:
+      description: https:// + merchant.domain, lowercased; ASCII, no port, no path (1.6.0).
+      type: string
+      pattern: ^https://[a-z0-9.-]{1,253}$
+    VariantRef:
+      description: The merchant's variant reference, e.g. gid://shopify/ProductVariant/<n> (1.6.0).
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: ^[A-Za-z0-9:/._-]+$
+    SnapshotV2:
+      description: |
+        The purchase snapshot v2 (1.6.0), exactly as Appendix A "Snapshot v2" defines it: every v1
+        fact, the 5-digit ZIP instead of the 3-digit prefix, and the merchant origin, variant,
+        checkout hash, completion mode, completer key and estimated flag. Callers that send
+        `Intent-Contract-Version: 1.6.0` get v2 snapshots for every cart.
+      type: object
+      additionalProperties: false
+      required:
+        [v, approval, nonce, merchant, item, quantity, unit_price, shipping, total, total_kind, ship_to, continue_url_hash, rule_version, expires_at, merchant_origin, variant_ref, checkout_ref_hash, completion_mode, completer_keyid, total_estimated]
+      properties:
+        v:
+          type: integer
+          const: 2
+        approval:
+          type: string
+          minLength: 1
+        nonce:
+          description: Snapshot salt, 16 bytes base64url without padding.
+          type: string
+          pattern: ^[A-Za-z0-9_-]{21}[AQgw]$
+        merchant:
+          $ref: "#/components/schemas/Merchant"
+        item:
+          $ref: "#/components/schemas/Item"
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 3
+        unit_price:
+          $ref: "#/components/schemas/Money"
+        shipping:
+          $ref: "#/components/schemas/Money"
+        total:
+          $ref: "#/components/schemas/Money"
+        total_kind:
+          $ref: "#/components/schemas/TotalKind"
+        ship_to:
+          $ref: "#/components/schemas/ShipTo"
+        continue_url_hash:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+        rule_version:
+          type: string
+          minLength: 1
+        expires_at:
+          $ref: "#/components/schemas/Timestamp"
+        merchant_origin:
+          $ref: "#/components/schemas/MerchantOrigin"
+        variant_ref:
+          $ref: "#/components/schemas/VariantRef"
+        checkout_ref_hash:
+          description: '"sha256:" + hex(SHA-256(utf8(checkout_id))) of the merchant checkout.'
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+        completion_mode:
+          $ref: "#/components/schemas/CompletionMode"
+        completer_keyid:
+          description: The per-approval completer key (a gw- keyid, never the session key).
+          $ref: "#/components/schemas/GatewayKeyId"
+        total_estimated:
+          description: True when the total came from a quote without the merchant's tax.
+          type: boolean
+    OrderRef:
+      description: The merchant's order reference (1.6.0). Never an email or a name.
+      type: string
+      pattern: ^[A-Za-z0-9#-]{1,64}$
+    OutcomeState:
+      description: Outcome states (1.6.0, Appendix G).
+      type: string
+      enum: [handed_off, completing, ordered, mismatch, failed, checkout_expired, indeterminate, reported]
+    OutcomeSource:
+      description: Who observed the outcome (1.6.0, Appendix G sources table).
+      type: string
+      enum: [shop_api, gateway_precheck, merchant_api, signed_webhook, staging_webhook, checkout_page, gateway_report]
+    BindingCheck:
+      type: string
+      enum: [match, differs, unknown]
+    Binding:
+      description: |
+        The binding check `binding-v1` (1.6.0, Appendix G): each of five checks compares an observed
+        order with the approved snapshot. No observed value is copied in.
+      type: object
+      additionalProperties: false
+      required: [rule_version, result, checks]
+      properties:
+        rule_version:
+          type: string
+          const: binding-v1
+        result:
+          type: string
+          enum: [ok, mismatch, incomplete]
+        checks:
+          type: object
+          additionalProperties: false
+          required: [merchant_origin, checkout_ref, line, ship_to, total]
+          properties:
+            merchant_origin:
+              $ref: "#/components/schemas/BindingCheck"
+            checkout_ref:
+              $ref: "#/components/schemas/BindingCheck"
+            line:
+              $ref: "#/components/schemas/BindingCheck"
+            ship_to:
+              $ref: "#/components/schemas/BindingCheck"
+            total:
+              $ref: "#/components/schemas/BindingCheck"
+    OutcomeReported:
+      description: What a gateway reported and Intent Cloud could not verify (1.6.0, Appendix G R5).
+      type: object
+      additionalProperties: false
+      required: [state, source]
+      properties:
+        state:
+          type: string
+          enum: [ordered, mismatch, failed]
+        source:
+          $ref: "#/components/schemas/OutcomeSource"
+        order_ref:
+          $ref: "#/components/schemas/OrderRef"
+        final_total:
+          $ref: "#/components/schemas/Money"
+        binding:
+          $ref: "#/components/schemas/Binding"
+    Outcome:
+      description: |
+        What happened after the approval (1.6.0, Appendix G). Present once the approval is past
+        `approved`. Rule O1: `state: ordered` only with `assurance: verified` and
+        `binding.result: ok`.
+      type: object
+      additionalProperties: false
+      required: [state, source, assurance, observed_at]
+      properties:
+        state:
+          $ref: "#/components/schemas/OutcomeState"
+        source:
+          $ref: "#/components/schemas/OutcomeSource"
+        assurance:
+          type: string
+          enum: [verified, reported]
+        order_ref:
+          $ref: "#/components/schemas/OrderRef"
+        final_total:
+          $ref: "#/components/schemas/Money"
+        binding:
+          $ref: "#/components/schemas/Binding"
+        observed_at:
+          $ref: "#/components/schemas/Timestamp"
+        reported:
+          $ref: "#/components/schemas/OutcomeReported"
+    OutcomeStatement:
+      description: |
+        Intent Cloud's signed statement of an outcome (1.6.0, Appendix G). `cloud_signature` is the
+        approval key's Ed25519 signature over `"intent-outcome-v1\n" || JCS(statement without
+        cloud_signature)`, base64url without padding.
+      type: object
+      additionalProperties: false
+      required: [v, approval_handle, snapshot_hash, outcome, ledger, issued_at, kid, cloud_signature]
+      properties:
+        v:
+          type: integer
+          const: 1
+        approval_handle:
+          $ref: "#/components/schemas/ApprovalHandle"
+        snapshot_hash:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        outcome:
+          $ref: "#/components/schemas/Outcome"
+        ledger:
+          $ref: "#/components/schemas/LedgerRef"
+        issued_at:
+          $ref: "#/components/schemas/Timestamp"
+        kid:
+          type: string
+          pattern: ^cloud-approval-[0-9]{6}$
+        cloud_signature:
+          $ref: "#/components/schemas/Ed25519Signature"
+    OutcomeReport:
+      description: |
+        A gateway's report of a `shop_agent` outcome (1.6.0, Appendix G R1-R7). `checkout_ref` is
+        required for `completing`; `order_ref`, `final_total` and `binding` for `ordered` and
+        `mismatch`.
+      type: object
+      additionalProperties: false
+      required: [report_id, state, source, observed_at]
+      properties:
+        report_id:
+          type: string
+          pattern: ^or_[A-Za-z0-9_-]{16,32}$
+        state:
+          type: string
+          enum: [completing, ordered, mismatch, failed, indeterminate]
+        source:
+          type: string
+          enum: [shop_api, gateway_precheck]
+        checkout_ref:
+          type: string
+          minLength: 1
+          maxLength: 128
+        order_ref:
+          $ref: "#/components/schemas/OrderRef"
+        final_total:
+          $ref: "#/components/schemas/Money"
+        binding:
+          $ref: "#/components/schemas/Binding"
+        observed_at:
+          $ref: "#/components/schemas/Timestamp"
+    OutcomeReportAccepted:
+      type: object
+      additionalProperties: false
+      required: [accepted, outcome]
+      properties:
+        accepted:
+          type: boolean
+          const: true
+        outcome:
+          $ref: "#/components/schemas/Outcome"
     LedgerRef:
-      description: The approval's `approved` entry in Intent Cloud's approval ledger (Appendix B).
+      description: An entry in Intent Cloud's approval ledger (Appendix B), named by `seq` and `entry_hash`.
       type: object
       additionalProperties: false
       required: [seq, entry_hash]

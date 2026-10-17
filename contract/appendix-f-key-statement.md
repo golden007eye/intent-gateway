@@ -1,6 +1,6 @@
 # Appendix F: Key statement (normative)
 
-Contract version 1.5.0. Published under Apache-2.0 as part of the Intent Cloud public contract. Vector: `vectors/s1-key-statement.json`.
+Contract version 1.6.0. Published under Apache-2.0 as part of the Intent Cloud public contract. Vector: `vectors/s1-key-statement.json`.
 
 Receipt keys (Appendix D) and approval keys (Appendix E) rotate monthly. Each public API host has a long-lived offline **root key** that signs a statement listing them. The gateway pins the root public key per host and learns every other key from the statement. The edge serves the current statement at `GET /v1/key-statement`.
 
@@ -11,7 +11,7 @@ Receipt keys (Appendix D) and approval keys (Appendix E) rotate monthly. Each pu
 |---|---|
 | `v` | integer, `1` |
 | `kid` | the root key, `cloud-root-<n>`; the first is `cloud-root-1` |
-| `keys` | 2 to 4 entries `{kid, kty:"OKP", crv:"Ed25519", x}`, `x` the raw public key in base64url without padding. A `kid` is `cloud-receipt-<yyyymm>` or `cloud-approval-<yyyymm>`, and its prefix is the key's only use. Each use has 1 or 2 keys (the current one and the next); kids are unique |
+| `keys` | 2 to 4 entries `{kid, kty:"OKP", crv:"Ed25519", x}`, `x` the raw public key in base64url without padding. A `kid` is `cloud-receipt-<yyyymm>` or `cloud-approval-<yyyymm>`, and its prefix names the key's use. An approval key signs approval proofs (prefix `intent-approval-v1\n`, Appendix E) and outcome statements (prefix `intent-outcome-v1\n`, Appendix G), and nothing else. Each use has 1 or 2 keys (the current one and the next); kids are unique |
 | `confirm_origin` | the `https` origin of the confirm page, without path |
 | `rp_id` | the WebAuthn relying-party id of the confirm page's passkeys |
 | `issued_at`, `expires_at` | RFC 3339 UTC with seconds and `Z`; `expires_at` is at least 90 and at most 180 days after `issued_at` |

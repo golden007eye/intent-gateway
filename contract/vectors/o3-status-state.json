@@ -1,0 +1,117 @@
+{
+  "id": "O3",
+  "appendix": "G",
+  "description": "ApprovalStatus.state for every outcome. 1.5.0 null: not served (1.5.0 carts are handoff).",
+  "cases": [
+    {
+      "input": {
+        "outcome_state": "handed_off",
+        "mode": "handoff"
+      },
+      "expected": {
+        "1.6.0": "handed_off",
+        "1.5.0": "handed_off"
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "checkout_expired",
+        "mode": "handoff"
+      },
+      "expected": {
+        "1.6.0": "handed_off",
+        "1.5.0": "handed_off"
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "mismatch",
+        "mode": "handoff"
+      },
+      "expected": {
+        "1.6.0": "handed_off",
+        "1.5.0": "handed_off"
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "reported",
+        "mode": "handoff"
+      },
+      "expected": {
+        "1.6.0": "handed_off",
+        "1.5.0": "handed_off"
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "ordered",
+        "mode": "handoff"
+      },
+      "expected": {
+        "1.6.0": "ordered",
+        "1.5.0": "ordered"
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "completing",
+        "mode": "shop_agent"
+      },
+      "expected": {
+        "1.6.0": "approved",
+        "1.5.0": null
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "indeterminate",
+        "mode": "shop_agent"
+      },
+      "expected": {
+        "1.6.0": "approved",
+        "1.5.0": null
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "failed",
+        "mode": "shop_agent"
+      },
+      "expected": {
+        "1.6.0": "approved",
+        "1.5.0": null
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "mismatch",
+        "mode": "shop_agent"
+      },
+      "expected": {
+        "1.6.0": "approved",
+        "1.5.0": null
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "reported",
+        "mode": "shop_agent"
+      },
+      "expected": {
+        "1.6.0": "approved",
+        "1.5.0": null
+      }
+    },
+    {
+      "input": {
+        "outcome_state": "ordered",
+        "mode": "shop_agent"
+      },
+      "expected": {
+        "1.6.0": "ordered",
+        "1.5.0": null
+      }
+    }
+  ]
+}

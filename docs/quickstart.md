@@ -24,7 +24,7 @@ Start `claude` and ask:
 
 1. The agent calls `find_offers`. Each result ends with what the gateway sent (field names, never values) and what it blocked.
 2. It calls `create_cart` and shows an approval link, `http://127.0.0.1:<port>/confirm/c/…`, with a check code and a QR code.
-3. Open the link. The page shows the item, merchant, total, the ZIP prefix and the check code. Enter the demo code and click **Approve $<total> with demo passkey**. The code is six digits, new on every start and never shown to the agent. Claude Code does not show the gateway's terminal output, so the page shows the command that reads it: `cat <data dir>/demo/approval-code`.
+3. Open the link. The page shows the item, merchant, total, the ZIP code and the check code. Enter the demo code and click **Approve $<total> with demo passkey**. The code is six digits, new on every start and never shown to the agent. Claude Code does not show the gateway's terminal output, so the page shows the command that reads it: `cat <data dir>/demo/approval-code`.
 4. Ask the agent whether it was approved. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started. The agent calls `get_approval_status` and reports it approved, with the approver passkey's fingerprint. The first passkey that approves becomes the [approver pin](threat-model.md#phone-hand-off-and-self-approval).
 
 ## 3. Check what was sent

@@ -254,22 +254,28 @@ describe("key statement (appendix F)", () => {
 });
 
 describe("GET /v1/meta", () => {
-  it("reports contract 1.5.0, the vendored SHA256SUMS hash and the version header", async () => {
+  it("without Intent-Contract-Version reports contract 1.5.0, its released SHA256SUMS hash and the version header", async () => {
     const cloud = await start();
     const { res, json } = await call(cloud, createSession(), "GET", "/v1/meta");
     expect(res.status).toBe(200);
     expect(res.headers.get("intent-contract-version")).toBe("1.5.0");
-    const meta = Meta.parse(json);
-    const source = /sha256 of `SHA256SUMS`: `([0-9a-f]{64})`/.exec(readFileSync(join(repo, "contract", "SOURCE.md"), "utf8"));
-    expect(meta.contract_sums_sha256).toBe(source?.[1]);
-    expect(meta.contract_version).toBe("1.5.0");
     expect(json).toEqual({
       contract_version: "1.5.0",
-      contract_sums_sha256: source?.[1],
+      contract_sums_sha256: "c6fc6ffea8b7cb9053a74e0a3aa340d73d1c2800fcc4c47669707400d06410d2",
       rule_versions: ["recheck-v1"],
       limits: { requests_per_minute: 120, carts_per_hour: 10, carts_per_hour_passkey: 50, approvals_per_day: 20 },
     });
     expect(json).not.toHaveProperty("enrol_origin");
+  });
+
+  it("with Intent-Contract-Version: 1.6.0 reports 1.6.0 and the vendored SHA256SUMS hash", async () => {
+    const cloud = await start();
+    const { res, json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.6.0" } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("intent-contract-version")).toBe("1.6.0");
+    const meta = Meta.parse(json);
+    const source = /sha256 of `SHA256SUMS`: `([0-9a-f]{64})`/.exec(readFileSync(join(repo, "contract", "SOURCE.md"), "utf8"));
+    expect(meta).toMatchObject({ contract_version: "1.6.0", contract_sums_sha256: source?.[1] });
   });
 
   it("is signed: an unsigned read gets 401 authentication failed", async () => {

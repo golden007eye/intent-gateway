@@ -26,7 +26,7 @@ import { connectCloud } from "../disclosure/index.ts";
 import { createGateway, DEMO_SESSION, type Gateway, GatewayStartError } from "../gateway/index.ts";
 import { type HttpHandle, runHttp } from "../mcp/index.ts";
 import { loadPolicy } from "../policy/index.ts";
-import { createSession } from "../signing/index.ts";
+import { createSession, openCompleterKeys } from "../signing/index.ts";
 import { openStore, type Store } from "../store/index.ts";
 import { isTestRoot, type PinnedRootKey, TEST_ROOT_KEY } from "../trust/index.ts";
 import { formatReport, runVerify } from "../verify/index.ts";
@@ -63,6 +63,7 @@ async function gatewayOver(
   const gateway = createGateway({
     cloud: (keySet) => connectCloud({ baseUrl: demo.cloudUrl, session }, store, { keySet }),
     store,
+    completerKeys: openCompleterKeys(options.dir ?? demo.dataDir),
     policy: loadPolicy(POLICY),
     pinnedRootKeys: options.pins ?? demo.trustKeys.rootKeys,
     ...(options.demoMode === false
@@ -147,7 +148,7 @@ describe("demo flow", () => {
     const page = await raw(link);
     expect(page.status).toBe(200);
     expect(page.body).toMatch(/>Approve \$\d+\.\d\d with demo passkey</);
-    expect(page.body).toContain("ZIP 941xx");
+    expect(page.body).toContain("ZIP 94103");
     expect(page.body).toContain(DEMO_BANNER);
     expect(page.body).toContain(`cat ${demo.codeFile}`);
     // The read-the-code hint is folded away behind a disclosure, so it does not clutter the card.

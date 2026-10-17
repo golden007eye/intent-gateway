@@ -63,8 +63,11 @@ describe(`receipts on edge statuses (${TARGET})`, () => {
     expect(receiptProblem(result, keySet, target.now())).toBeNull();
   });
 
-  it("404 off the six endpoints and 405 for another method, both not_found", async () => {
-    const headers = [["content-digest", contentDigest(new Uint8Array())]] as const;
+  it("404 off the seven endpoints and 405 for another method, both not_found", async () => {
+    const headers = [
+      ["intent-contract-version", CONTRACT_VERSION],
+      ["content-digest", contentDigest(new Uint8Array())],
+    ] as const;
     for (const [method, path, status] of [
       ["GET", "/v1/nowhere", 404],
       ["GET", "/v1/carts", 405],
