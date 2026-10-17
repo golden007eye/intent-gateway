@@ -8,18 +8,21 @@
 import {
   type Activity,
   type ActivityRequest,
+  type BlockKind,
   blockKind,
   buildActivity,
   buildPurchases,
+  CLEAR_CREDENTIAL,
   credentialWords,
   type Delivery,
   destinationLabel,
   INTENT_CLOUD,
   leafFields,
-  LOGGING_REFUSAL,
+  loggedValues,
   type Purchase,
 } from "../activity/index.ts";
 import { withheldAt } from "../observation/index.ts";
+import { isCredentialHeader, markerDigest } from "../privacy/index.ts";
 import { EXCLUDED_CATEGORIES, type Policy } from "../policy/index.ts";
 import type { ChainResult } from "../store/index.ts";
 
@@ -249,7 +252,7 @@ export function buildModel(input: ModelInput): PanelModel {
     notSent: r.not_sent,
     discarded: r.discarded,
     refusedBefore: blocked.length,
-    refusedNote: blocked.length === 0 ? "nothing refused" : `last: ${refusalWords(blocked.at(-1)?.blocked ?? [], blocked.at(-1)?.facts.held)}, nothing sent`,
+    refusedNote: blocked.length === 0 ? "nothing refused" : `last: ${refusalWords(blocked.at(-1)?.blocked ?? [], blocked.at(-1)?.facts.held, blocked.at(-1)?.facts.block_kind)}, nothing sent`,
     elsewhere: [...elsewhere.values()],
   };
 
@@ -325,7 +328,7 @@ function feedLine(a: Activity, time: Clock): Line {
         label: "refused",
         tone: "bad",
         text: join([
-          `${f.destination === undefined ? endpointWords(f.endpoint) : `${destinationLabel(f.destination)} ${f.endpoint ?? "request"}`} refused${f.held === undefined ? " before sending" : ""}: ${refusalWords(a.blocked, f.held)}`,
+          `${f.destination === undefined ? endpointWords(f.endpoint) : `${destinationLabel(f.destination)} ${f.endpoint ?? "request"}`} refused${f.held === undefined ? " before sending" : ""}: ${refusalWords(a.blocked, f.held, f.block_kind)}`,
           "nothing sent",
         ]),
       };
@@ -566,7 +569,27 @@ function logRow(item: unknown, index: number, time: Clock): LogRow {
   const fields: [string, string][] = [];
   // Only a policy block keeps values: a `held` on an identity block or a logging refusal (a hand-edited chain) is not shown.
   const { held, ...rest } = body;
-  flatten(e.kind === "block" && held !== undefined && blockKind(strings(body.blocked)) !== "policy" ? rest : e.body, "", fields);
+  if (e.kind === "disclosure") {
+    // A disclosure's headers and body are shown as every other view reads them: a credential in clear (a hand-edited,
+    // re-hashed chain) never as its value, a redaction marker as "redacted", the body's values instead of its base64.
+    const { body_b64: bytes, headers, ...plain } = body;
+    flatten(plain, "", fields);
+    if (Array.isArray(headers)) {
+      headers.forEach((pair, i) => {
+        const [name, value] = Array.isArray(pair) ? (pair as unknown[]) : [];
+        const shown = typeof name === "string" && isCredentialHeader(name) && markerDigest(value) === null ? CLEAR_CREDENTIAL : (credentialWords(value) ?? (typeof value === "string" ? value : JSON.stringify(value)));
+        fields.push([`headers[${String(i)}] ${typeof name === "string" ? name : "?"}`, shown]);
+      });
+    }
+    const values = loggedValues(body);
+    if (values === null) {
+      if (bytes !== undefined) fields.push(["body", "not readable as logged"]);
+    } else {
+      for (const [k, v] of Object.entries(values)) fields.push([`body.${k}`, credentialWords(v) ?? (typeof v === "string" ? v : JSON.stringify(v))]);
+    }
+  } else {
+    flatten(e.kind === "block" && held !== undefined && blockKind(body) !== "policy" ? rest : e.body, "", fields);
+  }
   return {
     seq: e.seq,
     ts: e.ts,
@@ -602,7 +625,7 @@ function entrySummary(kind: string, b: Record<string, unknown>): string {
       return join([`${kind} #${String(b.disclosure_seq)}`, text(b.reason)]);
     case "block": {
       // Only a policy block keeps values; an identity block or a logging refusal holds none, and none is shown.
-      const held = blockKind(strings(b.blocked)) === "policy" ? Object.entries(record(b.held)).map(([k, v]) => `${k} ${JSON.stringify(v)} kept here only`) : [];
+      const held = blockKind(b) === "policy" ? Object.entries(record(b.held)).map(([k, v]) => `${k} ${JSON.stringify(v)} kept here only`) : [];
       return join([`refused before sending${to} ${text(b.endpoint)}`, strings(b.blocked).join("; "), ...held]);
     }
     case "wallet":
@@ -656,10 +679,10 @@ function flatten(value: unknown, prefix: string, out: [string, string][]): void 
  * Policy rules and identity findings in plain words; the rule itself stays in the server log. `held`, the values a
  * policy block kept (never sent), names the category: `category "alcohol" excluded`.
  */
-export function refusalWords(blocked: readonly string[], held?: Readonly<Record<string, unknown>>): string {
+export function refusalWords(blocked: readonly string[], held?: Readonly<Record<string, unknown>>, kind?: BlockKind): string {
   const category = typeof held?.category === "string" ? held.category : null;
   const words = blocked.map((b) => {
-    if (LOGGING_REFUSAL.test(b)) return `not logged as sent: ${b}`;
+    if (kind === "logging") return `not logged as sent: ${b}`;
     if (b.startsWith("categories.block")) return category === null ? "excluded or blocked category" : `category "${category}" excluded`;
     if (b.startsWith("spend.")) return "over a spend limit";
     if (b.startsWith("merchants.")) return "merchant not allowed";

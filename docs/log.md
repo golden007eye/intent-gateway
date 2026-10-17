@@ -67,7 +67,7 @@ The actions group the chain's entries:
 - `cart`: one `createCart` request, the `createApproval` request after it, and the approval link the gateway gave the agent.
 - `status`: one `getApproval` request. When the state Intent Cloud returns for it is `rejected` or `expired`, that is the action's outcome, and the line reads `rejected` or `expired`.
 - `approval`: an Approval the gateway checked and chained, with the approver pin written with it, if it was the first.
-- `blocked`: a request the gateway held back; nothing was sent. `facts.block_kind` says what held it: a gateway `policy` rule, buyer `identity` in the body, or a `logging` rule; for a wallet destination, `facts.destination` names it.
+- `blocked`: a request the gateway held back; nothing was sent. `facts.block_kind` says what held it: a gateway `policy` rule, buyer `identity` in the body, or a `logging` rule, as the block entry's `rule` records it (a block without `rule` is read from its reasons); for a wallet destination, `facts.destination` names it.
 - `pin`: an approver pin written by `intent approver accept`. `flagged`: a passkey flagged as not the pinned approver.
 - `wallet`: a wallet change on this machine: the Shop wallet linked, or unlinked (`intent wallet unlink shop` deletes its vault file) with whether Shop confirmed revoking the token (`token revoked at Shop`) or not (`token not revoked (deleted here only)`).
 - `call`: one request to a wallet destination (Shop) and its response entry: the operation, its argument names, and the status that came back. A call has no receipt; one without a response entry is `maybe sent`.

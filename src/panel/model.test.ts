@@ -314,6 +314,29 @@ describe("buildModel: wallet destinations, refusals and wallet entries (ADR-0014
     expect(html).not.toContain("jane");
   });
 
+  it("attack: the server log of a hand-edited, re-hashed chain never shows a credential in clear, in a header or in the body", () => {
+    const TOKEN = "shop-access-token-SECRET-0123456789";
+    const REFRESH = "shop-refresh-token-SECRET-9876543210";
+    const leaked = {
+      ...shopCall("refresh", { refresh_token: REFRESH, client: "intent-gateway" }, []),
+      headers: [
+        ["authorization", `Bearer ${TOKEN}`],
+        ["x-api-key", TOKEN_MARKER],
+        ["content-type", "application/json"],
+      ],
+    };
+    const lm = buildModel(input({ items: chain([["disclosure", leaked, at("10:22")]]), now: Date.parse(at("10:30")) }));
+    const fields = Object.fromEntries(lm.log[0]?.fields ?? []);
+    expect(fields["headers[0] authorization"]).toBe("[a credential in clear, not shown: intent verify fails this entry]");
+    expect(fields["headers[1] x-api-key"]).toBe("redacted (sha256 e5c02528…)");
+    expect(fields["headers[2] content-type"]).toBe("application/json");
+    expect(fields["body.params.arguments.refresh_token"]).toBe("[a credential in clear, not shown: intent verify fails this entry]");
+    expect(fields["body.params.arguments.client"]).toBe("intent-gateway");
+    expect(fields.body_b64).toBeUndefined();
+    const page = renderPage(lm);
+    for (const secret of [TOKEN, REFRESH, Buffer.from(REFRESH).toString("base64").slice(0, 16)]) expect(page).not.toContain(secret);
+  });
+
   it("attack: a request drawer shows a redaction marker as redacted, and a credential in clear never as its value", () => {
     const leak = { refresh_token: "shop-refresh-token-SECRET", note: "ok" };
     const specs: Spec[] = [

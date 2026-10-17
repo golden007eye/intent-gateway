@@ -326,6 +326,7 @@ describe("invariant 3: identity in an outbound body", () => {
       endpoint: "searchCatalog",
       fields: ["product", "ship_to", "ship_to.country", "ship_to.postal_code"],
       blocked: ["card at $.product", "email at $.product"],
+      rule: "identity",
     });
     const log = readFileSync(logPath(), "utf8");
     expect(log).not.toContain("jane@example.com");

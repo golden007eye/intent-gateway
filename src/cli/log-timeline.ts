@@ -7,7 +7,7 @@
 // a wallet destination (Shop) says "answered" with the status its `response` entry recorded, never "receipt": a wallet
 // signs none. The "Sent to … only" lines name each destination apart, from what its logged requests carried.
 // `intent verify` re-checks every signature. Pure; the golden test pins it.
-import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, INTENT_CLOUD, LOGGING_REFUSAL, summarise } from "../activity/index.ts";
+import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, INTENT_CLOUD, summarise } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 import { printable } from "../ui/index.ts";
 
@@ -216,7 +216,7 @@ function rawRow(a: Activity, g: Glyphs): Row {
         f.destination !== undefined
           ? `${destinationLabel(f.destination)} ${f.endpoint ?? "request"}`
           : (heldWords(f.endpoint ?? "", f.held, g) ?? ENDPOINT_WORDS[f.endpoint ?? ""] ?? f.endpoint ?? "request");
-      const why = a.blocked.map(reason).join("; ") || "no reason recorded";
+      const why = a.blocked.map((r) => (f.block_kind === "logging" ? `not logged as sent: ${r}` : reason(r))).join("; ") || "no reason recorded";
       const refused = a.outcome === "refused";
       return { verb: "blocked", verbTone: "bad", values: `${what}: ${why}`, outcome: refused ? `${g.bad} refused` : `${g.bad} nothing sent`, outcomeTone: "bad" };
     }
@@ -312,12 +312,8 @@ const IDENTITY_WORDS: Readonly<Record<string, string>> = {
   banned_key: "an identity field",
 };
 
-/**
- * `categories.block at category` → `category excluded by your gateway policy`; `email at $.note` → `an email address in
- * note`. A logging refusal (ADR-0014) is already in words and is shown as written.
- */
+/** `categories.block at category` → `category excluded by your gateway policy`; `email at $.note` → `an email address in note`. */
 function reason(text: string): string {
-  if (LOGGING_REFUSAL.test(text)) return `not logged as sent: ${text}`;
   const match = /^(.+?) at (.+)$/.exec(text);
   if (match === null) return text;
   const [, rule = "", path = ""] = match;

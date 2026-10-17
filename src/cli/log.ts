@@ -269,7 +269,7 @@ function describe(item: Item, demo: boolean): [string, string, Tone] {
     case "block": {
       const reasons = strings(b.blocked);
       // Only a policy block keeps values; an identity block or a logging refusal holds none, and none is shown.
-      const held = blockKind(reasons) === "policy" ? Object.entries(record(b.held)).map(([name, value]) => `${name} = ${JSON.stringify(value)}`) : [];
+      const held = blockKind(b) === "policy" ? Object.entries(record(b.held)).map(([name, value]) => `${name} = ${JSON.stringify(value)}`) : [];
       const values = held.length === 0 ? "" : ` (${held.join(", ")}, kept here only)`;
       return ["blocked", `${endpointOf(b)}: held back ${list(reasons, "(no reason recorded)")}${values}; nothing was sent`, "bad"];
     }

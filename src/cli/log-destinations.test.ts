@@ -168,3 +168,74 @@ describe("intent log: wallet destinations, refusals and wallet entries", () => {
     expect(formatVerbose(items, { style: STYLE })).toContain('params.arguments.refresh_token = "[a credential in clear, not shown: intent verify fails this entry]"');
   });
 });
+
+describe("intent log: form bodies and the block's rule", () => {
+  /** A Shop OAuth-style transport: form-encoded bodies, written by `write` (URLSearchParams by default). */
+  function formTransport(write: (payload: Record<string, string>) => string = (p) => new URLSearchParams(p).toString()): DestinationTransport {
+    return {
+      prepare: (operation, payload) => ({
+        operation,
+        method: "POST",
+        path: "/oauth/token",
+        headers: [
+          ["host", "shop.example"],
+          ["content-type", "application/x-www-form-urlencoded"],
+        ],
+        body: Buffer.from(write(payload as Record<string, string>), "utf8"),
+      }),
+      send: () => Promise.resolve({ status: 200, headers: [], body: Buffer.from("{}", "utf8") }),
+    };
+  }
+
+  async function writeFormFlow(): Promise<unknown[]> {
+    const dir = join(mkdtempSync(join(tmpdir(), "log-form-")), "data");
+    let second = 0;
+    store = await openStore(dir, { clock: () => TS + (second += 1000) });
+    const cloud = createDisclosedCloud(unreachableCloud, store, { keySet: () => null });
+    const accounts = createDisclosedWallet(formTransport(), cloud, { destination: "shop_accounts" });
+    await accounts.call("refresh", { grant_type: "refresh_token", refresh_token: REFRESH, client_id: "intent-gateway" });
+    // A repeated name: what the core parses (the last value) is not what is sent, so it is refused.
+    const repeated = createDisclosedWallet(
+      formTransport(() => "grant_type=refresh_token&client_id=a&client_id=b"),
+      cloud,
+      { destination: "shop_accounts" },
+    );
+    await expect(repeated.call("refresh", {})).rejects.toBeInstanceOf(DisclosureRefusedError);
+    await store.close();
+    store = null;
+    return readLog(dir);
+  }
+
+  it("a form body shows its non-secret values; its secret only as redacted", async () => {
+    const items = await writeFormFlow();
+    const out = formatVerbose(items, { style: STYLE });
+    expect(out).toContain('client_id = "intent-gateway"');
+    expect(out).toContain('grant_type = "refresh_token"');
+    expect(out).toContain(`refresh_token = redacted (sha256 ${sha8(REFRESH)}…)`);
+    expect(out).not.toContain("(value not logged)");
+    for (const view of [out, formatLog(items, { style: STYLE }), formatJson(items)]) expect(view).not.toContain(REFRESH);
+  });
+
+  it("the core writes rule: logging on a refusal, so the form-body reason shows as not logged as sent", async () => {
+    const items = await writeFormFlow();
+    const block = (items as { kind: string; body: Record<string, unknown> }[]).find((i) => i.kind === "block");
+    expect(block?.body.rule).toBe("logging");
+    expect(formatLog(items, { style: STYLE })).toContain("Shop accounts refresh: not logged as sent: the form body is not written as the gateway writes it");
+  });
+
+  it("a block's rule wins over its wording; an unknown rule shows no value; a block without rule is read from its reasons", () => {
+    const at = (seq: number, body: Record<string, unknown>) => ({ seq, prev: "", ts: `2026-10-16T17:26:3${String(seq)}.000Z`, kind: "block", hash: "", body });
+    const items = [
+      at(0, { endpoint: "search", destination: "shop", fields: [], blocked: ["some future wording"], rule: "logging" }),
+      at(1, { endpoint: "searchCatalog", fields: ["category"], blocked: ["categories.block at category"], held: { category: EMAIL }, rule: "something-new" }),
+      at(2, { endpoint: "search", destination: "shop", fields: [], blocked: ["a credential in the query (access_token), which the log cannot digest"] }),
+      at(3, { endpoint: "searchCatalog", fields: ["category"], blocked: ["categories.block at category"], held: { category: "alcohol" } }),
+    ];
+    const kinds = formatJson(items).trimEnd().split("\n").map((l) => (JSON.parse(l) as { facts: { block_kind: string } }).facts.block_kind);
+    expect(kinds).toEqual(["logging", "identity", "logging", "policy"]);
+    const out = formatLog(items, { style: STYLE });
+    expect(out).toContain("Shop search: not logged as sent: some future wording");
+    expect(out).not.toContain(EMAIL);
+    expect(out).toContain('search for "alcohol"');
+  });
+});

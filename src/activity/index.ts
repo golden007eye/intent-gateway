@@ -25,7 +25,7 @@ export {
   type IdentityFinding,
   INTENT_CLOUD,
   leafFields,
-  LOGGING_REFUSAL,
+  loggedValues,
   type Outcome,
   summarise,
 } from "./activity.ts";

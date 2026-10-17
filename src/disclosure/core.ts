@@ -6,7 +6,8 @@
 // and its stop, so a failed append around a send to any destination stops sends to all of them.
 //
 // Per call, through the adapter's beforeSend hook on the final request bytes:
-// 1. Refusals, each a `block` entry (names and reasons, never values) and DisclosureRefusedError, nothing sent:
+// 1. Refusals, each a `block` entry (names and reasons, never values; `rule: "logging"`) and DisclosureRefusedError,
+//    nothing sent:
 //    - to any destination, a request with more than one content-type header (the body is read by it);
 //    - to a wallet destination, a body that is not exactly JSON.stringify of its own parse (duplicate keys, spacing,
 //      escapes), or, for a form body (an OAuth endpoint's), URLSearchParams of its own parse (repeated names, other
@@ -15,7 +16,7 @@
 //    - to Intent Cloud, any credential: its requests are logged byte for byte, never redacted, so their
 //      content_digest and receipts stay checkable against the logged bytes.
 // 2. findIdentity on the outbound body, JSON or form (the MCP envelope's tool and client names exempt for wallets):
-//    a finding appends a `block` entry and throws DisclosureBlockedError.
+//    a finding appends a `block` entry (`rule: "identity"`) and throws DisclosureBlockedError.
 // 3. Credentials are digested in what is logged, never in what is sent: a credential header (privacy's
 //    CREDENTIAL_HEADERS), every body value under a secret key (privacy's isSecretKey) and every value at one of the
 //    caller's secretPaths becomes `[redacted sha256:<hex>]`, and `redacted: [{at, sha256}]` lists them. A body with a
@@ -206,7 +207,7 @@ export function createDisclosureCore(store: Store): DisclosureCore {
       // The body is read by its content-type; with two of them the core and the transport could read different ones.
       if (request.headers.filter(([name]) => name.toLowerCase() === "content-type").length > 1) {
         const reasons = ["the request has more than one content-type header, so its body could not be logged as sent"];
-        await store.append("block", { endpoint: request.operation, ...elsewhere, fields: [], blocked: reasons });
+        await store.append("block", { endpoint: request.operation, ...elsewhere, fields: [], blocked: reasons, rule: "logging" });
         throw new DisclosureRefusedError(request.operation, reasons);
       }
       const json = bodyValue(request.headers, request.body);
@@ -214,12 +215,12 @@ export function createDisclosureCore(store: Store): DisclosureCore {
       const { request: kept, redacted } = redact(request, json, options.secretPaths ?? []);
       const refusals = refusalsOf(destination, request, json, redacted);
       if (refusals.length > 0) {
-        await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: refusals });
+        await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: refusals, rule: "logging" });
         throw new DisclosureRefusedError(request.operation, refusals);
       }
       const findings = findIdentity(json, { mcpEnvelope: destination !== INTENT_CLOUD });
       if (findings.length > 0) {
-        await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: findings.map(describe) });
+        await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: findings.map(describe), rule: "identity" });
         throw new DisclosureBlockedError(request.operation, findings);
       }
       try {

@@ -22,7 +22,7 @@
 // - approver_pin, approver_flag: fingerprint, handle, reason. keys: statement.kid, statement.expires_at.
 // - session: mode ("demo" on the first entry of a demo chain) or id.
 import { ObservedBody, type ObservedOffer, withheldAt } from "../observation/index.ts";
-import { findIdentity, isSecretKey, markerDigest } from "../privacy/index.ts";
+import { bodyValue, findIdentity, isSecretKey, markerDigest } from "../privacy/index.ts";
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
 /** What one action was. */
@@ -236,8 +236,11 @@ const FOLLOW_UPS: ReadonlySet<string> = new Set(["receipt", "response", "unackno
 const KEY_READS: ReadonlySet<string> = new Set(["getMeta", "getSignatureKeys", "getKeyStatement"]);
 /** Block reasons the gateway writes about a response it refused (gateway.ts), not a request it held back. */
 const REFUSAL = /^(cart|snapshot|approval_proof): /;
-/** Block reasons the disclosure core writes for a request it would not log as it was (core.ts step 1, DisclosureRefusedError). */
-export const LOGGING_REFUSAL = /^(a credential at |a credential in the query |the body is not plain JSON)/;
+/**
+ * Block reasons the disclosure core writes for a request it would not log as it was (core.ts step 1), read only on a
+ * block entry without `rule` (written before the core recorded it).
+ */
+const LOGGING_REFUSAL = /^(a credential at |a credential in the query |the body is not plain JSON|the form body is not written|the request has more than one content-type header)/;
 /** Block reasons of the buyer-identity check (findIdentity's kinds, written as `<kind> at <path>`). */
 const IDENTITY_REASON = /^(card|email|phone|street_address|banned_key) at /;
 const SEVERITY: readonly Delivery[] = ["acknowledged", "answered", "not_sent", "unacknowledged", "maybe_sent", "discarded"];
@@ -332,7 +335,7 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
           target.blocked.push(...blocked);
           target.outcome = "refused";
         } else {
-          const kind = blockKind(blocked);
+          const kind = blockKind(b);
           // Only a policy block keeps values (the structured ones it held back); any other `held` is never shown.
           const held = kind === "policy" ? record(b.held) : {};
           const facts: ActivityFacts = {
@@ -480,7 +483,7 @@ export function summarise(items: readonly unknown[], activities: readonly Activi
         found = findIdentity(r.fields);
       } else {
         bodies ??= bodiesBySeq(items);
-        found = findIdentity(bodies.get(r.seq) ?? r.fields, { mcpToolName: true });
+        found = findIdentity(bodies.get(r.seq) ?? r.fields, { mcpEnvelope: true });
       }
       if (found.length > 0) findings.push({ seq: r.seq, kinds: [...new Set(found.map((f) => f.kind))].sort() });
     }
@@ -507,12 +510,10 @@ function bodiesBySeq(items: readonly unknown[]): Map<number, unknown> {
   const out = new Map<number, unknown>();
   for (const raw of items) {
     const item = asItem(raw);
-    if (item?.kind !== "disclosure" || typeof item.body.body_b64 !== "string" || item.body.body_b64 === "") continue;
-    try {
-      out.set(item.seq, JSON.parse(Buffer.from(item.body.body_b64, "base64").toString("utf8")));
-    } catch {
-      // Not JSON: its request has no fields either, so it counts as unchecked.
-    }
+    if (item?.kind !== "disclosure") continue;
+    // A body that cannot be read has no fields either, so its request counts as unchecked.
+    const body = loggedBody(item.body);
+    if (body !== undefined && body !== null) out.set(item.seq, body);
   }
   return out;
 }
@@ -526,7 +527,7 @@ function toRequest(item: Item, answer: Item | null): ActivityRequest {
     endpoint: text(b.endpoint),
     method: typeof b.method === "string" ? b.method : null,
     path: typeof b.path === "string" ? b.path : null,
-    fields: values(b.body_b64),
+    fields: loggedValues(b),
     field_names: leafFields(strings(b.fields)),
     content_digest: typeof b.content_digest === "string" ? b.content_digest : null,
     redacted: Array.isArray(b.redacted)
@@ -598,8 +599,14 @@ function destinationOf(b: Body): string {
   return typeof b.destination === "string" && b.destination !== "" ? b.destination : INTENT_CLOUD;
 }
 
-/** What held a request back, from the reasons its `block` entry lists. */
-export function blockKind(reasons: readonly string[]): BlockKind {
+/**
+ * What held a request back, from a `block` entry's body: its `rule` when present (the disclosure core writes
+ * `logging` or `identity`); any other `rule` is read as `identity`, so its values are never shown. A block without
+ * `rule` (a policy block, or one written before the core recorded it) is read from its reasons.
+ */
+export function blockKind(block: Readonly<Record<string, unknown>>): BlockKind {
+  if (block.rule !== undefined) return block.rule === "logging" || block.rule === "policy" ? block.rule : "identity";
+  const reasons = strings(block.blocked);
   if (reasons.some((r) => LOGGING_REFUSAL.test(r))) return "logging";
   if (reasons.some((r) => IDENTITY_REASON.test(r))) return "identity";
   return "policy";
@@ -635,19 +642,29 @@ function receiptKid(header: unknown): string | null {
   }
 }
 
-/** The logged body bytes as `path → value`; {} for an empty body, null when there are no bytes or they are not JSON. */
-function values(b64: unknown): Record<string, unknown> | null {
-  if (typeof b64 !== "string") return null;
-  if (b64 === "") return {};
-  let json: unknown;
-  try {
-    json = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
-  } catch {
-    return null;
-  }
+/** A disclosure's logged body bytes as `path → value`; {} for an empty body, null when there are no bytes or they cannot be read. */
+export function loggedValues(b: Readonly<Body>): Record<string, unknown> | null {
+  const body = loggedBody(b);
+  if (body === undefined) return null;
   const out: Record<string, unknown> = {};
-  flatten(json, "", out);
+  if (body !== null) flatten(body, "", out);
   return out;
+}
+
+/**
+ * A disclosure's logged body read as its content-type says (privacy's bodyValue: a form as {name: value}, else JSON);
+ * null for an empty body, undefined when there are no bytes or they cannot be read.
+ */
+function loggedBody(b: Readonly<Body>): unknown {
+  if (typeof b.body_b64 !== "string") return undefined;
+  const headers = Array.isArray(b.headers)
+    ? b.headers.flatMap((h): [string, string][] => (Array.isArray(h) && typeof h[0] === "string" && typeof h[1] === "string" ? [[h[0], h[1]]] : []))
+    : [];
+  try {
+    return bodyValue(headers, Buffer.from(b.body_b64, "base64"));
+  } catch {
+    return undefined;
+  }
 }
 
 /** Leaves by dotted path; an array of scalars stays one value (`must_haves: ["road"]`), an array of objects is walked as `[]`. */
