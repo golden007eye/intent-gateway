@@ -95,10 +95,38 @@ describe("verify: disclosures to wallet destinations", () => {
 
   it("attack: a secret key in an Intent Cloud disclosure fails too (any destination)", async () => {
     const dir = await chain(async (s) => {
-      const bytes = Buffer.from('{"items":[{"code":"123456"}]}', "utf8");
+      const bytes = Buffer.from('{"items":[{"apiKey":"k-123456"}]}', "utf8");
       await s.append("disclosure", { endpoint: "search", fields: [], body_b64: bytes.toString("base64"), headers: [], content_digest: digest(bytes) });
     });
-    expect(failures(await verify(dir))).toContainEqual(expect.stringMatching(/holds a credential: body\.items\[0\]\.code is not redacted/));
+    expect(failures(await verify(dir))).toContainEqual(expect.stringMatching(/holds a credential: body\.items\[0\]\.apiKey is not redacted/));
+  });
+
+  it("attack: verify shares the core's wider rules: credential headers, secret key spellings, an OAuth code, a query secret", async () => {
+    const dir = await chain(async (s) => {
+      const d = await s.append(
+        "disclosure",
+        walletDisclosure(
+          { accessToken: "a", Refresh_Token: "r", password: "p", oauth: { grant_type: "authorization_code", code: "c" }, promo: { code: "SPRING10" } },
+          {
+            path: "/api/mcp?access_token=q",
+            headers: [["Cookie", "s=1"], ["proxy-authorization", "Basic x"], ["X-Api-Key", "k"]],
+            redacted: [],
+          },
+        ),
+      );
+      await answer(s, d.seq);
+    });
+    const found = failures(await verify(dir)).filter((f) => f.includes("holds a credential"));
+    expect(found.map((f) => f.replace(/^seq 0: the disclosure holds a credential: /, ""))).toEqual([
+      "the Cookie header is not redacted",
+      "the proxy-authorization header is not redacted",
+      "the X-Api-Key header is not redacted",
+      "the query parameter access_token is not redacted",
+      "body.accessToken is not redacted",
+      "body.Refresh_Token is not redacted",
+      "body.password is not redacted",
+      "body.oauth.code is not redacted",
+    ]);
   });
 
   it("attack: a redacted item naming a path with no marker, or with another digest, exits 1", async () => {

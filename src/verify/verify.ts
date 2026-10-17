@@ -7,7 +7,7 @@
 import { INTENT } from "../config/index.ts";
 import { ReceiptRequest } from "../contract/index.ts";
 import { observationProblem } from "../observation/index.ts";
-import { findIdentity, isCredentialHeader, markerDigest, redactionHeld, unredactedSecrets } from "../privacy/index.ts";
+import { findIdentity, isCredentialHeader, markerDigest, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
@@ -430,14 +430,16 @@ function loggedHeaders(body: Record<string, unknown>): [string, string][] {
 }
 
 /**
- * Where a disclosure to any destination holds a credential in clear (ADR-0014): an `authorization` header, or a body
- * value under a secret key, that is not a redaction marker.
+ * Where a disclosure to any destination holds a credential in clear (ADR-0014): a credential header, or a body value
+ * under a secret key, that is not a redaction marker, or a query parameter named as a secret key. The same rules as
+ * the disclosure core's (privacy's credential helpers).
  */
 function credentialProblems(body: Record<string, unknown>): string[] {
   const headers = loggedHeaders(body)
     .filter(([name, value]) => isCredentialHeader(name) && markerDigest(value) === null)
     .map(([name]) => `the ${name} header`);
-  return [...headers, ...unredactedSecrets(loggedJson(body))];
+  const query = typeof body.path === "string" ? secretQueryKeys(body.path).map((name) => `the query parameter ${name}`) : [];
+  return [...headers, ...query, ...unredactedSecrets(loggedJson(body))];
 }
 
 /** Each `redacted[]` item must name a path of the logged request that holds the marker for its sha256. */

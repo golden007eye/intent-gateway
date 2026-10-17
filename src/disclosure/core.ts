@@ -6,15 +6,22 @@
 // and its stop, so a failed append around a send to any destination stops sends to all of them.
 //
 // Per call, through the adapter's beforeSend hook on the final request bytes:
-// 1. findIdentity on the outbound JSON body: a finding appends a `block` entry and throws DisclosureBlockedError.
-// 2. Credentials are digested in what is logged, never in what is sent: an `authorization` header, every body value
-//    under a secret key (privacy's SECRET_KEYS) and every value at one of the caller's secretPaths becomes
-//    `[redacted sha256:<hex>]`, and `redacted: [{at, sha256}]` lists them. A body with a redacted value is logged as
-//    the JSON text of the redacted value; every other byte is logged exactly as sent.
-// 3. The gateway session's `session` entry (once), then the `disclosure` entry; if either append throws, beforeSend
+// 1. Refusals, each a `block` entry (names and reasons, never values) and DisclosureRefusedError, nothing sent:
+//    - to a wallet destination, a body that is not exactly JSON.stringify of its own parse (duplicate keys, spacing,
+//      escapes): what is logged and scanned must be what is sent, and a redacted body is logged re-serialised;
+//    - to a wallet destination, a path whose query names a secret key (`?access_token=`), which cannot be digested;
+//    - to Intent Cloud, any credential: its requests are logged byte for byte, never redacted, so their
+//      content_digest and receipts stay checkable against the logged bytes.
+// 2. findIdentity on the outbound JSON body (an MCP tool name exempt for wallets): a finding appends a `block` entry
+//    and throws DisclosureBlockedError.
+// 3. Credentials are digested in what is logged, never in what is sent: a credential header (privacy's
+//    CREDENTIAL_HEADERS), every body value under a secret key (privacy's isSecretKey) and every value at one of the
+//    caller's secretPaths becomes `[redacted sha256:<hex>]`, and `redacted: [{at, sha256}]` lists them. A body with a
+//    redacted value is logged as the JSON text of the redacted value; every other byte is logged exactly as sent.
+// 4. The gateway session's `session` entry (once), then the `disclosure` entry; if either append throws, beforeSend
 //    throws, the adapter sends nothing, and the core stops for good. A disclosure to a destination other than Intent
 //    Cloud carries `destination`, and may carry the local field `purchase` (never sent).
-// 4. After the exchange, the follow-up the caller's `answered` appends (or `unacknowledged` when no response came
+// 5. After the exchange, the follow-up the caller's `answered` appends (or `unacknowledged` when no response came
 //    back). If that append throws, the core stops for good.
 import { randomUUID } from "node:crypto";
 import { CloudNetworkError, CloudResponseError, type HeaderPair } from "../cloud/index.ts";
@@ -28,6 +35,7 @@ import {
   type PathSegment,
   redactionMarker,
   secretDigest,
+  secretQueryKeys,
 } from "../privacy/index.ts";
 import { NOT_SENT_REASON, type Store } from "../store/index.ts";
 
@@ -83,6 +91,18 @@ export class DisclosureBlockedError extends Error {
     super(`${endpoint} not sent: the request body looks like buyer identity (${findings.map(describe).join(", ")})`);
     this.endpoint = endpoint;
     this.findings = findings;
+  }
+}
+
+/** The request breaks a logging rule (ADR-0014); a `block` entry names why, and nothing was sent. */
+export class DisclosureRefusedError extends Error {
+  override name = "DisclosureRefusedError";
+  readonly endpoint: string;
+  readonly reasons: readonly string[];
+  constructor(endpoint: string, reasons: readonly string[]) {
+    super(`${endpoint} not sent: ${reasons.join("; ")}`);
+    this.endpoint = endpoint;
+    this.reasons = reasons;
   }
 }
 
@@ -179,7 +199,13 @@ export function createDisclosureCore(store: Store): DisclosureCore {
       assertOpen();
       const json = parseBody(request.body);
       const fields = fieldNames(json);
-      const findings = findIdentity(json);
+      const { request: kept, redacted } = redact(request, json, options.secretPaths ?? []);
+      const refusals = refusalsOf(destination, request, json, redacted);
+      if (refusals.length > 0) {
+        await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: refusals });
+        throw new DisclosureRefusedError(request.operation, refusals);
+      }
+      const findings = findIdentity(json, { mcpToolName: destination !== INTENT_CLOUD });
       if (findings.length > 0) {
         await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: findings.map(describe) });
         throw new DisclosureBlockedError(request.operation, findings);
@@ -194,7 +220,6 @@ export function createDisclosureCore(store: Store): DisclosureCore {
       }
       // From here to the append call nothing awaits, so the store's FIFO queue keeps n in chain order.
       const n = session.next++;
-      const { request: kept, redacted } = redact(request, json, options.secretPaths ?? []);
       const body = {
         ...steps.body(kept, fields),
         ...elsewhere,
@@ -255,6 +280,19 @@ export function describe(finding: Finding): string {
   return `${finding.kind} at ${finding.path}`;
 }
 
+/** Why a request may not be logged and sent as it is (step 1 above); empty when it may. */
+function refusalsOf(destination: Destination, request: OutboundRequest, json: unknown, redacted: readonly Redaction[]): string[] {
+  if (destination === INTENT_CLOUD) {
+    return redacted.map((r) => `a credential at ${r.at}: requests to Intent Cloud are logged byte for byte and never carry one`);
+  }
+  const reasons: string[] = [];
+  if (request.body.length > 0 && !Buffer.from(JSON.stringify(json), "utf8").equals(Buffer.from(request.body))) {
+    reasons.push("the body is not plain JSON as the gateway writes it (duplicate keys, spacing or escapes), so it could not be logged as sent");
+  }
+  for (const name of secretQueryKeys(request.path)) reasons.push(`a credential in the query (${name}), which the log cannot digest`);
+  return reasons;
+}
+
 /**
  * The request as it is logged: credential headers and secret body values replaced by their redaction markers, and
  * where each sat. With nothing to redact it is the request itself, byte for byte.
@@ -279,9 +317,8 @@ function redact(
 }
 
 /** A copy of `value` with every secret key's value, and every value at a secret path, replaced by its marker. */
-function redactValues(value: unknown, at: PathSegment[], secretPaths: readonly (readonly PathSegment[])[], out: Redaction[]): unknown {
+function redactValues(value: unknown, at: PathSegment[], secretPaths: readonly (readonly PathSegment[])[], out: Redaction[], secretKey = false): unknown {
   const secretPath = at.length > 0 && secretPaths.some((p) => p.length === at.length && p.every((s, i) => s === at[i]));
-  const secretKey = typeof at.at(-1) === "string" && isSecretKey(at.at(-1) as string);
   if ((secretPath || secretKey) && value !== null && value !== undefined && markerDigest(value) === null) {
     const sha256 = secretDigest(value);
     out.push({ at: formatPath("body", at), sha256 });
@@ -289,7 +326,8 @@ function redactValues(value: unknown, at: PathSegment[], secretPaths: readonly (
   }
   if (Array.isArray(value)) return (value as unknown[]).map((item, i) => redactValues(item, [...at, i], secretPaths, out));
   if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactValues(item, [...at, key], secretPaths, out)]));
+    const keys = Object.keys(value);
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactValues(item, [...at, key], secretPaths, out, isSecretKey(key, keys))]));
   }
   return value;
 }

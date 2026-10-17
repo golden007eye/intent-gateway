@@ -16,6 +16,7 @@ import {
   createDisclosedWallet,
   type DestinationTransport,
   DisclosureBlockedError,
+  DisclosureRefusedError,
   DisclosureStoppedError,
   type IntentCloud,
   type OutboundRequest,
@@ -27,20 +28,30 @@ const REFRESH = "shop-refresh-token-SECRET-9876543210";
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 const marker = (text: string) => `[redacted sha256:${sha(text)}]`;
 
+interface Shape {
+  headers?: [string, string][];
+  path?: string;
+  /** The body bytes for a payload; JSON.stringify by default. */
+  bytes?: (payload: unknown) => string;
+}
+
 /** A JSON-RPC transport that records every request it was asked to send. */
-function fakeTransport(reply: (request: OutboundRequest) => { status: number; body: string } | Error = () => ({ status: 200, body: '{"result":{}}' })) {
+function fakeTransport(
+  reply: (request: OutboundRequest) => { status: number; body: string } | Error = () => ({ status: 200, body: '{"result":{}}' }),
+  shape: Shape = {},
+) {
   const sent: OutboundRequest[] = [];
   const transport: DestinationTransport = {
     prepare: (operation, payload) => ({
       operation,
       method: "POST",
-      path: "/api/mcp",
-      headers: [
+      path: shape.path ?? "/api/mcp",
+      headers: shape.headers ?? [
         ["host", "wallet.example"],
         ["authorization", `Bearer ${TOKEN}`],
         ["content-type", "application/json"],
       ],
-      body: Buffer.from(JSON.stringify(payload), "utf8"),
+      body: Buffer.from((shape.bytes ?? JSON.stringify)(payload), "utf8"),
     }),
     send: (request) => {
       sent.push(request);
@@ -57,9 +68,8 @@ const unreachableCloud = new Proxy({} as IntentCloud, {
   get: () => () => Promise.reject(new Error("the Intent Cloud adapter was called")),
 });
 
-// A JSON-RPC call. Its tool is under `tool`, not MCP's `name`: the identity detector blocks any key containing "name"
-// (a Shop adapter needs a path exemption for it, later work).
-const rpc = (tool: string, args: Json) => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { tool, arguments: args } });
+// An MCP tool call: the identity check exempts `params.name` here (a tool name, never the buyer's).
+const rpc = (name: string, args: Json) => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
 
 let store: Store;
 let dir: string;
@@ -97,7 +107,7 @@ describe("invariant 2 widened: log before send to a wallet destination", () => {
       method: "POST",
       path: "/api/mcp",
       purchase: "ap_TEST0001",
-      fields: ["id", "jsonrpc", "method", "params", "params.arguments", "params.arguments.grant", "params.arguments.note", "params.arguments.refresh_token", "params.tool"],
+      fields: ["id", "jsonrpc", "method", "params", "params.arguments", "params.arguments.grant", "params.arguments.note", "params.arguments.refresh_token", "params.name"],
     });
     expect(body["headers"]).toEqual([
       ["host", "wallet.example"],
@@ -247,5 +257,124 @@ describe("invariant 2 widened: log before send to a wallet destination", () => {
     expect(sent).toHaveLength(0);
     await shop.call("x", { items: [{ "a.b": "s" }] });
     expect(bodyOf(logged()[0])["redacted"]).toContainEqual({ at: 'body.items[0]["a.b"]', sha256: sha("s") });
+  });
+});
+
+describe("review fixes: wider redaction, refusals, the MCP tool name", () => {
+  const audit = () => readFileSync(join(dir, "audit.jsonl"), "utf8");
+
+  it("digests every credential header and every secret key spelling; none reaches audit.jsonl, and verify passes", async () => {
+    const cloud = await setup();
+    const secrets = {
+      cookie: "session=COOKIE-SECRET-1",
+      proxy: "Basic PROXY-SECRET-2",
+      apiKeyHeader: "XKEY-SECRET-3",
+      accessToken: "ACCESS-SECRET-4",
+      refresh: "REFRESH-SECRET-5",
+      password: "PASSWORD-SECRET-6",
+      apiKey: "APIKEY-SECRET-7",
+    };
+    const { transport, sent } = fakeTransport(undefined, {
+      headers: [
+        ["host", "wallet.example"],
+        ["Cookie", secrets.cookie],
+        ["proxy-authorization", secrets.proxy],
+        ["X-Api-Key", secrets.apiKeyHeader],
+      ],
+    });
+    const accounts = createDisclosedWallet(transport, cloud, { destination: "shop_accounts" });
+    await accounts.call("login", {
+      accessToken: secrets.accessToken,
+      Refresh_Token: secrets.refresh,
+      password: secrets.password,
+      api_key: secrets.apiKey,
+      promo: { code: "SPRING10" },
+    });
+    expect(sent).toHaveLength(1);
+    for (const value of Object.values(secrets)) {
+      expect(Buffer.from(sent[0]?.body ?? []).toString("utf8") + JSON.stringify(sent[0]?.headers)).toContain(value);
+      expect(audit()).not.toContain(value);
+    }
+    const body = bodyOf(logged()[0]);
+    expect((body["redacted"] as { at: string }[]).map((r) => r.at)).toEqual([
+      "headers.Cookie",
+      "headers.proxy-authorization",
+      "headers.X-Api-Key",
+      "body.accessToken",
+      "body.Refresh_Token",
+      "body.password",
+      "body.api_key",
+    ]);
+    // A promo `code` with no OAuth sibling is not a credential: it is logged as sent.
+    const loggedBody = JSON.parse(Buffer.from(body["body_b64"] as string, "base64").toString("utf8")) as Json;
+    expect(loggedBody["promo"]).toEqual({ code: "SPRING10" });
+    // content_digest covers the logged body bytes (the sent bytes differ only at the redacted values).
+    expect(body["content_digest"]).toBe(`sha-256=:${createHash("sha256").update(Buffer.from(body["body_b64"] as string, "base64")).digest("base64")}:`);
+    await store.close();
+    const report = await runVerify({ dataDir: dir, pinnedRootKeys: PINNED, now: new Date(), skipSupplyChain: true });
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(report.counts.redactions).toBe(7);
+  });
+
+  it("attack: a secret in the query (?access_token=) is refused, never sent and never logged", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport(undefined, { path: "/api/mcp?client=gw&access_token=QUERY-SECRET" });
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    await expect(shop.call("search", rpc("search", { q: "lamp" }))).rejects.toBeInstanceOf(DisclosureRefusedError);
+    expect(sent).toHaveLength(0);
+    expect(store.entries().map((e) => e.kind)).toEqual(["block"]);
+    expect(bodyOf(store.entries()[0])).toMatchObject({ destination: "shop", blocked: ["a credential in the query (access_token), which the log cannot digest"] });
+    expect(audit()).not.toContain("QUERY-SECRET");
+  });
+
+  it("attack: a duplicate key carrying an email (unseen by the parsed scan) is refused before the log and the send", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport(undefined, { bytes: () => '{"q":"ada@example.com","q":"lamp"}' });
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    await expect(shop.call("search", {})).rejects.toBeInstanceOf(DisclosureRefusedError);
+    expect(sent).toHaveLength(0);
+    expect(store.entries().map((e) => e.kind)).toEqual(["block"]);
+    expect(audit()).not.toContain("ada@example.com");
+    // Spacing alone is refused too: the log must hold what is sent.
+    const spaced = createDisclosedWallet(fakeTransport(undefined, { bytes: () => '{ "q": "lamp" }' }).transport, cloud, { destination: "shop" });
+    await expect(spaced.call("search", {})).rejects.toBeInstanceOf(DisclosureRefusedError);
+  });
+
+  it("refuses a credential on an Intent Cloud request: Intent Cloud requests are never redacted", async () => {
+    dir = join(await fsp.mkdtemp(join(tmpdir(), "wallet-")), "data");
+    store = await openStore(dir);
+    let reached = 0;
+    const withCookie = {
+      meta: async (options?: { beforeSend?: (r: OutboundRequest) => void | Promise<void> }) => {
+        await options?.beforeSend?.({ operation: "getMeta", method: "GET", path: "/v1/meta", headers: [["cookie", "c=CLOUD-SECRET"]], body: new Uint8Array(0) });
+        reached += 1;
+        throw new Error("sent");
+      },
+    } as unknown as IntentCloud;
+    const cloud = createDisclosedCloud(withCookie, store, { keySet: () => null });
+    await expect(cloud.meta()).rejects.toBeInstanceOf(DisclosureRefusedError);
+    expect(reached).toBe(0);
+    expect(store.entries().map((e) => e.kind)).toEqual(["block"]);
+    expect(audit()).not.toContain("CLOUD-SECRET");
+  });
+
+  it("lets an MCP tool name through under params.name only; every other name-like key still blocks", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    await shop.call("search_catalog", rpc("search_catalog", { q: "lamp" }));
+    expect(sent).toHaveLength(1);
+    await expect(shop.call("x", rpc("search_catalog", { name: "Ada Lovelace" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    await expect(shop.call("x", rpc("Ada Lovelace", {}))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    await expect(shop.call("x", { ...rpc("search_catalog", {}), method: "tools/list" })).rejects.toBeInstanceOf(DisclosureBlockedError);
+    // The value is still scanned: a card number shaped like a tool name blocks.
+    await expect(shop.call("x", rpc("cc4111111111111111", {}))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    expect(sent).toHaveLength(1);
+    expect(logged().filter((e) => e.kind === "block").map((e) => bodyOf(e)["blocked"])).toEqual([
+      ["banned_key at $.params.arguments.name"],
+      ["banned_key at $.params.name"],
+      ["banned_key at $.params.name"],
+      ["card at $.params.name"],
+    ]);
   });
 });
