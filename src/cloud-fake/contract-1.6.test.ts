@@ -77,7 +77,8 @@ async function purchase(cloud: FakeCloud, accepts: CompletionMode[] = ["handoff"
 
 const read = (cloud: FakeCloud, p: Purchase, by: Session, version: string | null = "1.6.0") => call(cloud, by, "GET", `/v1/approvals/${p.handle}`, undefined, version);
 const report = (cloud: FakeCloud, p: Purchase, value: unknown, by: Session = p.completer) => call(cloud, by, "POST", `/v1/approvals/${p.handle}/outcome-reports`, value);
-const COMPLETING = { report_id: "or_AAAAAAAAAAAAAAAA", state: "completing", source: "shop_api", checkout_ref: "gid://shopify/Checkout/1", observed_at: "2026-10-15T12:01:00Z" };
+const ID = (c: string): string => `or_${c.repeat(22)}`;
+const COMPLETING = { report_id: ID("A"), state: "completing", source: "shop_api", checkout_ref_hash: `sha256:${"0".repeat(64)}`, observed_at: "2026-10-15T12:01:00Z" };
 const BINDING_OK = {
   rule_version: "binding-v1",
   result: "ok",
@@ -174,13 +175,22 @@ describe("outcome reports (Appendix G R1–R7)", () => {
     const { cloud, p } = await approvedShopAgent();
     const intruder = await report(cloud, p, COMPLETING, createSession());
     expect([intruder.status, intruder.json]).toEqual([404, { error: "not_found", message: "unknown handle" }]);
-    expect((await report(cloud, p, { ...COMPLETING, state: "failed", report_id: "or_BBBBBBBBBBBBBBBB" })).status).toBe(409);
+    const failedFirst = { report_id: ID("B"), completing_report_id: ID("A"), state: "failed", source: "shop_api", observed_at: "2026-10-15T12:01:00Z" };
+    expect((await report(cloud, p, failedFirst)).status).toBe(409);
     const first = await report(cloud, p, COMPLETING);
     expect(first.status).toBe(201);
-    expect(OutcomeReportAccepted.parse(first.json).outcome).toMatchObject({ state: "completing", assurance: "reported" });
+    // R5: stored as the gateway's report, reported assurance, with what it said under `reported`.
+    expect(OutcomeReportAccepted.parse(first.json).outcome).toMatchObject({
+      state: "completing",
+      source: "gateway_report",
+      assurance: "reported",
+      reported: { state: "completing", source: "shop_api" },
+    });
     expect(await report(cloud, p, COMPLETING)).toEqual(first);
-    expect((await report(cloud, p, { ...COMPLETING, checkout_ref: "other" })).status).toBe(409);
-    expect((await report(cloud, p, { ...COMPLETING, report_id: "or_CCCCCCCCCCCCCCCC" })).status).toBe(409);
+    expect((await report(cloud, p, { ...COMPLETING, checkout_ref_hash: `sha256:${"1".repeat(64)}` })).status).toBe(409);
+    expect((await report(cloud, p, { ...COMPLETING, report_id: ID("C") })).status).toBe(409);
+    // A report without checkout_ref_hash, or with the raw checkout id, does not match the schema.
+    expect((await report(cloud, p, { ...COMPLETING, report_id: ID("D"), checkout_ref_hash: undefined, checkout_ref: "gid://shopify/Checkout/1" })).status).toBe(400);
     const status = ApprovalStatus.parse((await read(cloud, p, p.completer)).json);
     expect([status.state, status.outcome?.state]).toEqual(["approved", "completing"]);
   });
@@ -188,12 +198,33 @@ describe("outcome reports (Appendix G R1–R7)", () => {
   it("a gateway's ordered is stored as reported, is final, and the session key may report too (R1, R4, R5)", async () => {
     const { cloud, p } = await approvedShopAgent();
     expect((await report(cloud, p, COMPLETING, p.session)).status).toBe(201);
-    const ordered = { report_id: "or_DDDDDDDDDDDDDDDD", state: "ordered", source: "shop_api", order_ref: "#1001", final_total: p.cart.total, binding: BINDING_OK, observed_at: "2026-10-15T12:02:00Z" };
+    const ordered = {
+      report_id: ID("D"),
+      completing_report_id: ID("A"),
+      state: "ordered",
+      source: "shop_api",
+      order_ref: "gid://shopify/Order/1001",
+      final_total: p.cart.total,
+      binding: BINDING_OK,
+      observed_at: "2026-10-15T12:02:00Z",
+    };
+    // R4: every later report names the accepted completing one.
+    expect((await report(cloud, p, { ...ordered, completing_report_id: ID("Z") })).status).toBe(409);
     const r = await report(cloud, p, ordered);
     expect(r.status).toBe(201);
     expect(OutcomeReportAccepted.parse(r.json).outcome).toMatchObject({ state: "reported", source: "gateway_report", assurance: "reported", reported: { state: "ordered" } });
-    expect((await report(cloud, p, { ...ordered, report_id: "or_EEEEEEEEEEEEEEEE", state: "failed" })).status).toBe(409);
+    expect((await report(cloud, p, { ...ordered, report_id: ID("E"), state: "failed" })).status).toBe(409);
     expect(cloud.inspect(p.handle)?.reports.map((x) => x.state)).toEqual(["completing", "ordered"]);
+  });
+
+  it("R4 transitions: completing → indeterminate → failed, then nothing; a failed report is stored as failed with reported", async () => {
+    const { cloud, p } = await approvedShopAgent();
+    expect((await report(cloud, p, COMPLETING)).status).toBe(201);
+    const later = (id: string, state: string, source = "shop_api") => ({ report_id: ID(id), completing_report_id: ID("A"), state, source, observed_at: "2026-10-15T12:03:00Z" });
+    expect((await report(cloud, p, later("B", "indeterminate"))).status).toBe(201);
+    const failed = await report(cloud, p, later("C", "failed", "gateway_precheck"));
+    expect(OutcomeReportAccepted.parse(failed.json).outcome).toMatchObject({ state: "failed", assurance: "reported", reported: { state: "failed", source: "gateway_precheck" } });
+    expect((await report(cloud, p, later("D", "indeterminate"))).status).toBe(409);
   });
 
   it("410 for completing when not approved or after expires_at (R3); 409 on a hand-off approval", async () => {
@@ -225,13 +256,16 @@ describe("vector o3: ApprovalStatus.state for every outcome", () => {
     const cloud = await start({ oneTap: true, catalog: [SHOP_AGENT_ITEM] });
     const p = await purchase(cloud, [mode]);
     cloud.approveWithPasskey(p.handle, new SoftPasskey());
-    expect(cloud.setOutcome(p.handle, { state: state as never, source: "merchant_api", assurance: state === "ordered" ? "verified" : "reported", ...(state === "ordered" ? { binding: BINDING_OK as never } : {}) }).status).toBe(200);
+    const order = state === "ordered" || state === "mismatch" ? { order_ref: "#1001", final_total: p.cart.total, binding: BINDING_OK as never } : {};
+    const source = state === "reported" ? "gateway_report" : "merchant_api";
+    const reported = state === "reported" ? { reported: { state: "ordered" as const, source: "shop_api" as const } } : {};
+    expect(cloud.setOutcome(p.handle, { state: state as never, source, assurance: state === "ordered" ? "verified" : "reported", ...order, ...reported }).status).toBe(200);
     const v16 = ApprovalStatus.parse((await read(cloud, p, p.session)).json);
     expect(v16.state).toBe(c.expected["1.6.0"]);
     expect(v16.outcome?.state).toBe(state);
     expect(v16.proof).toBeDefined();
-    const v15 = await read(cloud, p, p.session, null);
-    if (c.expected["1.5.0"] === null) expect(v15.status).toBe(404);
-    else expect(ApprovalStatus.parse(v15.json)).toMatchObject({ state: c.expected["1.5.0"] });
+    // R8: this approval was created by a 1.6.0 request, so a read without the header is 404 whatever the row (the
+    // 1.5.0 column is for approvals created by 1.5.0 requests; statusState is checked against it above).
+    expect((await read(cloud, p, p.session, null)).status).toBe(404);
   });
 });

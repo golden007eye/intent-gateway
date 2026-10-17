@@ -35,10 +35,22 @@ export function sentProblems(snapshot: AnySnapshot, sent: SentPurchase): SentRea
     variant_ref: snapshot.variant_ref !== sent.offer.variant_ref || snapshot.variant_ref !== sent.cart.variant_ref,
     merchant_origin: snapshot.merchant_origin !== `https://${sent.offer.merchant.domain}` || snapshot.merchant_origin !== sent.cart.merchant_origin,
     total: snapshot.total.amount_minor !== sent.cart.total.amount_minor, // Money is USD only (the schema)
-    // Both are RFC 3339 UTC with seconds and Z (the Timestamp schema), so they compare as instants.
-    expires_at: !(Date.parse(snapshot.expires_at) <= Date.parse(sent.cart.expires_at)),
+    // Compared as instants; one that is not a real instant (2026-02-30, 24:00) fails closed.
+    expires_at: !(instant(snapshot.expires_at) <= instant(sent.cart.expires_at)),
   };
   return SENT_FIELDS.filter((field) => failed[field]);
+}
+
+/**
+ * A Timestamp (`YYYY-MM-DDTHH:MM:SSZ`) as milliseconds since the epoch, or NaN when it names no real instant. Stricter
+ * than Date.parse, which rolls some impossible dates over instead of refusing them.
+ */
+export function instant(timestamp: string): number {
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$/.exec(timestamp);
+  if (m === null) return Number.NaN;
+  const [y, mo, d, h, mi, s] = m.slice(1).map(Number) as [number, number, number, number, number, number];
+  const ms = Date.UTC(y, mo - 1, d, h, mi, s);
+  return new Date(ms).toISOString() === `${timestamp.slice(0, -1)}.000Z` ? ms : Number.NaN;
 }
 
 /** The words for a reason, for refusals the developer and the agent read. */

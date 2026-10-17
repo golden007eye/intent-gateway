@@ -117,7 +117,8 @@ describe("golden chain", () => {
     await cloud.keyStatement();
     keySet = KEYS;
     await cloud.search({ ship_to: { postal_code: "94110", country: "US" }, product: "trail shoe" });
-    await cloud.createCart({ offer_handle: "of_TEST0001", quantity: 1, ship_to: { country: "US", postal_code: "94110" } });
+    // The pre-1.6 request body, kept so the golden chain stays byte for byte; this fake adapter does not validate it.
+    await cloud.createCart({ offer_handle: "of_TEST0001", quantity: 1, ship_to: { country: "US", postal_code: "94110" } } as never);
     await cloud.createApproval("ct_TEST0001");
     await cloud.getApproval("ap_TEST0001");
     await cloud.getApproval("ap_TEST0001"); // 502, no version: unacknowledged

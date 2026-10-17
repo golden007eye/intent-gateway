@@ -618,7 +618,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     // The policy on the offer as searched, with the spend so far from the chain.
     const domain = known.offer.merchant.domain;
     const before = spendCheck(policyOffer(domain, known.category, known.offer.price, known.offer.shipping, quantity));
-    const request: CloudCartRequest = { offer_handle: known.offer.offer_handle, quantity, ship_to: { country: "US", postal_code: known.zip } };
+    const request: Omit<CloudCartRequest, "completer_keyid" | "completion_accepts"> = { offer_handle: known.offer.offer_handle, quantity, ship_to: { country: "US", postal_code: known.zip } };
     if (before.length > 0) {
       return block("createCart", inputFields(request), before.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
         `Not sent: the gateway policy refuses this cart (${before.map((b) => b.reason).join("; ")}).`,
@@ -987,10 +987,9 @@ function checkSnapshot(created: ApprovalCreated, cart: Cart, sent: SentPurchase)
   for (const key of ["merchant", "item", "quantity", "unit_price", "shipping", "total", "total_kind"] as const) {
     if (!same(s[key], cart[key])) problems.push(`${key} differs from the cart`);
   }
-  if (s.v === 2) {
-    for (const key of ["completion_mode", "total_estimated"] as const) {
-      if (s[key] !== cart[key]) problems.push(`${key} differs from the cart`);
-    }
+  // The schema admits only v2 from a 1.6.0 host; a v1 snapshot that got past it fails step 7 below (snapshot_version).
+  for (const key of ["completion_mode", "total_estimated"] as const) {
+    if (s[key] !== cart[key]) problems.push(`${key} differs from the cart`);
   }
   problems.push(...sentProblems(s, sent).map((reason) => SENT_WORDS[reason]));
   return problems;

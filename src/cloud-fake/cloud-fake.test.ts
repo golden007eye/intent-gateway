@@ -5,10 +5,12 @@ import { createHash, createPublicKey, type KeyObject, verify } from "node:crypto
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { z } from "zod";
 import {
-  ApprovalCreated,
-  type ApprovalProof,
-  ApprovalStatus,
+  ApprovalCreated as ApprovalCreatedV2,
+  type ApprovalProofV1 as ApprovalProof,
+  ApprovalProofV1,
+  ApprovalStatus as ApprovalStatusV2,
   Cart,
   ErrorBody,
   Jwks,
@@ -17,7 +19,16 @@ import {
   RateLimited,
   Receipt,
   SearchResponse,
+  SnapshotV1,
 } from "../contract/index.ts";
+
+// The requests in this file send no Intent-Contract-Version, so the fake answers as 1.5.0 (v1 snapshots and proofs),
+// byte for byte as published gateways expect: these are the released 1.5.0 response forms. contract-1.6.test.ts
+// covers the 1.6.0 answers.
+const ApprovalCreated = ApprovalCreatedV2.extend({ snapshot: SnapshotV1 });
+const ApprovalStatus = ApprovalStatusV2.extend({ proof: ApprovalProofV1.optional() });
+type ApprovalCreated = z.infer<typeof ApprovalCreated>;
+type ApprovalStatus = z.infer<typeof ApprovalStatus>;
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { createSession, type Session, sessionFromSeed, signRequest } from "../signing/index.ts";
 import { verifyApprovalProof, verifyReceipt, verifyStatement } from "../trust/index.ts";

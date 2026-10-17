@@ -32,7 +32,7 @@ const USD = (amount_minor: number): Json => ({ amount_minor, currency: "USD" });
 const MERCHANT = { name: "Example Shop", domain: "shop.example" };
 const ITEM = { title: "Trail shoe", variant: "Size 10" };
 const SEARCH: SearchRequest = { ship_to: { postal_code: "94110", country: "US" }, product: "trail shoe" };
-const CART_REQUEST: CartRequest = { offer_handle: "of_TEST0001", quantity: 1, ship_to: { country: "US", postal_code: "94110" } };
+const CART_REQUEST: CartRequest = { offer_handle: "of_TEST0001", quantity: 1, ship_to: { country: "US", postal_code: "94110" }, completer_keyid: createSession().keyid };
 
 const BODIES: Readonly<Record<string, Json>> = {
   "/v1/meta": { contract_version: "1.5.0", contract_sums_sha256: "c".repeat(64), rule_versions: ["recheck-v1"] },
@@ -67,7 +67,7 @@ const BODIES: Readonly<Record<string, Json>> = {
     approval_handle: "ap_TEST0001",
     approval_link_path: "/c/abcdefghijklmnop",
     snapshot: {
-      v: 1,
+      v: 2,
       approval: "ap_TEST0001",
       nonce: "AAAAAAAAAAAAAAAAAAAAAA",
       merchant: MERCHANT,
@@ -77,10 +77,16 @@ const BODIES: Readonly<Record<string, Json>> = {
       shipping: USD(0),
       total: USD(8999),
       total_kind: "exact",
-      ship_to: { country: "US", postal_prefix: "941" },
+      ship_to: { country: "US", postal_code: "94110" },
       continue_url_hash: `sha256:${"a".repeat(64)}`,
       rule_version: "recheck-v1",
       expires_at: "2026-09-24T12:30:00Z",
+      merchant_origin: "https://shop.example",
+      variant_ref: "gid://shopify/ProductVariant/1",
+      checkout_ref_hash: `sha256:${"c".repeat(64)}`,
+      completion_mode: "handoff",
+      completer_keyid: CART_REQUEST.completer_keyid,
+      total_estimated: false,
     },
     snapshot_hash: "b".repeat(64),
     check_code: "0123abcd",
@@ -343,9 +349,9 @@ describe("contract 1.6.0: a per-call signer and outcome reports", () => {
     const stub = await startStub(() => ({
       status: 201,
       headers: [["Intent-Contract-Version", "1.6.0"]],
-      body: JSON.stringify({ accepted: true, outcome: { state: "completing", source: "gateway_report", assurance: "reported", observed_at: "2026-10-15T12:01:00Z" } }),
+      body: JSON.stringify({ accepted: true, outcome: { state: "completing", source: "gateway_report", assurance: "reported", observed_at: "2026-10-15T12:01:00Z", reported: { state: "completing", source: "shop_api" } } }),
     }));
-    const report = { report_id: "or_AAAAAAAAAAAAAAAA", state: "completing", source: "shop_api", checkout_ref: "gid://shopify/Checkout/1", observed_at: "2026-10-15T12:01:00Z" } as const;
+    const report = { report_id: `or_${"A".repeat(22)}`, state: "completing", source: "shop_api", checkout_ref_hash: `sha256:${"0".repeat(64)}`, observed_at: "2026-10-15T12:01:00Z" } as const;
     const result = await cloudFor(stub).reportOutcome("ap_TEST0001", report);
     expect(result).toMatchObject({ ok: true, status: 201, body: { accepted: true } });
     const [r] = stub.requests;
@@ -364,7 +370,7 @@ describe("contract 1.6.0: a per-call signer and outcome reports", () => {
   it("reportOutcome refuses a malformed handle or report before anything is sent", async () => {
     const stub = await startStub();
     const cloud = cloudFor(stub);
-    const report = { report_id: "or_AAAAAAAAAAAAAAAA", state: "completing", source: "shop_api", observed_at: "2026-10-15T12:01:00Z" } as const;
+    const report = { report_id: `or_${"A".repeat(22)}`, state: "completing", source: "shop_api", checkout_ref_hash: `sha256:${"0".repeat(64)}`, observed_at: "2026-10-15T12:01:00Z" } as const;
     await expect(cloud.reportOutcome("ap_../x", report)).rejects.toThrow(CloudRequestError);
     await expect(cloud.reportOutcome("ap_TEST0001", { ...report, state: "ordered_maybe" } as never)).rejects.toThrow(CloudRequestError);
     expect(stub.connections).toHaveLength(0);

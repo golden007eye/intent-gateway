@@ -99,7 +99,7 @@ export const ENDPOINTS = {
     request: OutcomeReport,
     status: 201,
     response: OutcomeReportAccepted,
-    errors: [400, 401, 403, 404, 409, 410, 413, 429],
+    errors: [400, 401, 404, 409, 410, 413, 429],
   },
 } as const satisfies Record<string, Endpoint>;
 export type OperationId = keyof typeof ENDPOINTS;

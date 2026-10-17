@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { sessionFromSeed } from "../signing/index.ts";
 import { approvalChallenge } from "../trust/index.ts";
-import { AnySnapshot, SnapshotV2 } from "./index.ts";
+import { AnySnapshot, checkoutRefHash, SnapshotV2 } from "./index.ts";
 
 interface A3Case {
   name: string;
@@ -39,7 +39,9 @@ describe("vector a3: snapshot v2", () => {
 
     it("continue_url_hash, checkout_ref_hash and the completer keyid come from the inputs", () => {
       expect(snapshot.continue_url_hash).toBe(`sha256:${sha256(c.input.continue_url)}`);
-      expect(snapshot.checkout_ref_hash).toBe(`sha256:${sha256(c.input.checkout_id)}`);
+      // Amendment L1: the checkout ref hash is over the id up to its first "?" (a3 checkout ids carry `?key=`).
+      expect(snapshot.checkout_ref_hash).toBe(checkoutRefHash(c.input.checkout_id));
+      expect(c.input.checkout_id).toContain("?");
       expect(snapshot.completer_keyid).toBe(sessionFromSeed(Buffer.from(c.input.completer_seed_hex, "hex")).keyid);
     });
 

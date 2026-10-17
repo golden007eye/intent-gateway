@@ -4,7 +4,7 @@ The files in this directory are the Intent Cloud public contract, copied byte fo
 
 - Contract: the Intent Cloud public contract
 - Version: 1.6.0
-- sha256 of `SHA256SUMS`: `7e386d25732f64b33718801d251a73d9ee7d13d68ff9615bd6a4c9a5b3ec7304`
+- sha256 of `SHA256SUMS`: `b75b771e3ae299d74a53f450574af6fab8e63d6bcca2b42aa957046afbf4657d`
 - Licence: Apache-2.0 (`LICENSE` in this directory)
 
 `SHA256SUMS` lists every contract file except `LICENSE` and itself, with paths relative to this directory. `src/contract/vendored.test.ts` checks each listed hash, that the listed set equals the files present, that the sha256 above matches `SHA256SUMS`, and that the spec's `info.version` equals the version above.

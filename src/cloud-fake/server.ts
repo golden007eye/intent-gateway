@@ -14,7 +14,8 @@ import type { AddressInfo } from "node:net";
 import {
   type AnySnapshot,
   type ApprovalCreated,
-  type ApprovalProof,
+  type AnyApprovalProof,
+  type ApprovalProofV1,
   type ApprovalState,
   type ApprovalStatus,
   type Cart,
@@ -23,18 +24,20 @@ import {
   type CredentialPublicKey,
   ApprovalHandle,
   CartRequest,
+  CartRequestV1,
   checkoutRefHash,
   CONTRACT_VERSION,
   type KeyStatement,
   type Offer,
   type Outcome as CloudOutcome,
+  Outcome as CloudOutcomeSchema,
   OutcomeReport,
   type OutcomeState,
   type ReceiptRequest as ReceiptRequestType,
   ReceiptRequest,
   SearchRequest,
   type ShipTo,
-  type Snapshot,
+  type SnapshotV1,
   type SnapshotV2,
   type WebAuthnAssertion,
 } from "../contract/index.ts";
@@ -241,7 +244,8 @@ interface ApprovalRecord {
   linkPath: string;
   expiresAt: number;
   state: ApprovalState;
-  created: ApprovalCreated;
+  // The 201 body as served: a v1 snapshot for a 1.5.0 cart, v2 for a 1.6.0 one.
+  created: Omit<ApprovalCreated, "snapshot"> & { snapshot: AnySnapshot };
   claimedBy?: string;
   ledger?: { seq: number; entry_hash: string };
   /** The approving passkey's assertion and key; the proof is signed from them at each read. */
@@ -250,6 +254,9 @@ interface ApprovalRecord {
   /** 1.6.0: the outcome, and when it became terminal (seconds). */
   outcome?: CloudOutcome;
   terminalAt?: number;
+  /** 1.6.0: the last reported state (R4) and the accepted completing report's id, which every later report names. */
+  reportedState?: OutcomeReport["state"];
+  completingReportId?: string;
   /** 1.6.0: accepted outcome reports by report_id: the body's hash and the first answer, which a retry replays. */
   reports: Map<string, { hash: string; body: OutcomeReport; reply: Reply }>;
 }
@@ -400,10 +407,11 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   }
 
   /** The proof as a read at `at` serves it: issued at the read, naming the ledger's `approved` entry. */
-  function servedProof(a: ApprovalRecord, approvedBy: NonNullable<ApprovalRecord["approvedBy"]>, at: number): ApprovalProof {
+  function servedProof(a: ApprovalRecord, approvedBy: NonNullable<ApprovalRecord["approvedBy"]>, at: number): AnyApprovalProof {
     const ref = a.ledger;
     if (ref === undefined) throw new Error("an approved approval without a ledger entry");
-    const unsigned: Omit<ApprovalProof, "cloud_signature"> = {
+    // A 1.5.0 approval's proof names its v1 snapshot, a 1.6.0 one its v2 snapshot.
+    const unsigned: Omit<ApprovalProofV1, "cloud_signature" | "snapshot"> & { snapshot: AnySnapshot } = {
       v: 1,
       approval_handle: a.handle,
       snapshot: a.snapshot,
@@ -416,18 +424,18 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     };
     if (faults.has("proofHash")) {
       const changed = { ...unsigned, snapshot_hash: sha256Hex("not the snapshot") };
-      return { ...changed, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(changed)) };
+      return { ...changed, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(changed)) } as AnyApprovalProof;
     }
     if (faults.has("proofUnknownKid")) {
       const changed = { ...unsigned, kid: "cloud-approval-209912" };
-      return { ...changed, cloud_signature: randomKey(changed.kid).sign(APPROVAL_PREFIX + canonicalize(changed)) };
+      return { ...changed, cloud_signature: randomKey(changed.kid).sign(APPROVAL_PREFIX + canonicalize(changed)) } as AnyApprovalProof;
     }
     if (proofSnapshotPatch !== null && a.snapshot.v === 2) {
       const snapshot = { ...a.snapshot, ...proofSnapshotPatch };
       const changed = { ...unsigned, snapshot, snapshot_hash: sha256Hex(canonicalize(snapshot)) };
       return { ...changed, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(changed)) };
     }
-    return { ...unsigned, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(unsigned)) };
+    return { ...unsigned, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(unsigned)) } as AnyApprovalProof;
   }
 
   // ---- Platform handlers (behind the edge) -------------------------------------------------------------------
@@ -458,15 +466,11 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
 
   function createCart(body: Buffer, keyid: string, ipKey: string, version: ServedVersion, at: number): Reply {
     const json = parseJson(body);
-    const parsed = CartRequest.safeParse(json);
-    if (!parsed.success) return fail(400, "bad_request", "body does not match CartRequest");
-    const request = parsed.data;
     const v16 = version === "1.6.0";
-    // 1.5.0 has neither field, and its schema refuses unknown ones; 1.6.0 requires the completer key.
-    if (!v16 && (request.completer_keyid !== undefined || request.completion_accepts !== undefined)) {
-      return fail(400, "bad_request", "body does not match CartRequest");
-    }
-    if (v16 && request.completer_keyid === undefined) return fail(400, "bad_request", "completer_keyid is required");
+    // 1.6.0 requires the completer key; 1.5.0 has neither 1.6.0 field, and its strict schema refuses them.
+    const parsed = v16 ? CartRequest.safeParse(json) : CartRequestV1.safeParse(json);
+    if (!parsed.success) return fail(400, "bad_request", "body does not match CartRequest");
+    const request: Partial<CartRequest> & CartRequestV1 = parsed.data;
     if (v16 && request.completer_keyid === keyid) return fail(400, "bad_request", "completer_keyid must not be the session key");
     const offer = offers.get(request.offer_handle);
     if (offer === undefined) return UNKNOWN_HANDLE();
@@ -551,7 +555,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     const approvalHandle = handle("ap");
     const expiresAt = Math.min(cart.expiresAt, at + APPROVAL_TTL);
     const continueUrl = `https://${cart.item.merchant.domain}/checkout/${cart.handle}`;
-    const v1: Snapshot = {
+    const v1: SnapshotV1 = {
       v: 1,
       approval: approvalHandle,
       nonce: randomBytes(16).toString("base64url"),
@@ -590,7 +594,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     }
     const snapshotHash = sha256Hex(canonicalize(snapshot));
     const linkPath = `/c/${randomBytes(16).toString("base64url")}`;
-    const created: ApprovalCreated = {
+    const created: ApprovalRecord["created"] = {
       approval_handle: approvalHandle,
       approval_link_path: linkPath,
       snapshot,
@@ -634,6 +638,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (!ApprovalHandle.safeParse(param).success) return fail(400, "bad_request", "malformed approval handle");
     const a = approvals.get(param);
     if (a === undefined || !mayUse(a, keyid, version, at)) return UNKNOWN_HANDLE();
+    // R8: an approval created by a 1.6.0 request is read only with the 1.6.0 header.
+    if (version !== "1.6.0" && a.snapshot.v === 2) return UNKNOWN_HANDLE();
     refresh(a, at);
     let state = a.state;
     if (a.outcome !== undefined) {
@@ -641,7 +647,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       if (mapped === null) return UNKNOWN_HANDLE();
       state = mapped;
     }
-    const status: ApprovalStatus = {
+    // A 1.5.0 approval's proof carries its v1 snapshot, which the 1.6.0 ApprovalStatus schema does not allow.
+    const status: Omit<ApprovalStatus, "proof"> & { proof?: AnyApprovalProof } = {
       state,
       display: { merchant: a.snapshot.merchant.name, title: a.snapshot.item.title, total: a.snapshot.total },
     };
@@ -653,14 +660,23 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return { status: 200, body: status };
   }
 
-  /** How Intent Cloud stores a gateway's report (Appendix G R5): never as more than `reported` assurance. */
+  /**
+   * How Intent Cloud stores a gateway's report (Appendix G R5): source gateway_report, reported assurance, and what the
+   * gateway said under `reported`; an ordered or mismatch report is stored as `reported`, the others in their state.
+   */
   function storedOutcome(report: OutcomeReport): CloudOutcome {
-    const base = { source: "gateway_report", assurance: "reported", observed_at: report.observed_at } as const;
-    if (report.state !== "ordered" && report.state !== "mismatch") return { ...base, state: report.state };
     // Copied by key name: src/ lint forbids reading a property named like `process.binding`.
     const reported = Object.fromEntries(REPORTED_KEYS.filter((k) => report[k] !== undefined).map((k) => [k, report[k]])) as NonNullable<CloudOutcome["reported"]>;
-    return { ...base, state: "reported", reported };
+    const state = report.state === "ordered" || report.state === "mismatch" ? "reported" : report.state;
+    return { state, source: "gateway_report", assurance: "reported", observed_at: report.observed_at, reported };
   }
+
+  /** R4's transitions of the reported state; `approved` is before any report. Terminal states allow nothing. */
+  const NEXT: Readonly<Record<string, readonly string[]>> = {
+    approved: ["completing"],
+    completing: ["indeterminate", "ordered", "mismatch", "failed"],
+    indeterminate: ["ordered", "mismatch", "failed"],
+  };
 
   /** `POST /v1/approvals/{h}/outcome-reports` (Appendix G R1–R7). */
   function reportOutcome(param: string, body: Buffer, keyid: string, version: ServedVersion, at: number): Reply {
@@ -674,25 +690,26 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (reportFault !== null) return fail(reportFault, "bad_request", "fake cloud error");
     const parsed = OutcomeReport.safeParse(parseJson(body));
     if (!parsed.success) return fail(400, "bad_request", "body does not match OutcomeReport");
+    // The schema holds the field rules (checkout_ref_hash, completing_report_id, the order fields, gateway_precheck).
     const report = parsed.data;
-    if (report.state === "completing" && report.checkout_ref === undefined) return fail(400, "bad_request", "completing needs checkout_ref");
-    if ((report.state === "ordered" || report.state === "mismatch") && !ORDER_KEYS.every((k) => k in report)) {
-      return fail(400, "bad_request", `${report.state} needs order_ref, final_total and binding`);
-    }
+    // R2: the body hash is hex(SHA-256(JCS(body))); a retry resends the same bytes and gets the first answer.
     const hash = sha256Hex(canonicalize(report));
     const prior = a.reports.get(report.report_id);
     if (prior !== undefined) return prior.hash === hash ? prior.reply : fail(409, "conflict", "report_id reused with another body");
     refresh(a, at);
-    if (a.outcome === undefined) {
-      if (report.state !== "completing") return fail(409, "conflict", "the first report must be completing");
+    const current = a.reportedState ?? "approved";
+    if (report.state === "completing") {
+      if (current !== "approved") return fail(409, "conflict", "the approval is already completing");
       if (a.state !== "approved" || at >= a.expiresAt) return fail(410, "gone", "the approval is not approved, or has expired");
-    } else if (a.terminalAt !== undefined) {
-      return fail(409, "conflict", "the outcome is final");
-    } else if (report.state === "completing") {
-      return fail(409, "conflict", "the approval is already completing");
+    } else if (report.completing_report_id !== a.completingReportId) {
+      return fail(409, "conflict", "completing_report_id is not the accepted completing report");
     }
+    if (!(NEXT[current] ?? []).includes(report.state)) return fail(409, "conflict", `no ${report.state} report after ${current}`);
     const outcome = storedOutcome(report);
     a.outcome = outcome;
+    a.reportedState = report.state;
+    if (report.state === "completing") a.completingReportId = report.report_id;
+    // Terminal is judged on the reported state (R4).
     if (report.state === "ordered" || report.state === "mismatch" || report.state === "failed") a.terminalAt = at;
     const reply: Reply = { status: 201, body: { accepted: true, outcome } };
     a.reports.set(report.report_id, { hash, body: report, reply });
@@ -930,7 +947,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       if (a.state !== "approved" && a.state !== "handed_off") return { status: 409, state: a.state, reason: `no outcome when ${a.state}` };
       if (a.terminalAt !== undefined) return { status: 409, state: a.state, reason: "the outcome is final" };
       const at = now();
-      a.outcome = { ...outcome, observed_at: timestamp(at) };
+      // Parsed, so a test cannot make the fake serve an outcome the 1.6.0 schema refuses (fields, O1, assurance caps).
+      a.outcome = CloudOutcomeSchema.parse({ ...outcome, observed_at: timestamp(at) });
       if (TERMINAL.has(outcome.state)) a.terminalAt = at;
       return { status: 200, state: statusState(outcome.state, modeOf(a))["1.6.0"] };
     },

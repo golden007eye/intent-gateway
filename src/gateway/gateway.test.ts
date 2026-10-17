@@ -576,7 +576,7 @@ describe("createCart snapshot checks", () => {
 
   it("a snapshot whose ZIP is not the ZIP sent is refused, even with the same 3-digit prefix", async () => {
     const h = await setup();
-    rewriteApproval(h, (c) => (c.snapshot.v === 2 ? { ...c, snapshot: { ...c.snapshot, ship_to: { country: "US", postal_code: "94199" } } } : c));
+    rewriteApproval(h, (c) => ({ ...c, snapshot: { ...c.snapshot, ship_to: { country: "US", postal_code: "94199" } } }));
     const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
     expect(result.status).toBe("refused");
     expect(result.message).toContain("ship_to differs from the ZIP sent");
@@ -585,9 +585,9 @@ describe("createCart snapshot checks", () => {
   it("a v1 snapshot from a 1.6.0 host is refused", async () => {
     const h = await setup();
     rewriteApproval(h, (c) => {
-      if (c.snapshot.v !== 2) return c;
       const v1 = omit(c.snapshot, ["merchant_origin", "variant_ref", "checkout_ref_hash", "completion_mode", "completer_keyid", "total_estimated"]);
-      return { ...c, snapshot: { ...v1, v: 1, ship_to: { country: "US", postal_prefix: "941" } } };
+      // The 1.6.0 schema refuses a v1 snapshot; this one arrives past it, as a faulty adapter would hand it on.
+      return { ...c, snapshot: { ...v1, v: 1, ship_to: { country: "US", postal_prefix: "941" } } } as never;
     });
     const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
     expect(result.status).toBe("refused");
@@ -1102,7 +1102,7 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     h.patch.createCart = async (r) => {
       // Before the disclosed call runs (and so before its disclosure is appended), the key is on disk.
       expect(await keyFiles(h)).toContain(r.completer_keyid);
-      const named = (e: Entry): boolean => e.kind === "disclosure" && Buffer.from(String((e.body as { body_b64?: unknown }).body_b64), "base64").toString().includes(String(r.completer_keyid));
+      const named = (e: Entry): boolean => e.kind === "disclosure" && Buffer.from(String((e.body as { body_b64?: unknown }).body_b64), "base64").toString().includes(r.completer_keyid);
       expect(h.store.entries().some(named)).toBe(false);
       checked = true;
       return h.real.createCart(r);
@@ -1401,7 +1401,8 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     h.fake.approveWithPasskey(approval, new SoftPasskey());
     await h.gateway.getApprovalStatus({ approval_handle: approval });
     const verified = outcome === "ordered";
-    h.fake.setOutcome(approval, { state: outcome, source: "merchant_api", assurance: verified ? "verified" : "reported", ...(verified ? { binding: BINDING_OK } : {}) });
+    const order = outcome === "ordered" || outcome === "mismatch" ? { order_ref: "#1001", final_total: { amount_minor: 9499, currency: "USD" as const }, binding: BINDING_OK } : {};
+    expect(h.fake.setOutcome(approval, { state: outcome, source: "merchant_api", assurance: verified ? "verified" : "reported", ...order }).status).toBe(200);
     expect(await h.gateway.getApprovalStatus({ approval_handle: approval })).toMatchObject({ status: "approved", cloud_reported: reported });
     expect(bodies(h, "observed").at(-1)).toMatchObject({ endpoint: "getApproval", outcome_state: outcome });
   });

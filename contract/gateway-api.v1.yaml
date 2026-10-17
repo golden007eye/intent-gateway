@@ -310,7 +310,9 @@ paths:
       operationId: getApproval
       summary: Approval status and proof
       description: |
-        Only the session that created the approval sees it; any other session gets 404. Once the
+        Only the session that created the approval sees it, and (1.6.0) the approval's own completer
+        key within the limits of Appendix G R7; any other key gets 404. An approval created by a
+        1.6.0 request is read only with the 1.6.0 header (R8). Once the
         approval is `approved`, `handed_off` or `ordered`, the response carries `proof`
         (Appendix E). `ordered` is what Intent Cloud reported, as the merchant told it.
       tags: [approvals]
@@ -346,13 +348,15 @@ paths:
       operationId: reportOutcome
       summary: Report a shop_agent outcome
       description: |
-        1.6.0, Appendix G R1-R7. Signed by the approval's `completer_keyid` or by the session that
-        created the cart; any other key gets 403. The first accepted report must be `completing`:
-        it moves the approval to `completing` atomically, and that is the redemption. The same
-        `report_id` with the same body replays the first answer; with another body, or another
-        `report_id` once `completing` or terminal, 409. `completing` after `expires_at`, or when the
-        approval is not `approved`, gets 410. A gateway's `ordered` or `mismatch` is stored as
-        `reported`. Not yet served: until then the edge answers 404.
+        1.6.0, Appendix G R0-R8. Signed by the approval's `completer_keyid` or by the session that
+        created the cart; any other key gets 404, like an unknown handle (R1). A non-`shop_agent`
+        approval gets 409 (R0). The first accepted report must be `completing`: it moves the
+        approval to `completing` atomically, and that is the redemption. The same `report_id` with
+        the same body hash replays the first answer; with another body, 409; a second `completing`,
+        409. Every later report carries `completing_report_id` and follows R4's transitions, else
+        409. A first `completing` after `expires_at`, or on a rejected or expired approval, gets
+        410. A gateway's report is stored as `reported` (R5). Not yet served: until then the edge answers
+        404.
       tags: [approvals]
       parameters:
         - $ref: "#/components/parameters/ContractVersion"
@@ -381,8 +385,6 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -502,19 +504,6 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    Forbidden:
-      description: The signing key may not report for this approval (1.6.0, Appendix G R1).
-      headers:
-        Intent-Contract-Version:
-          $ref: "#/components/headers/IntentContractVersion"
-        Intent-Receipt:
-          $ref: "#/components/headers/IntentReceipt"
-        Intent-Receipt-Signature:
-          $ref: "#/components/headers/IntentReceiptSignature"
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
     Gone:
       description: The handle has expired.
       headers:
@@ -613,17 +602,6 @@ components:
         postal_code:
           type: string
           pattern: ^[0-9]{5}$
-    ShipToArea:
-      type: object
-      additionalProperties: false
-      required: [country, postal_prefix]
-      properties:
-        country:
-          type: string
-          const: US
-        postal_prefix:
-          type: string
-          pattern: ^[0-9]{3}$
     Merchant:
       type: object
       additionalProperties: false
@@ -886,7 +864,7 @@ components:
     CartRequest:
       type: object
       additionalProperties: false
-      required: [offer_handle, quantity, ship_to]
+      required: [offer_handle, quantity, ship_to, completer_keyid]
       properties:
         offer_handle:
           $ref: "#/components/schemas/OfferHandle"
@@ -897,7 +875,9 @@ components:
         ship_to:
           $ref: "#/components/schemas/ShipTo"
         completer_keyid:
-          description: Per-approval key that may read and report it (1.6.0); required for 1.6 gateways.
+          description: |
+            The per-approval completer key (1.6.0, Appendix C): a new key for every cart, never the
+            signing keyid and never one named by an earlier approval, else 400.
           $ref: "#/components/schemas/GatewayKeyId"
         completion_accepts:
           description: Usable completion modes, preference order (1.6.0); absent means [handoff].
@@ -942,49 +922,6 @@ components:
           $ref: "#/components/schemas/VariantRef"
         total_estimated:
           type: boolean
-    Snapshot:
-      description: The purchase snapshot, exactly as Appendix A defines it.
-      type: object
-      additionalProperties: false
-      required:
-        [v, approval, nonce, merchant, item, quantity, unit_price, shipping, total, total_kind, ship_to, continue_url_hash, rule_version, expires_at]
-      properties:
-        v:
-          type: integer
-          const: 1
-        approval:
-          type: string
-          minLength: 1
-        nonce:
-          description: Snapshot salt, 16 bytes base64url without padding.
-          type: string
-          pattern: ^[A-Za-z0-9_-]{21}[AQgw]$
-        merchant:
-          $ref: "#/components/schemas/Merchant"
-        item:
-          $ref: "#/components/schemas/Item"
-        quantity:
-          type: integer
-          minimum: 1
-          maximum: 3
-        unit_price:
-          $ref: "#/components/schemas/Money"
-        shipping:
-          $ref: "#/components/schemas/Money"
-        total:
-          $ref: "#/components/schemas/Money"
-        total_kind:
-          $ref: "#/components/schemas/TotalKind"
-        ship_to:
-          $ref: "#/components/schemas/ShipToArea"
-        continue_url_hash:
-          type: string
-          pattern: ^sha256:[0-9a-f]{64}$
-        rule_version:
-          type: string
-          minLength: 1
-        expires_at:
-          $ref: "#/components/schemas/Timestamp"
     ApprovalCreated:
       type: object
       additionalProperties: false
@@ -997,9 +934,8 @@ components:
           type: string
           pattern: ^/c/[A-Za-z0-9_-]{16,64}$
         snapshot:
-          oneOf:
-            - $ref: "#/components/schemas/Snapshot"
-            - $ref: "#/components/schemas/SnapshotV2"
+          description: Always a v2 snapshot in 1.6.0 (Appendix A); a 1.6.0 caller refuses any other.
+          $ref: "#/components/schemas/SnapshotV2"
         snapshot_hash:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -1134,9 +1070,8 @@ components:
         approval_handle:
           $ref: "#/components/schemas/ApprovalHandle"
         snapshot:
-          oneOf:
-            - $ref: "#/components/schemas/Snapshot"
-            - $ref: "#/components/schemas/SnapshotV2"
+          description: Always a v2 snapshot in 1.6.0 (Appendix A); a 1.6.0 caller refuses any other.
+          $ref: "#/components/schemas/SnapshotV2"
         snapshot_hash:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -1217,9 +1152,10 @@ components:
       type: string
       enum: [handoff, shop_agent]
     MerchantOrigin:
-      description: https:// + merchant.domain, lowercased; ASCII, no port, no path (1.6.0).
+      description: "https:// + merchant.domain, the Appendix G host grammar (1.6.0, Appendix A v2)."
       type: string
-      pattern: ^https://[a-z0-9.-]{1,253}$
+      maxLength: 261
+      pattern: ^https://(?:[a-z0-9]|[a-z0-9][a-z0-9-]{0,61}[a-z0-9])(?:\.(?:[a-z0-9]|[a-z0-9][a-z0-9-]{0,61}[a-z0-9]))*$
     VariantRef:
       description: The merchant's variant reference, e.g. gid://shopify/ProductVariant/<n> (1.6.0).
       type: string
@@ -1278,7 +1214,7 @@ components:
         variant_ref:
           $ref: "#/components/schemas/VariantRef"
         checkout_ref_hash:
-          description: '"sha256:" + hex(SHA-256(utf8(checkout_id))) of the merchant checkout.'
+          description: Checkout ref hash of the merchant checkout (Appendix G), the id up to its first ?.
           type: string
           pattern: ^sha256:[0-9a-f]{64}$
         completion_mode:
@@ -1290,9 +1226,10 @@ components:
           description: True when the total came from a quote without the merchant's tax.
           type: boolean
     OrderRef:
-      description: The merchant's order reference (1.6.0). Never an email or a name.
+      description: "An order number (#1001) or a Shopify order id gid://shopify/Order/<n> (1.6.0)."
       type: string
-      pattern: ^[A-Za-z0-9#-]{1,64}$
+      maxLength: 64
+      pattern: ^(?:[A-Za-z0-9#-]{1,64}|gid://shopify/Order/[0-9]{1,20})$
     OutcomeState:
       description: Outcome states (1.6.0, Appendix G).
       type: string
@@ -1341,9 +1278,10 @@ components:
       properties:
         state:
           type: string
-          enum: [ordered, mismatch, failed]
+          enum: [completing, indeterminate, ordered, mismatch, failed]
         source:
-          $ref: "#/components/schemas/OutcomeSource"
+          type: string
+          enum: [shop_api, gateway_precheck]
         order_ref:
           $ref: "#/components/schemas/OrderRef"
         final_total:
@@ -1354,10 +1292,57 @@ components:
       description: |
         What happened after the approval (1.6.0, Appendix G). Present once the approval is past
         `approved`. Rule O1: `state: ordered` only with `assurance: verified` and
-        `binding.result: ok`.
+        `binding.result: ok`. `ordered` and `mismatch` carry `order_ref`, `final_total` and
+        `binding`; `reported` carries what a gateway reported and is present exactly when `source` is
+        `gateway_report`.
       type: object
       additionalProperties: false
       required: [state, source, assurance, observed_at]
+      allOf:
+        - if:
+            properties:
+              state:
+                const: ordered
+          then:
+            required: [order_ref, final_total, binding]
+            properties:
+              assurance:
+                const: verified
+              binding:
+                properties:
+                  result:
+                    const: ok
+        - if:
+            properties:
+              state:
+                const: mismatch
+          then:
+            required: [order_ref, final_total, binding]
+        - if:
+            properties:
+              state:
+                const: reported
+          then:
+            properties:
+              assurance:
+                const: reported
+        - if:
+            properties:
+              source:
+                const: gateway_report
+          then:
+            required: [reported]
+          else:
+            not:
+              required: [reported]
+        - if:
+            properties:
+              source:
+                enum: [checkout_page, gateway_report]
+          then:
+            properties:
+              assurance:
+                const: reported
       properties:
         state:
           $ref: "#/components/schemas/OutcomeState"
@@ -1406,26 +1391,54 @@ components:
           $ref: "#/components/schemas/Ed25519Signature"
     OutcomeReport:
       description: |
-        A gateway's report of a `shop_agent` outcome (1.6.0, Appendix G R1-R7). `checkout_ref` is
-        required for `completing`; `order_ref`, `final_total` and `binding` for `ordered` and
-        `mismatch`.
+        A gateway's report of a `shop_agent` outcome (1.6.0, Appendix G R0-R8). `checkout_ref_hash`
+        (never the raw checkout id) is required for `completing`; `completing_report_id` for every
+        other state; `order_ref`, `final_total` and `binding` for `ordered` and `mismatch`;
+        `source: gateway_precheck` only with `failed`.
       type: object
       additionalProperties: false
       required: [report_id, state, source, observed_at]
+      allOf:
+        - if:
+            properties:
+              state:
+                const: completing
+          then:
+            required: [checkout_ref_hash]
+          else:
+            required: [completing_report_id]
+        - if:
+            properties:
+              state:
+                enum: [ordered, mismatch]
+          then:
+            required: [order_ref, final_total, binding]
+        - if:
+            properties:
+              source:
+                const: gateway_precheck
+          then:
+            properties:
+              state:
+                const: failed
       properties:
         report_id:
           type: string
-          pattern: ^or_[A-Za-z0-9_-]{16,32}$
+          pattern: ^or_[A-Za-z0-9_-]{22,32}$
+        completing_report_id:
+          description: The `report_id` of the accepted `completing` report (R4).
+          type: string
+          pattern: ^or_[A-Za-z0-9_-]{22,32}$
         state:
           type: string
           enum: [completing, ordered, mismatch, failed, indeterminate]
         source:
           type: string
           enum: [shop_api, gateway_precheck]
-        checkout_ref:
+        checkout_ref_hash:
+          description: The checkout ref hash of the Shop checkout (Appendix G), never the raw id.
           type: string
-          minLength: 1
-          maxLength: 128
+          pattern: ^sha256:[0-9a-f]{64}$
         order_ref:
           $ref: "#/components/schemas/OrderRef"
         final_total:

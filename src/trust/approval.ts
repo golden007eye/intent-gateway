@@ -2,7 +2,7 @@
 // gateway has verified itself. Intent Cloud's signature is checked, and then the passkey assertion is re-verified
 // against the statement's confirm origin and rp_id, so neither Intent Cloud nor the agent alone can approve.
 import { constants, createHash, createPublicKey, type KeyObject, verify } from "node:crypto";
-import { type AnySnapshot, ApprovalProof, ApprovalState, type CredentialPublicKey, type LedgerRef } from "../contract/index.ts";
+import { AnyApprovalProof, type AnySnapshot, ApprovalProof, ApprovalState, type CredentialPublicKey, type LedgerRef } from "../contract/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { approverFingerprint } from "./fingerprint.ts";
 import { fromBase64Url, utf8 } from "./bytes.ts";
@@ -85,7 +85,9 @@ export function verifyApprovalProof(
   if (rawProof === undefined) return fail(null, "missing_proof");
 
   // Step 1: the schema, and the approval the gateway asked about.
-  const parsed = ApprovalProof.safeParse(rawProof);
+  // A 1.6.0 approval (chained with step 7's `sent`) needs a v2 proof; one chained by a 1.5.0 gateway (no `sent`) keeps
+  // its released 1.5.0 form, so `intent verify` still checks those chains. Step 7 then refuses a v1 snapshot anyway.
+  const parsed = (pending.sent === undefined ? AnyApprovalProof : ApprovalProof).safeParse(rawProof);
   if (!parsed.success) return fail(1, "schema");
   const proof = parsed.data;
   // A lone surrogate passes the schema but has no canonical form; such a proof cannot have been signed.

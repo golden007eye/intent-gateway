@@ -44,7 +44,7 @@ const USD = (amount_minor: number): Json => ({ amount_minor, currency: "USD" });
 const MERCHANT = { name: "Example Shop", domain: "shop.example" };
 const ITEM = { title: "Trail shoe", variant: "Size 10" };
 const SEARCH: SearchRequest = { ship_to: { postal_code: "94110", country: "US" }, product: "trail shoe" };
-const CART_REQUEST: CartRequest = { offer_handle: "of_TEST0001", quantity: 1, ship_to: { country: "US", postal_code: "94110" } };
+const CART_REQUEST: CartRequest = { offer_handle: "of_TEST0001", quantity: 1, ship_to: { country: "US", postal_code: "94110" }, completer_keyid: createSession().keyid };
 // A 16-digit, Luhn-valid SKU: findIdentity would call it a card if it scanned inbound bodies.
 const SKU_TITLE = "Trail shoe SKU 4111111111111111";
 const OFFER = {
@@ -78,7 +78,7 @@ const BODIES: Readonly<Record<string, Json>> = {
     approval_handle: "ap_TEST0001",
     approval_link_path: "/c/abcdefghijklmnop",
     snapshot: {
-      v: 1,
+      v: 2,
       approval: "ap_TEST0001",
       nonce: "AAAAAAAAAAAAAAAAAAAAAA",
       merchant: MERCHANT,
@@ -88,10 +88,16 @@ const BODIES: Readonly<Record<string, Json>> = {
       shipping: USD(0),
       total: USD(8999),
       total_kind: "exact",
-      ship_to: { country: "US", postal_prefix: "941" },
+      ship_to: { country: "US", postal_code: "94110" },
       continue_url_hash: `sha256:${"a".repeat(64)}`,
       rule_version: "recheck-v1",
       expires_at: "2026-09-24T12:30:00Z",
+      merchant_origin: "https://shop.example",
+      variant_ref: "gid://shopify/ProductVariant/1",
+      checkout_ref_hash: `sha256:${"c".repeat(64)}`,
+      completion_mode: "handoff",
+      completer_keyid: CART_REQUEST.completer_keyid,
+      total_estimated: false,
     },
     snapshot_hash: "b".repeat(64),
     check_code: "0123abcd",
@@ -258,7 +264,7 @@ describe("invariant 2: log before send", () => {
       "getMeta", "getSignatureKeys", "getKeyStatement", "searchCatalog", "createCart", "createApproval", "getApproval",
     ]);
     expect(disclosures[5]?.["path"]).toBe("/v1/carts/ct_TEST0001/approvals");
-    expect(disclosures[4]?.["fields"]).toEqual(["offer_handle", "quantity", "ship_to", "ship_to.country", "ship_to.postal_code"]);
+    expect(disclosures[4]?.["fields"]).toEqual(["completer_keyid", "offer_handle", "quantity", "ship_to", "ship_to.country", "ship_to.postal_code"]);
     // Unsigned endpoints still log the digest; they have no keyid, nonce or created.
     expect(disclosures[1]).toMatchObject({ fields: [], body_b64: "", keyid: null, nonce: null, created: null });
     expect(disclosures[1]?.["content_digest"]).toMatch(/^sha-256=:/);

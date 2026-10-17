@@ -1,0 +1,480 @@
+{
+  "id": "E2",
+  "appendix": "E",
+  "description": "Appendix E step 7 (1.6.0): the approved v2 snapshot (input.snapshot, the a3 shop_agent snapshot) against the gateway's own CartRequest, the Offer and the Cart it received. refused lists the failing fields in the order quantity, ship_to, completer_keyid, completion_mode, variant_ref, merchant_origin, total, expires_at. A v1 snapshot is always refused.",
+  "snapshot": {
+    "v": 2,
+    "approval": "ap_TEST0004",
+    "nonce": "EBESExQVFhcYGRobHB0eHw",
+    "merchant": {
+      "name": "Test Shop",
+      "domain": "shop.example"
+    },
+    "item": {
+      "title": "Trail Runner 3",
+      "variant": "US 10 / Blue"
+    },
+    "quantity": 1,
+    "unit_price": {
+      "amount_minor": 12000,
+      "currency": "USD"
+    },
+    "shipping": {
+      "amount_minor": 500,
+      "currency": "USD"
+    },
+    "total": {
+      "amount_minor": 13600,
+      "currency": "USD"
+    },
+    "total_kind": "max",
+    "ship_to": {
+      "country": "US",
+      "postal_code": "94110"
+    },
+    "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+    "rule_version": "recheck-v1",
+    "expires_at": "2026-10-16T12:15:00Z",
+    "merchant_origin": "https://shop.example",
+    "variant_ref": "gid://shopify/ProductVariant/1001",
+    "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+    "completion_mode": "shop_agent",
+    "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+    "total_estimated": true
+  },
+  "cases": [
+    {
+      "name": "the gateway's own request",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": true,
+        "refused": []
+      }
+    },
+    {
+      "name": "quantity 2 requested, 1 approved",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 2,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "quantity"
+        ]
+      }
+    },
+    {
+      "name": "another ZIP requested",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94111"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "ship_to"
+        ]
+      }
+    },
+    {
+      "name": "another completer key",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "completer_keyid"
+        ]
+      }
+    },
+    {
+      "name": "shop_agent approved, only handoff accepted",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "completion_mode"
+        ]
+      }
+    },
+    {
+      "name": "shop_agent approved, completion_accepts absent (= [handoff])",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s"
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "completion_mode"
+        ]
+      }
+    },
+    {
+      "name": "another variant offered",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1002",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "variant_ref"
+        ]
+      }
+    },
+    {
+      "name": "the offer the agent picked is another merchant",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Other",
+            "domain": "other.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "merchant_origin"
+        ]
+      }
+    },
+    {
+      "name": "another total on the cart",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13500,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "total"
+        ]
+      }
+    },
+    {
+      "name": "the snapshot outlives the cart",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:10:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "expires_at"
+        ]
+      }
+    },
+    {
+      "name": "another merchant origin on the cart",
+      "input": {
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://other.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "merchant_origin"
+        ]
+      }
+    }
+  ]
+}
