@@ -136,6 +136,32 @@ describe("intent log with observations (golden)", () => {
   });
 });
 
+describe("intent log -v with a 1.6.0 outcome", () => {
+  it("names the outcome as served and the order it names (plan G4 test 7)", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "log-outcome-")), "demo");
+    const store = await openStore(dir, { clock: () => TS });
+    const status = await store.append("disclosure", disclosure("getApproval", "GET", "/v1/approvals/ap_TEST0003", null));
+    await store.append("receipt", { disclosure_seq: status.seq, status: 200, verified: true });
+    await store.append("observed", {
+      disclosure_seq: status.seq,
+      endpoint: "getApproval",
+      approval_handle: "ap_TEST0003",
+      state: "ordered",
+      outcome_state: "ordered",
+      outcome: { state: "ordered", source: "signed_webhook", assurance: "verified", order_ref: "ORD-100001", final_total_minor: 12500, binding_result: "ok" },
+      order_number: "ORD-100001",
+      title: "Trail Runner 3",
+      merchant: "Trailhead",
+      total_minor: 12500,
+      currency: "USD",
+    });
+    await store.close();
+    expect(formatVerbose(readLog(dir), { style: PLAIN })).toContain(
+      "approval ap_TEST0003 ordered: Trail Runner 3, $125.00, Trailhead; outcome as served: ordered (signed_webhook, verified), order ORD-100001\n",
+    );
+  });
+});
+
 describe("the footer prints the real invocation", () => {
   it("a short invocation goes before each command; a long one is named once on its own line; neither is cut", async () => {
     const { items } = await observedChain();

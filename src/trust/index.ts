@@ -1,5 +1,5 @@
 // Verifies what Intent Cloud signs: the root-signed key statement (Appendix F), receipts (Appendix D) and approval
-// proofs (Appendix E), and decides whether an approving passkey is the pinned one (ADR-0011). Pure; no I/O.
+// proofs (Appendix E) and outcome statements (Appendix G), and decides whether an approving passkey is the pinned one (ADR-0011). Pure; no I/O.
 //
 // Use: verifyStatement → KeySet; verifyReceipt and verifyApprovalProof take that KeySet and `now`, and refuse a
 // KeySet that verifyStatement did not make or that has expired. checkApprover takes the credential of a verified
@@ -15,6 +15,15 @@
 export { approvalChallenge, type ApprovalFailure, type ApprovalResult, type ChainEntry, verifyApprovalProof, type VerifiedApproval, type VerifiedCredential } from "./approval.ts";
 export { type ApproverBody, type ApproverCheck, checkApprover, type FlagReason } from "./approver.ts";
 export { approverFingerprint } from "./fingerprint.ts";
+export {
+  OUTCOME_PREFIX,
+  type OutcomeApproval,
+  type OutcomeCheckOptions,
+  type OutcomeRefusal,
+  type OutcomeStatementResult,
+  stagingSourceAllowed,
+  verifyOutcomeStatement,
+} from "./outcome.ts";
 export { type ReceiptFailure, type ReceiptResponse, type ReceiptResult, type SentRequest, verifyReceipt } from "./receipt.ts";
 export { instant, readSent, SENT_FIELDS, SENT_WORDS, SentPurchase, type SentReason, sentProblems } from "./sent.ts";
 export { isTestRoot, onlyTestRoot, TEST_ROOT_KEY, TEST_ROOT_X } from "./test-root.ts";

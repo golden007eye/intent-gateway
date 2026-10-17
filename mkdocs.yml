@@ -91,5 +91,6 @@ nav:
       - "ADR-0012: Node support": adr/0012-node-support.md
       - "ADR-0013: Bundled dependencies": adr/0013-bundled-dependencies.md
       - "ADR-0014: Log before send, every destination": adr/0014-log-before-send-every-destination.md
+      - "ADR-0015: Outcomes, assurance and binding": adr/0015-outcomes-assurance-binding.md
       - "ADR-0016: Per-approval completer key": adr/0016-per-approval-completer-key.md
       - "ADR-0017: Wallet adapters in the gateway": adr/0017-wallet-adapters-in-the-gateway.md

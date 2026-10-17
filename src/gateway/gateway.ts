@@ -30,12 +30,14 @@ import {
   ApprovalHandle,
   ApprovalProof,
   type ApprovalStatus,
+  type AnySnapshot,
   type Cart,
   type CartRequest as CloudCartRequest,
   type CompletionMode as CloudCompletionMode,
   CONTRACT_VERSION,
   type KeyStatement,
   type Offer as CloudOffer,
+  type OutcomeState,
   OfferHandle,
   type SearchRequest as CloudSearchRequest,
 } from "../contract/index.ts";
@@ -56,6 +58,7 @@ import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { CLOUD_BASELINE, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
 import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
+import { CloudOutcomeEntry, ORDER_REF, outcomesFor, readCloudOutcome, replaces, shownStatus, type StatementCheck } from "../outcome/index.ts";
 import { findIdentity } from "../privacy/index.ts";
 import type { CompleterKeys, Session } from "../signing/index.ts";
 import type { Entry, Store } from "../store/index.ts";
@@ -67,8 +70,10 @@ import {
   onlyTestRoot,
   type PinnedRootKey,
   verifyApprovalProof,
+  verifyOutcomeStatement,
   SENT_WORDS,
   readSent,
+  stagingSourceAllowed,
   type SentPurchase,
   sentProblems,
   verifyStatement,
@@ -213,12 +218,38 @@ export type CreateCartResult =
     })
   | Refused;
 
+/**
+ * Intent Cloud's outcome as the gateway read it (ADR-0015): `state_shown` is never more than the verified statement
+ * (rule O1, invariant 5); null when nothing was acted on (no statement, or one that did not verify).
+ */
+export interface ShownOutcome {
+  /**
+   * What the gateway shows: this read's outcome when its statement verified (and R5a lets it replace the one adopted
+   * before), else the outcome adopted from an earlier verified statement, else null.
+   */
+  readonly state_shown: OutcomeState | null;
+  /** True when `state_shown` comes from an earlier verified statement, not this read's. */
+  readonly kept_earlier?: true;
+  /** The order the shown outcome's statement names. */
+  readonly order_ref?: string;
+  /** Intent Cloud's own words in this read, as it served them. */
+  readonly cloud_state: OutcomeState;
+  readonly source: string;
+  readonly assurance: string;
+  /** Whether this read's statement verified. */
+  readonly statement_verified: boolean;
+  /** The rule this read's statement failed, when it did not verify. */
+  readonly refused_by?: string;
+}
+
 export type ApprovalStatusResult =
   | (Told & {
       readonly status: "approved";
-      /** What Intent Cloud reported after the approval, worded as its report: handed_off or ordered. */
+      /** What Intent Cloud reported after the approval, worded as its report: handed_off or ordered (from the verified statement only). */
       readonly cloud_reported?: "handed_off" | "ordered";
+      /** The order the verified statement names, when it shows `ordered`. */
       readonly order_number?: string;
+      readonly outcome?: ShownOutcome;
       readonly fingerprint: string;
     })
   | (Told & { readonly status: "flagged"; readonly fingerprint: string })
@@ -797,7 +828,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const fetched = await call(() => cloud.getApproval(handle, signer), fromSeq);
     if (fetched.ok) await store.append("observed", observeStatus(fetched.seq, handle, fetched.body));
     const mode = bodyOf(pending).completion_mode === "shop_agent" ? "shop_agent" : "handoff";
-    if (chained !== undefined) return reportChained(chained, fetched.ok ? fetched.body : null, mode, fromSeq);
+    if (chained !== undefined) return reportChained(chained, fetched.ok ? fetched.body : null, mode, keys, fromSeq);
     if (!fetched.ok) return fetched.refused;
     const status = fetched.body;
 
@@ -847,7 +878,8 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (check.decision === "pin") {
       logger.warn(`intent-gateway: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
     }
-    return approved(check.fingerprint, status, mode, fromSeq);
+    const shown = await recordOutcome(handle, status, verified.snapshot, verified.snapshotHash, keys);
+    return approved(check.fingerprint, status, mode, shown, fromSeq);
   }
 
   /**
@@ -866,38 +898,114 @@ export function createGateway(options: GatewayOptions): Gateway {
   }
 
   /** A handle already chained: its proof was verified, and its passkey was the pin, when it was chained. */
-  function reportChained(chained: Entry, status: ApprovalStatus | null, mode: CloudCompletionMode, fromSeq: number): ApprovalStatusResult {
+  async function reportChained(chained: Entry, status: ApprovalStatus | null, mode: CloudCompletionMode, keys: KeySet, fromSeq: number): Promise<ApprovalStatusResult> {
     const proof = ApprovalProof.safeParse(bodyOf(chained).proof);
     if (!proof.success) return { status: "not_verified", message: `The chained approval is malformed; run ${INTENT} verify.`, summary: summary(fromSeq) };
-    return approved(approverFingerprint(proof.data.credential_public_key), status, mode, fromSeq);
+    const shown = await recordOutcome(String(bodyOf(chained).handle), status, proof.data.snapshot, proof.data.snapshot_hash, keys);
+    return approved(approverFingerprint(proof.data.credential_public_key), status, mode, shown, fromSeq);
   }
 
-  function approved(fingerprint: string, status: ApprovalStatus | null, mode: CloudCompletionMode, fromSeq: number): ApprovalStatusResult {
+  /**
+   * Reads Intent Cloud's outcome for a chained approval (ADR-0015) and chains an `outcome` entry, once per distinct
+   * outcome and shown state. Only a verified outcome statement whose `outcome` equals the status's (M1) is acted on;
+   * the gateway re-runs the binding result with its own total check and shows no more than that (O1, O2). A statement
+   * refused by any rule shows nothing of its own: the outcome adopted from an earlier verified statement stays shown.
+   * A verified outcome that may not replace the adopted one (R5a: a terminal verified outcome is final) is not adopted.
+   * Nothing here frees spend-cap room: only local evidence does (contract §6).
+   */
+  async function recordOutcome(handle: string, status: ApprovalStatus | null, snapshot: AnySnapshot, snapshotHash: string, keys: KeySet): Promise<ShownOutcome | null> {
+    if (status === null) return null;
+    const { outcome, outcome_statement: statement } = status;
+    const stated = statement?.outcome ?? outcome;
+    if (stated === undefined) return null;
+    let check: StatementCheck;
+    if (outcome === undefined || statement === undefined || canonicalize(outcome) !== canonicalize(statement.outcome)) {
+      check = { ok: false, refused_by: "m1", signed: false };
+    } else {
+      check = verifyOutcomeStatement(statement, { handle, snapshot, snapshotHash }, keys, new Date(now()), { stagingSource: stagingSourceAllowed(pinnedRootKeys) });
+    }
+    // The statement is kept so `intent verify` can re-check it offline, unless it holds what looks like buyer identity:
+    // then it is not kept, and nothing in it is acted on (refused_by "identity").
+    const held = statement !== undefined && findIdentity(statement).length === 0;
+    if (statement !== undefined && !held) check = { ok: false, refused_by: "identity", signed: false };
+    const reading = readCloudOutcome(stated, snapshot.total.amount_minor, check);
+    const shownState = reading.state_shown;
+    const cloud = { state: stated.state, source: stated.source, assurance: stated.assurance };
+    const named = shownState !== null && stated.order_ref !== undefined && ORDER_REF.test(stated.order_ref);
+    const body = CloudOutcomeEntry.parse({
+      handle,
+      basis: "cloud",
+      outcome_hash: sha256Hex(canonicalize(outcome ?? stated)),
+      cloud,
+      statement_verified: check.ok,
+      ...(check.ok ? {} : { refused_by: check.refused_by }),
+      ...(held ? { statement_jcs: canonicalize(statement) } : {}),
+      ...(reading.local_binding === null ? {} : { local_binding: reading.local_binding }),
+      state_shown: shownState,
+      ...(named ? { order_ref: stated.order_ref } : {}),
+      ...(shownState !== null && stated.final_total !== undefined ? { final_total_minor: stated.final_total.amount_minor } : {}),
+    });
+    const words = {
+      cloud_state: cloud.state,
+      source: cloud.source,
+      assurance: cloud.assurance,
+      statement_verified: check.ok,
+      ...(check.ok ? {} : { refused_by: check.refused_by }),
+    };
+    const recorded = outcomesFor(store.entries(), handle).filter((o): o is CloudOutcomeEntry => o.basis === "cloud");
+    // The outcome adopted so far: the latest one a verified statement showed.
+    const adopted = recorded.findLast((o) => o.statement_verified && o.state_shown !== null && o.cloud !== null);
+    const keep = (): ShownOutcome =>
+      adopted?.state_shown == null
+        ? { ...words, state_shown: null }
+        : { ...words, state_shown: adopted.state_shown, kept_earlier: true, ...(adopted.order_ref === undefined ? {} : { order_ref: adopted.order_ref }) };
+    if (shownState !== null && adopted?.cloud != null && !replaces(adopted.cloud, cloud)) {
+      logger.warn(
+        `intent-gateway: Intent Cloud reported outcome ${cloud.state} for ${handle} after it reported the final outcome ${adopted.cloud.state} (Appendix G R5a); the gateway keeps the earlier one.`,
+      );
+      return keep();
+    }
+    const duplicate = recorded.some((o) => o.outcome_hash === body.outcome_hash && o.state_shown === body.state_shown && o.statement_verified === body.statement_verified);
+    if (!duplicate) await store.append("outcome", body);
+    if (shownState === null) return keep();
+    return { ...words, state_shown: shownState, ...(body.order_ref === undefined ? {} : { order_ref: body.order_ref }) };
+  }
+
+  function approved(fingerprint: string, status: ApprovalStatus | null, mode: CloudCompletionMode, shown: ShownOutcome | null, fromSeq: number): ApprovalStatusResult {
     const base = "Approved: the buyer's pinned passkey signed this purchase, and the gateway verified and logged the proof.";
     // Intent Cloud's word is repeated only when its state and outcome agree (Appendix G; never more than the outcome).
     const inconsistent = status === null ? null : statusProblem(status.state, status.outcome, mode);
     if (inconsistent !== null) {
       logger.warn(`intent-gateway: Intent Cloud reported an approval state and an outcome that disagree (${inconsistent}); the gateway does not repeat them.`);
+      // The structured reading (never more than the verified statement) is still given; the sentence repeats nothing.
       return {
         status: "approved",
         fingerprint,
+        ...(shown === null ? {} : { outcome: shown }),
         message: `${base} Intent Cloud reported what happened next inconsistently, so the gateway does not repeat it.`,
         summary: summary(fromSeq),
       };
     }
-    const state = status?.state;
-    if (state === "handed_off" || state === "ordered") {
-      const order = status?.order_number;
-      const report =
-        state === "ordered"
-          ? ` Intent Cloud reported that the merchant placed the order${order === undefined ? "" : ` (order ${order})`}.`
-          : " Intent Cloud reported that the buyer was handed off to the merchant checkout.";
+    // A statement this read refused: say what Intent Cloud reported and which rule failed, and count nothing from it.
+    const refusal =
+      shown === null || shown.statement_verified
+        ? ""
+        : ` Intent Cloud reported ${shown.cloud_state.replace("_", " ")}, but its statement fails ${shown.refused_by ?? "a rule"}; not counted as placed.`;
+    if (shown !== null && shown.state_shown === null) {
+      return { status: "approved", fingerprint, outcome: shown, message: base + refusal, summary: summary(fromSeq) };
+    }
+    if (shown !== null && shown.state_shown !== null) {
+      const state = shown.state_shown;
+      const word = shownStatus(state, mode);
+      // The order of the shown outcome's own statement (an earlier one when it was kept), never of a refused one.
+      const order = state === "ordered" ? shown.order_ref : undefined;
       return {
         status: "approved",
-        cloud_reported: state,
+        ...(word === "approved" ? {} : { cloud_reported: word }),
         ...(order === undefined ? {} : { order_number: order }),
+        outcome: shown,
         fingerprint,
-        message: base + report,
+        message: base + outcomeWords(state, order) + refusal,
         summary: summary(fromSeq),
       };
     }
@@ -1011,6 +1119,27 @@ function checkSnapshot(created: ApprovalCreated, cart: Cart, sent: SentPurchase)
 }
 
 /** The demo confirm page's Approve button, `Approve $1,234.56 with demo passkey`, so the agent names what the user sees. */
+/**
+ * What the gateway says about Intent Cloud's outcome: worded as Intent Cloud's report, and never more than the state
+ * the gateway shows (invariant 5).
+ */
+function outcomeWords(state: OutcomeState, order: string | undefined): string {
+  switch (state) {
+    case "ordered":
+      return ` Intent Cloud reported that the merchant placed the order${order === undefined ? "" : ` (order ${order})`}, in a statement the gateway verified.`;
+    case "handed_off":
+      return " Intent Cloud reported that the buyer was handed off to the merchant checkout.";
+    case "mismatch":
+      return " Intent Cloud reported an order that does not match what the buyer approved (merchant, item, ZIP or total). Check the order with the merchant.";
+    case "checkout_expired":
+      return " Intent Cloud reported that the merchant checkout expired; no order was read.";
+    case "reported":
+      return " Intent Cloud reported an order it could not verify; the gateway does not count it as placed.";
+    default:
+      return ` Intent Cloud reported the purchase as ${state.replace("_", " ")}.`;
+  }
+}
+
 function approveLabel(totalMinor: unknown): string {
   if (typeof totalMinor !== "number" || !Number.isSafeInteger(totalMinor) || totalMinor < 0) return "Approve with demo passkey";
   return `Approve $${Math.floor(totalMinor / 100).toLocaleString("en-US")}.${String(totalMinor % 100).padStart(2, "0")} with demo passkey`;
