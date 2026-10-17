@@ -349,6 +349,9 @@ function feedLine(a: Activity, time: Clock): Line {
         text: join(["Approval status checked", short(f.approval_handle), f.title ?? "", f.approval_state === undefined ? "" : f.approval_state.replace("_", " "), delivery()]),
       };
     }
+    case "outcome":
+      // What the gateway sent and how it was acknowledged; nothing about what Intent Cloud did with the report.
+      return { ...base, label: "outcome", tone: toneOf(a.requests), text: join(["Outcome report sent to Intent Cloud", short(f.approval_handle), delivery()]) };
     case "approval":
       return {
         ...base,

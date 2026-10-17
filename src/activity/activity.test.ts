@@ -47,6 +47,22 @@ const FLOW: Spec[] = [
 
 const actions = (list: readonly Activity[]) => list.map((a) => [a.action, a.outcome, a.seqs]);
 
+describe("outcome reports (contract 1.6.0)", () => {
+  it("a reportOutcome request is its own `outcome` action for its approval, not a key read", () => {
+    const report = { report_id: "or_AAAAAAAAAAAAAAAA", state: "completing", source: "shop_api", checkout_ref: "c1", observed_at: "2026-10-16T10:05:00Z" };
+    const { activities, summary } = buildActivity(
+      chain([
+        ["session", { id: "s1" }],
+        ["disclosure", disclosure("reportOutcome", "POST", "/v1/approvals/ap_1/outcome-reports", report, ["checkout_ref", "observed_at", "report_id", "source", "state"])],
+        ["receipt", { disclosure_seq: 1, status: 201, verified: true }],
+      ]),
+    );
+    const outcome = activities.find((a) => a.action === "outcome");
+    expect(outcome).toMatchObject({ outcome: "acknowledged", facts: { approval_handle: "ap_1" } });
+    expect(summary.actions).toMatchObject({ outcome: 1, keys: 0 });
+  });
+});
+
 describe("buildActivity", () => {
   it("groups a whole flow into start, search, blocked, cart, status and approval, each with its outcome", () => {
     const { activities, summary } = buildActivity(chain(FLOW));

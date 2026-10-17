@@ -50,7 +50,7 @@ Colour is used only when the output is a terminal, and never with `NO_COLOR` set
 
 | Option | Keeps |
 |---|---|
-| `--action search,cart` | The actions of these kinds: `start`, `keys`, `search`, `cart`, `status`, `approval`, `blocked`, `pin`, `flagged`, `wallet`, `call`. |
+| `--action search,cart` | The actions of these kinds: `start`, `keys`, `search`, `cart`, `status`, `outcome` (an outcome report the gateway sent to Intent Cloud), `approval`, `blocked`, `pin`, `flagged`, `wallet`, `call`. |
 | `--since 30m` | Actions from that long ago (`s`, `m`, `h`, `d`, `w`), or from a date (`2026-10-16`, local midnight; UTC with `--utc`) or time (`2026-10-16T09:00:00Z`). |
 | `--last 5` | The last N actions, after the other filters. |
 
