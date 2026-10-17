@@ -6,29 +6,49 @@
 //
 // Entry bodies are written by other modules (disclosure, gateway, trust, cli approver). This module reads only:
 // - disclosure: endpoint, method, path, fields, body_b64, content_digest, keyid.
+// - disclosure, also: destination (absent = Intent Cloud) and redacted [{at, sha256}] (ADR-0014). A disclosure to a
+//   wallet destination is a `call` action, never correlated with a purchase here.
 // - receipt: disclosure_seq, status, verified, receipt_header (its `kid` member); unacknowledged, discarded:
 //   disclosure_seq, reason (and status inside the reason, when it starts with one).
-// - block: endpoint, fields, blocked, held (the values a policy block held back; absent on older chains).
+// - response (the follow-up of a destination that signs no receipt): disclosure_seq, status, body_sha256, bytes.
+// - block: endpoint, destination, fields, blocked, held (the values a policy block held back; absent on older chains,
+//   and never read for an identity block or a logging refusal, which hold no values).
+// - wallet: rail, action (linked, unlinked), revoked.
+// Entries of the kinds completion, complete_attempt and outcome (the one-tap completion) are not read yet: they slot
+// in as purchase steps once the outcome module writes them.
 // - observed: what Intent Cloud returned for one acknowledged request (src/observation's ObservedBody), joined to
 //   that request's action. A chain written before observations existed has none, and its actions read as before.
 // - approval_pending: handle, approval_url, total_minor, expires_at; approval: handle.
 // - approver_pin, approver_flag: fingerprint, handle, reason. keys: statement.kid, statement.expires_at.
 // - session: mode ("demo" on the first entry of a demo chain) or id.
 import { ObservedBody, type ObservedOffer, withheldAt } from "../observation/index.ts";
-import { findIdentity } from "../privacy/index.ts";
+import { findIdentity, isSecretKey, markerDigest } from "../privacy/index.ts";
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
 /** What one action was. */
-export const ACTION_KINDS = ["start", "keys", "search", "cart", "status", "approval", "blocked", "pin", "flagged", "wallet", "unreadable"] as const;
+export const ACTION_KINDS = ["start", "keys", "search", "cart", "status", "approval", "blocked", "pin", "flagged", "wallet", "call", "unreadable"] as const;
 export type ActionKind = (typeof ACTION_KINDS)[number];
 
 /**
  * What became of one logged request, in `intent verify`'s categories: a receipt came back (`acknowledged`); it left
  * and no receipt came back (`unacknowledged`); it never left, no connection was made (`not_sent`); no answer is
  * recorded, the gateway stopped first or is still waiting (`maybe_sent`); a response without a valid receipt was not
- * used (`discarded`).
+ * used (`discarded`); a destination that signs no receipt (a wallet) answered, and its `response` entry records the
+ * status, size and digest of what came back (`answered`).
  */
-export type Delivery = "acknowledged" | "unacknowledged" | "not_sent" | "maybe_sent" | "discarded";
+export type Delivery = "acknowledged" | "answered" | "unacknowledged" | "not_sent" | "maybe_sent" | "discarded";
+
+/** What a request's `fields` hold, instead of the value, for a credential the log holds in clear. */
+export const CLEAR_CREDENTIAL = "[a credential in clear, not shown: intent verify fails this entry]";
+
+/** Where a disclosure without `destination` went. */
+export const INTENT_CLOUD = "intent_cloud";
+
+/** One credential a logged request holds only as its digest: where it sat and its sha256. */
+export interface ActivityRedaction {
+  readonly at: string;
+  readonly sha256: string;
+}
 
 /** An action's outcome: the worst delivery of its requests, or what the action itself recorded. */
 export type Outcome =
@@ -51,7 +71,7 @@ export type ActivityObserved = { readonly seq: number } & ObservedBody;
 export interface ActivityResponse {
   /** The follow-up entry's seq. */
   readonly seq: number;
-  readonly kind: "receipt" | "unacknowledged" | "discarded";
+  readonly kind: "receipt" | "response" | "unacknowledged" | "discarded";
   /** The HTTP status, when one came back. */
   readonly status: number | null;
   /** A receipt came back. */
@@ -62,11 +82,16 @@ export interface ActivityResponse {
   readonly receipt_kid: string | null;
   /** Why there is no receipt (unacknowledged, discarded). */
   readonly reason: string | null;
+  /** response: the size and sha256 of the body that came back (never its content). */
+  readonly bytes: number | null;
+  readonly body_sha256: string | null;
 }
 
 export interface ActivityRequest {
   readonly seq: number;
   readonly time: string;
+  /** `intent_cloud`, or the wallet destination (`shop`) the request went to. */
+  readonly destination: string;
   readonly endpoint: string;
   readonly method: string | null;
   readonly path: string | null;
@@ -75,6 +100,8 @@ export interface ActivityRequest {
   /** The field paths that carry a value, as the entry lists them. */
   readonly field_names: readonly string[];
   readonly content_digest: string | null;
+  /** The credentials the logged request holds only as digests (`headers.authorization`); [] for none. */
+  readonly redacted: readonly ActivityRedaction[];
   /** The shopping session keyid the request was signed with; null when unsigned. */
   readonly keyid: string | null;
   readonly delivery: Delivery;
@@ -104,14 +131,18 @@ export interface ActivityFacts {
   pinned?: boolean;
   /** approver_flag: "sign_count", or another passkey than the pin. */
   flag_reason?: string;
-  /** wallet: the rail (`shop`), what was done (`unlinked`) and whether the rail confirmed revoking the token. */
+  /** call, blocked: the destination when it is not Intent Cloud (`shop`). */
+  destination?: string;
+  /** blocked: what held it back: a gateway `policy` rule, buyer `identity` in the body, or a `logging` rule (ADR-0014). */
+  block_kind?: BlockKind;
+  /** wallet: the rail (`shop`), what was done (`linked`, `unlinked`) and whether the rail confirmed revoking the token. */
   wallet_rail?: string;
   wallet_action?: string;
   revoked?: boolean;
   key_kid?: string;
   keys_expire_at?: string;
   session_id?: string;
-  /** block: the endpoint whose request was held back. */
+  /** block: the endpoint whose request was held back; call: the operation sent to the destination. */
   endpoint?: string;
   /** block: the field names the held-back request held (names only: its values are not logged). */
   field_names?: string[];
@@ -159,12 +190,28 @@ export interface ActivitySummary {
   readonly refused: number;
   /** The field paths every request that may have left carried (all but not_sent), sorted. */
   readonly sent_fields: string[];
+  /** The same per destination, Intent Cloud first, then in order of first appearance; only destinations with a logged request. */
+  readonly destinations: DestinationSummary[];
   /**
    * Buyer identity (findIdentity, the check the gateway runs before each send) in the values of the requests that may
    * have left: `checked` requests with logged bytes, `unchecked` ones without, and each finding by seq.
    */
   readonly identity: { checked: number; unchecked: number; findings: IdentityFinding[] };
 }
+
+export interface DestinationSummary {
+  readonly destination: string;
+  /** Requests logged to it, and how many of them were maybe sent (no answer recorded) or never left. */
+  readonly logged: number;
+  readonly maybe_sent: number;
+  readonly not_sent: number;
+  /** The field paths of its requests that may have left, sorted. */
+  readonly fields: string[];
+  /** Where the credentials its requests carried sat (`headers.authorization`), sorted; logged as digests only. */
+  readonly redacted: string[];
+}
+
+export type BlockKind = "policy" | "identity" | "logging";
 
 export interface IdentityFinding {
   readonly seq: number;
@@ -185,10 +232,15 @@ interface Item {
   body: Body;
 }
 
+const FOLLOW_UPS: ReadonlySet<string> = new Set(["receipt", "response", "unacknowledged", "discarded"]);
 const KEY_READS: ReadonlySet<string> = new Set(["getMeta", "getSignatureKeys", "getKeyStatement"]);
 /** Block reasons the gateway writes about a response it refused (gateway.ts), not a request it held back. */
 const REFUSAL = /^(cart|snapshot|approval_proof): /;
-const SEVERITY: readonly Delivery[] = ["acknowledged", "not_sent", "unacknowledged", "maybe_sent", "discarded"];
+/** Block reasons the disclosure core writes for a request it would not log as it was (core.ts step 1, DisclosureRefusedError). */
+export const LOGGING_REFUSAL = /^(a credential at |a credential in the query |the body is not plain JSON)/;
+/** Block reasons of the buyer-identity check (findIdentity's kinds, written as `<kind> at <path>`). */
+const IDENTITY_REASON = /^(card|email|phone|street_address|banned_key) at /;
+const SEVERITY: readonly Delivery[] = ["acknowledged", "answered", "not_sent", "unacknowledged", "maybe_sent", "discarded"];
 
 /** Reads the chain items `readChain` returns as actions, in chain order, with summary counts. */
 export function buildActivity(items: readonly unknown[]): ActivityLog {
@@ -197,7 +249,7 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
   const answers = new Map<number, Item>();
   for (const raw of items) {
     const item = asItem(raw);
-    if (item !== null && (item.kind === "receipt" || item.kind === "unacknowledged" || item.kind === "discarded")) {
+    if (item !== null && FOLLOW_UPS.has(item.kind)) {
       const target = item.body.disclosure_seq;
       if (typeof target === "number" && !answers.has(target)) answers.set(target, item);
     }
@@ -228,7 +280,9 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
         const endpoint = text(b.endpoint);
         const request = toRequest(item, answers.get(item.seq) ?? null);
         let activity: Activity;
-        if (KEY_READS.has(endpoint)) {
+        if (request.destination !== INTENT_CLOUD) {
+          activity = open(item, "call", { destination: request.destination, endpoint });
+        } else if (KEY_READS.has(endpoint)) {
           const previous = activities.at(-1);
           activity = previous !== undefined && (previous.action === "start" || previous.action === "keys") && previous.facts.key_kid === undefined ? previous : open(item, "keys");
         } else if (endpoint === "searchCatalog") {
@@ -249,6 +303,7 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
         break;
       }
       case "receipt":
+      case "response":
       case "unacknowledged":
       case "discarded": {
         const target = typeof b.disclosure_seq === "number" ? requests.get(b.disclosure_seq) : undefined;
@@ -277,8 +332,16 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
           target.blocked.push(...blocked);
           target.outcome = "refused";
         } else {
-          const held = record(b.held);
-          const facts: ActivityFacts = { endpoint, field_names: leafFields(strings(b.fields)), ...(Object.keys(held).length === 0 ? {} : { held }) };
+          const kind = blockKind(blocked);
+          // Only a policy block keeps values (the structured ones it held back); any other `held` is never shown.
+          const held = kind === "policy" ? record(b.held) : {};
+          const facts: ActivityFacts = {
+            endpoint,
+            ...(typeof b.destination === "string" && b.destination !== INTENT_CLOUD ? { destination: b.destination } : {}),
+            block_kind: kind,
+            field_names: leafFields(strings(b.fields)),
+            ...(Object.keys(held).length === 0 ? {} : { held }),
+          };
           const activity = open(item, "blocked", facts, refusalOf === null ? "blocked" : "refused");
           activity.blocked.push(...blocked);
         }
@@ -376,26 +439,49 @@ export function filterActivity(activities: readonly Activity[], filter: Activity
 /** The counts over `activities` (all of a chain's, or the ones a filter kept) of the chain `items`. */
 export function summarise(items: readonly unknown[], activities: readonly Activity[]): ActivitySummary {
   const actions = Object.fromEntries(ACTION_KINDS.map((k) => [k, 0])) as Record<ActionKind, number>;
-  const counts = { logged: 0, sent: 0, acknowledged: 0, unacknowledged: 0, not_sent: 0, maybe_sent: 0, discarded: 0 };
+  const counts = { logged: 0, sent: 0, acknowledged: 0, answered: 0, unacknowledged: 0, not_sent: 0, maybe_sent: 0, discarded: 0 };
   let refused = 0;
   const sent = new Set<string>();
+  const byDestination = new Map<string, { logged: number; maybe_sent: number; not_sent: number; fields: Set<string>; redacted: Set<string> }>();
   const findings: IdentityFinding[] = [];
   let checked = 0;
   let unchecked = 0;
+  let bodies: Map<number, unknown> | null = null;
   for (const a of activities) {
     actions[a.action] += 1;
     if (a.outcome === "refused") refused += 1;
     for (const r of a.requests) {
       counts.logged += 1;
       counts[r.delivery] += 1;
-      if (r.delivery === "not_sent") continue;
-      for (const f of r.field_names) sent.add(f);
+      let d = byDestination.get(r.destination);
+      if (d === undefined) {
+        d = { logged: 0, maybe_sent: 0, not_sent: 0, fields: new Set(), redacted: new Set() };
+        byDestination.set(r.destination, d);
+      }
+      d.logged += 1;
+      if (r.delivery === "maybe_sent") d.maybe_sent += 1;
+      if (r.delivery === "not_sent") {
+        d.not_sent += 1;
+        continue;
+      }
+      for (const f of r.field_names) {
+        sent.add(f);
+        d.fields.add(f);
+      }
+      for (const x of r.redacted) d.redacted.add(x.at);
       if (r.fields === null) {
         unchecked += 1;
         continue;
       }
       checked += 1;
-      const found = findIdentity(r.fields);
+      // A wallet body is checked as the core checked it: whole, with its MCP tool name exempt (flattened, `params.name` reads as a name key).
+      let found;
+      if (r.destination === INTENT_CLOUD) {
+        found = findIdentity(r.fields);
+      } else {
+        bodies ??= bodiesBySeq(items);
+        found = findIdentity(bodies.get(r.seq) ?? r.fields, { mcpToolName: true });
+      }
       if (found.length > 0) findings.push({ seq: r.seq, kinds: [...new Set(found.map((f) => f.kind))].sort() });
     }
   }
@@ -409,8 +495,26 @@ export function summarise(items: readonly unknown[], activities: readonly Activi
     requests: counts,
     refused,
     sent_fields: [...sent].sort(),
+    destinations: [...byDestination.entries()]
+      .sort(([a], [b]) => Number(b === INTENT_CLOUD) - Number(a === INTENT_CLOUD))
+      .map(([destination, d]) => ({ destination, logged: d.logged, maybe_sent: d.maybe_sent, not_sent: d.not_sent, fields: [...d.fields].sort(), redacted: [...d.redacted].sort() })),
     identity: { checked, unchecked, findings },
   };
+}
+
+/** The logged JSON body of each disclosure, by seq (bodies that are not JSON are left out). */
+function bodiesBySeq(items: readonly unknown[]): Map<number, unknown> {
+  const out = new Map<number, unknown>();
+  for (const raw of items) {
+    const item = asItem(raw);
+    if (item?.kind !== "disclosure" || typeof item.body.body_b64 !== "string" || item.body.body_b64 === "") continue;
+    try {
+      out.set(item.seq, JSON.parse(Buffer.from(item.body.body_b64, "base64").toString("utf8")));
+    } catch {
+      // Not JSON: its request has no fields either, so it counts as unchecked.
+    }
+  }
+  return out;
 }
 
 function toRequest(item: Item, answer: Item | null): ActivityRequest {
@@ -418,14 +522,29 @@ function toRequest(item: Item, answer: Item | null): ActivityRequest {
   return {
     seq: item.seq,
     time: item.ts,
+    destination: destinationOf(b),
     endpoint: text(b.endpoint),
     method: typeof b.method === "string" ? b.method : null,
     path: typeof b.path === "string" ? b.path : null,
     fields: values(b.body_b64),
     field_names: leafFields(strings(b.fields)),
     content_digest: typeof b.content_digest === "string" ? b.content_digest : null,
+    redacted: Array.isArray(b.redacted)
+      ? b.redacted.map(record).flatMap((r) => (typeof r.at === "string" && typeof r.sha256 === "string" ? [{ at: r.at, sha256: r.sha256 }] : []))
+      : [],
     keyid: typeof b.keyid === "string" ? b.keyid : null,
-    delivery: answer === null ? "maybe_sent" : answer.kind === "receipt" ? "acknowledged" : answer.kind === "discarded" ? "discarded" : neverLeft(answer.body) ? "not_sent" : "unacknowledged",
+    delivery:
+      answer === null
+        ? "maybe_sent"
+        : answer.kind === "receipt"
+          ? "acknowledged"
+          : answer.kind === "response"
+            ? "answered"
+            : answer.kind === "discarded"
+              ? "discarded"
+              : neverLeft(answer.body)
+                ? "not_sent"
+                : "unacknowledged",
     response: answer === null ? null : toResponse(answer),
     observed: null,
   };
@@ -469,7 +588,34 @@ function toResponse(item: Item): ActivityResponse {
     signature_checked: item.kind === "receipt" && b.verified === true,
     receipt_kid: item.kind === "receipt" ? receiptKid(b.receipt_header) : null,
     reason,
+    bytes: item.kind === "response" && typeof b.bytes === "number" ? b.bytes : null,
+    body_sha256: item.kind === "response" && typeof b.body_sha256 === "string" ? b.body_sha256 : null,
   };
+}
+
+/** A disclosure's destination: `intent_cloud` when it names none. */
+function destinationOf(b: Body): string {
+  return typeof b.destination === "string" && b.destination !== "" ? b.destination : INTENT_CLOUD;
+}
+
+/** What held a request back, from the reasons its `block` entry lists. */
+export function blockKind(reasons: readonly string[]): BlockKind {
+  if (reasons.some((r) => LOGGING_REFUSAL.test(r))) return "logging";
+  if (reasons.some((r) => IDENTITY_REASON.test(r))) return "identity";
+  return "policy";
+}
+
+/** `intent_cloud` → `Intent Cloud`, `shop` → `Shop`, `shop_accounts` → `Shop accounts`: a destination in words. */
+export function destinationLabel(destination: string): string {
+  if (destination === INTENT_CLOUD) return "Intent Cloud";
+  const words = destination.replaceAll("_", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** A redaction marker (`[redacted sha256:<hex>]`) in words: `redacted (sha256 1a2b3c4d…)`; null for any other value. */
+export function credentialWords(value: unknown): string | null {
+  const digest = markerDigest(value);
+  return digest === null ? null : `redacted (sha256 ${digest.slice(0, 8)}…)`;
 }
 
 /** `502 without Intent-Contract-Version` → 502. */
@@ -505,11 +651,16 @@ function values(b64: unknown): Record<string, unknown> | null {
 }
 
 /** Leaves by dotted path; an array of scalars stays one value (`must_haves: ["road"]`), an array of objects is walked as `[]`. */
-function flatten(value: unknown, prefix: string, out: Record<string, unknown>): void {
-  if (Array.isArray(value) && value.some((v) => typeof v === "object" && v !== null)) {
+// A value under a credential key that is not a redaction marker (a hand-edited chain; `intent verify` fails it) is
+// never read out: it stands as CLEAR_CREDENTIAL, so no view prints a credential.
+function flatten(value: unknown, prefix: string, out: Record<string, unknown>, secretKey = false): void {
+  if (secretKey && value !== null && markerDigest(value) === null) {
+    out[prefix] = CLEAR_CREDENTIAL;
+  } else if (Array.isArray(value) && value.some((v) => typeof v === "object" && v !== null)) {
     for (const item of value) flatten(item, `${prefix}[]`, out);
   } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    for (const [key, item] of Object.entries(value)) flatten(item, prefix === "" ? key : `${prefix}.${key}`, out);
+    const keys = Object.keys(value);
+    for (const [key, item] of Object.entries(value)) flatten(item, prefix === "" ? key : `${prefix}.${key}`, out, isSecretKey(key, keys));
   } else if (prefix !== "") {
     out[prefix] = value;
   }

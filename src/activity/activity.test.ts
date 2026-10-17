@@ -87,6 +87,8 @@ describe("buildActivity", () => {
       signature_checked: true,
       receipt_kid: "cloud-receipt-202610",
       reason: null,
+      bytes: null,
+      body_sha256: null,
     });
     // A blocked request's values are not in the chain: only its field names and what held it back.
     expect(blocked).toMatchObject({ blocked: ["categories.block at category"], facts: { endpoint: "searchCatalog", field_names: ["category", "ship_to.postal_code"] }, requests: [] });
@@ -134,7 +136,7 @@ describe("buildActivity", () => {
     ]);
     expect(activities[0]?.requests[0]?.response).toMatchObject({ kind: "unacknowledged", status: 502, acknowledged: false, signature_checked: false });
     expect(activities[3]?.requests[0]?.response).toBeNull();
-    expect(summary.requests).toEqual({ logged: 4, sent: 2, acknowledged: 0, unacknowledged: 1, not_sent: 1, maybe_sent: 1, discarded: 1 });
+    expect(summary.requests).toEqual({ logged: 4, sent: 2, acknowledged: 0, answered: 0, unacknowledged: 1, not_sent: 1, maybe_sent: 1, discarded: 1 });
   });
 
   it("attack: an approval link asked over a request without a receipt keeps that request's outcome", () => {
@@ -263,5 +265,69 @@ describe("filterActivity", () => {
     items.push("torn");
     const kept = filterActivity(buildActivity(items).activities, { actions: new Set(["search"]), since: new Date("2030-01-01T00:00:00Z") });
     expect(kept.map((a) => a.action)).toEqual(["unreadable"]);
+  });
+});
+
+describe("wallet destinations (ADR-0014)", () => {
+  const shop = (seq: number, args: Record<string, unknown>): Record<string, unknown> => ({
+    ...disclosure("get_checkout", "POST", "/api/mcp", { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "get_checkout", arguments: args } }, [
+      "id",
+      "jsonrpc",
+      "method",
+      "params",
+      "params.arguments",
+      ...Object.keys(args).map((k) => `params.arguments.${k}`),
+      "params.name",
+    ]),
+    destination: "shop",
+    keyid: null,
+    redacted: [{ at: "headers.authorization", sha256: String(seq).repeat(64) }],
+  });
+  const specs: Spec[] = [
+    ["disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", SEARCH, SEARCH_FIELDS)],
+    ["receipt", { disclosure_seq: 0, status: 200, verified: true }],
+    ["disclosure", shop(2, { checkout_id: "co_1" })],
+    ["response", { disclosure_seq: 2, status: 200, body_sha256: "a".repeat(64), bytes: 12 }],
+    ["disclosure", shop(4, { checkout_id: "co_2" })],
+    ["block", { endpoint: "search", destination: "shop", fields: ["params.arguments.note"], blocked: ["email at $.params.arguments.note"], held: { note: "x@example.com" } }],
+    ["block", { endpoint: "search", destination: "shop", fields: [], blocked: ["the body is not plain JSON as the gateway writes it (duplicate keys, spacing or escapes), so it could not be logged as sent"] }],
+    ["block", { endpoint: "searchCatalog", fields: ["category"], blocked: ["categories.block at category"], held: { category: "alcohol" } }],
+    ["wallet", { rail: "shop", action: "unlinked", revoked: true }],
+  ];
+
+  it("a wallet send is a call: answered by its response entry, maybe sent without one, never acknowledged", () => {
+    const { activities } = buildActivity(chain(specs));
+    expect(actions(activities).slice(0, 3)).toEqual([
+      ["search", "acknowledged", [0, 1]],
+      ["call", "answered", [2, 3]],
+      ["call", "maybe_sent", [4]],
+    ]);
+    expect(activities[1]?.facts).toEqual({ destination: "shop", endpoint: "get_checkout" });
+    expect(activities[1]?.requests[0]).toMatchObject({
+      destination: "shop",
+      delivery: "answered",
+      redacted: [{ at: "headers.authorization", sha256: "2".repeat(64) }],
+      response: { kind: "response", status: 200, acknowledged: false, signature_checked: false, bytes: 12, body_sha256: "a".repeat(64) },
+    });
+  });
+
+  it("a block says what held it back; only a policy block keeps its held values", () => {
+    const blocks = buildActivity(chain(specs)).activities.filter((a) => a.action === "blocked");
+    expect(blocks.map((b) => [b.facts.block_kind, b.facts.destination, b.facts.held])).toEqual([
+      ["identity", "shop", undefined],
+      ["logging", "shop", undefined],
+      ["policy", undefined, { category: "alcohol" }],
+    ]);
+  });
+
+  it("the summary counts per destination, Intent Cloud first, and checks a wallet body whole (its tool name is not a name)", () => {
+    const { summary } = buildActivity(chain(specs));
+    expect(summary.requests).toMatchObject({ logged: 3, sent: 2, acknowledged: 1, answered: 1, maybe_sent: 1 });
+    expect(summary.destinations).toEqual([
+      { destination: "intent_cloud", logged: 1, maybe_sent: 0, not_sent: 0, fields: SEARCH_FIELDS.filter((f) => f !== "budget_max" && f !== "ship_to"), redacted: [] },
+      { destination: "shop", logged: 2, maybe_sent: 1, not_sent: 0, fields: ["id", "jsonrpc", "method", "params.arguments.checkout_id", "params.name"], redacted: ["headers.authorization"] },
+    ]);
+    expect(summary.identity).toEqual({ checked: 3, unchecked: 0, findings: [] });
+    expect(summary.actions).toMatchObject({ call: 2, wallet: 1, blocked: 3 });
   });
 });

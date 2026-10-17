@@ -1,0 +1,89 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`intent log: wallet destinations, refusals and wallet entries > -v lists the response entry and shows credentials as redacted digests, never as values 1`] = `
+"2026-10-16 17:26:41 UTC  search  seq 0-1  acknowledged
+  #0    sent           searchCatalog: category, ship_to.country, ship_to.postal_code
+                      POST /v1/catalog/search
+                      values in the logged request:
+                        category = "lamps"
+                        ship_to.country = "US"
+                        ship_to.postal_code = "94103"
+                      content-digest sha-256=:x:
+                      keyid gw-k
+                      receipt seq 1: status 200, receipt key ?, signature checked when logged
+  #1    receipt        #0: Intent Cloud acknowledged receiving it (status 200, signature verified)
+
+2026-10-16 17:26:49 UTC  wallet  seq 2  recorded
+  #2    wallet         Shop wallet linked
+
+2026-10-16 17:26:53 UTC  start  seq 3  recorded
+  #3    session        gateway session <session> started (a local id, never sent)
+
+2026-10-16 17:26:57 UTC  call  seq 4-5  answered
+  #4    sent           to Shop: get_checkout: id, jsonrpc, method, params.arguments.checkout_id, params.name
+                      POST /api/mcp
+                      values in the logged request:
+                        jsonrpc = "2.0"
+                        id = 1
+                        method = "tools/call"
+                        params.name = "get_checkout"
+                        params.arguments.checkout_id = "co_123"
+                      header authorization: redacted (sha256 e5c02528…)
+                      content-digest sha-256=:4IiF7q97X7VCMl3zSlVTlWy3xBmn+cw6f7aJz49//sQ=:
+                      keyid none (unsigned request)
+                      response seq 5: status 200, 31 bytes, body sha256 16fb2717…; Shop signs no receipt
+  #5    response       #4: answered (status 200, 31 bytes; no receipt: the destination signs none)
+
+2026-10-16 17:27:05 UTC  call  seq 6-7  answered
+  #6    sent           to Shop: refresh: id, jsonrpc, method, params.arguments.refresh_token, params.name
+                      POST /api/mcp
+                      values in the logged request:
+                        jsonrpc = "2.0"
+                        id = 1
+                        method = "tools/call"
+                        params.name = "refresh"
+                        params.arguments.refresh_token = redacted (sha256 a1d94354…)
+                      header authorization: redacted (sha256 e5c02528…)
+                      content-digest sha-256=:WjDv/DfjBTjxX0wahuG3FyhP1KwB+IReHaYSg73/Q6k=:
+                      keyid none (unsigned request)
+                      response seq 7: status 401, 31 bytes, body sha256 16fb2717…; Shop signs no receipt
+  #7    response       #6: answered (status 401, 31 bytes; no receipt: the destination signs none)
+
+2026-10-16 17:27:13 UTC  blocked  seq 8  blocked
+  #8    blocked        to Shop: search: held back email at $.params.arguments.note; nothing was sent
+
+2026-10-16 17:27:17 UTC  blocked  seq 9  blocked
+  #9    blocked        to Shop: search: held back a credential in the query (access_token), which the log cannot digest; nothing was sent
+
+2026-10-16 17:27:21 UTC  wallet  seq 10  recorded
+  #10   wallet         Shop wallet unlinked, token revoked at Shop
+
+2026-10-16 17:27:25 UTC  wallet  seq 11  recorded
+  #11   wallet         Shop wallet unlinked, token not revoked (deleted here only)
+
+12 entries, every hash links, head seq 11. intent verify re-checks the receipts and approvals.
+"
+`;
+
+exports[`intent log: wallet destinations, refusals and wallet entries > the timeline: a Shop call is answered with its status, blocks say nothing sent, each destination has its own Sent line 1`] = `
+"intent log · real chain · /data · 12 entries
+
+Friday 16 October 2026 (UTC)
+17:26:41  search    lamps · ZIP 94103                                     ✓ receipt
+17:26:49  wallet    Shop wallet linked                                    ✓ recorded
+17:26:53  start     gateway started                                       ✓ recorded
+17:26:57  call      Shop get_checkout · checkout_id                       ✓ answered 200 (no receipt: unsigned)
+17:27:05  call      Shop refresh · refresh_token                          ⚠ answered 401 (no receipt: unsigned)
+17:27:13  blocked   Shop search: an email address in params.arguments.note  ✗ nothing sent
+17:27:17  blocked   Shop search: not logged as sent: a credential in the query (access_token), which the log cannot digest  ✗ nothing sent
+17:27:21  wallet    Shop wallet unlinked · token revoked at Shop          ✓ recorded
+17:27:25  wallet    Shop wallet unlinked · token not revoked (deleted here only)  ✓ recorded
+
+Sent to Intent Cloud only: category, ZIP code, country.
+Sent to Shop only: checkout_id, refresh_token, tool name, MCP envelope (jsonrpc, id, method), 2 credentials (in the log as digests).
+Never sent: your name, postal address, card.
+
+9 actions · 1 search · 2 wallet calls · 3 wallet changes · 2 blocked · 1 receipt · 2 answered unsigned
+Details: intent log -v · Machine-readable: intent log --json · Integrity: intent verify
+"
+`;

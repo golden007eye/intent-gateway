@@ -1,8 +1,24 @@
 // What each view of the panel shows, computed from the chain items `readChain` returns, the active policy and the
 // last verify result. Pure; no I/O. Correlation (which entries make one action, one purchase) comes from the shared
 // activity model; this file only words it. Wording follows `intent log` and invariant 5: what the gateway sent and
-// what came back (a receipt: Intent Cloud acknowledged receiving it), never what Intent Cloud does next.
-import { type Activity, type ActivityRequest, buildActivity, buildPurchases, type Delivery, leafFields, type Purchase } from "../activity/index.ts";
+// what came back (a receipt: Intent Cloud acknowledged receiving it), never what Intent Cloud does next. The overview's
+// counts are Intent Cloud's; each wallet destination (Shop) is counted apart and said to answer, never to acknowledge.
+// The one-tap states (handed off, ordered, mismatch) and the Outcome step slot into STATE and purchaseView after the
+// outcome module.
+import {
+  type Activity,
+  type ActivityRequest,
+  blockKind,
+  buildActivity,
+  buildPurchases,
+  credentialWords,
+  type Delivery,
+  destinationLabel,
+  INTENT_CLOUD,
+  leafFields,
+  LOGGING_REFUSAL,
+  type Purchase,
+} from "../activity/index.ts";
 import { withheldAt } from "../observation/index.ts";
 import { EXCLUDED_CATEGORIES, type Policy } from "../policy/index.ts";
 import type { ChainResult } from "../store/index.ts";
@@ -66,6 +82,8 @@ export interface Kpis {
   readonly discarded: number;
   readonly refusedBefore: number;
   readonly refusedNote: string;
+  /** Requests to each wallet destination, apart from Intent Cloud's: `Shop`, logged and maybe sent, answered. */
+  readonly elsewhere: readonly { readonly destination: string; readonly sent: number; readonly answered: number; readonly maybeSent: number }[];
 }
 
 export type StepState = "done" | "waiting" | "failed" | "todo";
@@ -178,6 +196,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** What became of a request, in `intent verify`'s categories, in the words `intent log` uses (never "sent" for one that never left). */
 const DELIVERY: Record<Delivery, readonly [short: string, long: string, tone: Tone]> = {
   acknowledged: ["receipt ✓", "Intent Cloud acknowledged receiving it (signed receipt)", "ok"],
+  answered: ["answered", "the destination answered; its status is recorded (it signs no receipt)", "ok"],
   unacknowledged: ["no receipt", "left the gateway; no receipt came back", "warn"],
   not_sent: ["not sent", "logged, not sent: no connection was made", "plain"],
   maybe_sent: ["maybe sent", "logged, maybe sent; no answer recorded", "warn"],
@@ -200,7 +219,21 @@ export function buildModel(input: ModelInput): PanelModel {
     .reduce((sum, a) => sum + (a.facts.total_minor ?? 0), 0);
   const perDay = input.policy?.policy.spend.per_day_usd;
   const firstWaiting = waiting[0];
-  const r = summary.requests;
+  // The overview's "Sent to Intent Cloud" counts Intent Cloud's requests only; wallet destinations are listed apart.
+  const r = { sent: 0, acknowledged: 0, unacknowledged: 0, maybe_sent: 0, not_sent: 0, discarded: 0 };
+  const elsewhere = new Map<string, { destination: string; sent: number; answered: number; maybeSent: number }>();
+  for (const req of activities.flatMap((a) => a.requests)) {
+    if (req.destination === INTENT_CLOUD) {
+      if (req.delivery !== "answered") r[req.delivery] += 1;
+      if (req.delivery !== "not_sent" && req.delivery !== "maybe_sent") r.sent += 1;
+      continue;
+    }
+    const d = elsewhere.get(req.destination) ?? { destination: destinationLabel(req.destination), sent: 0, answered: 0, maybeSent: 0 };
+    elsewhere.set(req.destination, d);
+    if (req.delivery !== "not_sent") d.sent += 1;
+    if (req.delivery === "answered") d.answered += 1;
+    if (req.delivery === "maybe_sent") d.maybeSent += 1;
+  }
   const kpis: Kpis = {
     approvedMinor,
     dailyLimitMinor: perDay === undefined ? null : perDay * 100,
@@ -217,6 +250,7 @@ export function buildModel(input: ModelInput): PanelModel {
     discarded: r.discarded,
     refusedBefore: blocked.length,
     refusedNote: blocked.length === 0 ? "nothing refused" : `last: ${refusalWords(blocked.at(-1)?.blocked ?? [], blocked.at(-1)?.facts.held)}, nothing sent`,
+    elsewhere: [...elsewhere.values()],
   };
 
   const lines = activities.filter((a) => a.action !== "keys").map((a) => feedLine(a, time));
@@ -290,7 +324,10 @@ function feedLine(a: Activity, time: Clock): Line {
         ...base,
         label: "refused",
         tone: "bad",
-        text: join([`${endpointWords(f.endpoint)} refused${f.held === undefined ? " before sending" : ""}: ${refusalWords(a.blocked, f.held)}`, "nothing sent"]),
+        text: join([
+          `${f.destination === undefined ? endpointWords(f.endpoint) : `${destinationLabel(f.destination)} ${f.endpoint ?? "request"}`} refused${f.held === undefined ? " before sending" : ""}: ${refusalWords(a.blocked, f.held)}`,
+          "nothing sent",
+        ]),
       };
     case "cart":
       return {
@@ -319,8 +356,21 @@ function feedLine(a: Activity, time: Clock): Line {
       return { ...base, label: "pin", tone: "plain", text: `Approver pinned: passkey ${f.fingerprint ?? ""}` };
     case "flagged":
       return { ...base, label: "flagged", tone: "bad", text: join([`Passkey ${f.fingerprint ?? ""} flagged`, f.flag_reason === "sign_count" ? "its signature counter went back" : "it is not your pinned approver"]) };
-    case "wallet":
-      return { ...base, label: "wallet", tone: "plain", text: join([`Wallet ${f.wallet_rail ?? ""} ${f.wallet_action ?? ""}`, f.revoked === true ? "token revoked" : f.revoked === false ? "token not revoked" : ""]) };
+    case "wallet": {
+      const rail = destinationLabel(f.wallet_rail ?? "");
+      const revoked = f.wallet_action !== "unlinked" ? "" : f.revoked === true ? `token revoked at ${rail}` : f.revoked === false ? "token not revoked (deleted here only)" : "";
+      return { ...base, label: "wallet", tone: "plain", text: join([`${rail} wallet ${f.wallet_action ?? ""}`.trim(), revoked]) };
+    }
+    case "call": {
+      const status = a.requests[0]?.response?.status ?? null;
+      const answered = a.outcome === "answered";
+      return {
+        ...base,
+        label: "call",
+        tone: answered ? (status !== null && status >= 400 ? "warn" : "plain") : toneOf(a.requests),
+        text: join([`${destinationLabel(f.destination ?? "")} ${f.endpoint ?? ""}`.trim(), answered ? `answered${status === null ? "" : ` ${String(status)}`}, unsigned` : delivery()]),
+      };
+    }
     case "unreadable":
       return { ...base, label: "unreadable", tone: "bad", text: `Line ${String(f.line ?? "?")} is not an entry (a torn or edited line)` };
   }
@@ -388,6 +438,7 @@ const STATE: Record<Purchase["state"], readonly [string, Tone]> = {
   not_sent: ["Not sent", "plain"],
   maybe_sent: ["Maybe sent", "warn"],
   discarded: ["Response discarded", "bad"],
+  answered: ["Answered", "plain"],
 };
 
 function purchaseView(p: Purchase, time: Clock): PurchaseView {
@@ -465,11 +516,16 @@ function drawerOf(a: Activity, time: Clock): Drawer {
 
 function requestDetail(r: ActivityRequest): RequestDetail {
   const sent: [string, string][] =
-    r.fields === null ? r.field_names.map((n) => [n, "(value not logged)"]) : Object.entries(r.fields).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]);
+    r.fields === null
+      ? r.field_names.map((n) => [n, "(value not logged)"])
+      : Object.entries(r.fields).map(([k, v]) => [k, credentialWords(v) ?? (typeof v === "string" ? v : JSON.stringify(v))]);
+  for (const x of r.redacted.filter((x) => x.at.startsWith("headers."))) sent.push([`header ${x.at.slice("headers.".length)}`, `redacted (sha256 ${x.sha256.slice(0, 8)}…)`]);
   const back: [string, string][] = [];
   const res = r.response;
   if (res !== null) {
     if (res.status !== null) back.push(["status", String(res.status)]);
+    if (res.bytes !== null) back.push(["bytes", String(res.bytes)]);
+    if (res.body_sha256 !== null) back.push(["body sha256", res.body_sha256]);
     if (res.acknowledged) back.push(["receipt", `${res.receipt_kid ?? "signed"}${res.signature_checked ? " ✓" : ""}`]);
     if (res.reason !== null) back.push(["reason", res.reason]);
   }
@@ -508,14 +564,23 @@ function logRow(item: unknown, index: number, time: Clock): LogRow {
   }
   const body = record(e.body);
   const fields: [string, string][] = [];
-  flatten(e.body, "", fields);
+  // Only a policy block keeps values: a `held` on an identity block or a logging refusal (a hand-edited chain) is not shown.
+  const { held, ...rest } = body;
+  flatten(e.kind === "block" && held !== undefined && blockKind(strings(body.blocked)) !== "policy" ? rest : e.body, "", fields);
   return {
     seq: e.seq,
     ts: e.ts,
     clock: time(e.ts, true),
     kind: e.kind,
     summary: entrySummary(e.kind, body),
-    tone: e.kind === "block" || e.kind === "discarded" || e.kind === "approver_flag" ? "bad" : e.kind === "unacknowledged" ? "warn" : e.kind === "receipt" || e.kind === "approval" ? "ok" : "plain",
+    tone:
+      e.kind === "block" || e.kind === "discarded" || e.kind === "approver_flag"
+        ? "bad"
+        : e.kind === "unacknowledged"
+          ? "warn"
+          : e.kind === "receipt" || e.kind === "response" || e.kind === "approval"
+            ? "ok"
+            : "plain",
     fields,
     hash: text(e.hash),
     prev: text(e.prev),
@@ -524,16 +589,24 @@ function logRow(item: unknown, index: number, time: Clock): LogRow {
 
 function entrySummary(kind: string, b: Record<string, unknown>): string {
   const names = (v: unknown) => leafFields(strings(v)).join(", ");
+  const to = typeof b.destination === "string" && b.destination !== INTENT_CLOUD ? ` to ${destinationLabel(b.destination)}` : "";
   switch (kind) {
     case "disclosure":
-      return join([`logged ${text(b.endpoint)}`, names(b.fields) || "no body fields"], "  ");
+      return join([`logged${to} ${text(b.endpoint)}`, names(b.fields) || "no body fields"], "  ");
+    case "response":
+      return join([`answer to #${String(b.disclosure_seq)}`, typeof b.status === "number" ? `status ${String(b.status)}` : "", typeof b.bytes === "number" ? `${String(b.bytes)} bytes` : "", "unsigned"]);
     case "receipt":
       return join([`receipt for #${String(b.disclosure_seq)}`, typeof b.status === "number" ? `status ${String(b.status)}` : "", b.verified === true ? "signature checked" : ""]);
     case "unacknowledged":
     case "discarded":
       return join([`${kind} #${String(b.disclosure_seq)}`, text(b.reason)]);
-    case "block":
-      return join([`refused before sending ${text(b.endpoint)}`, strings(b.blocked).join("; "), ...Object.entries(record(b.held)).map(([k, v]) => `${k} ${JSON.stringify(v)} kept here only`)]);
+    case "block": {
+      // Only a policy block keeps values; an identity block or a logging refusal holds none, and none is shown.
+      const held = blockKind(strings(b.blocked)) === "policy" ? Object.entries(record(b.held)).map(([k, v]) => `${k} ${JSON.stringify(v)} kept here only`) : [];
+      return join([`refused before sending${to} ${text(b.endpoint)}`, strings(b.blocked).join("; "), ...held]);
+    }
+    case "wallet":
+      return join([`${destinationLabel(text(b.rail))} wallet ${text(b.action)}`, b.action !== "unlinked" ? "" : b.revoked === true ? "token revoked" : "token not revoked"]);
     case "observed": {
       // What came back for one request, recorded here after its receipt; never sent.
       const what =
@@ -586,6 +659,7 @@ function flatten(value: unknown, prefix: string, out: [string, string][]): void 
 export function refusalWords(blocked: readonly string[], held?: Readonly<Record<string, unknown>>): string {
   const category = typeof held?.category === "string" ? held.category : null;
   const words = blocked.map((b) => {
+    if (LOGGING_REFUSAL.test(b)) return `not logged as sent: ${b}`;
     if (b.startsWith("categories.block")) return category === null ? "excluded or blocked category" : `category "${category}" excluded`;
     if (b.startsWith("spend.")) return "over a spend limit";
     if (b.startsWith("merchants.")) return "merchant not allowed";

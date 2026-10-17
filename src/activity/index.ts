@@ -1,5 +1,6 @@
-// activity: the local hash chain read as correlated actions (search, cart, approval-status check, approval, block)
-// with what each sent, what came back and its outcome, plus summary counts, and the actions of each purchase grouped. Pure; `intent log` and the panel share it.
+// activity: the local hash chain read as correlated actions (search, cart, approval-status check, approval, block,
+// wallet change, call to a wallet destination) with what each sent, where, what came back and its outcome, plus
+// summary counts per destination, and the actions of each purchase grouped. Pure; `intent log` and the panel share it.
 export {
   ACTION_KINDS,
   type ActionKind,
@@ -8,14 +9,23 @@ export {
   type ActivityFilter,
   type ActivityLog,
   type ActivityObserved,
+  type ActivityRedaction,
   type ActivityRequest,
   type ActivityResponse,
   type ActivitySummary,
+  type BlockKind,
+  blockKind,
   buildActivity,
+  CLEAR_CREDENTIAL,
+  credentialWords,
   type Delivery,
+  destinationLabel,
+  type DestinationSummary,
   filterActivity,
   type IdentityFinding,
+  INTENT_CLOUD,
   leafFields,
+  LOGGING_REFUSAL,
   type Outcome,
   summarise,
 } from "./activity.ts";
