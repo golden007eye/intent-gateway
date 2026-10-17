@@ -12,9 +12,9 @@ Connect an agent:
 
 Commands:
   intent serve [--http]             MCP server over stdio (the default), or Streamable HTTP
+  intent init [--yes]               first run: check the setup, offer Shop one-tap, print the connect line
   intent log                        each action: the values it sent, what came back, what was blocked
-                                    (-v: every entry; --json: one action per line;
-                                     --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
+                                    (-v, --json, --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
   intent verify                     re-check the chain, receipts, approvals and this install
                                     (--skip-install-check: chain only, for offline use)
   intent panel [--port <n>]         read-only local page: activity, purchases, approvals, policy, log, verify
@@ -25,13 +25,13 @@ Commands:
   intent approver list              approver pins and flagged passkeys
   intent approver accept            make a flagged passkey the approver (at a terminal)
   intent wallet status              whether a Shop wallet is linked and its encrypted vault opens
-  intent wallet unlink shop         delete the Shop wallet's vault file on this machine
+  intent wallet link shop           link your Shop account for one-tap purchases (you approve in Shop)
+  intent wallet unlink shop         revoke the gateway's Shop token and delete its vault file
   intent demo [--http]              run against a local demo Intent Cloud (HTTP when typed in a terminal)
 
-Options for every command:
+Options for every command (and --help, --version):
   --demo               use the demo Intent Cloud and the demo data dir (<data dir>/demo)
   --trust-keys <file>  root keys for the Intent Cloud host: {"rootKeys":[{"kid":…,"jwk":…}]}
-  --help, --version
 
 With no policy file the bundled zip-only policy applies: the only detail about you it sends is your ZIP code.
 intent policy add per-order-60 (or another library policy) narrows it, here to $60 a cart.

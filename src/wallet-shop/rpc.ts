@@ -5,7 +5,8 @@
 //   speaks MCP 2026-07-28 statelessly: there is no `initialize` (Shop refuses it), and every request carries the
 //   `Mcp-Method` header (plus `Mcp-Name` for a tool call) and a `params._meta` block naming the protocol version, the
 //   client's capabilities and the client.
-// - Shop's account server (destination `shop_accounts`): the RFC 7009 revocation, a form body with no client secret.
+// - Shop's account server (destination `shop_accounts`): the OAuth device flow (RFC 8628: the device authorization
+//   and the token request) and the RFC 7009 revocation, each a form body with no client secret (a public client).
 // Every request goes on a fresh connection that is closed afterwards, with a 30 s timeout and a 1 MiB answer cap, as
 // for Intent Cloud.
 import { type IncomingMessage, request as httpRequest } from "node:http";
@@ -19,8 +20,11 @@ export const DEFAULT_SHOP_AUTH_URL = "https://accounts.shop.app/";
 /** The only Shop tools the gateway calls (plan G7a). Any other tool Shop advertises, a spend request included, is never called. */
 export const SHOP_TOOLS = ["get_account", "create_checkout", "complete_checkout", "get_checkout", "search_orders"] as const;
 export type ShopTool = (typeof SHOP_TOOLS)[number];
-/** The account server's one operation in this module (sign-in comes with `intent wallet link`, plan G8). */
+/** The account server's operations, each a form POST: revocation, and the device flow of `intent wallet link shop` (plan G8). */
 export const REVOKE = "revoke";
+export const DEVICE_AUTHORIZATION = "device_authorization";
+export const TOKEN = "token";
+const ACCOUNT_PATHS: Readonly<Record<string, string>> = { [REVOKE]: "oauth/revoke", [DEVICE_AUTHORIZATION]: "oauth/device", [TOKEN]: "oauth/token" };
 /** The client name the gateway gives in each request's `_meta`: exactly the one the identity check lets through. */
 export const CLIENT_NAME = MCP_CLIENT_NAME;
 export const TIMEOUT_MS = 30_000;
@@ -129,12 +133,17 @@ export function createShopMcpTransport(options: McpTransportOptions): ShopTransp
   };
 }
 
-/** The transport to Shop's account server: `revoke` with {token, token_type_hint, client_id}, as a form (RFC 7009). */
+/**
+ * The transport to Shop's account server, one form POST per operation: `device_authorization` {client_id, scope,
+ * resource}, `token` {grant_type, device_code, client_id} (RFC 8628) and `revoke` {token, token_type_hint, client_id}
+ * (RFC 7009).
+ */
 export function createShopAccountsTransport(options: TransportOptions): ShopTransport {
   const target = parseTarget(options.url);
   return {
     prepare(operation, payload) {
-      if (operation !== REVOKE) throw new ShopRequestError(`the Shop account server has no operation ${JSON.stringify(operation)} here`);
+      const path = Object.hasOwn(ACCOUNT_PATHS, operation) ? ACCOUNT_PATHS[operation] : undefined;
+      if (path === undefined) throw new ShopRequestError(`the Shop account server has no operation ${JSON.stringify(operation)} here`);
       const fields = payload as Record<string, string>;
       const body = Buffer.from(new URLSearchParams(Object.entries(fields)).toString(), "utf8");
       const headers: HeaderPair[] = [
@@ -144,7 +153,7 @@ export function createShopAccountsTransport(options: TransportOptions): ShopTran
         ["content-length", String(body.length)],
         ["connection", "close"],
       ];
-      return { operation, method: "POST", path: `${target.path.replace(/\/$/, "")}/oauth/revoke`, headers, body };
+      return { operation, method: "POST", path: `${target.path.replace(/\/$/, "")}/${path}`, headers, body };
     },
     send: (request) => exchange(target, request, options),
   };

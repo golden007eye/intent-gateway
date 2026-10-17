@@ -1,12 +1,17 @@
-// `intent wallet status | unlink <rail>` (plans G6, G7a). status says whether a wallet is linked and whether its
-// vault opens, never the token, and whether one-tap with Shop is available (it needs INTENT_SHOP_CLIENT_ID).
+// `intent wallet status | link <rail> | unlink <rail>` (plans G6, G7a, G8). status says whether a wallet is linked
+// and whether its vault opens, never the token, and whether one-tap with Shop is available (it needs
+// INTENT_SHOP_CLIENT_ID). link runs Shop's OAuth device flow as the gateway's registered client; with none set it
+// sends nothing and exits 1. Every request of the flow is logged before it leaves (invariant 2), with the device
+// code and the tokens digested; the user code and the page to approve on are printed for the developer and never
+// sent. The tokens go to the encrypted vault, then `wallet {rail, action: "linked", revoked: false}` is chained.
 // unlink first asks the rail to revoke the token (a disclosed send, logged before it leaves), then deletes the vault
 // file and chains `wallet {rail, action: "unlinked", revoked}`. `revoked` is true only when the rail acknowledged the
 // revocation (HTTP 200, RFC 7009); otherwise the output says where to revoke it by hand (invariant 5).
 import { type Config, INTENT } from "../config/index.ts";
-import { connectShop, openWalletSession } from "../disclosure/index.ts";
-import { openStore, type Store } from "../store/index.ts";
-import { printable } from "../ui/index.ts";
+import { connectShop, type DeviceGrantPrompt, linkShop, openWalletSession, ShopLinkError, type WalletSession } from "../disclosure/index.ts";
+import { approvalQr } from "../gateway/index.ts";
+import { openStore } from "../store/index.ts";
+import { printable, printableLines } from "../ui/index.ts";
 import {
   deleteSecret,
   describeKeySource,
@@ -14,6 +19,7 @@ import {
   isWalletRail,
   loadSecret,
   loadWalletKey,
+  saveSecret,
   vaultPath,
   WALLET_RAILS,
   type WalletRail,
@@ -66,6 +72,97 @@ export async function walletStatus(io: Io, config: Config): Promise<number> {
   return code;
 }
 
+/**
+ * Links `rail` with Shop's device flow: exit 0 once the tokens are in the vault and the link is chained; 1 when one-tap
+ * is unavailable (no client set: nothing is sent) or the flow ends without tokens (the line says how to try again).
+ * A wallet already linked is unlinked first, as `wallet unlink` does: its token is revoked (a logged send; a failed
+ * revocation warns and linking goes on), its vault file deleted, and `wallet {action: "unlinked", revoked}` chained.
+ */
+export async function walletLink(io: Io, config: Config, rail: string): Promise<number> {
+  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
+  const name = RAIL_NAMES[rail];
+  const clientId = config.wallet.shopClientId;
+  if (clientId === null) {
+    line(
+      io.stderr,
+      `intent: ${name} one-tap is unavailable until a registered ${name} client is set (INTENT_SHOP_CLIENT_ID); nothing was sent to ${name}, and purchases are handed off to the merchant's checkout`,
+    );
+    return 1;
+  }
+  warn(io, config);
+  // The key comes first, so a setup that cannot keep the tokens (the Docker image without a key secret) stops before
+  // anything is sent.
+  const key = await loadWalletKey(config.wallet.key, { create: true });
+  if (key === null) throw new CliError(`the wallet key ${describeKeySource(config.wallet.key)} could not be created`);
+  const store = await openStore(config.dataDir, {
+    onWait: leaseNotice((text) => {
+      line(io.stderr, `intent: ${text}`);
+    }, io.now),
+  });
+  try {
+    const session = openWalletSession(store);
+    if (await hasSecret(config.dataDir, rail)) {
+      line(io.stdout, `${name} wallet already linked: revoking its token before linking again`);
+      const revoked = await revoke(io, config, rail, session);
+      await deleteSecret(config.dataDir, rail);
+      await store.append("wallet", { rail, action: "unlinked", revoked });
+      if (!revoked) line(io.stderr, `intent: warning: the earlier ${name} token was not revoked; revoke it in your ${name} account settings (${RAIL_SETTING[rail]})`);
+    }
+    const where = { mcpUrl: config.wallet.shopMcpUrl, authUrl: config.wallet.shopAuthUrl };
+    let linked;
+    try {
+      linked = await linkShop(session, {
+        ...where,
+        clientId,
+        show: (prompt) => {
+          showPrompt(io, name, prompt);
+        },
+        sleep: io.sleep ?? delay,
+        now: io.now ?? Date.now,
+      });
+    } catch (error) {
+      if (!(error instanceof ShopLinkError)) throw error;
+      line(io.stderr, `intent: ${name} wallet not linked: ${error.message}; run ${INTENT} wallet link ${rail} to try again`);
+      return 1;
+    }
+    await saveSecret(config.dataDir, rail, key, linked.vaultText);
+    const entry = await store.append("wallet", { rail, action: "linked", revoked: false });
+    line(io.stdout, printable(`${name} wallet linked: tokens kept in the encrypted vault ${vaultPath(config.dataDir, rail)} (entry #${String(entry.seq)})`));
+    if (!linked.refreshIssued) {
+      const life = linked.expiresInS === null ? "" : ` (in about ${String(Math.max(1, Math.round(linked.expiresInS / 3600)))} h)`;
+      line(io.stdout, `${name} issued no refresh token: when its access token expires${life}, run ${INTENT} wallet link ${rail} again`);
+    }
+    try {
+      const account = await connectShop(session, { ...where, vaultText: linked.vaultText }).account();
+      const budget = account.budgetRemaining;
+      line(
+        io.stdout,
+        budget === null
+          ? `${name} budget: ${name} reports none for this connection; set one in the ${name} app to cap what the gateway can spend`
+          : `${name} budget left for the gateway: ${(budget.amountMinor / 100).toFixed(2)} ${budget.currency}`,
+      );
+    } catch (error) {
+      // The link is made; only the budget line is missing. The message is the gateway's own, never Shop's text.
+      line(io.stderr, printable(`intent: linked, but the ${name} budget could not be read: ${error instanceof Error ? error.message : String(error)}`));
+    }
+  } finally {
+    await store.close();
+  }
+  return 0;
+}
+
+/** Where and how to approve the link: the page, the code to check there, and a QR code of the page at a terminal. */
+function showPrompt(io: Io, name: string, prompt: DeviceGrantPrompt): void {
+  line(io.stdout, `To link your ${name} account, open this page (on any device) and check that it shows the code ${printable(prompt.userCode)}:`);
+  line(io.stdout, `  ${printable(prompt.verificationUri)}`);
+  if (io.isTTY.stdout) line(io.stdout, printableLines(approvalQr(prompt.verificationUriComplete ?? prompt.verificationUri).text.trimEnd()));
+  line(io.stdout, `Waiting for you to approve it in ${name} (up to ${String(Math.ceil(prompt.expiresInS / 60))} min; Ctrl-C stops)…`);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Opens the chain, deletes the rail's vault file, then chains the unlink. Exit 0 also when nothing was linked. */
 export async function walletUnlink(io: Io, config: Config, rail: string): Promise<number> {
   if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
@@ -86,7 +183,7 @@ export async function walletUnlink(io: Io, config: Config, rail: string): Promis
   });
   let revoked: boolean;
   try {
-    revoked = await revoke(io, config, rail, store);
+    revoked = await revoke(io, config, rail, openWalletSession(store));
     if (!(await deleteSecret(config.dataDir, rail))) return notLinked();
     const entry = await store.append("wallet", { rail, action: "unlinked", revoked });
     line(io.stdout, printable(`${name} wallet unlinked: deleted ${vaultPath(config.dataDir, rail)} (entry #${String(entry.seq)})`));
@@ -102,7 +199,7 @@ export async function walletUnlink(io: Io, config: Config, rail: string): Promis
  * Asks the rail to revoke the vault's token; true only when it acknowledged. A vault that does not open, holds no
  * token, or names no client, and every failure of the send, give false with the reason on stderr (never the token).
  */
-async function revoke(io: Io, config: Config, rail: WalletRail, store: Store): Promise<boolean> {
+async function revoke(io: Io, config: Config, rail: WalletRail, session: WalletSession): Promise<boolean> {
   const name = RAIL_NAMES[rail];
   try {
     const key = await loadWalletKey(config.wallet.key, { create: false });
@@ -111,7 +208,7 @@ async function revoke(io: Io, config: Config, rail: WalletRail, store: Store): P
       line(io.stderr, `intent: the ${name} vault cannot be opened (no key), so its token cannot be revoked from here`);
       return false;
     }
-    const wallet = connectShop(openWalletSession(store), {
+    const wallet = connectShop(session, {
       mcpUrl: config.wallet.shopMcpUrl,
       authUrl: config.wallet.shopAuthUrl,
       vaultText: text,

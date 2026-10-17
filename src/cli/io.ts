@@ -29,6 +29,8 @@ export interface Io {
   columns?: number;
   /** Test seam: how often `log --follow` reads the chain (500 ms by default). */
   followMs?: number;
+  /** Test seam: how `wallet link` waits between its polls to Shop (setTimeout by default). */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** What a command returns: its exit code, and for a long-running one (serve, panel) how to stop it. */

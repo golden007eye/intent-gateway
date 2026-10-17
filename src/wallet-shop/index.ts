@@ -4,6 +4,7 @@
 export {
   createShopAdapter,
   parseShopCredentials,
+  SHOP_ACCOUNTS_SECRET_PATHS,
   SHOP_SECRET_PATHS,
   type ShopAdapterOptions,
   type ShopCaller,
@@ -11,15 +12,18 @@ export {
   shopCredentialsText,
 } from "./adapter.ts";
 export { SAVED_ADDRESS_ID, STORE_DOMAIN } from "./project.ts";
+export { type DeviceGrantPrompt, DEVICE_GRANT, type LinkedShop, MAX_WAIT_MS, runDeviceFlow, SHOP_SCOPE, ShopLinkError, type ShopLinkFailure } from "./oauth.ts";
 export {
   CLIENT_NAME,
   createShopAccountsTransport,
   createShopMcpTransport,
   DEFAULT_SHOP_AUTH_URL,
   DEFAULT_SHOP_MCP_URL,
+  DEVICE_AUTHORIZATION,
   MCP_PROTOCOL,
   REVOKE,
   SHOP_TOOLS,
+  TOKEN,
   type ShopTool,
   type ShopTransport,
   ShopRequestError,

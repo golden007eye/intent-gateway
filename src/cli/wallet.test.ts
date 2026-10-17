@@ -224,6 +224,6 @@ describe("intent wallet unlink shop", () => {
     expect((await s.run(["wallet", "unlink"])).code).toBe(2);
     const bare = await s.run(["wallet"]);
     expect(bare.code).toBe(2);
-    expect(bare.err).toContain("wallet needs one of: status, unlink");
+    expect(bare.err).toContain("wallet needs one of: status, link, unlink");
   });
 });

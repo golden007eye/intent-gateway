@@ -20,4 +20,4 @@ export {
   type MissingDetail,
   type Refused,
 } from "./gateway.ts";
-export type { ApprovalQr } from "./qr.ts";
+export { type ApprovalQr, approvalQr } from "./qr.ts";

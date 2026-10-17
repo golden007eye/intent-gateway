@@ -2,7 +2,26 @@
 // start never prints a line to paste. The entrypoint makes the token in <data>/http-token and, when it is new and
 // may be printed, leaves <data>/http-token.unshown beside it. The first start that serves prints the token in the
 // line and removes the marker; later starts print a line that reads the token from the container when pasted.
+// On a host, `intent init` prints hostConnect's line instead: the gateway over stdio, with the settings it was run
+// with, so the agent's gateway uses the same data dir, policy, Intent Cloud and Shop client.
 import { readFileSync, rmSync } from "node:fs";
+
+/** Settings the agent's gateway must share with the one `init` ran as; INTENT_WALLET_KEY is left out, as a secret. */
+const SHARED_SETTINGS = ["INTENT_DATA_DIR", "INTENT_POLICY", "INTENT_CLOUD_URL", "INTENT_WALLET_KEY_FILE", "INTENT_SHOP_CLIENT_ID", "INTENT_SHOP_MCP_URL", "INTENT_SHOP_AUTH_URL"];
+
+/** The `claude mcp add` line for a gateway on this host, over stdio. `args` follow the invocation (`--trust-keys <file>`). */
+export function hostConnect(intent: string, env: Readonly<Record<string, string | undefined>>, args: readonly string[] = []): string {
+  const settings = SHARED_SETTINGS.flatMap((name) => {
+    const value = env[name];
+    return value === undefined || value === "" ? [] : [`-e ${name}=${shellWord(value)}`];
+  });
+  return ["claude mcp add intent", ...settings, "--", intent, ...args.map(shellWord)].join(" ");
+}
+
+/** `value` as one shell word: as it is when it is plain, else in single quotes. */
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}
 
 export interface ConnectInput {
   /** The token the server checks (INTENT_HTTP_TOKEN, which the entrypoint sets from the token file). */

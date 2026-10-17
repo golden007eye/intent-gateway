@@ -21,9 +21,9 @@ Connect an agent:
 
 ${inline ? "Commands:" : `Commands (run each as: ${intent} <command>):`}
 ${pad("serve [--http]")}MCP server over stdio (the default), or Streamable HTTP
+${pad("init [--yes]")}first run: check the setup, offer Shop one-tap, print the connect line
 ${pad("log")}each action: the values it sent, what came back, what was blocked
-${"".padEnd(width)}(-v: every entry; --json: one action per line;
-${"".padEnd(width)} --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
+${"".padEnd(width)}(-v, --json, --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
 ${pad("verify")}re-check the chain, receipts, approvals and this install
 ${"".padEnd(width)}(--skip-install-check: chain only, for offline use)
 ${pad("panel [--port <n>]")}read-only local page: activity, purchases, approvals, policy, log, verify
@@ -34,13 +34,13 @@ ${pad("policy test <cases.yaml>")}run test cases against the active policy
 ${pad("approver list")}approver pins and flagged passkeys
 ${pad("approver accept")}make a flagged passkey the approver (at a terminal)
 ${pad("wallet status")}whether a Shop wallet is linked and its encrypted vault opens
-${pad("wallet unlink shop")}delete the Shop wallet's vault file on this machine
+${pad("wallet link shop")}link your Shop account for one-tap purchases (you approve in Shop)
+${pad("wallet unlink shop")}revoke the gateway's Shop token and delete its vault file
 ${pad("demo [--http]")}run against a local demo Intent Cloud (HTTP when typed in a terminal)
 
-Options for every command:
+Options for every command (and --help, --version):
   --demo               use the demo Intent Cloud and the demo data dir (<data dir>/demo)
   --trust-keys <file>  root keys for the Intent Cloud host: {"rootKeys":[{"kid":…,"jwk":…}]}
-  --help, --version
 
 With no policy file the bundled zip-only policy applies: the only detail about you it sends is your ZIP code.
 ${intent} policy add per-order-60 (or another library policy) narrows it, here to $60 a cart.
