@@ -1,6 +1,8 @@
 // The only network path to Intent Cloud (invariant 2: log before send; part of invariant 3).
 //
-// Every call goes through the cloud adapter's beforeSend hook, which sees the final request bytes:
+// The checks, appends and stop rule are the disclosure core's (core.ts), shared by every destination; this file says
+// which adapter call to run and how Intent Cloud's answer is acknowledged. Every call goes through the cloud adapter's
+// beforeSend hook, which sees the final request bytes:
 // 1. findIdentity on the outbound JSON body. A finding appends a `block` entry (finding kinds and paths, never the
 //    values) and throws DisclosureBlockedError, so nothing is sent.
 // 2. A `disclosure` entry holding the exact body bytes and the full header set is appended; the store fsyncs before
@@ -27,10 +29,7 @@
 // in the `observed` entry it writes after a verified answer.
 // Inbound bodies are never scanned here: an offer title is Cloud's content, not the buyer's. The gateway's
 // observations of them are scanned (src/observation) before they are kept.
-import { randomUUID } from "node:crypto";
 import {
-  CloudNetworkError,
-  CloudResponseError,
   type CloudResult,
   createHttpCloud,
   type HeaderPair,
@@ -39,9 +38,9 @@ import {
   type PreparedRequest,
 } from "../cloud/index.ts";
 import type { ApprovalCreated, ApprovalStatus, Cart, CartRequest, Jwks, KeyStatement, Meta, SearchRequest, SearchResponse } from "../contract/index.ts";
-import { type Finding, findIdentity } from "../privacy/index.ts";
-import { NOT_SENT_REASON, type Store } from "../store/index.ts";
+import type { Store } from "../store/index.ts";
 import { type KeySet, type SentRequest, verifyReceipt } from "../trust/index.ts";
+import { createDisclosureCore, type OutboundRequest } from "./core.ts";
 
 /** A result as the adapter returned it, plus the seq of the `disclosure` entry that logged its request. */
 export type DisclosedResult<T> = CloudResult<T> & { readonly disclosureSeq: number };
@@ -68,18 +67,6 @@ export interface DisclosureOptions {
   now?: () => number;
 }
 
-/** The outbound body looked like buyer identity; a `block` entry was written and nothing was sent. */
-export class DisclosureBlockedError extends Error {
-  override name = "DisclosureBlockedError";
-  readonly endpoint: string;
-  readonly findings: readonly Finding[];
-  constructor(endpoint: string, findings: readonly Finding[]) {
-    super(`${endpoint} not sent: the request body looks like buyer identity (${findings.map(describe).join(", ")})`);
-    this.endpoint = endpoint;
-    this.findings = findings;
-  }
-}
-
 /** A 2xx arrived without a valid receipt; a `discarded` entry was written and its content is not returned. */
 export class DisclosureDiscardedError extends Error {
   override name = "DisclosureDiscardedError";
@@ -90,14 +77,6 @@ export class DisclosureDiscardedError extends Error {
     this.disclosureSeq = disclosureSeq;
     this.status = status;
   }
-}
-
-/**
- * An append around an earlier send failed, so this disclosed cloud sends nothing more: a send whose answer could not
- * be recorded must stay the last one of its gateway session (invariant 2). Restarting the gateway starts a new one.
- */
-export class DisclosureStoppedError extends Error {
-  override name = "DisclosureStoppedError";
 }
 
 /** A search, cart or approval call before a verified key statement: its receipt could not be checked, so nothing is sent. */
@@ -128,25 +107,13 @@ export function connectCloud(http: HttpCloudOptions, store: Store, options: Disc
 
 export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: DisclosureOptions): DisclosedCloud {
   const now = options.now ?? Date.now;
-  const session = { id: randomUUID(), next: 0, open: new Set<number>() };
-  let sessionEntry: Promise<unknown> | null = null;
-  let stopped: string | null = null;
-
-  /** Stops every later send, for good (the first reason is kept), and returns the error that says so. */
-  function stop(reason: string, cause: unknown): DisclosureStoppedError {
-    stopped ??= `${reason}: ${cause instanceof Error ? cause.message : String(cause)}`;
-    return stoppedError(cause);
-  }
-  function stoppedError(cause?: unknown): DisclosureStoppedError {
-    const message = `the gateway sends nothing more: ${String(stopped)}`;
-    return new DisclosureStoppedError(message, cause === undefined ? undefined : { cause });
-  }
+  const core = createDisclosureCore(store);
 
   async function disclosed<T>(
     needsKeys: boolean,
     run: (beforeSend: (request: PreparedRequest) => Promise<void>) => Promise<CloudResult<T>>,
   ): Promise<DisclosedResult<T>> {
-    if (stopped !== null) throw stoppedError();
+    core.assertOpen();
     if (needsKeys) {
       const keySet = options.keySet();
       if (keySet === null) {
@@ -155,72 +122,13 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
       // Fail closed before anything is logged: every receipt of a send made now would be discarded anyway.
       if (now() >= keySet.expiresAt.getTime()) throw new DisclosureKeysExpiredError(keySet.expiresAt);
     }
-    // A holder, not locals, because beforeSend fills it inside the adapter's call.
-    const logged: { seq: number | null; n: number; sent: SentRequest | null } = { seq: null, n: -1, sent: null };
-    const beforeSend = async (request: PreparedRequest): Promise<void> => {
-      if (stopped !== null) throw stoppedError();
-      const json = parseBody(request.body);
-      const fields = fieldNames(json);
-      const findings = findIdentity(json);
-      if (findings.length > 0) {
-        await store.append("block", { endpoint: request.operation, fields, blocked: findings.map(describe) });
-        throw new DisclosureBlockedError(request.operation, findings);
-      }
-      try {
-        sessionEntry ??= store.append("session", { id: session.id });
-        await sessionEntry;
-      } catch (error) {
-        // The store's own error is what this call reports (it names a fence or a disk failure); later calls are refused.
-        stop("the session entry could not be logged", error);
-        throw error;
-      }
-      // From here to the append call nothing awaits, so the store's FIFO queue keeps n in chain order.
-      const n = session.next++;
-      const body = { ...disclosureBody(request, fields), session: { id: session.id, n, open: [...session.open].sort((a, b) => a - b) } };
-      session.open.add(n);
-      let entry;
-      try {
-        entry = await store.append("disclosure", body);
-      } catch (error) {
-        stop(`a request to ${request.operation} could not be logged, so it was not sent`, error);
-        throw error;
-      }
-      logged.seq = entry.seq;
-      logged.n = n;
-      logged.sent = sentRequest(body);
-    };
-
-    /** Appends the follow-up; if that fails, nothing is sent again (the disclosure must stay last in its session). */
-    async function answer<R>(seq: number, append: () => Promise<R>): Promise<R> {
-      let value: R;
-      try {
-        value = await append();
-      } catch (error) {
-        throw stop(`the answer to disclosure #${String(seq)} could not be logged`, error);
-      }
-      session.open.delete(logged.n);
-      return value;
-    }
-
-    let result: CloudResult<T>;
-    try {
-      result = await run(beforeSend);
-    } catch (error) {
-      // seq is null when the request never got past beforeSend: nothing was sent, so nothing follows the log.
-      const { seq, sent } = logged;
-      if (seq !== null && sent !== null) {
-        await answer<unknown>(seq, () =>
-          error instanceof CloudResponseError
-            ? acknowledge(seq, sent, error)
-            : store.append("unacknowledged", { disclosure_seq: seq, reason: noResponseReason(error) }),
-        );
-      }
-      throw error;
-    }
-    const { seq, sent } = logged;
-    if (seq === null || sent === null) throw new Error("the cloud adapter returned without calling beforeSend");
-    const discarded = await answer(seq, () => acknowledge(seq, sent, result));
-    if (discarded !== null) throw new DisclosureDiscardedError(seq, result.status, discarded);
+    const { result, seq } = await core.disclose("intent_cloud", {
+      run,
+      body: disclosureBody,
+      answered: (logged, ack) => acknowledge(logged.seq, sentRequest(logged.body), ack),
+      answeredError: (logged, error) => acknowledge(logged.seq, sentRequest(logged.body), error),
+      discard: (logged, ack, reason) => new DisclosureDiscardedError(logged.seq, ack.status, reason),
+    });
     return { ...result, disclosureSeq: seq };
   }
 
@@ -271,39 +179,7 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
   };
 }
 
-function describe(finding: Finding): string {
-  return `${finding.kind} at ${finding.path}`;
-}
-
-function noResponseReason(error: unknown): string {
-  if (error instanceof CloudNetworkError && error.neverLeft) return `${NOT_SENT_REASON} (${error.failure})`;
-  if (error instanceof Error) {
-    const reason = (error as { reason?: unknown }).reason;
-    return typeof reason === "string" ? `${error.name}: ${reason}` : error.name;
-  }
-  return "unknown failure";
-}
-
-/** The outbound body as JSON; an empty body (a GET, or a POST without one) is null. */
-function parseBody(body: Uint8Array): unknown {
-  return body.length === 0 ? null : (JSON.parse(Buffer.from(body).toString("utf8")) as unknown);
-}
-
-/** Every object key in the body as a dotted path, arrays written as `[]`: `ship_to`, `ship_to.postal_code`. */
-function fieldNames(value: unknown, prefix = "", out = new Set<string>()): string[] {
-  if (Array.isArray(value)) {
-    for (const item of value as unknown[]) fieldNames(item, `${prefix}[]`, out);
-  } else if (typeof value === "object" && value !== null) {
-    for (const [key, item] of Object.entries(value)) {
-      const name = prefix === "" ? key : `${prefix}.${key}`;
-      out.add(name);
-      fieldNames(item, name, out);
-    }
-  }
-  return [...out].sort();
-}
-
-function disclosureBody(request: PreparedRequest, fields: string[]) {
+function disclosureBody(request: OutboundRequest, fields: string[]) {
   const signatureInput = header(request.headers, "signature-input");
   const param = (name: string): string | null => {
     const match = signatureInput === null ? null : new RegExp(`;${name}=("?)([^";]*)\\1(?:;|$)`).exec(signatureInput);
