@@ -111,6 +111,25 @@ describe("schema parity with gateway-api.v1.yaml", () => {
     expect(fromZod(loose)).not.toEqual(normal(specSchemas["Money"] as Obj));
   });
 
+  it("every pattern matches whole values: anchored with ^ and $ (amendment item 9)", () => {
+    const patterns: string[] = [];
+    const walk = (node: Json): void => {
+      if (Array.isArray(node)) node.forEach(walk);
+      else if (node !== null && typeof node === "object") {
+        for (const [k, v] of Object.entries(node)) {
+          if (k === "pattern" && typeof v === "string") patterns.push(v);
+          else walk(v);
+        }
+      }
+    };
+    for (const schema of Object.values(SCHEMAS)) walk(fromZod(schema));
+    expect(patterns.length).toBeGreaterThan(20);
+    for (const p of patterns) expect(p, p).toMatch(/^\^.*\$$/s);
+    // An unanchored pattern would accept a prefix or a suffix of extra text.
+    expect(contract.ApprovalHandle.safeParse("ap_TEST0001/x").success).toBe(false);
+    expect(contract.MerchantOrigin.safeParse("https://shop.example.evil/").success).toBe(false);
+  });
+
   it("detects a changed pattern", () => {
     expect(fromZod(z.string().regex(/^of_[A-Za-z0-9_-]{1,64}$/))).not.toEqual(normal(specSchemas["OfferHandle"] as Obj));
   });

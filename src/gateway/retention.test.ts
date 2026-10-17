@@ -86,11 +86,23 @@ describe("completer key retention", () => {
     expect(gone(chain, T0)).toBe(false);
   });
 
-  it("a shop_agent report that never succeeds: gone 48 h after the later of expires_at and the outcome", () => {
+  it("item 8: a shop_agent report that never got its 201 extends nothing: gone at expires_at + 48 h", () => {
     const late = EXPIRES + 3_600_000;
     const chain = chainOf(pending("shop_agent"), approval, reportOf("failed", late));
-    expect(gone(chain, late + READ_WINDOW_MS - 1)).toBe(false);
-    expect(gone(chain, late + READ_WINDOW_MS)).toBe(true);
+    expect(gone(chain, EXPIRES + READ_WINDOW_MS - 1)).toBe(false);
+    expect(gone(chain, EXPIRES + READ_WINDOW_MS)).toBe(true);
+  });
+
+  it("item 8: no chain keeps a key past Intent Cloud's R7 limit (expires_at + 48 h, with no terminal at Intent Cloud)", () => {
+    const chains = [
+      chainOf(pending()),
+      chainOf(pending(), observed("approved")),
+      chainOf(pending(), approval),
+      chainOf(pending(), approval, observed("handed_off", "handed_off", EXPIRES + 3_600_000)),
+      chainOf(pending(), approval, observed("approved", "ordered", EXPIRES + 3_600_000)),
+      chainOf(pending("shop_agent"), approval, reportOf("completing"), reportOf("ordered", EXPIRES + 40 * 3_600_000)),
+    ];
+    for (const chain of chains) expect(gone(chain, EXPIRES + READ_WINDOW_MS)).toBe(true);
   });
 
   it("a non-terminal report (completing, indeterminate) keeps the key for the window from expires_at", () => {

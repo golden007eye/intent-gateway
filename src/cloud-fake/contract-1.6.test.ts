@@ -170,9 +170,10 @@ describe("outcome reports (Appendix G R1–R7)", () => {
     return { cloud, p };
   }
 
-  it("403 for another key; the first report must be completing; completing redeems once and replays", async () => {
+  it("404 for another key (R1, as for an unknown handle); the first report must be completing; completing redeems once and replays", async () => {
     const { cloud, p } = await approvedShopAgent();
-    expect((await report(cloud, p, COMPLETING, createSession())).status).toBe(403);
+    const intruder = await report(cloud, p, COMPLETING, createSession());
+    expect([intruder.status, intruder.json]).toEqual([404, { error: "not_found", message: "unknown handle" }]);
     expect((await report(cloud, p, { ...COMPLETING, state: "failed", report_id: "or_BBBBBBBBBBBBBBBB" })).status).toBe(409);
     const first = await report(cloud, p, COMPLETING);
     expect(first.status).toBe(201);
@@ -207,6 +208,8 @@ describe("outcome reports (Appendix G R1–R7)", () => {
     const handoff = await purchase(cloud, ["handoff"]);
     cloud.approveWithPasskey(handoff.handle, new SoftPasskey());
     expect((await report(cloud, handoff, COMPLETING)).status).toBe(409);
+    // R1 before R0: another key learns nothing about the approval's mode.
+    expect((await report(cloud, handoff, COMPLETING, createSession())).status).toBe(404);
   });
 });
 

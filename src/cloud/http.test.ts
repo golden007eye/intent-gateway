@@ -354,6 +354,13 @@ describe("contract 1.6.0: a per-call signer and outcome reports", () => {
     expect(verify(r).ok).toBe(true);
   });
 
+  it("attack (item 9): an answer with a non-integer number token is refused, though JSON.parse would make it an integer", async () => {
+    const body = JSON.stringify(BODIES["/v1/carts"]).replace('"amount_minor":8999', '"amount_minor":8999.0');
+    expect(body).toContain("8999.0");
+    const stub = await startStub(() => ({ status: 201, headers: [["Intent-Contract-Version", "1.6.0"]], body }));
+    await expect(cloudFor(stub).createCart(CART_REQUEST)).rejects.toMatchObject({ name: "CloudResponseError", reason: "schema" });
+  });
+
   it("reportOutcome refuses a malformed handle or report before anything is sent", async () => {
     const stub = await startStub();
     const cloud = cloudFor(stub);

@@ -17,6 +17,10 @@ describe("checkoutRefHash", () => {
     expect(checkoutRefHash("gid://shopify/Checkout/TEST0001?key=TESTKEY0001")).not.toBe(raw("gid://shopify/Checkout/TEST0001?key=TESTKEY0001"));
   });
 
+  it.each(["", "?", "?key=TESTKEY0001", "??"])("attack (item 7): an id with an empty path before '?' (%j) has no hash", (id) => {
+    expect(checkoutRefHash(id)).toBeNull();
+  });
+
   it("attack: another checkout id is another hash, whatever its query", () => {
     expect(checkoutRefHash("gid://shopify/Checkout/TEST0002?key=TESTKEY0001")).not.toBe(checkoutRefHash("gid://shopify/Checkout/TEST0001?key=TESTKEY0001"));
   });

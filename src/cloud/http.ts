@@ -29,7 +29,7 @@ import {
   type SearchRequest,
   type SearchResponse,
 } from "../contract/index.ts";
-import { canonicalize } from "../jcs/index.ts";
+import { canonicalize, nonIntegerToken } from "../jcs/index.ts";
 import { contentDigest, type Session, signRequest } from "../signing/index.ts";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -411,10 +411,15 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
     else return { ...common, ok: false, status, body: null };
 
     let json: unknown;
+    const text = exchange.body.toString("utf8");
     try {
-      json = JSON.parse(exchange.body.toString("utf8"));
+      json = JSON.parse(text);
     } catch {
       throw new CloudResponseError("not_json", status, common, `${operation} ${String(status)} body is not JSON`);
+    }
+    // Amendment item 9: JSON.parse cannot tell 1.0 from 1, so a non-integer number token anywhere is refused.
+    if (nonIntegerToken(text) !== null) {
+      throw new CloudResponseError("schema", status, common, `${operation} ${String(status)} body has a number that is not an integer`);
     }
     const parsed = schema.safeParse(json);
     if (!parsed.success) {

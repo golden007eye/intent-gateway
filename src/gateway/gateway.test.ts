@@ -541,8 +541,13 @@ describe("createCart snapshot checks", () => {
           completer_keyid: view?.snapshot.v === 2 ? view.snapshot.completer_keyid : "v1",
           completion_accepts: ["handoff"],
         },
-        offer: { variant_ref: view?.snapshot.v === 2 ? view.snapshot.variant_ref : "v1" },
-        cart: { merchant_origin: "https://shop.example", variant_ref: view?.snapshot.v === 2 ? view.snapshot.variant_ref : "v1" },
+        offer: { variant_ref: view?.snapshot.v === 2 ? view.snapshot.variant_ref : "v1", merchant: { name: "Trail Supply Co", domain: "shop.example" } },
+        cart: {
+          merchant_origin: "https://shop.example",
+          variant_ref: view?.snapshot.v === 2 ? view.snapshot.variant_ref : "v1",
+          total: { amount_minor: 2 * 8999 + 500, currency: "USD" },
+          expires_at: result.cart.expires_at,
+        },
       },
     });
     expect(result.summary).toBe(
@@ -1205,7 +1210,9 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
   // Appendix E step 7 (amendment H2) at approval-request time, one attack per fact, plus the cart-equality ones.
   it.each([
     ["quantity 2 when 1 was requested", { quantity: 2 }, "quantity is not the quantity requested"],
-    ["origin https://evil.example for domain shop.example", { merchant_origin: "https://evil.example" }, "merchant_origin is not the cart's"],
+    ["origin https://evil.example for domain shop.example", { merchant_origin: "https://evil.example" }, "merchant_origin is not https:// + the offer's merchant domain and the cart's"],
+    ["another total than the cart's", { total: { amount_minor: 1, currency: "USD" } as const }, "total is not the cart's"],
+    ["an expiry after the cart's", { expires_at: "2099-01-01T00:00:00Z" }, "expires_at is later than the cart's"],
     ["ZIP 94104 when 94103 was sent", { ship_to: { country: "US", postal_code: "94104" } as const }, "ship_to differs from the ZIP sent"],
     ["another variant", { variant_ref: "gid://shopify/ProductVariant/2" }, "variant_ref is not the offer's and the cart's"],
     ["a completion mode the cart request did not offer", { completion_mode: "shop_agent" as const }, "completion_mode is not one the cart request offered"],
@@ -1255,8 +1262,11 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     if (entry === undefined || !keySet.ok) throw new Error("setup");
     const body = entry.body as { sent: { offer: object; cart: object } };
     const check = (sent: object) => verifyApprovalProof(status.body, { ...entry, body: { ...body, sent: { ...body.sent, ...sent } } }, keySet.keySet, [], new Date(h.now()));
-    expect(check({ offer: { variant_ref: "gid://shopify/ProductVariant/9" } })).toMatchObject({ step: 7, reason: "variant_ref" });
+    expect(check({ offer: { ...body.sent.offer, variant_ref: "gid://shopify/ProductVariant/9" } })).toMatchObject({ step: 7, reason: "variant_ref" });
     expect(check({ cart: { ...body.sent.cart, merchant_origin: "https://evil.example" } })).toMatchObject({ step: 7, reason: "merchant_origin" });
+    expect(check({ offer: { ...body.sent.offer, merchant: { name: "Other", domain: "other.example" } } })).toMatchObject({ step: 7, reason: "merchant_origin" });
+    expect(check({ cart: { ...body.sent.cart, total: { amount_minor: 1, currency: "USD" } } })).toMatchObject({ step: 7, reason: "total" });
+    expect(check({ cart: { ...body.sent.cart, expires_at: "2026-10-15T12:00:01Z" } })).toMatchObject({ step: 7, reason: "expires_at" });
   });
 
   it("M5: the gateway's key choice refuses an earlier approval's keyid", async () => {

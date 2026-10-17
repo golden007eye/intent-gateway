@@ -114,7 +114,7 @@ export async function rootKeys(config: Config, options: { contacts?: boolean } =
 }
 
 /** http on a loopback address: only a local fake Intent Cloud answers there. */
-function isLoopbackHttp(url: string): boolean {
+export function isLoopbackHttp(url: string): boolean {
   try {
     const u = new URL(url);
     return u.protocol === "http:" && (u.hostname === "127.0.0.1" || u.hostname === "[::1]");

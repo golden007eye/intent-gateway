@@ -701,8 +701,8 @@ export function createGateway(options: GatewayOptions): Gateway {
     // above made sure the offer and the cart name a variant and the cart an origin.
     const sent: SentPurchase = {
       cart_request: request,
-      offer: { variant_ref: known.offer.variant_ref ?? "" },
-      cart: { merchant_origin: cart.merchant_origin ?? "", variant_ref: cart.variant_ref ?? "" },
+      offer: { variant_ref: known.offer.variant_ref ?? "", merchant: known.offer.merchant },
+      cart: { merchant_origin: cart.merchant_origin ?? "", variant_ref: cart.variant_ref ?? "", total: cart.total, expires_at: cart.expires_at },
     };
     const snapshotProblems = [
       ...checkSnapshot(created, cart, sent),

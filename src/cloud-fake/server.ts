@@ -38,7 +38,7 @@ import {
   type SnapshotV2,
   type WebAuthnAssertion,
 } from "../contract/index.ts";
-import { canonicalize, sha256Hex } from "../jcs/index.ts";
+import { canonicalize, nonIntegerToken, sha256Hex } from "../jcs/index.ts";
 import { contentDigest, createNonceCache, verifyRequest } from "../signing/index.ts";
 import { type CatalogItem, DEFAULT_CATALOG, searchCatalog } from "./catalog.ts";
 import {
@@ -296,8 +296,11 @@ export function addressKey(address: string): string {
 }
 
 function parseJson(body: Buffer): unknown {
+  const text = body.toString("utf8");
+  // Amendment item 9: a non-integer number token is refused, as JSON.parse would read 1.0 as 1.
+  if (nonIntegerToken(text) !== null) return undefined;
   try {
-    return JSON.parse(body.toString("utf8"));
+    return JSON.parse(text);
   } catch {
     return undefined;
   }
@@ -567,7 +570,9 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     let snapshot: AnySnapshot = v1;
     if (cart.version === "1.6.0") {
       const { body } = cart;
-      if (body.completion_mode === undefined || body.merchant_origin === undefined || body.variant_ref === undefined || cart.completer === undefined) {
+      // The checkout URL's query (`?key=…`) is not part of the hash (amendment L1).
+      const checkoutHash = checkoutRefHash(`gid://shopify/Checkout/${cart.handle}?key=${randomBytes(8).toString("hex")}`);
+      if (body.completion_mode === undefined || body.merchant_origin === undefined || body.variant_ref === undefined || cart.completer === undefined || checkoutHash === null) {
         throw new Error("a 1.6.0 cart without its 1.6.0 fields");
       }
       const v2: SnapshotV2 = {
@@ -576,8 +581,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         ship_to: { country: "US", postal_code: cart.shipTo.postal_code },
         merchant_origin: body.merchant_origin,
         variant_ref: body.variant_ref,
-        // The checkout URL's query (`?key=…`) is not part of the hash (amendment L1).
-        checkout_ref_hash: checkoutRefHash(`gid://shopify/Checkout/${cart.handle}?key=${randomBytes(8).toString("hex")}`),
+        checkout_ref_hash: checkoutHash,
         completion_mode: body.completion_mode,
         completer_keyid: cart.completer,
         total_estimated: body.total_estimated ?? false,
@@ -664,7 +668,9 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (!ApprovalHandle.safeParse(param).success) return fail(400, "bad_request", "malformed approval handle");
     const a = approvals.get(param);
     if (a === undefined || a.snapshot.v !== 2) return UNKNOWN_HANDLE();
-    if (!mayUse(a, keyid, version, at)) return fail(403, "forbidden", "this key may not report for this approval");
+    // R1 first: any key but the cart's session or the completer gets 404, like an unknown handle; then R0.
+    if (!mayUse(a, keyid, version, at)) return UNKNOWN_HANDLE();
+    if (modeOf(a) !== "shop_agent") return fail(409, "conflict", "not a shop_agent approval");
     if (reportFault !== null) return fail(reportFault, "bad_request", "fake cloud error");
     const parsed = OutcomeReport.safeParse(parseJson(body));
     if (!parsed.success) return fail(400, "bad_request", "body does not match OutcomeReport");
@@ -673,7 +679,6 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if ((report.state === "ordered" || report.state === "mismatch") && !ORDER_KEYS.every((k) => k in report)) {
       return fail(400, "bad_request", `${report.state} needs order_ref, final_total and binding`);
     }
-    if (modeOf(a) !== "shop_agent") return fail(409, "conflict", "not a shop_agent approval");
     const hash = sha256Hex(canonicalize(report));
     const prior = a.reports.get(report.report_id);
     if (prior !== undefined) return prior.hash === hash ? prior.reply : fail(409, "conflict", "report_id reused with another body");
