@@ -239,6 +239,121 @@ describe("buildModel: approvals, policy, log, verify", () => {
   });
 });
 
+describe("buildModel: wallet destinations, refusals and wallet entries (ADR-0014)", () => {
+  const TOKEN_MARKER = `[redacted sha256:${"e5c02528".padEnd(64, "0")}]`;
+  const REFRESH_MARKER = `[redacted sha256:${"a1d94354".padEnd(64, "1")}]`;
+  const EMAIL = "jane.buyer@example.com";
+  const shopCall = (name: string, args: Record<string, unknown>, redacted: { at: string; sha256: string }[]) => ({
+    endpoint: name,
+    destination: "shop",
+    method: "POST",
+    path: "/api/mcp",
+    fields: ["id", "jsonrpc", "method", "params", "params.arguments", ...Object.keys(args).map((k) => `params.arguments.${k}`), "params.name"],
+    body_b64: b64({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+    headers: [["authorization", TOKEN_MARKER]],
+    content_digest: "sha-256=:shop:",
+    redacted,
+  });
+  // The entries as the disclosure core writes them (src/cli/log-destinations.test.ts drives the real core).
+  const WALLET_SPECS: Spec[] = [
+    ["disclosure", disclosure("searchCatalog", "/v1/catalog/search", { category: "lamps", ship_to: SHIP }), at("10:20")],
+    ["receipt", receipt(0), at("10:20")],
+    ["wallet", { rail: "shop", action: "linked", revoked: false }, at("10:21")],
+    ["session", { id: "s-1" }, at("10:22")],
+    ["disclosure", shopCall("get_checkout", { checkout_id: "co_123" }, [{ at: "headers.authorization", sha256: "e5c02528".padEnd(64, "0") }]), at("10:22")],
+    ["response", { disclosure_seq: 4, status: 200, body_sha256: "1".repeat(64), bytes: 31 }, at("10:22")],
+    [
+      "disclosure",
+      shopCall("refresh", { refresh_token: REFRESH_MARKER }, [
+        { at: "headers.authorization", sha256: "e5c02528".padEnd(64, "0") },
+        { at: "body.params.arguments.refresh_token", sha256: "a1d94354".padEnd(64, "1") },
+      ]),
+      at("10:23"),
+    ],
+    ["response", { disclosure_seq: 6, status: 401, body_sha256: "2".repeat(64), bytes: 31 }, at("10:23")],
+    // An identity block holds no value; a `held` on one (a hand-edited chain) is never shown.
+    ["block", { endpoint: "search", destination: "shop", fields: ["params.arguments.note"], blocked: ["email at $.params.arguments.note"], held: { note: EMAIL } }, at("10:24")],
+    ["block", { endpoint: "search", destination: "shop", fields: ["params.arguments.q"], blocked: ["a credential in the query (access_token), which the log cannot digest"] }, at("10:25")],
+    ["wallet", { rail: "shop", action: "unlinked", revoked: true }, at("10:26")],
+    ["wallet", { rail: "shop", action: "unlinked", revoked: false }, at("10:27")],
+  ];
+  const m = buildModel(input({ items: chain(WALLET_SPECS), now: Date.parse(at("10:30")) }));
+  const html = renderPage(m);
+
+  it("the overview counts Intent Cloud's requests only, and each wallet destination apart: answered, never acknowledged", () => {
+    expect(m.kpis).toMatchObject({ sent: 1, acknowledged: 1, maybeSent: 0, elsewhere: [{ destination: "Shop", sent: 2, answered: 2, maybeSent: 0 }] });
+    expect(html).toContain("Also sent to Shop: 2 (2 answered, unsigned)</p>");
+    expect(html).not.toMatch(/maybe sent/);
+  });
+
+  it("the feed words a Shop call, both refusals with their reason and 'nothing sent', and the wallet changes", () => {
+    expect(m.feed.map((l) => [l.label, l.tone, l.text])).toEqual([
+      ["wallet", "plain", "Shop wallet unlinked · token not revoked (deleted here only)"],
+      ["wallet", "plain", "Shop wallet unlinked · token revoked at Shop"],
+      ["refused", "bad", "Shop search refused before sending: not logged as sent: a credential in the query (access_token), which the log cannot digest · nothing sent"],
+      ["refused", "bad", "Shop search refused before sending: buyer identity held back · nothing sent"],
+      ["call", "warn", "Shop refresh · answered 401, unsigned"],
+      ["call", "plain", "Shop get_checkout · answered 200, unsigned"],
+      ["start", "plain", "Gateway started"],
+      ["wallet", "plain", "Shop wallet linked"],
+      ["search", "plain", "Search · lamps · ZIP 94103 · receipt ✓"],
+    ]);
+    expect(m.refusals).toHaveLength(2);
+  });
+
+  it("the server log words the response, a Shop disclosure, a Shop block and a wallet entry", () => {
+    const summaries = m.log.map((r) => [r.kind, r.tone, r.summary]);
+    expect(summaries).toContainEqual(["response", "ok", "answer to #4 · status 200 · 31 bytes · unsigned"]);
+    expect(summaries).toContainEqual(["disclosure", "plain", "logged to Shop get_checkout  id, jsonrpc, method, params.arguments.checkout_id, params.name"]);
+    expect(summaries).toContainEqual(["block", "bad", "refused before sending to Shop search · email at $.params.arguments.note"]);
+    expect(summaries).toContainEqual(["wallet", "plain", "Shop wallet unlinked · token revoked"]);
+  });
+
+  it("attack: the panel shows no buyer identity, even one a hand-edited identity block holds", () => {
+    expect(html).not.toContain(EMAIL);
+    expect(html).not.toContain("jane");
+  });
+
+  it("attack: the server log of a hand-edited, re-hashed chain never shows a credential in clear, in a header or in the body", () => {
+    const TOKEN = "shop-access-token-SECRET-0123456789";
+    const REFRESH = "shop-refresh-token-SECRET-9876543210";
+    const leaked = {
+      ...shopCall("refresh", { refresh_token: REFRESH, client: "intent-gateway" }, []),
+      headers: [
+        ["authorization", `Bearer ${TOKEN}`],
+        ["x-api-key", TOKEN_MARKER],
+        ["content-type", "application/json"],
+      ],
+    };
+    const lm = buildModel(input({ items: chain([["disclosure", leaked, at("10:22")]]), now: Date.parse(at("10:30")) }));
+    const fields = Object.fromEntries(lm.log[0]?.fields ?? []);
+    expect(fields["headers[0] authorization"]).toBe("[a credential in clear, not shown: intent verify fails this entry]");
+    expect(fields["headers[1] x-api-key"]).toBe("redacted (sha256 e5c02528…)");
+    expect(fields["headers[2] content-type"]).toBe("application/json");
+    expect(fields["body.params.arguments.refresh_token"]).toBe("[a credential in clear, not shown: intent verify fails this entry]");
+    expect(fields["body.params.arguments.client"]).toBe("intent-gateway");
+    expect(fields.body_b64).toBeUndefined();
+    const page = renderPage(lm);
+    for (const secret of [TOKEN, REFRESH, Buffer.from(REFRESH).toString("base64").slice(0, 16)]) expect(page).not.toContain(secret);
+  });
+
+  it("attack: a request drawer shows a redaction marker as redacted, and a credential in clear never as its value", () => {
+    const leak = { refresh_token: "shop-refresh-token-SECRET", note: "ok" };
+    const specs: Spec[] = [
+      ["disclosure", disclosure("searchCatalog", "/v1/catalog/search", { category: "lamps", ship_to: SHIP }), at("10:20")],
+      ["receipt", receipt(0), at("10:20")],
+      ["disclosure", { ...disclosure("createCart", "/v1/carts", { offer_handle: "of_x", quantity: 1, token_check: REFRESH_MARKER, ...leak }, CART_FIELDS), redacted: [{ at: "headers.authorization", sha256: "e5c02528".padEnd(64, "0") }] }, at("10:21")],
+      ["receipt", receipt(2, 201), at("10:21")],
+    ];
+    const drawer = buildModel(input({ items: chain(specs), now: Date.parse(at("10:30")) })).drawers.find((d) => d.heading === "Cart");
+    const sent = Object.fromEntries(drawer?.requests[0]?.sent ?? []);
+    expect(sent.token_check).toBe("redacted (sha256 a1d94354…)");
+    expect(sent.refresh_token).toBe("[a credential in clear, not shown: intent verify fails this entry]");
+    expect(sent["header authorization"]).toBe("redacted (sha256 e5c02528…)");
+    expect(JSON.stringify(drawer)).not.toContain("shop-refresh-token-SECRET");
+  });
+});
+
 describe("renderPage", () => {
   const html = renderPage(buildModel(input()));
 

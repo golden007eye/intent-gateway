@@ -104,11 +104,15 @@ function overview(m: PanelModel): string {
   const sent = card(
     "Sent to Intent Cloud",
     String(k.sent),
-    k.sent === 0 && problems.length === 0
+    (k.sent === 0 && problems.length === 0
       ? `<p class="small">nothing sent yet</p>`
       : problems.length === 0
         ? `<p class="small t-ok">all ${String(k.acknowledged)} acknowledged by signed receipt</p>`
-        : `<p class="small">${String(k.acknowledged)} acknowledged by receipt</p><p class="small t-warn">${esc(problems.join(" · "))}</p>`,
+        : `<p class="small">${String(k.acknowledged)} acknowledged by receipt</p><p class="small t-warn">${esc(problems.join(" · "))}</p>`) +
+      // Each wallet destination apart: it answers, it never acknowledges (no receipt).
+      k.elsewhere
+        .map((d) => `<p class="small">Also sent to ${esc(d.destination)}: ${String(d.sent)} (${String(d.answered)} answered, unsigned${d.maybeSent === 0 ? "" : `; ${String(d.maybeSent)} logged, maybe sent`})</p>`)
+        .join(""),
   );
   const refused = card("Refused before sending", String(k.refusedBefore), `<p class="small">${esc(k.refusedNote)}</p>`, "", k.refusedBefore > 0 ? " t-bad" : "");
   const feed = m.feed.slice(0, 10);

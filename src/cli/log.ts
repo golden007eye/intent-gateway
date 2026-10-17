@@ -3,12 +3,22 @@
 // request sent, its endpoint, digest and keyid; `--json` prints the activity model, one action per line. It says what
 // the gateway sent and what came back, nothing more (invariant 5); `intent verify` re-checks the chain and every
 // signature. The formatters are pure; the golden tests pin their output.
-import { type Activity, type ActivityFilter, buildActivity, filterActivity, leafFields } from "../activity/index.ts";
+import {
+  type Activity,
+  type ActivityFilter,
+  blockKind,
+  buildActivity,
+  credentialWords,
+  destinationLabel,
+  filterActivity,
+  INTENT_CLOUD,
+  leafFields,
+} from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 import { withheldAt } from "../observation/index.ts";
 import { neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { type Io, line, type Outcome } from "./io.ts";
-import { formatTimeline, timelineFollow, type TimelineStyle } from "./log-timeline.ts";
+import { formatTimeline, timelineFollow, type TimelineStyle, walletWords } from "./log-timeline.ts";
 import { printable, printableJson } from "../ui/index.ts";
 
 type Body = Record<string, unknown>;
@@ -143,11 +153,17 @@ export function verboseLines(items: readonly unknown[], activity: Activity, styl
         push(`${pad}values: none (no body)`);
       } else {
         push(`${pad}values in the logged request:`);
-        for (const [name, value] of Object.entries(request.fields)) push(`${pad}  ${name} = ${JSON.stringify(value)}`);
+        for (const [name, value] of Object.entries(request.fields)) push(`${pad}  ${name} = ${credentialWords(value) ?? JSON.stringify(value)}`);
       }
+      for (const r of request.redacted.filter((x) => x.at.startsWith("headers."))) push(`${pad}header ${r.at.slice("headers.".length)}: redacted (sha256 ${r.sha256.slice(0, 8)}…)`);
       if (request.content_digest !== null) push(`${pad}content-digest ${request.content_digest}`);
       push(`${pad}keyid ${request.keyid ?? "none (unsigned request)"}`);
       const response = request.response;
+      if (response?.kind === "response") {
+        const size = response.bytes === null ? "" : `, ${String(response.bytes)} bytes`;
+        const digest = response.body_sha256 === null ? "" : `, body sha256 ${response.body_sha256.slice(0, 8)}…`;
+        push(`${pad}response seq ${String(response.seq)}: status ${String(response.status ?? "?")}${size}${digest}; ${destinationLabel(request.destination)} signs no receipt`);
+      }
       if (response?.kind === "receipt") {
         const checked = response.signature_checked ? "signature checked when logged" : `signature not checked when logged; ${INTENT} verify checks it`;
         push(`${pad}receipt seq ${String(response.seq)}: status ${String(response.status ?? "?")}, receipt key ${response.receipt_kid ?? "?"}, ${checked}`);
@@ -172,6 +188,7 @@ export function jsonLine(activity: Activity): string {
 function outcomeTone(outcome: Activity["outcome"]): Tone {
   switch (outcome) {
     case "acknowledged":
+    case "answered":
     case "approved":
     case "pinned":
       return "good";
@@ -231,7 +248,7 @@ function demoChain(items: readonly unknown[]): boolean {
 
 /** A disclosure whose request never left: logged before the send, which then failed to connect. */
 function notSentRow(item: Item): [string, string, Tone] {
-  return ["logged", `${text(item.body.endpoint)}: ${list(leafFields(strings(item.body.fields)), "no body fields")} (not sent: no connection was made)`, "warn"];
+  return ["logged", `${endpointOf(item.body)}: ${list(leafFields(strings(item.body.fields)), "no body fields")} (not sent: no connection was made)`, "warn"];
 }
 
 /**
@@ -240,7 +257,7 @@ function notSentRow(item: Item): [string, string, Tone] {
  */
 function unansweredRow(item: Item): [string, string, Tone] {
   const fields = list(leafFields(strings(item.body.fields)), "no body fields");
-  return ["logged", `${text(item.body.endpoint)}: ${fields} (maybe sent; no answer recorded: the gateway stopped before it finished, or is still waiting)`, "warn"];
+  return ["logged", `${endpointOf(item.body)}: ${fields} (maybe sent; no answer recorded: the gateway stopped before it finished, or is still waiting)`, "warn"];
 }
 
 function describe(item: Item, demo: boolean): [string, string, Tone] {
@@ -248,11 +265,17 @@ function describe(item: Item, demo: boolean): [string, string, Tone] {
   const ref = typeof b.disclosure_seq === "number" ? `#${String(b.disclosure_seq)}` : "#?";
   switch (item.kind) {
     case "disclosure":
-      return ["sent", `${text(b.endpoint)}: ${list(leafFields(strings(b.fields)), "no body fields")}`, null];
+      return ["sent", `${endpointOf(b)}: ${list(leafFields(strings(b.fields)), "no body fields")}`, null];
     case "block": {
-      const held = Object.entries(record(b.held)).map(([name, value]) => `${name} = ${JSON.stringify(value)}`);
+      const reasons = strings(b.blocked);
+      // Only a policy block keeps values; an identity block or a logging refusal holds none, and none is shown.
+      const held = blockKind(b) === "policy" ? Object.entries(record(b.held)).map(([name, value]) => `${name} = ${JSON.stringify(value)}`) : [];
       const values = held.length === 0 ? "" : ` (${held.join(", ")}, kept here only)`;
-      return ["blocked", `${text(b.endpoint)}: held back ${list(strings(b.blocked), "(no reason recorded)")}${values}; nothing was sent`, "bad"];
+      return ["blocked", `${endpointOf(b)}: held back ${list(reasons, "(no reason recorded)")}${values}; nothing was sent`, "bad"];
+    }
+    case "response": {
+      const size = typeof b.bytes === "number" ? `, ${String(b.bytes)} bytes` : "";
+      return ["response", `${ref}: answered (status ${typeof b.status === "number" ? String(b.status) : "?"}${size}; no receipt: the destination signs none)`, null];
     }
     case "observed":
       return ["returned", `${ref}, returned by Intent Cloud (recorded here, never sent): ${observedSummary(b)}`, null];
@@ -283,10 +306,8 @@ function describe(item: Item, demo: boolean): [string, string, Tone] {
       return b.reason === "sign_count"
         ? ["FLAGGED", `${text(b.fingerprint)} signed with a signature counter that did not go up; the passkey may have been copied`, "bad"]
         : ["FLAGGED", `${text(b.fingerprint)} is not the pinned approver; if it is your passkey, run ${INTENT} approver accept`, "bad"];
-    case "wallet": {
-      const revoked = b.revoked === true ? ", token revoked" : b.revoked === false ? ", token not revoked" : "";
-      return ["wallet", `${text(b.rail)} wallet ${text(b.action)}${revoked}`, null];
-    }
+    case "wallet":
+      return ["wallet", walletWords({ wallet_rail: text(b.rail), wallet_action: text(b.action), ...(typeof b.revoked === "boolean" ? { revoked: b.revoked } : {}) }, ", "), null];
     case "session":
       return ["session", b.mode === "demo" ? "demo chain (test keys, sample catalog)" : `gateway session ${text(b.id)} started (a local id, never sent)`, null];
     default:
@@ -329,6 +350,12 @@ function observedOffers(b: Body): string[] {
   });
   const count = typeof b.offers_count === "number" ? b.offers_count : kept.length;
   return count > kept.length ? [...kept, `(${String(count - kept.length)} more not recorded)`] : kept;
+}
+
+/** `searchCatalog`, or `to Shop: get_checkout` for a destination other than Intent Cloud. */
+function endpointOf(b: Body): string {
+  const destination = typeof b.destination === "string" ? b.destination : INTENT_CLOUD;
+  return destination === INTENT_CLOUD ? text(b.endpoint) : `to ${destinationLabel(destination)}: ${text(b.endpoint)}`;
 }
 
 function asItem(raw: unknown): Item | null {

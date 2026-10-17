@@ -118,7 +118,7 @@ describe("intent wallet unlink shop", () => {
     expect(status.out).toBe(`Shop wallet: not linked\n${UNAVAILABLE}\n`);
     const log = await s.run(["log", "-v"]);
     expect(log.code).toBe(0);
-    expect(log.out).toContain("shop wallet unlinked, token not revoked");
+    expect(log.out).toContain("Shop wallet unlinked, token not revoked (deleted here only)");
     expect(log.out + log.err).not.toContain(TOKEN);
     const verify = await s.run(["verify", "--skip-install-check"]);
     expect(verify.code, verify.out + verify.err).toBe(0);
