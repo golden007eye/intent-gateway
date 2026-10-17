@@ -1,5 +1,6 @@
 // What the gateway reads back from its own chain: the spend history for the policy's daily and weekly caps, and
 // the "Sent: … / Blocked: …" summary of one tool call. Pure; the chain is passed in.
+import { chargedNothing } from "../outcome/index.ts";
 import type { Purchase } from "../policy/index.ts";
 import { type Entry, neverLeft } from "../store/index.ts";
 
@@ -13,6 +14,10 @@ const asBody = (value: unknown): Body => (typeof value === "object" && value !==
  *   carts opened at once cannot each fit under a cap and together exceed it.
  * A malformed entry becomes a purchase with no valid total, which `evaluate` refuses (`history_invalid`) instead
  * of skipping it, so a damaged chain never turns a cap off.
+ *
+ * An approval stops counting only on local evidence that it charged nothing (outcome's chargedNothing: the gateway's
+ * own precheck refusal before any `complete_checkout` was logged, or Shop's terminal not-completed checkout read by
+ * the gateway). An outcome Intent Cloud states, verified or not, never frees cap room (contract §6, ADR-0015).
  */
 export function spendHistory(chain: readonly Entry[], now: number): Purchase[] {
   const approved = new Set<unknown>();
@@ -21,6 +26,7 @@ export function spendHistory(chain: readonly Entry[], now: number): Purchase[] {
     if (entry.kind !== "approval") continue;
     const body = asBody(entry.body);
     approved.add(body.handle);
+    if (typeof body.handle === "string" && chargedNothing(chain, body.handle)) continue;
     const total = asBody(asBody(asBody(body.proof).snapshot).total).amount_minor;
     purchases.push({ at: Date.parse(entry.ts), total_usd: typeof total === "number" ? total / 100 : Number.NaN });
   }

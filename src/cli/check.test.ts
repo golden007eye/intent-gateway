@@ -74,7 +74,7 @@ async function setup(options: { link?: boolean } = {}) {
   return { dir, env, fake, keyBytes, run, audit, entries };
 }
 
-/** A purchase the gateway completed, as the outcome module chains it: an outcome naming its order. */
+/** A hand-written `outcome` stub naming an order: the wallet check reads only `order_ref` (not a valid ADR-0015 entry). */
 async function chainOutcome(dir: string, orderRef: string): Promise<void> {
   const store = await openStore(dir);
   await store.append("outcome", { handle: "ap_TEST0001", basis: "wallet", order_ref: orderRef });
@@ -144,7 +144,12 @@ describe("intent wallet check shop", () => {
     await chainOutcome(s.dir, "gid://shopify/Order/7002");
     expect((await s.run(["wallet", "check", "shop"])).code).toBe(0);
     const verify = await s.run(["verify", "--skip-install-check"]);
-    expect(verify.code, verify.out + verify.err).toBe(0);
+    // The wallet entry passes. The hand-written outcome stub names no verified approval, and verify fails it (ADR-0015):
+    // that is its only failure.
+    expect(verify.out).toContain("disclosures: ok");
+    expect(verify.out.match(/FAILED/g)).toEqual(["FAILED", "FAILED"]);
+    expect(verify.out).toContain("outcomes: FAILED");
+    expect(verify.out).toContain("seq 0: the outcome for ap_TEST0001 is not an outcome entry");
     const log = await s.run(["log", "--no-color"]);
     expect(log.code, log.err).toBe(0);
     expect(log.out).toContain("Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (21.49 USD)");

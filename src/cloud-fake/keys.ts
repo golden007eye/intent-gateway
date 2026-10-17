@@ -7,6 +7,7 @@ import type { KeyStatement, StatementKey } from "../contract/index.ts";
 
 export const RECEIPT_PREFIX = "intent-receipt-v1\n";
 export const APPROVAL_PREFIX = "intent-approval-v1\n";
+export const OUTCOME_PREFIX = "intent-outcome-v1\n";
 export const STATEMENT_PREFIX = "intent-statement-v1\n";
 
 export const CONFIRM_ORIGIN = "https://confirm.example";

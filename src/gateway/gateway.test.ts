@@ -28,6 +28,8 @@ import {
   GatewayNotStartedError,
   GatewayStartError,
 } from "./index.ts";
+import { spendHistory } from "./history.ts";
+import { signOutcomeStatement } from "../../test/support/trust-kit.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -1426,9 +1428,12 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     const approval = await pendingPurchase(h, "Trail Runner 3");
     h.fake.approveWithPasskey(approval, new SoftPasskey());
     await h.gateway.getApprovalStatus({ approval_handle: approval });
-    const verified = outcome === "ordered";
-    const order = outcome === "ordered" || outcome === "mismatch" ? { order_ref: "#1001", final_total: { amount_minor: 9499, currency: "USD" as const }, binding: BINDING_OK } : {};
-    expect(h.fake.setOutcome(approval, { state: outcome, source: "merchant_api", assurance: verified ? "verified" : "reported", ...order }).status).toBe(200);
+    const verified = outcome === "ordered" || outcome === "mismatch";
+    // An order outcome carries order_ref, final_total and binding (Appendix G statement validity, M2), and a
+    // mismatch's binding result follows its checks.
+    const order = { order_ref: "#1001", final_total: { amount_minor: Number(pendingBody(h, approval).total_minor), currency: "USD" as const } };
+    const binding = outcome === "mismatch" ? { ...BINDING_OK, result: "mismatch" as const, checks: { ...BINDING_OK.checks, line: "differs" as const } } : BINDING_OK;
+    expect(h.fake.setOutcome(approval, { state: outcome, source: "merchant_api", assurance: verified ? "verified" : "reported", ...(verified ? { ...order, binding } : {}) }).status).toBe(200);
     expect(await h.gateway.getApprovalStatus({ approval_handle: approval })).toMatchObject({ status: "approved", cloud_reported: reported });
     expect(bodies(h, "observed").at(-1)).toMatchObject({ endpoint: "getApproval", outcome_state: outcome });
   });
@@ -1496,5 +1501,160 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     expect(result).not.toHaveProperty("cloud_reported");
     expect(result.message).toContain("inconsistently");
     expect(h.warnings.some((w) => w.includes("disagree"))).toBe(true);
+  });
+});
+
+// ---- outcomes (plan G4, ADR-0015) -----------------------------------------------------------------------------
+
+describe("outcomes: only a verified statement is acted on, and never more than it shows", () => {
+  const verify = (h: Harness) => runVerify({ dataDir: h.dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(h.now()), skipSupplyChain: true });
+  const outcomes = (h: Harness) => bodies(h, "outcome");
+  const plusOne = (o: Record<string, unknown>) => ({ ...o, final_total: { amount_minor: (o.final_total as { amount_minor: number }).amount_minor + 1, currency: "USD" } });
+
+  /** An approved hand-off purchase the merchant ordered; returns its handle. The gateway has read the hand-off. */
+  async function orderedPurchase(h: Harness): Promise<string> {
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    h.fake.handoff(approval);
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    h.fake.order(approval);
+    return approval;
+  }
+
+  /**
+   * Serves each status read with its outcome changed by `change`, in both `outcome` and a statement correctly signed
+   * by the test approval key (with `prefix`), so the attack fails exactly the rule under test. `state` overrides the
+   * status's state.
+   */
+  function serveSigned(h: Harness, change: (outcome: Record<string, unknown>) => Record<string, unknown>, prefix?: string, state?: ApprovalStatus["state"]): void {
+    h.patch.getApproval = async (handle, signer) => {
+      const r = await h.real.getApproval(handle, signer);
+      if (!r.ok || r.body.outcome_statement === undefined) return r;
+      const outcome = change(r.body.outcome_statement.outcome);
+      const unsigned = omit({ ...r.body.outcome_statement, outcome }, ["cloud_signature"]) as Record<string, unknown>;
+      const statement = signOutcomeStatement(unsigned, undefined, prefix);
+      return { ...r, body: { ...r.body, ...(state === undefined ? {} : { state }), outcome, outcome_statement: statement } as ApprovalStatus };
+    };
+  }
+
+  it("a merchant order: chained with its verified statement, shown ordered, once per outcome; intent verify re-checks it", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result).toMatchObject({ status: "approved", cloud_reported: "ordered", outcome: { state_shown: "ordered", statement_verified: true, source: "signed_webhook" } });
+    expect(result.message).toMatch(/Intent Cloud reported that the merchant placed the order \(order ORD-\d+\), in a statement the gateway verified/);
+    expect(outcomes(h).map((o) => [o.state_shown, o.statement_verified])).toEqual([
+      ["handed_off", true],
+      ["ordered", true],
+    ]);
+    expect(outcomes(h).at(-1)).toMatchObject({ basis: "cloud", handle: approval, local_binding: { result: "ok" } });
+    expect(String(outcomes(h).at(-1)?.order_ref)).toMatch(/^ORD-/);
+    const report = await verify(h);
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(report.counts.outcomes).toBe(2);
+    expect(report.checks.find((c) => c.name === "outcomes")?.details[0]).toBe("re-checked: 2 (handed_off: 1, ordered: 1)");
+  });
+
+  it("attack (AC-G4.1): Intent Cloud signs ordered with a final total above the approved one: shown mismatch, never ordered", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    serveSigned(h, plusOne);
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result).toMatchObject({ outcome: { state_shown: "mismatch", cloud_state: "ordered", statement_verified: false, refused_by: "final_total" }, cloud_reported: "handed_off" });
+    expect(result).not.toHaveProperty("order_number");
+    expect(result.message).not.toContain("placed the order");
+    expect(result.message).toContain("does not match what the buyer approved");
+    expect(outcomes(h).at(-1)).toMatchObject({ state_shown: "mismatch", local_binding: { result: "mismatch", checks: { total: "differs" } } });
+    expect((await verify(h)).exitCode).toBe(0);
+  });
+
+  it("attack (AC-G4.2): ordered signed with assurance reported is shown reported", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    serveSigned(h, (o) => ({ ...o, assurance: "reported" }));
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    // Intent Cloud's status still says ordered: the sentence repeats nothing, and the reading shows reported.
+    expect(result).toMatchObject({ outcome: { state_shown: "reported", refused_by: "o1" } });
+    expect(result).not.toHaveProperty("cloud_reported");
+    expect(result.message).not.toContain("placed the order");
+    expect(outcomes(h).at(-1)).toMatchObject({ state_shown: "reported", statement_verified: false });
+    expect((await verify(h)).exitCode).toBe(0);
+  });
+
+  it("attack: a statement signed without the prefix is refused and nothing is shown", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    serveSigned(h, (o) => o, "");
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result).toMatchObject({ outcome: { state_shown: null, statement_verified: false, refused_by: "cloud_signature" } });
+    expect(result).not.toHaveProperty("cloud_reported");
+    expect(result.message).toContain("could not verify (cloud_signature)");
+    expect(outcomes(h).at(-1)).toMatchObject({ state_shown: null, statement_verified: false });
+    expect(outcomes(h).at(-1)).not.toHaveProperty("order_ref");
+    expect((await verify(h)).exitCode).toBe(0);
+  });
+
+  it("attack (M1): an outcome without its statement, or one that differs from the statement's, is not acted on", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    h.patch.getApproval = async (handle, signer) => {
+      const r = await h.real.getApproval(handle, signer);
+      return r.ok ? { ...r, body: omit(r.body, ["outcome_statement"]) } : r;
+    };
+    const bare = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(bare).toMatchObject({ outcome: { state_shown: null, refused_by: "m1" } });
+    expect(bare).not.toHaveProperty("cloud_reported");
+    h.patch.getApproval = async (handle, signer) => {
+      const r = await h.real.getApproval(handle, signer);
+      return r.ok && r.body.outcome !== undefined ? { ...r, body: { ...r.body, outcome: { ...r.body.outcome, order_ref: "ORD-999999" } } } : r;
+    };
+    const differing = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(differing).toMatchObject({ outcome: { state_shown: null, refused_by: "m1" } });
+    expect(differing).not.toHaveProperty("order_number");
+    expect((await verify(h)).exitCode).toBe(0);
+  });
+
+  it("attack (invariant 1): a verified Intent Cloud checkout_expired never frees spend-cap room", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    const before = spendHistory(h.store.entries(), h.now());
+    h.fake.setOutcome(approval, { state: "checkout_expired", source: "merchant_api", assurance: "verified" });
+    expect(await h.gateway.getApprovalStatus({ approval_handle: approval })).toMatchObject({ outcome: { state_shown: "checkout_expired", statement_verified: true } });
+    expect(spendHistory(h.store.entries(), h.now())).toEqual(before);
+    expect(before).toHaveLength(1);
+  });
+
+  it("R5a: after a verified ordered, a later verified outcome is not adopted", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    const count = outcomes(h).length;
+    serveSigned(h, (o) => ({ state: "handed_off", source: "merchant_api", assurance: "verified", observed_at: o.observed_at }), undefined, "handed_off");
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result).toMatchObject({ outcome: { state_shown: "ordered", cloud_state: "ordered" } });
+    expect(outcomes(h)).toHaveLength(count);
+    expect(h.warnings.some((w) => w.includes("R5a"))).toBe(true);
+  });
+
+  it("attack: an outcome entry rewritten (and re-hashed) to show ordered fails intent verify", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    serveSigned(h, plusOne);
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    let prev = "0".repeat(64);
+    const lines = h.store.entries().map(({ seq, ts, kind, body }) => {
+      const edited = kind === "outcome" && (body as { state_shown?: unknown }).state_shown === "mismatch" ? { ...(body as object), state_shown: "ordered" } : body;
+      const fields = { seq, prev, ts, kind, body: edited };
+      prev = sha256Hex(canonicalize(fields));
+      return canonicalize({ ...fields, hash: prev });
+    });
+    await fsp.writeFile(join(h.dir, "audit.jsonl"), `${lines.join("\n")}\n`);
+    const report = await verify(h);
+    expect(report.exitCode).toBe(1);
+    expect(report.checks.find((c) => c.name === "outcomes")?.details.join("\n")).toContain("shows ordered, but its statement supports mismatch (rule O1");
   });
 });

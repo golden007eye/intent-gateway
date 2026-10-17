@@ -149,3 +149,15 @@ export const pendingEntry = (handle = "ap_TEST0001", snapshotHash = SNAPSHOT_HAS
   kind: "approval_pending",
   body: { handle, approval_url: "https://confirm.example/c/abcdefghijklmnop", snapshot_hash: snapshotHash },
 });
+
+/**
+ * An outcome statement (Appendix G) over `unsigned`, signed by `key` (default: the s1 test approval key) with `prefix`
+ * (default "intent-outcome-v1\n"), so attack cases can be correctly signed and fail exactly the rule under test.
+ */
+export function signOutcomeStatement(
+  unsigned: Record<string, unknown>,
+  key: KeyObject = seedOf("cloud-approval-202610"),
+  prefix = "intent-outcome-v1\n",
+): Record<string, unknown> {
+  return { ...unsigned, cloud_signature: sign(null, Buffer.from(prefix + canonicalize(unsigned), "utf8"), key).toString("base64url") };
+}
