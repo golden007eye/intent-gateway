@@ -326,7 +326,7 @@ describe("buildModel: wallet destinations, refusals and wallet entries (ADR-0014
     });
     const cm = buildModel(input({ items: chain([["wallet", check(2, 2149, true), at("10:21")], ["wallet", check(0, 0, false), at("10:22")]]), now: Date.parse(at("10:30")) }));
     expect(cm.feed.map((l) => [l.label, l.tone, l.text])).toEqual([
-      ["wallet", "plain", "Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 0 not matched to a purchase in this log (0.00 USD) · Shop had more than it returned"],
+      ["wallet", "warn", "Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 0 not matched to a purchase in this log (0.00 USD) · Shop said more orders exist, or returned a full page of 50: counts cover only the orders it returned"],
       ["wallet", "warn", "Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (21.49 USD)"],
     ]);
     expect(cm.log.map((r) => r.summary)).toEqual(["Shop wallet checked · 3 reported · 2 unmatched · 21.49 USD", "Shop wallet checked · 3 reported · 0 unmatched · 0.00 USD · partial"]);

@@ -645,7 +645,7 @@ export function walletCheckWords(f: Readonly<ActivityFacts>): string[] {
   return [
     `${rail} reported ${String(n)} order${n === 1 ? "" : "s"}${day === "" ? "" : ` since ${day}`}`,
     `${String(f.check_unmatched ?? 0)} not matched to a purchase in this log${total}`,
-    f.check_complete === false ? `${rail} had more than it returned` : "",
+    f.check_complete === false ? `${rail} said more orders exist, or returned a full page of 50: counts cover only the orders it returned` : "",
   ].filter((p) => p !== "");
 }
 

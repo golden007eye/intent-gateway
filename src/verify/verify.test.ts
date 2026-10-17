@@ -199,6 +199,17 @@ describe("runVerify: wallet entries (plan G6)", () => {
     expect(text).not.toContain("a@b.example");
     expect(text).not.toContain("Order/7001");
   });
+
+  it("attack: a checked entry with a key deleted (not set to undefined) fails", async () => {
+    const withoutComplete: Record<string, unknown> = { ...CHECKED };
+    delete withoutComplete.complete;
+    const dir = await chain(async (s) => {
+      await s.append("wallet", withoutComplete);
+    });
+    const report = await verify(dir);
+    expect(report.exitCode).toBe(1);
+    expect(formatReport(report)).toContain("seq 0: the wallet entry has no boolean complete");
+  });
 });
 
 describe("runVerify: a gateway that stopped mid-request (F-l)", () => {

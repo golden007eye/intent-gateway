@@ -296,10 +296,11 @@ function printCheck(io: Io, name: string, check: WalletCheck, seq: number): void
   const usd = (minor: number): string => `${(minor / 100).toFixed(2)} ${CHECK_CURRENCY}`;
   const orders = (n: number): string => `${String(n)} order${n === 1 ? "" : "s"}`;
   line(io.stdout, `${name} reported ${orders(check.orders.length)} since ${check.since}`);
-  if (!check.complete) line(io.stdout, `${name} reported more orders than it returned in one answer: these counts cover only the orders it returned`);
+  if (!check.complete) line(io.stdout, `${name} said more orders exist, or returned a full page of 50: these counts cover only the orders it returned`);
   line(io.stdout, `Matched to a purchase in this gateway's chain: ${String(check.orders.length - check.unmatched.length)}`);
   const untotalled = check.unmatchedUntotalled === 0 ? "" : ` (${String(check.unmatchedUntotalled)} without a ${CHECK_CURRENCY} total, not in the sum)`;
-  line(io.stdout, `Not matched: ${String(check.unmatched.length)}, totalling ${usd(check.unmatchedTotalMinor)}${untotalled}`);
+  const label = check.complete ? "Not matched" : "Not matched among the orders returned";
+  line(io.stdout, `${label}: ${String(check.unmatched.length)}, totalling ${usd(check.unmatchedTotalMinor)}${untotalled}`);
   for (const order of check.unmatched) {
     const total = order.total === null ? "no total" : `${(order.total.amountMinor / 100).toFixed(2)} ${order.total.currency}`;
     const row = [order.createdAt ?? "no time", order.orderRef, total, order.merchantOrigin ?? "no merchant origin"];
@@ -308,7 +309,7 @@ function printCheck(io: Io, name: string, check: WalletCheck, seq: number): void
   if (check.unmatched.length > 0) {
     line(
       io.stdout,
-      `Unmatched means no outcome in this chain names the order: it went through some other way (for example the ${name} app, another agent, or ${name}'s own agent payments) or through another gateway's chain`,
+      `Not matched means no outcome in this log names the order; this check cannot say how it was placed (for example the ${name} app, another agent, ${name}'s own agent payments, or another gateway).`,
     );
   }
   line(io.stdout, `Recorded as entry #${String(seq)} (counts and the total only; no order details are kept)`);

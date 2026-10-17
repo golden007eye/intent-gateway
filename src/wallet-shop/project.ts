@@ -242,7 +242,10 @@ export function projectOrders(content: Json): WalletOrders {
     const id = order?.id;
     if (order === null || typeof id !== "string" || !REF.test(id) || findIdentity(id).length > 0) return [];
     const merchant = record(order.merchant) ?? record(order.seller) ?? record(order.shop);
-    return [{ orderRef: id, total: total(order) ?? money(record(order.total)), merchantOrigin: origin(merchant?.url), createdAt: instant(order.created_at) }];
+    // An origin is printed to the developer: one that reads as identity (a personal domain, an email-like host) is dropped.
+    const merchantOrigin = origin(merchant?.url);
+    const safeOrigin = merchantOrigin !== null && findIdentity(merchantOrigin).length === 0 ? merchantOrigin : null;
+    return [{ orderRef: id, total: total(order) ?? money(record(order.total)), merchantOrigin: safeOrigin, createdAt: instant(order.created_at) }];
   });
   const page = record(content.pagination) ?? record(content.page_info);
   const more = page?.has_next_page === true || page?.hasNextPage === true || raw.length >= ORDERS_PAGE;

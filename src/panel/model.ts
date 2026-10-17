@@ -364,7 +364,8 @@ function feedLine(a: Activity, time: Clock): Line {
       const rail = destinationLabel(f.wallet_rail ?? "");
       const revoked = f.wallet_action !== "unlinked" ? "" : f.revoked === true ? `token revoked at ${rail}` : f.revoked === false ? "token not revoked (deleted here only)" : "";
       // A check with unmatched orders asks for a look: Shop reported orders no purchase in this log names (plan G12).
-      const tone = f.wallet_action === "checked" && (f.check_unmatched ?? 0) > 0 ? "warn" : "plain";
+      // An incomplete check also asks for a look: its counts cover only the orders Shop returned.
+      const tone = f.wallet_action === "checked" && ((f.check_unmatched ?? 0) > 0 || f.check_complete === false) ? "warn" : "plain";
       return { ...base, label: "wallet", tone, text: join([`${rail} wallet ${f.wallet_action ?? ""}`.trim(), revoked, ...walletCheckWords(f)]) };
     }
     case "call": {

@@ -76,6 +76,10 @@ A cart or status check the gateway refused after an answer (the cart, snapshot o
 
 ## Orders the log does not name
 
+<!-- feature: wallet-check -->
+!!! planned "Checking Shop for orders the log does not name"
+    `intent wallet check shop` is in the CLI, but it cannot run for you yet: it needs a registered Shop client (`INTENT_SHOP_CLIENT_ID`; none is built in) and a linked wallet, and the fields it reads from Shop's order list (`created_at`, `totals`, `pagination.has_next_page`) wait to be confirmed against a real Shop account. Until then an order whose fields differ comes back with no total, origin or time, never with buyer details.
+
 The log shows what went through this gateway. A linked Shop account can also be spent from in other ways: in the Shop app, by another agent, or by Shop's own agent payments. `intent wallet check shop` compares the two, on demand; nothing polls in the background.
 
 ```sh
@@ -85,9 +89,9 @@ intent wallet check shop --since 30d # or a date: --since 2026-10-01
 
 It asks Shop for the account's recent orders with one `search_orders` request. Like every Shop request, it is appended to the log before it leaves, and the answer is logged only as a status, a sha256 and a size. From each order Shop reported, the gateway keeps four values: its order reference, its total, the merchant's storefront origin and its creation time. Everything else in the answer is dropped on receipt, so the buyer's name, email, phone, addresses and the order's line text are never printed, logged or kept.
 
-The output says how many orders Shop reported in the period, how many a purchase in this log names (an `outcome` entry with that order reference), and lists the rest with their total, merchant origin and time, under "Not matched". An unmatched order is one this log does not name; the check cannot say how it was placed. Totals are summed in USD; an order Shop reported without a USD total is counted and left out of the sum. The gateway asks for one page of up to 50 orders: when Shop says more exist, the output says the counts cover only the orders it returned.
+The output says how many orders Shop reported in the period, how many a purchase in this log names (an `outcome` entry with that order reference), and lists the rest with their total, merchant origin and time, under "Not matched". An unmatched order is one this log does not name; the check cannot say how it was placed. No part of the gateway writes `outcome` entries yet (they arrive with one-tap purchases), so today every order Shop reported shows as not matched. Totals are summed in USD; an order Shop reported without a USD total is counted and left out of the sum. The gateway asks for one page of up to 50 orders: when Shop says more exist, or returns a full page of 50, the output says the counts cover only the orders it returned, the unmatched line reads "Not matched among the orders returned", and the entry records `complete: false`.
 
-Each check is chained as a `wallet` entry `{rail, action: "checked", since, order_count, unmatched_count, unmatched_total_minor, complete}`: counts and a total, never an order. `intent verify` fails a `checked` entry with any other key. `intent log` shows it as `Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (21.49 USD)`, and the panel's feed shows the same line, as a warning when any order is unmatched.
+Each check is chained as a `wallet` entry `{rail, action: "checked", since, order_count, unmatched_count, unmatched_total_minor, complete}`: counts and a total, never an order. `intent verify` fails a `checked` entry with any other key. `intent log` shows it as `Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (21.49 USD)`, and the panel's feed shows the same line, as a warning when any order is unmatched or the check covers only part of the orders.
 
 What it can't see: orders Shop does not report to the gateway's token, orders older than the period or beyond the first page, and anything about an order beyond the four values above. The command needs a Shop client (`INTENT_SHOP_CLIENT_ID`) and a linked wallet (`intent wallet link shop`); without either it says so, exits 1 and sends nothing.
 

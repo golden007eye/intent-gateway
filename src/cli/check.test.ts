@@ -120,8 +120,23 @@ describe("intent wallet check shop", () => {
     const r = await s.run(["wallet", "check", "shop", "--since", "2026-10-15T00:00:00Z"]);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("Shop reported 2 orders since 2026-10-15T00:00:00.000Z");
-    expect(r.out).toContain("Shop reported more orders than it returned in one answer");
+    expect(r.out).toContain("Shop said more orders exist, or returned a full page of 50: these counts cover only the orders it returned");
+    expect(r.out).toContain("Not matched among the orders returned: 2,");
     expect(s.entries().at(-1)?.body).toMatchObject({ order_count: 2, unmatched_count: 2, complete: false });
+  });
+
+  it("Shop returns exactly a full page of 50 and says nothing of more: the counts carry the caveat, complete:false", async () => {
+    const s = await setup();
+    s.fake.orders = Array.from({ length: 50 }, (_, i) => ({ id: `gid://shopify/Order/${String(8000 + i)}`, totalMinor: 100, createdAt: "2026-10-16T09:00:00.000Z" }));
+    const r = await s.run(["wallet", "check", "shop"]);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("Shop reported 50 orders since");
+    expect(r.out).toContain("Shop said more orders exist, or returned a full page of 50: these counts cover only the orders it returned");
+    expect(r.out).toContain("Not matched among the orders returned: 50, totalling 50.00 USD");
+    expect(r.out).toContain("this check cannot say how it was placed");
+    expect(s.entries().at(-1)?.body).toMatchObject({ order_count: 50, unmatched_count: 50, unmatched_total_minor: 5000, complete: false });
+    const log = await s.run(["log", "--no-color"]);
+    expect(log.out).toContain("Shop said more orders exist, or returned a full page of 50: counts cover only the orders it returned");
   });
 
   it("intent verify passes the checked entry, and intent log words it as what Shop reported", async () => {
