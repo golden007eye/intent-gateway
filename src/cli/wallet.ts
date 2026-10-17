@@ -50,22 +50,26 @@ export async function walletStatus(io: Io, config: Config): Promise<number> {
   return code;
 }
 
-/** Deletes the rail's vault file, then chains the unlink. Exit 0 also when nothing was linked. */
+/** Opens the chain, deletes the rail's vault file, then chains the unlink. Exit 0 also when nothing was linked. */
 export async function walletUnlink(io: Io, config: Config, rail: string): Promise<number> {
   if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
   const name = RAIL_NAMES[rail];
-  // Deleted first, then chained: the entry records a deletion that happened. Nothing is sent, so invariant 2 does
-  // not order these two; a failed append is reported and the file stays deleted.
-  if (!(await deleteSecret(config.dataDir, rail))) {
+  const notLinked = (): number => {
     line(io.stdout, `${name} wallet: not linked; nothing to unlink`);
     return 0;
-  }
+  };
+  if (!(await hasSecret(config.dataDir, rail))) return notLinked();
+  // The store is opened before the delete, so an unusable data dir or chain stops here with the file intact. The
+  // entry is appended after the delete, so it records a deletion that happened. Nothing is sent, so invariant 2
+  // does not order these; only a failed append can leave the deletion unchained, and then the command fails with
+  // the store's own error on stderr while the file stays deleted.
   const store = await openStore(config.dataDir, {
     onWait: leaseNotice((text) => {
       line(io.stderr, `intent: ${text}`);
     }, io.now),
   });
   try {
+    if (!(await deleteSecret(config.dataDir, rail))) return notLinked();
     const entry = await store.append("wallet", { rail, action: "unlinked", revoked: false });
     line(io.stdout, printable(`${name} wallet unlinked: deleted ${vaultPath(config.dataDir, rail)} (entry #${String(entry.seq)})`));
   } finally {

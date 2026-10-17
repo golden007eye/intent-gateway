@@ -12,6 +12,22 @@ export function isWalletRail(value: string): value is WalletRail {
   return (WALLET_RAILS as readonly string[]).includes(value);
 }
 
+/** What a `wallet` chain entry may record. Its body is exactly {rail, action, revoked}: no token, no account detail. */
+export const WALLET_ACTIONS = ["linked", "unlinked"] as const;
+
+/** Why a `wallet` entry body is not exactly {rail, action, revoked: boolean}, or null when it is. Pure. */
+export function walletEntryProblem(body: unknown): string | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return "is not an object";
+  const extra = Object.keys(body).filter((k) => k !== "rail" && k !== "action" && k !== "revoked");
+  // Names only: an extra key's value may be the very secret this check keeps out.
+  if (extra.length > 0) return `holds fields a wallet entry never has (${extra.sort().join(", ")}), which may be a credential`;
+  const { rail, action, revoked } = body as Record<string, unknown>;
+  if (typeof rail !== "string" || !isWalletRail(rail)) return `names no known wallet rail (${WALLET_RAILS.join(", ")})`;
+  if (typeof action !== "string" || !(WALLET_ACTIONS as readonly string[]).includes(action)) return `names no known action (${WALLET_ACTIONS.join(", ")})`;
+  if (typeof revoked !== "boolean") return "has no boolean revoked";
+  return null;
+}
+
 /** Amounts are integer minor units (cents) with their ISO 4217 currency, as everywhere else in the gateway. */
 export interface WalletMoney {
   readonly amountMinor: number;

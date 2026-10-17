@@ -2,7 +2,7 @@
 // unlink deletes the vault file and chains `wallet {rail, action: "unlinked", revoked: false}`, and the token is in
 // neither the chain, nor stdout, nor stderr.
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -118,6 +118,19 @@ describe("intent wallet unlink shop", () => {
     expect(log.out + log.err).not.toContain(TOKEN);
     const verify = await s.run(["verify", "--skip-install-check"]);
     expect(verify.code, verify.out + verify.err).toBe(0);
+  });
+
+  it.runIf(process.platform !== "win32")("keeps the vault file when the chain cannot be opened: the store opens before the delete", async () => {
+    const s = setup();
+    await saveSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"), TOKEN);
+    const elsewhere = join(mkdtempSync(join(tmpdir(), "wallet-cli-")), "audit.jsonl");
+    writeFileSync(elsewhere, "");
+    symlinkSync(elsewhere, join(s.dir, "audit.jsonl"));
+    const r = await s.run(["wallet", "unlink", "shop"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("symbolic link");
+    expect(existsSync(vaultPath(s.dir, "shop"))).toBe(true);
+    expect(r.out + r.err).not.toContain(TOKEN);
   });
 
   it("chains nothing when no wallet was linked", async () => {

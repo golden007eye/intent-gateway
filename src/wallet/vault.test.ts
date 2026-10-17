@@ -1,6 +1,6 @@
 // The wallet vault (plan G6 acceptance 1-4, 7): round trip, any changed byte or a wrong key refused as "tampered",
 // 0600 files in a 0700 folder, links and loose modes refused, and no key or token in any message.
-import { randomBytes } from "node:crypto";
+import { createCipheriv, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,6 +113,19 @@ describe("tamper and wrong key", () => {
     }
   });
 
+  it("binds the header into the AAD: a file sealed without it is refused, though its header reads right", async () => {
+    const data = join(temp(), "data");
+    const bytes = randomBytes(32);
+    const key = new WalletKey(bytes, "test");
+    await saveSecret(data, "shop", key, TOKEN);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", bytes, iv);
+    cipher.setAAD(Buffer.from("intent-wallet-v1|shop", "utf8"));
+    const sealed = Buffer.concat([cipher.update(Buffer.from(TOKEN)), cipher.final()]);
+    writeFileSync(vaultPath(data, "shop"), Buffer.concat([Buffer.from("IGWV\x01", "latin1"), iv, cipher.getAuthTag(), sealed]), { mode: 0o600 });
+    expect((await refused(loadSecret(data, "shop", key))).reason).toBe("tampered");
+  });
+
   it("refuses a wrong key with the same error, naming neither key nor token", async () => {
     const data = join(temp(), "data");
     const right = randomBytes(32);
@@ -200,6 +213,21 @@ describe("wallet key sources", () => {
     expect(error.reason).toBe("bad_key");
     expect(error.message).not.toContain("hunter2");
     expect((await refused(loadWalletKey({ kind: "file", path: join(temp(), "absent") }, { create: false }))).reason).toBe("no_key");
+  });
+
+  it("refuses a 32-byte text file as a raw key: a 31-character passphrase and a newline is not 32 random bytes", async () => {
+    const dir = temp();
+    for (const [name, content] of [
+      ["passphrase", "correct horse battery staple 42\n"],
+      ["printable", "A".repeat(32)],
+    ] as const) {
+      expect(Buffer.byteLength(content)).toBe(32);
+      const path = join(dir, name);
+      writeFileSync(path, content);
+      const error = await refused(loadWalletKey({ kind: "file", path }, { create: false }));
+      expect(error.reason).toBe("bad_key");
+      expect(error.message).not.toContain("horse");
+    }
   });
 
   it("takes the env key, and warns that it is visible, naming INTENT_WALLET_KEY_FILE", async () => {

@@ -10,7 +10,9 @@ export {
   type WalletLine,
   type WalletMoney,
   type WalletRail,
+  WALLET_ACTIONS,
   WALLET_RAILS,
+  walletEntryProblem,
 } from "./port.ts";
 export {
   deleteSecret,

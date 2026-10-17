@@ -253,6 +253,15 @@ describe("wallet settings", () => {
     expect(() => load({ INTENT_WALLET_KEY_FILE: "~/wallet" })).toThrow(/INTENT_WALLET_KEY_FILE starts with ~/);
   });
 
+  it("attack: refuses an INTENT_WALLET_KEY_FILE inside the data dir, where it would sit beside the vault", () => {
+    expect(() => load({ INTENT_DATA_DIR: "/data", INTENT_WALLET_KEY_FILE: "/data/wallet-key" })).toThrow(/INTENT_WALLET_KEY_FILE .* is inside the data dir/);
+    expect(() => load({ INTENT_DATA_DIR: "/data", INTENT_WALLET_KEY_FILE: "/data/wallet/../k" })).toThrow(ConfigError);
+    expect(() => load({ INTENT_RUNTIME: "container", INTENT_WALLET_KEY_FILE: "/data/secrets/k" })).toThrow(/inside the data dir/);
+    // A sibling whose name starts like the data dir is outside it.
+    expect(load({ INTENT_DATA_DIR: "/data", INTENT_WALLET_KEY_FILE: "/data-keys/k" }).wallet.key).toEqual({ kind: "file", path: "/data-keys/k" });
+    expect(load({ INTENT_DATA_DIR: "/data", INTENT_WALLET_KEY_FILE: "/..data/k" }).wallet.key).toEqual({ kind: "file", path: "/..data/k" });
+  });
+
   it("takes INTENT_WALLET_KEY next, and never prints its value", () => {
     const config = load({ INTENT_WALLET_KEY: KEY });
     expect(config.wallet.key.kind).toBe("env");
@@ -305,6 +314,8 @@ describe("wallet settings", () => {
     });
     expect(() => load({ INTENT_SHOP_MCP_URL: "http://shop.example/mcp" })).toThrow(/INTENT_SHOP_MCP_URL must use https/);
     expect(() => load({ INTENT_SHOP_AUTH_URL: "not a url" })).toThrow(/INTENT_SHOP_AUTH_URL is not a URL/);
+    // An unparsable value is not echoed: it may carry a credential.
+    expect(() => load({ INTENT_SHOP_MCP_URL: "shop.example/mcp?token=SECRET" })).toThrow(/^(?!.*SECRET).*INTENT_SHOP_MCP_URL is not a URL/);
     expect(() => load({ INTENT_SHOP_AUTH_URL: "https://u:p@shop.example/" })).toThrow(/must not carry credentials/);
   });
 });

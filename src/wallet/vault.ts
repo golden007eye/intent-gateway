@@ -1,7 +1,8 @@
 // The wallet vault: a wallet rail's token in one AES-256-GCM file, `<data>/wallet/<rail>.enc` (plan G6, D4).
 //
 // File: "IGWV" | version 0x01 | 12-byte random IV | 16-byte GCM tag | ciphertext, with the AAD
-// "intent-wallet-v1|<rail>", so a file copied to another rail's name does not open. Any changed byte, a wrong key or a
+// "IGWV" 0x01 "intent-wallet-v1|<rail>": a file copied to another rail's name does not open, and a later format
+// version cannot be relabelled as this one. Any changed byte, a wrong key or a
 // short file is refused as WalletVaultError("tampered"): GCM cannot tell them apart, and neither should the caller.
 // Written to a temporary 0600 file, fsync'd and renamed over the old one, so a crash leaves the old token or the new
 // one, never half a file. The data dir and its `wallet` folder must be directories owned by this user and not
@@ -65,11 +66,13 @@ const TAG_BYTES = 16;
 const MAGIC = Buffer.from("IGWV\x01", "latin1");
 const HEADER = MAGIC.length + IV_BYTES + TAG_BYTES;
 const NOFOLLOW = (constants as Partial<typeof constants>).O_NOFOLLOW ?? 0;
+const DIRECTORY = (constants as Partial<typeof constants>).O_DIRECTORY ?? 0;
 const READ = constants.O_RDONLY | NOFOLLOW;
 const CREATE = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW;
 
+/** The AAD: the file's magic and version bytes, then "intent-wallet-v1|<rail>", so neither the header nor the rail can be swapped. */
 function aad(rail: WalletRail): Buffer {
-  return Buffer.from(`intent-wallet-v1|${rail}`, "utf8");
+  return Buffer.concat([MAGIC, Buffer.from(`intent-wallet-v1|${rail}`, "utf8")]);
 }
 
 /** `<data>/wallet/<rail>.enc`. */
@@ -129,7 +132,8 @@ export async function loadWalletKey(source: WalletKeySource, options: { create: 
 
 /** 32 raw bytes, or their base64, base64url or hex text (trailing whitespace ignored). */
 function parseKey(content: Buffer, where: string): Buffer {
-  if (content.length === KEY_BYTES) return content;
+  // Raw bytes only when they cannot be text: a 32-character passphrase is not 32 random bytes.
+  if (content.length === KEY_BYTES && !content.every((b) => (b >= 0x20 && b <= 0x7e) || b === 0x09 || b === 0x0a || b === 0x0d)) return content;
   const text = content.toString("utf8").trim();
   if (WALLET_KEY_TEXT.test(text)) {
     const bytes = text.length === 64 ? Buffer.from(text, "hex") : Buffer.from(text, text.includes("-") || text.includes("_") ? "base64url" : "base64");
@@ -307,7 +311,7 @@ async function writeNew(path: string, content: Buffer): Promise<void> {
 /** fsyncs a directory so a rename or unlink in it survives a crash. Windows cannot open a directory for that. */
 async function syncDir(dir: string): Promise<void> {
   if (process.platform === "win32") return;
-  const handle = await fs.open(dir, constants.O_RDONLY);
+  const handle = await fs.open(dir, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
   try {
     await handle.sync();
   } finally {

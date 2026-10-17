@@ -257,18 +257,21 @@ function walletConfig(intent: Readonly<Record<string, string>>, at: WalletPlace)
   }
   let key: WalletKeySource;
   if (intent.INTENT_WALLET_KEY_FILE !== undefined) {
-    key = { kind: "file", path: path.resolve(at.cwd, userPath("INTENT_WALLET_KEY_FILE", intent.INTENT_WALLET_KEY_FILE)) };
+    const file = path.resolve(at.cwd, userPath("INTENT_WALLET_KEY_FILE", intent.INTENT_WALLET_KEY_FILE));
+    // A key beside the vault it opens protects nothing: whoever copies the data dir has both.
+    if (inside(path, at.dataDir, file)) {
+      throw new ConfigError(`INTENT_WALLET_KEY_FILE (${file}) is inside the data dir ${at.dataDir}; keep the wallet key outside it`);
+    }
+    key = { kind: "file", path: file };
   } else if (envKey !== undefined) {
     key = { kind: "env", value: new Secret(envKey) };
   } else if (at.runtime === "container") {
     key = { kind: "none", reason: "in the Docker image the wallet key must come from a secret: mount one and set INTENT_WALLET_KEY_FILE" };
   } else {
     const file = path.join(defaultConfigDir(at), "wallet-key");
-    const inside = path.relative(at.dataDir, file);
-    key =
-      inside !== "" && !inside.startsWith("..") && !path.isAbsolute(inside)
-        ? { kind: "none", reason: `the default wallet key file ${file} would sit inside the data dir; set INTENT_WALLET_KEY_FILE to a file outside it` }
-        : { kind: "default", path: file };
+    key = inside(path, at.dataDir, file)
+      ? { kind: "none", reason: `the default wallet key file ${file} would sit inside the data dir; set INTENT_WALLET_KEY_FILE to a file outside it` }
+      : { kind: "default", path: file };
   }
   return {
     key,
@@ -276,6 +279,12 @@ function walletConfig(intent: Readonly<Record<string, string>>, at: WalletPlace)
     shopMcpUrl: shopUrl("INTENT_SHOP_MCP_URL", intent.INTENT_SHOP_MCP_URL),
     shopAuthUrl: shopUrl("INTENT_SHOP_AUTH_URL", intent.INTENT_SHOP_AUTH_URL),
   };
+}
+
+/** Whether `file` is `dir` itself or lies under it. */
+function inside(path: typeof posix, dir: string, file: string): boolean {
+  const rel = path.relative(dir, file);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 /** The per-user config folder, apart from the data dir so the wallet key never sits beside the vault. */
@@ -297,7 +306,8 @@ function shopUrl(name: string, raw: string | undefined): string | null {
   try {
     url = new URL(raw);
   } catch {
-    throw new ConfigError(`${name} is not a URL: ${JSON.stringify(raw)}`);
+    // Not echoed: a mistyped value may carry a credential.
+    throw new ConfigError(`${name} is not a URL; give a full https URL`);
   }
   const loopback = isLoopback(url.hostname.replace(/^\[(.*)\]$/, "$1"));
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
