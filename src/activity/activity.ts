@@ -19,7 +19,7 @@ import { findIdentity } from "../privacy/index.ts";
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
 /** What one action was. */
-export const ACTION_KINDS = ["start", "keys", "search", "cart", "status", "approval", "blocked", "pin", "flagged", "unreadable"] as const;
+export const ACTION_KINDS = ["start", "keys", "search", "cart", "status", "approval", "blocked", "pin", "flagged", "wallet", "unreadable"] as const;
 export type ActionKind = (typeof ACTION_KINDS)[number];
 
 /**
@@ -104,6 +104,10 @@ export interface ActivityFacts {
   pinned?: boolean;
   /** approver_flag: "sign_count", or another passkey than the pin. */
   flag_reason?: string;
+  /** wallet: the rail (`shop`), what was done (`unlinked`) and whether the rail confirmed revoking the token. */
+  wallet_rail?: string;
+  wallet_action?: string;
+  revoked?: boolean;
   key_kid?: string;
   keys_expire_at?: string;
   session_id?: string;
@@ -332,6 +336,9 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
         if (pinnedNow) join(activity, item);
         break;
       }
+      case "wallet":
+        open(item, "wallet", { wallet_rail: text(b.rail), wallet_action: text(b.action), ...(typeof b.revoked === "boolean" ? { revoked: b.revoked } : {}) });
+        break;
       case "approver_flag":
         open(item, "flagged", { fingerprint: text(b.fingerprint), ...(typeof b.reason === "string" ? { flag_reason: b.reason } : {}) }, "flagged");
         break;

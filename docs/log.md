@@ -48,7 +48,7 @@ Colour is used only when the output is a terminal, and never with `NO_COLOR` set
 
 | Option | Keeps |
 |---|---|
-| `--action search,cart` | The actions of these kinds: `start`, `keys`, `search`, `cart`, `status`, `approval`, `blocked`, `pin`, `flagged`. |
+| `--action search,cart` | The actions of these kinds: `start`, `keys`, `search`, `cart`, `status`, `approval`, `blocked`, `pin`, `flagged`, `wallet`. |
 | `--since 30m` | Actions from that long ago (`s`, `m`, `h`, `d`, `w`), or from a date (`2026-10-16`, local midnight; UTC with `--utc`) or time (`2026-10-16T09:00:00Z`). |
 | `--last 5` | The last N actions, after the other filters. |
 
@@ -67,6 +67,7 @@ The actions group the chain's entries:
 - `approval`: an Approval the gateway checked and chained, with the approver pin written with it, if it was the first.
 - `blocked`: a request the gateway held back; nothing was sent.
 - `pin`: an approver pin written by `intent approver accept`. `flagged`: a passkey flagged as not the pinned approver.
+- `wallet`: a wallet change on this machine, such as `intent wallet unlink shop` deleting the Shop wallet's vault file, and whether the token was revoked.
 
 A cart or status check the gateway refused after an answer (the cart, snapshot or proof did not match) carries outcome `refused` and the reasons in `blocked`.
 
@@ -112,8 +113,8 @@ Each line is one action. Fields are always present; `null` means the chain does 
 | `time`, `seq` | The `ts` and seq of the action's first entry. |
 | `seqs` | Every entry of the action, in chain order. |
 | `action` | One of the kinds above. |
-| `outcome` | For requests, the worst `delivery` of the action's requests; otherwise `blocked`, `refused`, `approval_asked`, `approved`, `pinned`, `flagged` or `recorded` (a key statement or session start with no request). A status check whose observation says `rejected` or `expired` has that outcome. |
-| `facts` | The readable facts the action's entries hold, each present only when held: `category`, `product`, `must_haves`, `budget_minor`, `currency`, `zip`, `country`, `offer_handle`, `quantity`, `approval_handle`, `approval_url`, `total_minor`, `expires_at`, `fingerprint`, `pinned`, `flag_reason`, `key_kid`, `keys_expire_at`, `session_id`, `endpoint` and `field_names` (of a blocked request), `held` (the values a policy block held back), and from observations `offers_count`, `offers_hidden`, `offers`, `title`, `merchant` and `approval_state` (the latest state Intent Cloud returns for the approval; on a cart too). |
+| `outcome` | For requests, the worst `delivery` of the action's requests; otherwise `blocked`, `refused`, `approval_asked`, `approved`, `pinned`, `flagged` or `recorded` (a key statement, a session start with no request, or a wallet change). A status check whose observation says `rejected` or `expired` has that outcome. |
+| `facts` | The readable facts the action's entries hold, each present only when held: `category`, `product`, `must_haves`, `budget_minor`, `currency`, `zip`, `country`, `offer_handle`, `quantity`, `approval_handle`, `approval_url`, `total_minor`, `expires_at`, `fingerprint`, `pinned`, `flag_reason`, `key_kid`, `keys_expire_at`, `session_id`, `wallet_rail`, `wallet_action` and `revoked` (of a wallet change), `endpoint` and `field_names` (of a blocked request), `held` (the values a policy block held back), and from observations `offers_count`, `offers_hidden`, `offers`, `title`, `merchant` and `approval_state` (the latest state Intent Cloud returns for the approval; on a cart too). |
 | `blocked` | What held a request back, or why an answer was refused. |
 | `requests[]` | Each request the action logged. |
 | `requests[].fields` | The values sent, by dotted path, from the logged bytes; `{}` for no body; `null` for an entry without body bytes. |

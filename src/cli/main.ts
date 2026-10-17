@@ -14,6 +14,7 @@ import { logCommand } from "./log.ts";
 import { logFlags } from "./log-flags.ts";
 import { policyAdd, policyShow, policyTest } from "./policy.ts";
 import { serve } from "./serve.ts";
+import { walletStatus, walletUnlink } from "./wallet.ts";
 import type { Demo } from "../demo/index.ts";
 import { activePolicy, cliConfig, PACKAGE_ROOT, startDemoFor, trustedKeys } from "./setup.ts";
 import { printable, printableLines } from "../ui/index.ts";
@@ -54,10 +55,15 @@ const COMMANDS: Readonly<Record<string, Options>> = {
   "policy show": {},
   "approver list": {},
   "approver accept": {},
+  "wallet status": {},
+  "wallet unlink": {},
 };
 
 /** How many positional arguments follow the command words. */
-const ARGUMENTS: Readonly<Record<string, readonly string[]>> = { "policy test": ["<cases.yaml>"], "policy add": ["<name>"] };
+const ARGUMENTS: Readonly<Record<string, readonly string[]>> = { "policy test": ["<cases.yaml>"], "policy add": ["<name>"], "wallet unlink": ["<rail>"] };
+
+/** The commands that take a subcommand word: `policy show`, `approver list`, `wallet status`. */
+const GROUPS: ReadonlySet<string> = new Set(["policy", "approver", "wallet"]);
 
 type Values = Record<string, string | boolean | undefined>;
 
@@ -103,10 +109,11 @@ function parse(argv: readonly string[]): "help" | { command: string; args: strin
   if (loose.values.help === true || loose.positionals[0] === "help") return "help";
   const [first, second] = loose.positionals;
   // No command means serve: `npx -y intent-gateway` and `intent-gateway --demo` are what an MCP client runs.
-  const command = first === undefined ? "serve" : first === "policy" || first === "approver" ? `${first} ${second ?? ""}`.trim() : first;
+  const group = first !== undefined && GROUPS.has(first) ? first : null;
+  const command = first === undefined ? "serve" : group !== null ? `${group} ${second ?? ""}`.trim() : first;
   if (!Object.hasOwn(COMMANDS, command)) {
-    const what = first === "policy" || first === "approver" ? `${command} needs one of: ${subcommands(first).join(", ")}` : `unknown command "${command}"`;
-    throw new CliError(first === "policy" || first === "approver" ? `${what}; run ${INTENT} --help` : what, 2);
+    const what = group !== null ? `${command} needs one of: ${subcommands(group).join(", ")}` : `unknown command "${command}"`;
+    throw new CliError(group !== null ? `${what}; run ${INTENT} --help` : what, 2);
   }
   // Second pass, strict: only the options this command takes.
   let parsed;
@@ -201,6 +208,10 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
       return { code: approverList(io, config.dataDir) };
     case "approver accept":
       return { code: await approverAccept(io, config.dataDir) };
+    case "wallet status":
+      return { code: await walletStatus(io, config) };
+    case "wallet unlink":
+      return { code: await walletUnlink(io, config, arg(0)) };
     default:
       throw new CliError(`unknown command "${command}"`, 2);
   }

@@ -243,6 +243,72 @@ describe("HTTP transport", () => {
   });
 });
 
+describe("wallet settings", () => {
+  const KEY = "q".repeat(43) + "=";
+
+  it("takes INTENT_WALLET_KEY_FILE first, resolved against the working directory", () => {
+    expect(load({ INTENT_WALLET_KEY_FILE: "secrets/wallet" }).wallet).toMatchObject({ key: { kind: "file", path: "/work/secrets/wallet" }, envKeyIgnored: false });
+    const both = load({ INTENT_WALLET_KEY_FILE: "/run/secrets/wallet", INTENT_WALLET_KEY: KEY }).wallet;
+    expect(both).toMatchObject({ key: { kind: "file", path: "/run/secrets/wallet" }, envKeyIgnored: true });
+    expect(() => load({ INTENT_WALLET_KEY_FILE: "~/wallet" })).toThrow(/INTENT_WALLET_KEY_FILE starts with ~/);
+  });
+
+  it("takes INTENT_WALLET_KEY next, and never prints its value", () => {
+    const config = load({ INTENT_WALLET_KEY: KEY });
+    expect(config.wallet.key.kind).toBe("env");
+    expect(config.wallet.key.kind === "env" && config.wallet.key.value.reveal()).toBe(KEY);
+    expect(JSON.stringify(config)).not.toContain(KEY);
+    expect(String(config.wallet.key.kind === "env" ? config.wallet.key.value : "")).toBe("[redacted]");
+    expect(load({ INTENT_WALLET_KEY: "ab".repeat(32) }).wallet.key.kind).toBe("env");
+  });
+
+  it("refuses an INTENT_WALLET_KEY that is not 32 bytes of base64 or hex, without echoing it", () => {
+    for (const bad of ["hunter2-secret", "q".repeat(42) + "=", "zz".repeat(32)]) {
+      let message = "";
+      try {
+        load({ INTENT_WALLET_KEY: bad });
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigError);
+        message = (error as Error).message;
+      }
+      expect(message).toContain("INTENT_WALLET_KEY must be 32 random bytes");
+      expect(message).not.toContain(bad);
+    }
+  });
+
+  it.each([
+    ["Linux", {}, LINUX, "/home/dev/.config/intent-gateway/wallet-key"],
+    ["Linux XDG_CONFIG_HOME", { XDG_CONFIG_HOME: "/xdg-config" }, LINUX, "/xdg-config/intent-gateway/wallet-key"],
+    ["relative XDG_CONFIG_HOME is ignored", { XDG_CONFIG_HOME: "cfg" }, LINUX, "/home/dev/.config/intent-gateway/wallet-key"],
+    ["macOS", {}, { platform: "darwin", homedir: "/Users/dev", cwd: "/work" }, "/Users/dev/Library/Preferences/intent-gateway/wallet-key"],
+    ["Windows", { APPDATA: "C:\\Users\\dev\\AppData\\Roaming" }, { platform: "win32", homedir: "C:\\Users\\dev", cwd: "C:\\work" }, "C:\\Users\\dev\\AppData\\Roaming\\intent-gateway\\wallet-key"],
+  ] as const)("defaults the key file outside the data dir: %s", (_name, env, options, expected) => {
+    const config = load(env, options);
+    expect(config.wallet.key).toEqual({ kind: "default", path: expected });
+    expect(expected.startsWith(config.dataDir)).toBe(false);
+  });
+
+  it("has no default key in the Docker image or inside the data dir", () => {
+    const container = load({ INTENT_RUNTIME: "container" }).wallet.key;
+    expect(container).toMatchObject({ kind: "none" });
+    expect(container.kind === "none" && container.reason).toContain("INTENT_WALLET_KEY_FILE");
+    const inside = load({ INTENT_DATA_DIR: "/home/dev/.config" }).wallet.key;
+    expect(inside).toMatchObject({ kind: "none" });
+    expect(load({ INTENT_RUNTIME: "container", INTENT_WALLET_KEY_FILE: "/run/secrets/w" }).wallet.key).toEqual({ kind: "file", path: "/run/secrets/w" });
+  });
+
+  it("checks the Shop URLs: https, or http on loopback only", () => {
+    expect(load({}).wallet).toMatchObject({ shopMcpUrl: null, shopAuthUrl: null });
+    expect(load({ INTENT_SHOP_MCP_URL: "https://shop.example/mcp", INTENT_SHOP_AUTH_URL: "http://127.0.0.1:9000/" }).wallet).toMatchObject({
+      shopMcpUrl: "https://shop.example/mcp",
+      shopAuthUrl: "http://127.0.0.1:9000/",
+    });
+    expect(() => load({ INTENT_SHOP_MCP_URL: "http://shop.example/mcp" })).toThrow(/INTENT_SHOP_MCP_URL must use https/);
+    expect(() => load({ INTENT_SHOP_AUTH_URL: "not a url" })).toThrow(/INTENT_SHOP_AUTH_URL is not a URL/);
+    expect(() => load({ INTENT_SHOP_AUTH_URL: "https://u:p@shop.example/" })).toThrow(/must not carry credentials/);
+  });
+});
+
 describe("cloud trust", () => {
   it("rejects an unpinned cloud URL without --trust-keys", () => {
     expect(() => load({ INTENT_CLOUD_URL: "https://cloud.example" }, LINUX, [])).toThrow(
