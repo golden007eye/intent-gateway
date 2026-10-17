@@ -331,8 +331,16 @@ function observedSummary(b: Body): string {
       return `cart: ${text(b.title)} x${String(b.quantity)}, ${total}, ${text(b.merchant)}${withheld}`;
     case "createApproval":
       return `approval ${text(b.approval_handle)} ${text(b.state)}: ${text(b.title)} x${String(b.quantity)}, ${total}, ${text(b.merchant)}${withheld}`;
-    case "getApproval":
-      return `approval ${text(b.approval_handle)} ${text(b.state)}: ${text(b.title)}, ${total}, ${text(b.merchant)}${withheld}`;
+    case "getApproval": {
+      // 1.6.0: the outcome as Intent Cloud served it, before the gateway checked it (its `outcome` entry says what it showed).
+      const o = record(b.outcome);
+      const outcome =
+        typeof o.state === "string"
+          ? `; outcome as served: ${o.state} (${text(o.source)}, ${text(o.assurance)})${typeof o.order_ref === "string" ? `, order ${o.order_ref}` : ""}`
+          : "";
+      const order = typeof b.order_number === "string" && o.order_ref !== b.order_number ? `; order number ${b.order_number}` : "";
+      return `approval ${text(b.approval_handle)} ${text(b.state)}: ${text(b.title)}, ${total}, ${text(b.merchant)}${outcome}${order}${withheld}`;
+    }
     default:
       return "not a known observation";
   }

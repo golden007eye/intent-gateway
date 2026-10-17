@@ -15,8 +15,10 @@
 //   and never read for an identity block or a logging refusal, which hold no values).
 // - wallet: rail, action (linked, unlinked, checked), revoked; a check: since, order_count, unmatched_count,
 //   unmatched_total_minor, complete.
-// Entries of the kinds completion, complete_attempt and outcome (the one-tap completion) are not read yet: they slot
-// in as purchase steps once the outcome module writes them.
+// Entries of the kinds completion, complete_attempt and outcome are not read yet. `outcome` entries are written now
+// (src/outcome's OutcomeEntry, ADR-0015: read `state_shown`, never `cloud.state`, for what to show); they slot in as a
+// purchase step with the panel's outcome states (plan G5). completion and complete_attempt come with the one-tap
+// completion (plan G7b).
 // - observed: what Intent Cloud returned for one acknowledged request (src/observation's ObservedBody), joined to
 //   that request's action. A chain written before observations existed has none, and its actions read as before.
 // - approval_pending: handle, approval_url, total_minor, expires_at; approval: handle.

@@ -106,7 +106,7 @@ describe("runVerify: a clean chain", () => {
     const head = await lastEntry(dir);
     expect(failed(report)).toEqual([]);
     expect(report).toMatchObject({ ok: true, exitCode: 0, head: { seq: 5, hash: head.hash } });
-    expect(report.counts).toEqual({ disclosures: 1, receipts: 1, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 1, flags: 0 });
+    expect(report.counts).toEqual({ disclosures: 1, receipts: 1, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 1, outcomes: 0, flags: 0 });
     const text = formatReport(report);
     expect(text).toContain(`head: seq 5 hash ${head.hash}\n`);
     expect(text).toContain("sent, not acknowledged: 0\n");

@@ -33,6 +33,7 @@ import {
   Outcome as CloudOutcomeSchema,
   OutcomeReport,
   type OutcomeState,
+  type OutcomeStatement,
   type ReceiptRequest as ReceiptRequestType,
   ReceiptRequest,
   SearchRequest,
@@ -49,6 +50,7 @@ import {
   CONFIRM_ORIGIN,
   loadKeys,
   makeStatement,
+  OUTCOME_PREFIX,
   randomKey,
   RECEIPT_PREFIX,
   RP_ID,
@@ -438,6 +440,23 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return { ...unsigned, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(unsigned)) } as AnyApprovalProof;
   }
 
+  /**
+   * The outcome statement a 1.6.0 read serves beside the outcome (Appendix G): the approval key's signature over
+   * "intent-outcome-v1\n" || JCS(statement without cloud_signature). Its ledger names the approval's entry.
+   */
+  function servedOutcomeStatement(a: ApprovalRecord, outcome: CloudOutcome, at: number): OutcomeStatement {
+    const unsigned: Omit<OutcomeStatement, "cloud_signature"> = {
+      v: 1,
+      approval_handle: a.handle,
+      snapshot_hash: a.snapshotHash,
+      outcome,
+      ledger: a.ledger ?? { seq: 1, entry_hash: sha256Hex(a.handle) },
+      issued_at: timestamp(at),
+      kid: keys.approval.kid,
+    };
+    return { ...unsigned, cloud_signature: keys.approval.sign(OUTCOME_PREFIX + canonicalize(unsigned)) };
+  }
+
   // ---- Platform handlers (behind the edge) -------------------------------------------------------------------
 
   function search(body: Buffer, version: ServedVersion, at: number): Reply {
@@ -656,7 +675,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (a.orderNumber !== undefined) status.order_number = a.orderNumber;
     const withProof = state === "approved" || state === "handed_off" || state === "ordered";
     if (withProof && a.approvedBy !== undefined) status.proof = servedProof(a, a.approvedBy, at);
-    if (version === "1.6.0" && a.outcome !== undefined) status.outcome = a.outcome;
+    if (version === "1.6.0" && a.outcome !== undefined) {
+      status.outcome = a.outcome;
+      status.outcome_statement = servedOutcomeStatement(a, a.outcome, at);
+    }
     return { status: 200, body: status };
   }
 

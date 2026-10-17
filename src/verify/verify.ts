@@ -5,13 +5,25 @@
 // or an approval proof at the time it was chained. A statement that has expired since is still good evidence for
 // what it covered then. `now` is the self-check's clock.
 import { INTENT } from "../config/index.ts";
-import { ReceiptRequest } from "../contract/index.ts";
+import { ApprovalProof, ReceiptRequest } from "../contract/index.ts";
+import { canonicalize, parseIntegerJson, sha256Hex } from "../jcs/index.ts";
 import { observationProblem } from "../observation/index.ts";
+import { bindingV1, type CloudOutcomeEntry, type LocalOutcomeEntry, OutcomeEntry, readCloudOutcome } from "../outcome/index.ts";
 import { bodyValue, findIdentity, isCredentialHeader, markerDigest, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
-import { checkApprover, type KeySet, type PinnedRootKey, type ReceiptResponse, type SentRequest, verifyApprovalProof, verifyReceipt, verifyStatement } from "../trust/index.ts";
+import {
+  checkApprover,
+  type KeySet,
+  type PinnedRootKey,
+  type ReceiptResponse,
+  type SentRequest,
+  verifyApprovalProof,
+  verifyOutcomeStatement,
+  verifyReceipt,
+  verifyStatement,
+} from "../trust/index.ts";
 import { walletEntryProblem } from "../wallet/index.ts";
 
 export type Install = { kind: "npm"; pkgDir: string } | { kind: "image"; ref: string; version: string };
@@ -30,7 +42,7 @@ export interface VerifyOptions {
 }
 
 export interface Check {
-  name: "usage" | "chain" | "key statements" | "disclosures" | "approvals" | "approver flags" | "self-check";
+  name: "usage" | "chain" | "key statements" | "disclosures" | "approvals" | "outcomes" | "approver flags" | "self-check";
   ok: boolean;
   details: string[];
 }
@@ -56,6 +68,8 @@ export interface Report {
     discarded: number;
     redactions: number;
     approvals: number;
+    /** `outcome` entries that re-checked (ADR-0015). */
+    outcomes: number;
     flags: number;
   };
 }
@@ -67,7 +81,7 @@ const EMPTY_CHAIN = `No entries yet: the gateway has sent nothing. Start it with
 const USAGE_REASONS: ReadonlySet<FailureReason> = new Set(["package-unreadable", "ref-invalid"]);
 
 export async function runVerify(opts: VerifyOptions): Promise<Report> {
-  const counts = { disclosures: 0, receipts: 0, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 0, flags: 0 };
+  const counts = { disclosures: 0, receipts: 0, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 0, outcomes: 0, flags: 0 };
   const empty = { seq: -1, hash: GENESIS };
   if (opts.pinnedRootKeys.length === 0) {
     return usage(["no root key is pinned for this Intent Cloud host; pass --trust-keys"], empty, counts);
@@ -137,6 +151,12 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
   const keyFailures: string[] = [];
   const disclosureFailures: string[] = [];
   const approvalFailures: string[] = [];
+  const outcomeFailures: string[] = [];
+  /** How many re-checked outcome entries showed each state ("not acted on" for none). */
+  const outcomeStates = new Map<string, number>();
+  let outcomeEntries = 0;
+  /** The proof of each approval that verified, by handle: what an outcome entry is checked against. */
+  const approvedProofs = new Map<string, unknown>();
   const flags: string[] = [];
   const disclosures = new Map<number, Disclosure>();
   const pending = new Map<string, Entry>();
@@ -258,8 +278,22 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
         break;
       case "approval": {
         const problem = approvalProblem(body, pending, keys, entries.slice(0, index), ts);
-        if (problem === null) counts.approvals += 1;
-        else approvalFailures.push(`${at}: the approval ${typeof body.handle === "string" ? `for ${body.handle} ` : ""}${problem}`);
+        if (problem === null) {
+          counts.approvals += 1;
+          approvedProofs.set(body.handle as string, body.proof);
+        } else approvalFailures.push(`${at}: the approval ${typeof body.handle === "string" ? `for ${body.handle} ` : ""}${problem}`);
+        break;
+      }
+      case "outcome": {
+        outcomeEntries += 1;
+        const result = outcomeProblem(entry.body, approvedProofs, keys, ts, entries.slice(0, index));
+        if (typeof result === "string") {
+          outcomeFailures.push(`${at}: the outcome ${typeof body.handle === "string" ? `for ${body.handle} ` : ""}${result}`);
+        } else {
+          counts.outcomes += 1;
+          const shown = result.state_shown ?? "not acted on";
+          outcomeStates.set(shown, (outcomeStates.get(shown) ?? 0) + 1);
+        }
         break;
       }
       case "approver_flag":
@@ -328,6 +362,18 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       ],
     },
     { name: "approvals", ok: approvalFailures.length === 0, details: [`verified: ${String(counts.approvals)}`, ...approvalFailures] },
+    ...(outcomeEntries === 0
+      ? []
+      : [
+          {
+            name: "outcomes" as const,
+            ok: outcomeFailures.length === 0,
+            details: [
+              `re-checked: ${String(counts.outcomes)}${outcomeStates.size === 0 ? "" : ` (${[...outcomeStates].map(([state, n]) => `${state}: ${String(n)}`).join(", ")})`}`,
+              ...outcomeFailures,
+            ],
+          },
+        ]),
     { name: "approver flags", ok: true, details: [`flagged: ${String(counts.flags)}`, ...flags] },
   ];
 }
@@ -406,6 +452,94 @@ function approvalProblem(
   }
   if (approver.decision === "flag") return `is counted as approved, but its passkey is not the pinned approver (fingerprint ${approver.fingerprint})`;
   if (approver.decision === "pin") return "was chained before any approver pin";
+  return null;
+}
+
+/**
+ * Why an `outcome` entry does not hold (ADR-0015), or the entry when it does. It must name an approval that verified
+ * earlier in the chain. A `cloud` entry's statement is re-verified at the entry's time against the key statement then
+ * in force, and the gateway's reading (rules O1, O2, M1) is re-run from it: `statement_verified`, `refused_by`,
+ * `local_binding` and `state_shown` must be what the recorded statement gives, so a shown state can never claim more
+ * than the statement. An entry without a statement shows nothing. A `local` entry re-runs binding-v1 from its
+ * recorded inputs, which never hold a raw checkout id.
+ */
+function outcomeProblem(
+  value: unknown,
+  approvedProofs: ReadonlyMap<string, unknown>,
+  keys: RecordedKeys | null,
+  ts: Date,
+  before: readonly Entry[],
+): string | OutcomeEntry {
+  const parsed = OutcomeEntry.safeParse(value);
+  if (!parsed.success) return `is not an outcome entry (${parsed.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ")})`;
+  const entry = parsed.data;
+  const proof = ApprovalProof.safeParse(approvedProofs.get(entry.handle));
+  if (!proof.success) return "names no approval that verified earlier in the chain";
+  const { snapshot, snapshot_hash: snapshotHash } = proof.data;
+  const problem = entry.basis === "cloud" ? cloudOutcomeProblem(entry, snapshot, snapshotHash, keys, ts) : localOutcomeProblem(entry, snapshot, before);
+  return problem ?? entry;
+}
+
+function cloudOutcomeProblem(entry: CloudOutcomeEntry, snapshot: ApprovalProof["snapshot"], snapshotHash: string, keys: RecordedKeys | null, ts: Date): string | null {
+  if (entry.statement_jcs === undefined) {
+    if (entry.statement_verified || entry.state_shown !== null) return "shows an outcome but holds no outcome statement";
+    return null;
+  }
+  let statement: unknown;
+  try {
+    statement = parseIntegerJson(entry.statement_jcs);
+    if (canonicalize(statement) !== entry.statement_jcs) return "holds a statement that is not canonical JSON";
+  } catch {
+    return "holds a statement that is not canonical JSON";
+  }
+  if (findIdentity(statement).length > 0) return "holds a statement with what looks like buyer identity";
+  const stated = record(record(statement).outcome);
+  const cloud = entry.cloud;
+  if (cloud === null || cloud.state !== stated.state || cloud.source !== stated.source || cloud.assurance !== stated.assurance) {
+    return "names an Intent Cloud outcome other than its statement's";
+  }
+  if (entry.refused_by === "m1") {
+    // The status's own outcome is not kept: M1 cannot be re-checked, and an M1 refusal may show nothing.
+    if (entry.statement_verified || entry.state_shown !== null) return "shows an outcome its status did not match (M1)";
+    return null;
+  }
+  if (keys === null) return "cannot be checked: no key statement was recorded before it";
+  if (keys.keySet === null) return `cannot be checked: the key statement at seq ${String(keys.seq)} did not verify`;
+  const check = verifyOutcomeStatement(statement, { handle: entry.handle, snapshot, snapshotHash }, keys.keySet, ts);
+  if (check.ok && entry.outcome_hash !== sha256Hex(canonicalize(stated))) return "names an outcome hash other than its verified statement's (M1)";
+  if (entry.statement_verified !== check.ok) {
+    return check.ok ? "says its statement did not verify, but it does" : `says its statement verified, but it does not (${check.refused_by})`;
+  }
+  if (!check.ok && entry.refused_by !== check.refused_by) return `names refusal ${String(entry.refused_by)}, but the statement fails ${check.refused_by}`;
+  const reading = readCloudOutcome(stated, snapshot.total.amount_minor, check);
+  if (entry.state_shown !== reading.state_shown) {
+    return `shows ${String(entry.state_shown)}, but its statement supports ${String(reading.state_shown)} (rule O1: never more than the verified statement)`;
+  }
+  if (canonicalize(entry.local_binding ?? null) !== canonicalize(reading.local_binding)) return "holds a local binding other than its statement gives";
+  if (entry.order_ref !== undefined && (entry.state_shown === null || entry.order_ref !== stated.order_ref)) return "names an order its shown statement does not";
+  return null;
+}
+
+function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: ApprovalProof["snapshot"], before: readonly Entry[]): string | null {
+  if (entry.state_shown !== entry.state) return `shows ${entry.state_shown}, but records ${entry.state}`;
+  if (entry.source === "gateway_precheck" && entry.state !== "failed") return "names the gateway's precheck for a state other than failed";
+  const inputs = entry.binding_inputs;
+  if (inputs !== undefined && "checkout_ref" in inputs.observed) return "keeps a raw checkout id in its binding inputs";
+  if (entry.state === "ordered" && (entry.local_binding?.result !== "ok" || inputs === undefined)) return "shows ordered without a binding ok from recorded inputs (rule O1)";
+  if (inputs !== undefined) {
+    if (snapshot.v !== 2) return "re-runs a binding against a v1 snapshot";
+    let rerun: unknown;
+    try {
+      rerun = bindingV1(snapshot, inputs.observed, { ...inputs.context, mode: String(inputs.context.mode), ship_to_optional: inputs.context.ship_to_optional });
+    } catch {
+      return "holds binding inputs with an unknown mode";
+    }
+    if (canonicalize(rerun) !== canonicalize(entry.local_binding ?? null)) return "holds a local binding other than its recorded inputs give";
+  }
+  const shopSends = before.filter((e) => e.kind === "disclosure" && record(e.body).purchase === entry.handle && record(e.body).endpoint === "complete_checkout");
+  if (entry.reason === "not_sent" && shopSends.length > 0) {
+    return "says nothing was sent, but a complete_checkout disclosure for the purchase is logged";
+  }
   return null;
 }
 

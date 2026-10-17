@@ -79,7 +79,7 @@ describe("runVerify: observations", () => {
     });
     const report = await verify(dir);
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);
-    expect(report.counts).toEqual({ disclosures: 1, receipts: 1, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 0, flags: 0 });
+    expect(report.counts).toEqual({ disclosures: 1, receipts: 1, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 0, outcomes: 0, flags: 0 });
     expect(check(report, "disclosures")?.details).toContain("answers summarised locally (observed, never sent): 1");
   });
 

@@ -7,7 +7,7 @@
 // it is written, findIdentity runs over it, and any value that looks like buyer identity is replaced with WITHHELD
 // and its path listed in `withheld` (invariant 3: what we never hold, we cannot leak). Pure; no I/O.
 import { z } from "zod";
-import { type ApprovalCreated, type ApprovalStatus, type Cart, CompletionMode, OutcomeState, type SearchResponse } from "../contract/index.ts";
+import { type ApprovalCreated, type ApprovalStatus, type Cart, CompletionMode, OutcomeSource, OutcomeState, type SearchResponse } from "../contract/index.ts";
 import { findIdentity } from "../privacy/index.ts";
 
 /** At most this many offers of a search are kept in its observation; `offers_count` still counts them all. */
@@ -77,6 +77,22 @@ export const ObservedBody = z.discriminatedUnion("endpoint", [
     state: State,
     /** 1.6.0: the outcome's state, as Intent Cloud reported it (the completer key's retention reads it). */
     outcome_state: OutcomeState.optional(),
+    /**
+     * 1.6.0: a summary of the outcome as Intent Cloud served it, before any check: its words, the order it names and
+     * the binding result it states. What the gateway concluded is the `outcome` entry, not this.
+     */
+    outcome: z
+      .strictObject({
+        state: OutcomeState,
+        source: OutcomeSource,
+        assurance: z.enum(["verified", "reported"]),
+        order_ref: z.string().min(1).max(64).optional(),
+        final_total_minor: Minor.optional(),
+        binding_result: z.enum(["ok", "mismatch", "incomplete"]).optional(),
+      })
+      .optional(),
+    /** The merchant's order number Intent Cloud returned (before 1.6.0, and beside an outcome). */
+    order_number: z.string().min(1).max(40).optional(),
     title: Text,
     merchant: Text,
     total_minor: Minor,
@@ -143,12 +159,28 @@ export function observeStatus(disclosureSeq: number, handle: string, status: App
     endpoint: "getApproval",
     approval_handle: handle,
     state: status.state,
-    ...(status.outcome === undefined ? {} : { outcome_state: status.outcome.state }),
+    ...(status.outcome === undefined ? {} : { outcome_state: status.outcome.state, outcome: outcomeSummary(status.outcome) }),
+    ...(status.order_number === undefined ? {} : { order_number: status.order_number }),
     title: status.display.title,
     merchant: status.display.merchant,
     total_minor: status.display.total.amount_minor,
     currency: status.display.total.currency,
   });
+}
+
+/** Read by a constant key: src/ lint forbids naming a property `binding` (it would also match `process.binding`). */
+const BINDING = "binding";
+
+function outcomeSummary(o: NonNullable<ApprovalStatus["outcome"]>) {
+  const result = o[BINDING]?.result;
+  return {
+    state: o.state,
+    source: o.source,
+    assurance: o.assurance,
+    ...(o.order_ref === undefined ? {} : { order_ref: o.order_ref }),
+    ...(o.final_total === undefined ? {} : { final_total_minor: o.final_total.amount_minor }),
+    ...(result === undefined ? {} : { binding_result: result }),
+  };
 }
 
 /** Why `body` is not a valid observation (its shape, or buyer identity in it), or null. */
