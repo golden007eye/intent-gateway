@@ -513,6 +513,7 @@ describe("intent policy show", () => {
     expect(result.code).toBe(0);
     expect(result.out).toMatch(/^no policy file at .+: the gateway uses the bundled zip-only policy$/m);
     expect(result.out).toContain("ship_to: postcode_only");
+    expect(result.out).toMatch(/^completion modes allowed: handoff, one_tap$/m);
     // From source there is no build-info.json, so no commit is claimed.
     expect(result.out).toMatch(/^gateway: \S+, no commit \(running from source\)$/m);
   });
@@ -527,6 +528,15 @@ describe("intent policy show", () => {
     const stale = await s.run(["policy", "show"]);
     expect(stale.code).toBe(1);
     expect(stale.out).toMatch(/^lock: policy library: policy\.lock does not describe policy\.yaml.+run intent policy add <name> again$/m);
+  });
+
+  it("names the completion modes a narrowed policy allows", async () => {
+    const s = setup();
+    mkdirSync(s.dir, { recursive: true });
+    writeFileSync(join(s.dir, "policy.yaml"), "version: 1\napproval: passkey\ncompletion: [handoff]\n");
+    const shown = await s.run(["policy", "show"]);
+    expect(shown.code).toBe(0);
+    expect(shown.out).toMatch(/^completion modes allowed: handoff$/m);
   });
 });
 

@@ -50,6 +50,11 @@ describe("loadPolicy: invariant-1 attack list", () => {
     ["share.history: true", `${base}share:\n  history: true\n`, "share.history"],
     ["share.ship_to: full", `${base}share:\n  ship_to: full\n`, "share.ship_to"],
     ["an unknown nested key", `${base}spend:\n  per_order_usd: 10\n  unlimited: true\n`, "spend.unlimited"],
+    ["completion: [auto]", `${base}completion: [auto]\n`, "completion[0]"],
+    ["a completion mode beside a valid one", `${base}completion: [handoff, shop_agent]\n`, "completion[1]"],
+    ["completion: one_tap as text, not a list", `${base}completion: one_tap\n`, "completion"],
+    ["completion: null", `${base}completion: null\n`, "completion"],
+    ["three completion modes", `${base}completion: [handoff, one_tap, handoff]\n`, "completion"],
     ["an alias bomb", aliasBomb, "c[7]"],
     ["a 65 KiB file", `${base}# ${"x".repeat(65 * 1024)}\n`, "(document)"],
   ];
@@ -94,6 +99,7 @@ describe("loadPolicy: malformed input", () => {
     ["a merchant that is not text", `${base}merchants:\n  block: [42]\n`, "merchants.block[0]"],
     ["a blank category", `${base}categories:\n  block: ["  "]\n`, "categories.block[0]"],
     ["a non-plain key", `${base}? [a, b]\n: 1\n`, "(document)"],
+    ["an empty completion list", `${base}completion: []\n`, "completion"],
   ];
 
   it.each(invalid)("refuses %s with POLICY_INVALID", (_label, text, path) => {
@@ -119,8 +125,15 @@ describe("loadPolicy: accepted policies", () => {
       merchants: { block: [] },
       categories: { block: [] },
       approval: "passkey",
+      completion: ["handoff", "one_tap"],
     });
-    expect(Object.isFrozen(p) && Object.isFrozen(p.merchants.block)).toBe(true);
+    expect(Object.isFrozen(p) && Object.isFrozen(p.merchants.block) && Object.isFrozen(p.completion)).toBe(true);
+  });
+
+  it("loads a completion list that narrows to the hand-off, and dedupes and sorts one", () => {
+    expect(loadPolicy(`${base}completion: [handoff]\n`).completion).toEqual(["handoff"]);
+    expect(loadPolicy(`${base}completion: [one_tap, one_tap]\n`).completion).toEqual(["one_tap"]);
+    expect(loadPolicy(`${base}completion: [one_tap, handoff]\n`).completion).toEqual(["handoff", "one_tap"]);
   });
 
   it("normalizes, sorts and deduplicates lists", () => {
@@ -153,6 +166,7 @@ describe("loadPolicy: accepted policies", () => {
     expect(CLOUD_BASELINE.categories.block).toEqual([...EXCLUDED_CATEGORIES].sort());
     expect(CLOUD_BASELINE.approval).toBe("passkey");
     expect(CLOUD_BASELINE.quantity.max).toBe(3);
+    expect(CLOUD_BASELINE.completion).toEqual(["handoff", "one_tap"]);
   });
 });
 

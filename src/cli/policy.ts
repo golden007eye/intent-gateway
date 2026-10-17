@@ -148,6 +148,7 @@ export async function policyShow(io: Io, config: Config): Promise<number> {
   }
   const note = noShipToNote(active.policy);
   if (note !== null) line(io.stdout, `note: ${note}; ${shipToFix(policyPath)}`);
+  line(io.stdout, `completion modes allowed: ${active.policy.completion.join(", ")}`);
   // The commit the bundled library policies come from, as the build recorded it (never a guessed one).
   line(io.stdout, `gateway: ${describeBuild(BUILD)}`);
   line(io.stdout, "---");
