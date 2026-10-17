@@ -68,6 +68,7 @@ import {
   type PinnedRootKey,
   verifyApprovalProof,
   SENT_WORDS,
+  readSent,
   type SentPurchase,
   sentProblems,
   verifyStatement,
@@ -693,17 +694,22 @@ export function createGateway(options: GatewayOptions): Gateway {
         `Refused: the cart Intent Cloud created does not match what was asked (${cartProblems.join("; ")}). No approval was requested.`);
     }
 
+    // What step 7 matches the snapshot to, now and when the approval is accepted (chained below). Checked against its
+    // schema before the approval request, so a `sent` that step 7 could not read never reaches the buyer's passkey.
+    const sent = readSent({
+      cart_request: request,
+      offer: { variant_ref: known.offer.variant_ref, merchant: known.offer.merchant },
+      cart: { merchant_origin: cart.merchant_origin, variant_ref: cart.variant_ref, total: cart.total, expires_at: cart.expires_at },
+    });
+    if (sent === null) {
+      return block("createCart", ["cart"], ["cart: not what step 7 can check (sent)"], fromSeq, "refused",
+        "Refused: the cart and offer do not give what the approval is checked against (Appendix E step 7). No approval was requested.");
+    }
+
     const approvalCall = await call(() => cloud.createApproval(cart.cart_handle), fromSeq);
     if (!approvalCall.ok) return approvalCall.refused;
     const created = approvalCall.body;
     await store.append("observed", observeApproval(approvalCall.seq, created));
-    // What step 7 matches the snapshot to, now and when the approval is accepted (chained below). The cart checks
-    // above made sure the offer and the cart name a variant and the cart an origin.
-    const sent: SentPurchase = {
-      cart_request: request,
-      offer: { variant_ref: known.offer.variant_ref ?? "", merchant: known.offer.merchant },
-      cart: { merchant_origin: cart.merchant_origin ?? "", variant_ref: cart.variant_ref ?? "", total: cart.total, expires_at: cart.expires_at },
-    };
     const snapshotProblems = [
       ...checkSnapshot(created, cart, sent),
       ...spendCheck(policyOffer(created.snapshot.merchant.domain, known.category, created.snapshot.total, null, created.snapshot.quantity), mode).map(
@@ -807,6 +813,15 @@ export function createGateway(options: GatewayOptions): Gateway {
       return { status: status.state === "pending" ? "pending" : status.state === "rejected" ? "rejected" : "expired", message, summary: summary(fromSeq) };
     }
 
+    // A live approval is a 1.6.0 one, chained with step 7's `sent`. A pending entry without it (written by a 1.5.0
+    // gateway) is refused here, so the released 1.5.0 proof form is accepted only by `intent verify` on old chains.
+    if (readSent(bodyOf(pending).sent) === null) {
+      return {
+        ...(await block("getApproval", ["proof"], ["approval_proof: chained without what Appendix E step 7 checks (sent)"], fromSeq, "refused", "")),
+        status: "not_verified",
+        message: "This approval was asked for before contract 1.6.0, so it cannot be checked now. Create a new cart.",
+      };
+    }
     const verified = verifyApprovalProof(status, pending, keys, chain, new Date(now()));
     if (!verified.ok) {
       const step = verified.step === null ? "" : ` (Appendix E step ${String(verified.step)})`;

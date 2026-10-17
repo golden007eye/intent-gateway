@@ -1269,6 +1269,32 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     expect(check({ cart: { ...body.sent.cart, expires_at: "2026-10-15T12:00:01Z" } })).toMatchObject({ step: 7, reason: "expires_at" });
   });
 
+  it("a pending entry without step 7's `sent` (a 1.5.0 gateway's) is refused live: the v1 proof form is for intent verify only", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    const entry = h.store.entries().find((e) => e.kind === "approval_pending" && (e.body as { handle?: unknown }).handle === approval);
+    await h.store.append("approval_pending", omit(entry?.body as Record<string, unknown>, ["sent"]));
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result.status).toBe("not_verified");
+    expect(result.message).toContain("before contract 1.6.0");
+    expect(bodies(h, "approval")).toHaveLength(0);
+  });
+
+  it("a cart whose answer step 7 could not read is refused before any approval request", async () => {
+    const h = await setup();
+    // Past the adapter's schema (as a faulty one would hand it on): an expiry that is no Timestamp.
+    h.patch.createCart = async (r) => {
+      const res = await h.real.createCart(r);
+      return res.ok ? { ...res, body: { ...res.body, expires_at: "2026-10-15 12:15:00Z" } } : res;
+    };
+    const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
+    expect(result.status).toBe("refused");
+    expect(result.message).toContain("step 7");
+    expect(h.sends.createApproval).toBe(0);
+    expect(await keyFiles(h)).toEqual([]);
+  });
+
   it("M5: the gateway's key choice refuses an earlier approval's keyid", async () => {
     const h = await setup();
     const first = await pendingPurchase(h, "Trail Runner 3");

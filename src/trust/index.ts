@@ -17,5 +17,5 @@ export { type ApproverBody, type ApproverCheck, checkApprover, type FlagReason }
 export { approverFingerprint } from "./fingerprint.ts";
 export { type ReceiptFailure, type ReceiptResponse, type ReceiptResult, type SentRequest, verifyReceipt } from "./receipt.ts";
 export { instant, readSent, SENT_FIELDS, SENT_WORDS, SentPurchase, type SentReason, sentProblems } from "./sent.ts";
-export { isTestRoot, onlyTestRoot, TEST_ROOT_KEY } from "./test-root.ts";
+export { isTestRoot, onlyTestRoot, TEST_ROOT_KEY, TEST_ROOT_X } from "./test-root.ts";
 export { type KeySet, MAX_CLOCK_SKEW_MS, type PinnedRootKey, type StatementFailure, type StatementResult, verifyStatement } from "./statement.ts";
