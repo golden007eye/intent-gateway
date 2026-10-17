@@ -114,7 +114,6 @@ async function revoke(io: Io, config: Config, rail: WalletRail, store: Store): P
     const wallet = connectShop(openWalletSession(store), {
       mcpUrl: config.wallet.shopMcpUrl,
       authUrl: config.wallet.shopAuthUrl,
-      clientId: config.wallet.shopClientId,
       vaultText: text,
     });
     const result = await wallet.revoke();

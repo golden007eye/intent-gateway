@@ -59,6 +59,11 @@ export type WalletCheckoutStatus = "open" | "processing" | "buyer_review" | "com
  */
 export interface CheckoutLocator {
   readonly storeDomain: string;
+  /**
+   * `sha256:<hex>` of the rail's checkout id, never the id: a UCP checkout id can carry a credential (`?key=`). This
+   * is what the gateway records (G7b's `checkout_ref`). The adapter holds the id itself in memory only, so a
+   * reference from before a restart no longer reaches the checkout (ADR-0017).
+   */
   readonly checkoutRef: string;
 }
 

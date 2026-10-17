@@ -20,8 +20,6 @@ export interface ShopConnection {
   readonly mcpUrl: string | null;
   /** INTENT_SHOP_AUTH_URL; null for Shop's own. */
   readonly authUrl: string | null;
-  /** INTENT_SHOP_CLIENT_ID, used to revoke when the vault names no client. */
-  readonly clientId: string | null;
   /** The wallet vault's text for `shop`. When it holds no usable tokens, every call fails and revoke sends nothing. */
   readonly vaultText: string;
   readonly timeoutMs?: number;
@@ -44,5 +42,5 @@ export function connectShop(owner: DisclosedCloud | WalletSession, connection: S
   const accounts = createDisclosedWallet(createShopAccountsTransport({ url: connection.authUrl ?? DEFAULT_SHOP_AUTH_URL, ...timing }), owner, {
     destination: "shop_accounts",
   });
-  return createShopAdapter({ mcp, accounts, credentials, clientId: connection.clientId });
+  return createShopAdapter({ mcp, accounts, credentials });
 }

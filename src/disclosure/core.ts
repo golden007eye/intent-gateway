@@ -7,6 +7,7 @@
 //
 // Per call, through the adapter's beforeSend hook on the final request bytes:
 // 1. Refusals, each a `block` entry (names and reasons, never values) and DisclosureRefusedError, nothing sent:
+//    - to any destination, a request with more than one content-type header (the body is read by it);
 //    - to a wallet destination, a body that is not exactly JSON.stringify of its own parse (duplicate keys, spacing,
 //      escapes), or, for a form body (an OAuth endpoint's), URLSearchParams of its own parse (repeated names, other
 //      escapes): what is logged and scanned must be what is sent, and a redacted body is logged re-serialised;
@@ -202,6 +203,12 @@ export function createDisclosureCore(store: Store): DisclosureCore {
     const logged: { entry: Logged<B> | null; n: number } = { entry: null, n: -1 };
     const beforeSend = async (request: OutboundRequest): Promise<void> => {
       assertOpen();
+      // The body is read by its content-type; with two of them the core and the transport could read different ones.
+      if (request.headers.filter(([name]) => name.toLowerCase() === "content-type").length > 1) {
+        const reasons = ["the request has more than one content-type header, so its body could not be logged as sent"];
+        await store.append("block", { endpoint: request.operation, ...elsewhere, fields: [], blocked: reasons });
+        throw new DisclosureRefusedError(request.operation, reasons);
+      }
       const json = bodyValue(request.headers, request.body);
       const fields = fieldNames(json);
       const { request: kept, redacted } = redact(request, json, options.secretPaths ?? []);

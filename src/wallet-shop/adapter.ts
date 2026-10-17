@@ -13,7 +13,14 @@
 // - Every idempotency key is a UUID v4 (Shop's schema: `format: uuid`).
 import { randomUUID } from "node:crypto";
 import { findIdentity } from "../privacy/index.ts";
-import { AddressFieldsRequiredError, type CheckoutLocator, type CheckoutRequest, type WalletAdapter, WalletRailError } from "../wallet/index.ts";
+import {
+  AddressFieldsRequiredError,
+  type CheckoutLocator,
+  type CheckoutRequest,
+  type WalletAdapter,
+  type WalletCheckout,
+  WalletRailError,
+} from "../wallet/index.ts";
 import { asksForAddressFields, checkoutOf, projectAccount, projectCheckout, readToolAnswer, record, STORE_DOMAIN, type ToolAnswer } from "./project.ts";
 import { REVOKE, type ShopTool, type WireResponse } from "./rpc.ts";
 
@@ -52,17 +59,19 @@ export function parseShopCredentials(text: string): ShopCredentials | null {
 /**
  * Body paths of a Shop MCP request whose values are digested in the log, besides the `authorization` header and
  * every key whose last word is `token` (privacy's isSecretKey): the payment instrument's credential, which is a
- * Shop Pay token under whatever name Shop gives it.
+ * Shop Pay token under whatever name Shop gives it, and the checkout id of get_checkout and complete_checkout, which
+ * can carry a credential (`?key=`).
  */
-export const SHOP_SECRET_PATHS: readonly string[] = ["params.arguments.checkout.payment.instruments[0].credential"];
+export const SHOP_SECRET_PATHS: readonly string[] = ["params.arguments.checkout.payment.instruments[0].credential", "params.arguments.id"];
 
 export interface ShopAdapterOptions {
   readonly mcp: ShopCaller;
   readonly accounts: ShopCaller;
-  /** Null when the vault holds no usable tokens: every call then fails, and revoke sends nothing. */
+  /**
+   * Null when the vault holds no usable tokens: every call then fails, and revoke sends nothing. Usable credentials
+   * always name the client the tokens were issued to, which is the one revocation names.
+   */
   readonly credentials: ShopCredentials | null;
-  /** The client id to revoke with when the credentials name none (INTENT_SHOP_CLIENT_ID). */
-  readonly clientId?: string | null;
   /** A UUID v4 for create_checkout; tests may fix it. */
   readonly newKey?: () => string;
 }
@@ -81,6 +90,22 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
 
   function refused(answer: ToolAnswer): void {
     if (answer.isError) throw new WalletRailError(200, null, "Shop refused the request");
+  }
+
+  // Shop's checkout ids by their sha256 reference, in memory only: an id can carry a credential (`?key=`), so it is
+  // never returned, recorded or logged in clear (SHOP_SECRET_PATHS digests it in each request).
+  const checkoutIds = new Map<string, string>();
+
+  function hold(answer: ToolAnswer, store: string, shipToPostalCode: string | undefined): WalletCheckout {
+    const { checkout, checkoutId } = projectCheckout(answer.content, store, shipToPostalCode);
+    checkoutIds.set(checkout.checkoutRef, checkoutId);
+    return checkout;
+  }
+
+  function held(checkout: CheckoutLocator): string {
+    const id = checkoutIds.get(checkout.checkoutRef);
+    if (id === undefined) throw new WalletRailError(0, null, "this gateway process does not hold that checkout's id (it is kept in memory only)");
+    return id;
   }
 
   function checkStore(store: string): void {
@@ -108,6 +133,8 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
       const { savedAddressId } = projectAccount(account.content);
       // No opaque id to choose delivery by: Shop would need the address fields, which the gateway never sends.
       if (savedAddressId === null) throw new AddressFieldsRequiredError("delivery");
+      const key = newKey();
+      if (!UUID_V4.test(key)) throw new TypeError("a Shop idempotency key is a UUID v4");
       const answer = await tool(
         "create_checkout",
         {
@@ -118,19 +145,20 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
               methods: [{ type: "shipping", destinations: [{ id: savedAddressId, type: "shipping_address" }], selected_destination_id: savedAddressId }],
             },
           },
-          meta: { "idempotency-key": newKey() },
+          meta: { "idempotency-key": key },
         },
         request.purchase,
       );
       if (asksForAddressFields(answer.content)) throw new AddressFieldsRequiredError("delivery");
       refused(answer);
-      return projectCheckout(answer.content, request.storeDomain, request.shipToPostalCode);
+      return hold(answer, request.storeDomain, request.shipToPostalCode);
     },
 
     async completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, shipToPostalCode?: string) {
       checkStore(checkout.storeDomain);
       if (!UUID_V4.test(idempotencyKey)) throw new TypeError("a Shop idempotency key is a UUID v4");
-      const current = await tool("get_checkout", { shop: checkout.storeDomain, id: checkout.checkoutRef }, purchase);
+      const id = held(checkout);
+      const current = await tool("get_checkout", { shop: checkout.storeDomain, id }, purchase);
       refused(current);
       const raw = checkoutOf(current.content);
       const offered = Array.isArray(record(raw.payment)?.instruments) ? (record(raw.payment)?.instruments as unknown[]).map(record) : [];
@@ -142,27 +170,27 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
         "complete_checkout",
         {
           shop: checkout.storeDomain,
-          id: checkout.checkoutRef,
+          id,
           checkout: { payment: { instruments: [{ ...instrument, selected: true }] } },
           meta: { "idempotency-key": idempotencyKey },
         },
         purchase,
       );
       refused(answer);
-      return projectCheckout(answer.content, checkout.storeDomain, shipToPostalCode);
+      return hold(answer, checkout.storeDomain, shipToPostalCode);
     },
 
     async getCheckout(checkout: CheckoutLocator, purchase: string, shipToPostalCode?: string) {
       checkStore(checkout.storeDomain);
-      const answer = await tool("get_checkout", { shop: checkout.storeDomain, id: checkout.checkoutRef }, purchase);
+      const answer = await tool("get_checkout", { shop: checkout.storeDomain, id: held(checkout) }, purchase);
       refused(answer);
-      return projectCheckout(answer.content, checkout.storeDomain, shipToPostalCode);
+      return hold(answer, checkout.storeDomain, shipToPostalCode);
     },
 
     async revoke() {
       const credentials = options.credentials;
-      const clientId = credentials?.clientId ?? options.clientId ?? null;
-      if (credentials === null || clientId === null) return "not_sent";
+      if (credentials === null) return "not_sent";
+      const clientId = credentials.clientId;
       const token = credentials.refreshToken ?? credentials.accessToken;
       const hint = credentials.refreshToken === null ? "access_token" : "refresh_token";
       const response = await options.accounts.call(REVOKE, { token, token_type_hint: hint, client_id: clientId });

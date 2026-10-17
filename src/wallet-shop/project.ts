@@ -2,7 +2,7 @@
 // saved addresses and order history (get_account), and checkouts echo the delivery address. Nothing of that leaves
 // this file: each reader below copies out only the fields it names, so any field Shop adds is dropped by default.
 //
-// Kept: the budget left; the checkout id, status, lines {variant_ref, quantity, title}, store domain, merchant
+// Kept: the budget left; the checkout's sha256 reference (the id itself may hold a credential), its status, lines {variant_ref, quantity, title}, store domain, merchant
 // origin, total and order id. The ship-to ZIP is compared here, in memory, and only `match | differs | unknown`
 // is kept. The saved-address id is kept inside the adapter (it is how delivery is chosen) and never returned.
 // From an error, only the JSON-RPC numeric code and a fixed local label are kept: Shop's message can carry
@@ -10,6 +10,7 @@
 //
 // The field names follow Shop's published tool schemas (UCP checkout) as of 2026-10-16; the budget's and the
 // address id's exact shape is pending the S1 spike's captured answers (plan G0 questions 2 and 9).
+import { createHash } from "node:crypto";
 import { findIdentity } from "../privacy/index.ts";
 import { type ShipToMatch, type WalletAccount, type WalletCheckout, type WalletCheckoutStatus, type WalletLine, type WalletMoney, WalletRailError } from "../wallet/index.ts";
 import type { WireResponse } from "./rpc.ts";
@@ -79,8 +80,11 @@ function structured(result: Json): Json | null {
   }
 }
 
-/** A saved-address id as Shop gives it: an opaque Shopify gid, nothing that reads as an address. */
-export const SAVED_ADDRESS_ID = /^gid:\/\/shopify\/[A-Za-z]+\/[0-9]{1,20}(?:\?[A-Za-z0-9_=&.-]{1,100})?$/;
+/**
+ * A saved-address id as Shop gives it: an opaque Shopify gid, nothing that reads as an address. No query suffix: a
+ * query could carry a token (`customer_access_token=`), which the log would keep in clear under `id`, or address text.
+ */
+export const SAVED_ADDRESS_ID = /^gid:\/\/shopify\/[A-Za-z]+\/[0-9]{1,20}$/;
 
 /** What the adapter keeps from get_account: the budget left, and the saved-address id to choose delivery by. */
 export function projectAccount(content: Json): { account: WalletAccount; savedAddressId: string | null } {
@@ -109,7 +113,18 @@ const STATUS: Readonly<Record<string, WalletCheckoutStatus>> = {
 };
 /** A myshopify store domain, as Shop names a store. */
 export const STORE_DOMAIN = /^[a-z0-9][a-z0-9-]{0,62}\.myshopify\.com$/;
-const REF = /^[A-Za-z0-9:/_.?=&-]{1,256}$/;
+/** A variant or order id that may be kept: no query, so no `?key=` credential can ride along. */
+const REF = /^[A-Za-z0-9:/_.-]{1,256}$/;
+/** A checkout id as Shop sends it. It may carry a credential (`?key=<secret>`), so it is a secret value throughout. */
+const CHECKOUT_ID = /^[A-Za-z0-9:/_.?=&%-]{1,512}$/;
+
+/**
+ * How a checkout is named wherever it is kept or shown: `sha256:` and the hex SHA-256 of the id's UTF-8 bytes. The
+ * id itself can hold a credential (UCP's `?key=`), so it is held in memory only, for the next call to Shop.
+ */
+export function checkoutRefOf(checkoutId: string): string {
+  return `sha256:${createHash("sha256").update(checkoutId, "utf8").digest("hex")}`;
+}
 
 /** The raw checkout object of an answer (`checkout`, or the answer itself). */
 export function checkoutOf(content: Json): Json {
@@ -117,15 +132,22 @@ export function checkoutOf(content: Json): Json {
 }
 
 /**
- * The checkout in our terms. `requestedStore` is the store the gateway asked for, kept when Shop reports none.
- * An unknown status reads as `processing`: neither completable nor terminal, so the gateway waits or reconciles.
+ * The checkout in our terms, and Shop's raw checkout id for the adapter to hold in memory. `requestedStore` is the
+ * store the gateway asked for, kept when Shop reports none. An unknown status reads as `processing`: neither
+ * completable nor terminal, so the gateway waits or reconciles.
  */
-export function projectCheckout(content: Json, requestedStore: string, shipToPostalCode: string | undefined): WalletCheckout {
+export function projectCheckout(
+  content: Json,
+  requestedStore: string,
+  shipToPostalCode: string | undefined,
+): { checkout: WalletCheckout; checkoutId: string } {
   const checkout = checkoutOf(content);
-  const checkoutRef = checkout.id;
-  if (typeof checkoutRef !== "string" || !REF.test(checkoutRef) || findIdentity(checkoutRef).length > 0) {
-    throw new WalletRailError(200, null, "Shop's checkout has no usable id");
-  }
+  const checkoutId = checkout.id;
+  if (typeof checkoutId !== "string" || !CHECKOUT_ID.test(checkoutId)) throw new WalletRailError(200, null, "Shop's checkout has no usable id");
+  return { checkout: projected(checkout, checkoutRefOf(checkoutId), requestedStore, shipToPostalCode), checkoutId };
+}
+
+function projected(checkout: Json, checkoutRef: string, requestedStore: string, shipToPostalCode: string | undefined): WalletCheckout {
   const status = typeof checkout.status === "string" ? (STATUS[checkout.status] ?? "processing") : "processing";
   const merchant = record(checkout.merchant) ?? record(checkout.seller) ?? record(checkout.shop);
   const reported = merchant?.domain;

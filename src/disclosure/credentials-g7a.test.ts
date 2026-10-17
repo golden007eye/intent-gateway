@@ -110,6 +110,30 @@ describe("form bodies (OAuth endpoints)", () => {
     expect(audit()).not.toContain("ada@example.com");
   });
 
+  it("attack: a request with two content-type headers (a form read as JSON, or the reverse) is refused, never sent", async () => {
+    const session = await setup();
+    const sent: OutboundRequest[] = [];
+    const twoTypes: DestinationTransport = {
+      prepare: (operation) => ({
+        operation,
+        method: "POST",
+        path: "/oauth/revoke",
+        headers: [
+          ["content-type", "application/json"],
+          ["content-type", "application/x-www-form-urlencoded"],
+        ],
+        body: Buffer.from(JSON.stringify({ q: "lamp" })),
+      }),
+      send: (request) => {
+        sent.push(request);
+        return Promise.resolve({ status: 200, headers: [], body: Buffer.from("{}") });
+      },
+    };
+    await expect(createDisclosedWallet(twoTypes, session, { destination: "shop_accounts" }).call("revoke", {})).rejects.toBeInstanceOf(DisclosureRefusedError);
+    expect(sent).toHaveLength(0);
+    expect(store.entries().map((e) => e.kind)).toEqual(["block"]);
+  });
+
   it("attack: verify fails a hand-written chain whose form disclosure holds a token in clear", async () => {
     await setup();
     const bytes = Buffer.from(form({ token: REFRESH, client_id: "gw" }), "utf8");
@@ -163,6 +187,8 @@ describe("the MCP client name", () => {
     await shop.call("get_account", call({ name: "intent-gateway", version: "0.1.0" }));
     expect(sent).toHaveLength(1);
     await expect(shop.call("x", call({ name: "Ada Lovelace", version: "1" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    // Only the gateway's own name: another well-formed client name is a name like any other.
+    await expect(shop.call("x", call({ name: "ada-lovelace", version: "1" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
     await expect(shop.call("x", call({ name: "intent-gateway", user: { name: "x" } }))).rejects.toBeInstanceOf(DisclosureBlockedError);
     expect(sent).toHaveLength(1);
   });

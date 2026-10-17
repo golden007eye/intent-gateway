@@ -29,7 +29,7 @@ import {
   startFakeShop,
   UNIT_PRICE_MINOR,
 } from "../wallet-shop-fake/index.ts";
-import { createShopMcpTransport, MCP_PROTOCOL, SHOP_TOOLS, ShopRequestError, ShopTransportError, shopCredentialsText } from "./index.ts";
+import { createShopAdapter, createShopMcpTransport, MCP_PROTOCOL, SHOP_TOOLS, ShopRequestError, ShopTransportError, shopCredentialsText } from "./index.ts";
 
 type Json = Record<string, unknown>;
 const ZIP = FAKE_BUYER.zip;
@@ -56,7 +56,7 @@ async function setup(faults: FakeShopFaults = {}): Promise<Harness> {
   store = await openStore(dir);
   const session = openWalletSession(store);
   const vaultText = shopCredentialsText({ clientId: shop.clientId, accessToken: shop.accessToken, refreshToken: shop.refreshToken });
-  return { session, wallet: connectShop(session, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, clientId: null, vaultText }) };
+  return { session, wallet: connectShop(session, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText }) };
 }
 
 const purchase = "ap_TEST0001";
@@ -118,7 +118,7 @@ describe("a purchase's Shop calls", () => {
     const { wallet } = await setup();
     const created = await wallet.createCheckout(request);
     expect(created).toEqual({
-      checkoutRef: expect.stringMatching(/^gid:\/\/shopify\/Checkout\//) as unknown,
+      checkoutRef: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) as unknown,
       storeDomain: FAKE_STORE,
       status: "open",
       merchantOrigin: FAKE_STOREFRONT,
@@ -187,12 +187,12 @@ describe("invariant 3: Shop's buyer identity never gets past the projection", ()
     outputs.push(await wallet.account());
     const created = await wallet.createCheckout(request);
     outputs.push(created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, ZIP));
-    // An error answer whose message carries the buyer's name and email.
+    // A checkout reference this process does not hold: refused locally, its error naming nothing.
     const missing = await wallet.getCheckout({ storeDomain: FAKE_STORE, checkoutRef: "gid://shopify/Checkout/0" }, purchase).catch((e: unknown) => e);
     expect(missing).toBeInstanceOf(WalletRailError);
     outputs.push((missing as Error).message);
     // A JSON-RPC error with identity in its message (a bad token).
-    const broken = connectShop(openWalletSession(store), { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, clientId: null, vaultText: shopCredentialsText({ clientId: "c", accessToken: "wrong", refreshToken: null }) });
+    const broken = connectShop(openWalletSession(store), { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText: shopCredentialsText({ clientId: "c", accessToken: "wrong", refreshToken: null }) });
     const refused = await broken.account().catch((e: unknown) => e);
     expect(refused).toMatchObject({ name: "WalletRailError", httpStatus: 401 });
     outputs.push((refused as Error).message);
@@ -218,6 +218,20 @@ describe("plan kill criterion K4: no address fields ever leave", () => {
     expect((error as AddressFieldsRequiredError).step).toBe("delivery");
     expect(sentTools()).toEqual(["get_account"]);
     expect(audit()).not.toContain(FAKE_BUYER.address1);
+  });
+
+  it("attack: a saved-address id with a query (a token, address text) is never used, so nothing is sent with it", async () => {
+    for (const hostile of [`${FAKE_ADDRESS_ID}?model_name=CustomerAddress&customer_access_token=SECRET-ADDR-TOKEN`, `${FAKE_ADDRESS_ID}?city=Springfield`]) {
+      const { wallet } = await setup({ addressId: hostile });
+      const error = await wallet.createCheckout(request).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(AddressFieldsRequiredError);
+      expect((error as AddressFieldsRequiredError).step).toBe("delivery");
+      expect(sentTools()).toEqual(["get_account"]);
+      expect(audit()).not.toContain("SECRET-ADDR-TOKEN");
+      for (const body of loggedBodies()) expect(body).not.toContain("?");
+      await store.close();
+      await shop.close();
+    }
   });
 
   it("attack (K4 regression, test 3): a forced street address is blocked by findIdentity with a block entry, and never sent", async () => {
@@ -256,7 +270,11 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
       for (const body of loggedBodies()) expect(body).not.toContain(secret);
     }
     const complete = store.entries().find((e) => e.kind === "disclosure" && (e.body as Json).endpoint === "complete_checkout")?.body as Json;
-    expect((complete.redacted as { at: string }[]).map((r) => r.at)).toEqual(["headers.authorization", "body.params.arguments.checkout.payment.instruments[0].credential"]);
+    expect((complete.redacted as { at: string }[]).map((r) => r.at)).toEqual([
+      "headers.authorization",
+      "body.params.arguments.id",
+      "body.params.arguments.checkout.payment.instruments[0].credential",
+    ]);
     const revoke = store.entries().find((e) => e.kind === "disclosure" && (e.body as Json).endpoint === "revoke")?.body as Json;
     expect(revoke).toMatchObject({ destination: "shop_accounts", redacted: [{ at: "body.token" }] });
     // After the revocation Shop refuses the token: the adapter says so in its own words.
@@ -264,9 +282,63 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
     await verified();
   });
 
+  it("attack (invariant 2): when the chain cannot be appended to, neither revoke nor get_account reaches Shop", async () => {
+    await setup();
+    const failing = new Proxy(store, {
+      get(target, prop, receiver) {
+        if (prop === "append") return () => Promise.reject(new Error("disk full"));
+        const value: unknown = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const vaultText = shopCredentialsText({ clientId: shop.clientId, accessToken: shop.accessToken, refreshToken: shop.refreshToken });
+    const wallet = connectShop(openWalletSession(failing), { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText });
+    await expect(wallet.revoke()).rejects.toThrow("disk full");
+    await expect(wallet.account()).rejects.toThrow();
+    expect(shop.revocations).toEqual([]);
+    expect(shop.calls).toEqual([]);
+  });
+
+  it("refuses a create_checkout key that is not a UUID v4: nothing is sent", async () => {
+    await setup();
+    const calls: string[] = [];
+    const answer = (content: unknown) => ({
+      status: 200,
+      headers: [["content-type", "application/json"]] as [string, string][],
+      body: Buffer.from(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { structuredContent: content } })),
+    });
+    const mcp = {
+      call: (operation: string) => {
+        calls.push(operation);
+        return Promise.resolve(answer({ account: { preferred_address_id: FAKE_ADDRESS_ID } }));
+      },
+    };
+    const wallet = createShopAdapter({ mcp, accounts: mcp, credentials: { clientId: "c", accessToken: "a", refreshToken: null }, newKey: () => "ik_AAAAAAAAAAAAAAAAAAAAAA" });
+    await expect(wallet.createCheckout(request)).rejects.toBeInstanceOf(TypeError);
+    expect(calls).toEqual(["get_account"]);
+  });
+
+  it("attack: a checkout id carrying ?key= flows through create, get and complete; the key is never in the chain, a result or an error", async () => {
+    const { wallet } = await setup({ checkoutKey: "SECRET-CHECKOUT-KEY" });
+    const created = await wallet.createCheckout(request);
+    const outputs: unknown[] = [created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, ZIP)];
+    // It did reach Shop, which needs it: the fake got the full id back on each call.
+    const ids = shop.calls.filter((c) => c.tool === "get_checkout" || c.tool === "complete_checkout").map((c) => ((c.body.params as Json).arguments as Json).id);
+    expect(ids.every((id) => typeof id === "string" && id.endsWith("?key=SECRET-CHECKOUT-KEY"))).toBe(true);
+    // A reference from another process (or forged) reaches nothing, and its error names no id.
+    const stranger = await wallet.getCheckout({ storeDomain: FAKE_STORE, checkoutRef: "sha256:00" }, purchase).catch((e: unknown) => e);
+    expect(stranger).toBeInstanceOf(WalletRailError);
+    outputs.push((stranger as Error).message);
+    expect(JSON.stringify(outputs)).not.toContain("SECRET-CHECKOUT-KEY");
+    expect(JSON.stringify(outputs)).not.toContain("gid://shopify/Checkout/");
+    expect(audit()).not.toContain("SECRET-CHECKOUT-KEY");
+    for (const body of loggedBodies()) expect(body).not.toContain("SECRET-CHECKOUT-KEY");
+    await verified();
+  });
+
   it("revoke with no usable token in the vault sends nothing", async () => {
     await setup();
-    const empty = connectShop(openWalletSession(store), { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, clientId: "x", vaultText: "not json" });
+    const empty = connectShop(openWalletSession(store), { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText: "not json" });
     expect(await empty.revoke()).toBe("not_sent");
     await expect(empty.account()).rejects.toBeInstanceOf(WalletRailError);
     expect(shop.revocations).toEqual([]);

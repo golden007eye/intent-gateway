@@ -64,15 +64,15 @@ export interface IdentityOptions {
    * Cloud. Each drops only the banned_key finding at exactly its path; its value is still scanned:
    * - the tool name at `$.params.name`, when the top-level `method` is `tools/call` and the name matches MCP_TOOL_NAME;
    * - the client's own name at `$.params._meta["io.modelcontextprotocol/clientInfo"].name` (MCP 2026-07-28 carries
-   *   it on every request), when the top-level `jsonrpc` is "2.0" and the name matches MCP_CLIENT_NAME.
+   *   it on every request), when the top-level `jsonrpc` is "2.0" and the name is exactly MCP_CLIENT_NAME.
    */
   mcpEnvelope?: boolean;
 }
 
 /** An MCP tool name the identity check lets through under `$.params.name` (IdentityOptions.mcpEnvelope). */
 export const MCP_TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
-/** An MCP client name (the gateway's own) let through under the request's clientInfo (IdentityOptions.mcpEnvelope). */
-export const MCP_CLIENT_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+/** The gateway's own MCP client name, the only one let through under a request's clientInfo (IdentityOptions.mcpEnvelope). */
+export const MCP_CLIENT_NAME = "intent-gateway";
 const CLIENT_INFO = "io.modelcontextprotocol/clientInfo";
 const CLIENT_NAME_PATH = `$.params._meta[${JSON.stringify(CLIENT_INFO)}].name`;
 
@@ -91,7 +91,7 @@ function isClientNamed(value: unknown): boolean {
   const top = record(value);
   if (top?.jsonrpc !== "2.0") return false;
   const name = record(record(record(top.params)?._meta)?.[CLIENT_INFO])?.name;
-  return typeof name === "string" && MCP_CLIENT_NAME.test(name);
+  return name === MCP_CLIENT_NAME;
 }
 
 function record(value: unknown): Record<string, unknown> | null {

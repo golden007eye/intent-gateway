@@ -10,6 +10,7 @@
 // for Intent Cloud.
 import { type IncomingMessage, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { MCP_CLIENT_NAME } from "../privacy/index.ts";
 
 /** The MCP protocol version Shop speaks; it refuses `initialize`, so every request names it in `_meta`. */
 export const MCP_PROTOCOL = "2026-07-28";
@@ -20,8 +21,8 @@ export const SHOP_TOOLS = ["get_account", "create_checkout", "complete_checkout"
 export type ShopTool = (typeof SHOP_TOOLS)[number];
 /** The account server's one operation in this module (sign-in comes with `intent wallet link`, plan G8). */
 export const REVOKE = "revoke";
-/** The client name the gateway gives in each request's `_meta` (an MCP_CLIENT_NAME for the identity check). */
-export const CLIENT_NAME = "intent-gateway";
+/** The client name the gateway gives in each request's `_meta`: exactly the one the identity check lets through. */
+export const CLIENT_NAME = MCP_CLIENT_NAME;
 export const TIMEOUT_MS = 30_000;
 export const MAX_ANSWER_BYTES = 1024 * 1024;
 

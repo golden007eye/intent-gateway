@@ -2,7 +2,8 @@
 // an error only as a status, a code and a fixed label; Shop's own words never do.
 import { describe, expect, it } from "vitest";
 import { WalletRailError } from "../wallet/index.ts";
-import { asksForAddressFields, projectAccount, projectCheckout, readToolAnswer } from "./project.ts";
+import { createHash } from "node:crypto";
+import { asksForAddressFields, checkoutRefOf, projectAccount, projectCheckout, readToolAnswer } from "./project.ts";
 
 const json = (value: unknown, status = 200, type = "application/json") => ({
   status,
@@ -81,9 +82,10 @@ describe("projectCheckout", () => {
   };
 
   it("keeps the named fields only and compares the ZIP in memory", () => {
-    const projected = projectCheckout({ checkout: base }, "asked.myshopify.com", "94107");
+    const { checkout: projected, checkoutId } = projectCheckout({ checkout: base }, "asked.myshopify.com", "94107");
+    expect(checkoutId).toBe("gid://shopify/Checkout/abc");
     expect(projected).toEqual({
-      checkoutRef: "gid://shopify/Checkout/abc",
+      checkoutRef: checkoutRefOf("gid://shopify/Checkout/abc"),
       storeDomain: "real-store.myshopify.com",
       status: "open",
       merchantOrigin: "https://stickers.example",
@@ -92,13 +94,23 @@ describe("projectCheckout", () => {
       shipTo: "match",
       orderRef: null,
     });
-    expect(JSON.stringify(projected)).not.toMatch(/Jane|jane@|94107/);
-    expect(projectCheckout({ checkout: base }, "asked.myshopify.com", "10001").shipTo).toBe("differs");
+    expect(JSON.stringify(projected)).not.toMatch(/Jane|jane@|94107|Checkout\/abc/);
+    expect(projectCheckout({ checkout: base }, "asked.myshopify.com", "10001").checkout.shipTo).toBe("differs");
   });
 
-  it("maps statuses, reads an unknown one as processing, and drops what reads as identity or is not https", () => {
-    const read = (patch: Record<string, unknown>) => projectCheckout({ ...base, ...patch }, "asked.myshopify.com", undefined);
+  it("names a checkout whose id carries a ?key= credential only by its sha256", () => {
+    const id = "gid://shopify/Checkout/abc?key=SECRET-CHECKOUT-KEY";
+    const { checkout, checkoutId } = projectCheckout({ checkout: { ...base, id } }, "asked.myshopify.com", undefined);
+    expect(checkoutId).toBe(id);
+    expect(checkout.checkoutRef).toBe(`sha256:${createHash("sha256").update(id, "utf8").digest("hex")}`);
+    expect(JSON.stringify(checkout)).not.toContain("SECRET");
+  });
+
+  it("maps statuses, reads an unknown one as processing, and drops what reads as identity, a query or is not https", () => {
+    const read = (patch: Record<string, unknown>) => projectCheckout({ ...base, ...patch }, "asked.myshopify.com", undefined).checkout;
     expect(read({ status: "completed", order: { id: "gid://shopify/Order/9" } })).toMatchObject({ status: "completed", orderRef: "gid://shopify/Order/9" });
+    expect(read({ status: "completed", order: { id: "gid://shopify/Order/9?key=SECRET" } }).orderRef).toBeNull();
+    expect(read({ line_items: [{ item: { id: "gid://shopify/ProductVariant/1?key=SECRET" }, quantity: 1 }] }).lines).toEqual([]);
     expect(read({ status: "requires_escalation" }).status).toBe("buyer_review");
     expect(read({ status: "canceled" }).status).toBe("failed");
     expect(read({ status: "something_new" }).status).toBe("processing");

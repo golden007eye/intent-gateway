@@ -55,6 +55,10 @@ export interface FakeShopFaults {
   revokeStatus?: number;
   /** Whether a repeated idempotency key returns the first result (true by default). */
   idempotency?: boolean;
+  /** The saved address's id, in place of FAKE_ADDRESS_ID (a hostile id: a query with a token, address text). */
+  addressId?: string;
+  /** The `?key=` credential in every checkout id (random by default). */
+  checkoutKey?: string;
 }
 
 export interface FakeShopCall {
@@ -149,6 +153,8 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
   const errorText = (text: string): string =>
     shop.faults.identityEverywhere === true ? `${text} for ${FAKE_BUYER.first_name} ${FAKE_BUYER.last_name} <${FAKE_BUYER.email}>` : text;
 
+  const addressId = (): string => shop.faults.addressId ?? FAKE_ADDRESS_ID;
+
   function address(): Record<string, unknown> {
     return {
       first_name: FAKE_BUYER.first_name,
@@ -163,14 +169,14 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
   }
 
   function account(): Record<string, unknown> {
-    const addresses = [shop.faults.requiresAddressFields === true ? address() : { id: FAKE_ADDRESS_ID, ...address() }];
+    const addresses = [shop.faults.requiresAddressFields === true ? address() : { id: addressId(), ...address() }];
     return {
       account: {
         name: `${FAKE_BUYER.first_name} ${FAKE_BUYER.last_name}`,
         email: FAKE_BUYER.email,
         phone: FAKE_BUYER.phone,
         budget: { remaining: { amount: 5000, currency: "USD" }, period: "total" },
-        ...(shop.faults.requiresAddressFields === true ? {} : { preferred_address_id: FAKE_ADDRESS_ID }),
+        ...(shop.faults.requiresAddressFields === true ? {} : { preferred_address_id: addressId() }),
         addresses,
         orders: [{ id: "gid://shopify/Order/4001", shipping_address: address(), email: FAKE_BUYER.email }],
         payment: {
@@ -242,12 +248,13 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         const line = ((checkout.line_items ?? []) as Record<string, unknown>[])[0] ?? {};
         const method = (((checkout.fulfillment ?? {}) as Record<string, unknown>).methods as Record<string, unknown>[] | undefined)?.[0];
         const destination = (method?.destinations as Record<string, unknown>[] | undefined)?.[0];
-        if (shop.faults.requiresAddressFields === true || typeof destination?.id !== "string" || destination.id !== FAKE_ADDRESS_ID) {
+        if (shop.faults.requiresAddressFields === true || typeof destination?.id !== "string" || destination.id !== addressId()) {
           return toolError("missing", "$.checkout.fulfillment.methods[0].destinations[0].address1", "a shipping address is required");
         }
         return remember(key, () => {
           const c: Checkout = {
-            id: `gid://shopify/Checkout/${randomBytes(8).toString("hex")}`,
+            // A UCP checkout id carries a credential in its query, as Shopify's do.
+            id: `gid://shopify/Checkout/${randomBytes(8).toString("hex")}?key=${shop.faults.checkoutKey ?? randomBytes(16).toString("hex")}`,
             shop: args.shop as string,
             variant: shop.faults.otherVariant === true ? FAKE_OTHER_VARIANT : String((line.item as Record<string, unknown> | undefined)?.id),
             quantity: typeof line.quantity === "number" ? line.quantity : 1,
