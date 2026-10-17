@@ -527,7 +527,6 @@ function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: ApprovalProof["
   if (inputs !== undefined && "checkout_ref" in inputs.observed) return "keeps a raw checkout id in its binding inputs";
   if (entry.state === "ordered" && (entry.local_binding?.result !== "ok" || inputs === undefined)) return "shows ordered without a binding ok from recorded inputs (rule O1)";
   if (inputs !== undefined) {
-    if (snapshot.v !== 2) return "re-runs a binding against a v1 snapshot";
     let rerun: unknown;
     try {
       rerun = bindingV1(snapshot, inputs.observed, { ...inputs.context, mode: String(inputs.context.mode), ship_to_optional: inputs.context.ship_to_optional });
