@@ -1,12 +1,7 @@
-// binding-v1 (Appendix G) replayed from vector o1. Expected values come from Intent Cloud's vectors, never from this
-// implementation.
-//
-// Two copies of o1 are replayed:
-// - the amended 1.6.0 o1 as the platform built it (test/fixtures/contract-1.6-amend/, PROVISIONAL: copied before the
-//   amendment's final hash). Its checkout ref hash covers the id up to its first "?", the context carries
-//   recorded_checkout_ref_hash and bound_elsewhere, and three cases pin integer-only inputs. AT RE-VENDOR: point
-//   AMENDED at contract/vectors/o1-binding.json and drop the fixture and the VENDORED block below.
-// - the 1.6.0 o1 vendored today, whose checkout ref hash still covered the whole id: every check but checkout_ref.
+// binding-v1 (Appendix G) replayed from vector o1 of the amended contract 1.6.0. Expected values come from Intent
+// Cloud's vector, never from this implementation. The checkout ref hash covers the id up to its first "?", the context
+// carries recorded_checkout_ref_hash and bound_elsewhere, and three cases pin integer-only inputs, so the vector is
+// read with parseIntegerJson.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -21,28 +16,20 @@ interface O1Case {
 }
 const root = join(import.meta.dirname, "..", "..");
 const load = (path: string): { cases: O1Case[] } => parseIntegerJson(readFileSync(join(root, path), "utf8")) as { cases: O1Case[] };
-const AMENDED = load("test/fixtures/contract-1.6-amend/o1-binding.json");
-const VENDORED = load("contract/vectors/o1-binding.json");
+const O1 = load("contract/vectors/o1-binding.json");
 
-describe("vector o1 (amended 1.6.0, provisional copy): every case", () => {
+describe("vector o1: every case", () => {
   it("holds the 21 contract cases, the origin grammar, the integer-only types and the one-order rule", () => {
-    expect(AMENDED.cases.length).toBe(39);
-    expect(AMENDED.cases.filter((c) => c.name.startsWith("type:")).map((c) => c.name)).toEqual(['type: quantity 1.0', 'type: quantity "1"', "type: quantity true"]);
+    expect(O1.cases.length).toBe(39);
+    expect(O1.cases.filter((c) => c.name.startsWith("type:")).map((c) => c.name)).toEqual(['type: quantity 1.0', 'type: quantity "1"', "type: quantity true"]);
   });
-  it.each(AMENDED.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+  it.each(O1.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
     expect(bindingV1(SnapshotV2.parse(c.input.snapshot), c.input.observed, c.input.context)).toEqual(c.expected);
   });
 });
 
-describe("vector o1 (1.6.0 as vendored): every check but checkout_ref", () => {
-  it.each(VENDORED.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
-    const actual = bindingV1(SnapshotV2.parse(c.input.snapshot), c.input.observed, c.input.context).checks;
-    expect({ ...actual, checkout_ref: "skipped" }).toEqual({ ...c.expected.checks, checkout_ref: "skipped" });
-  });
-});
-
 describe("binding-v1: rules no vector case pins yet", () => {
-  const base = AMENDED.cases[0] as O1Case;
+  const base = O1.cases[0] as O1Case;
   const s = SnapshotV2.parse(base.input.snapshot);
   const run = (observed: Partial<ObservedOrder>, context: Partial<BindingContext> = {}) =>
     bindingV1(s, { ...base.input.observed, ...observed }, { ...base.input.context, ...context });

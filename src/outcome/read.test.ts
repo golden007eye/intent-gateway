@@ -1,7 +1,5 @@
 // Rules O1, O2 and M1 on read (Appendix G): what the gateway shows for Intent Cloud's outcome, never more than the
-// verified statement; R5a's precedence replayed from vector o4 (amended, PROVISIONAL copy in
-// test/fixtures/contract-1.6-amend/; AT RE-VENDOR point it at contract/vectors/o4-report-transitions.json); and the
-// local-evidence rule for spend-cap room.
+// verified statement; R5a's precedence replayed from vector o4; and the local-evidence rule for spend-cap room.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -61,8 +59,8 @@ describe("readCloudOutcome", () => {
   });
 });
 
-describe("vector o4 (amended, provisional copy): R5a precedence", () => {
-  const o4 = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "test", "fixtures", "contract-1.6-amend", "o4-report-transitions.json"), "utf8")) as {
+describe("vector o4: R5a precedence", () => {
+  const o4 = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "contract", "vectors", "o4-report-transitions.json"), "utf8")) as {
     precedence: { current: OutcomeHead; new: OutcomeHead; replaces: boolean }[];
   };
   it("has rows", () => {

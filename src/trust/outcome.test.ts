@@ -1,9 +1,6 @@
 // Outcome statements (Appendix G, as amended M2) replayed from vector o2: only the valid statement verifies, and each
 // refusal names the rule of `refused_by`. Expected values come from Intent Cloud's vectors; attack cases are signed
 // here with the published test approval key and fail exactly the rule under test.
-//
-// The amended o2 (12 cases, with refused_by) is a PROVISIONAL copy in test/fixtures/contract-1.6-amend/. AT RE-VENDOR:
-// point AMENDED at contract/vectors/o2-outcome-statement.json and drop the VENDORED block (the 1.6.0 file of 4 cases).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -18,8 +15,7 @@ interface O2 {
 }
 const root = join(import.meta.dirname, "..", "..");
 const load = (path: string): O2 => JSON.parse(readFileSync(join(root, path), "utf8")) as O2;
-const AMENDED = load("test/fixtures/contract-1.6-amend/o2-outcome-statement.json");
-const VENDORED = load("contract/vectors/o2-outcome-statement.json");
+const AMENDED = load("contract/vectors/o2-outcome-statement.json");
 const NOW = at(AMENDED.input.valid_at);
 const SNAPSHOT = AMENDED.input.approved_snapshot as SnapshotV2;
 const HASH = AMENDED.input.approved_snapshot_hash;
@@ -34,7 +30,7 @@ function keys(): KeySet {
 }
 const approval = { handle: HANDLE, snapshot: SNAPSHOT, snapshotHash: HASH };
 
-describe("vector o2 (amended 1.6.0, provisional copy)", () => {
+describe("vector o2", () => {
   it("the approved snapshot hashes to approved_snapshot_hash", () => {
     expect(sha256Hex(canonicalize(SNAPSHOT))).toBe(HASH);
   });
@@ -53,14 +49,6 @@ describe("vector o2 (amended 1.6.0, provisional copy)", () => {
       const result = verifyOutcomeStatement(c.statement, approval, keys(), NOW);
       expect(!result.ok && result.signed).toBe(c.refused_by !== "cloud_signature" && c.refused_by !== "snapshot_hash");
     }
-  });
-});
-
-describe("vector o2 (1.6.0 as vendored)", () => {
-  it.each(VENDORED.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
-    const result = verifyOutcomeStatement(c.statement, { ...approval, snapshotHash: VENDORED.input.approved_snapshot_hash }, keys(), NOW);
-    expect(result.ok).toBe(c.verifies);
-    if (!c.verifies) expect(result).toMatchObject({ refused_by: c.refused_by });
   });
 });
 
