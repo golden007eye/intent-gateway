@@ -28,6 +28,8 @@ export interface ShopConnection {
   /** The wallet vault's text for `shop`. When it holds no usable tokens, every call fails and revoke sends nothing. */
   readonly vaultText: string;
   readonly timeoutMs?: number;
+  /** Makes each create_checkout idempotency key (a UUID v4); random by default, fixed by tests. */
+  readonly newKey?: () => string;
 }
 
 /** The Shop wallet adapter, every send of it logged first by the disclosure core of `owner`. */
@@ -44,7 +46,12 @@ export function connectShop(owner: DisclosedCloud | WalletSession, connection: S
     owner,
     { destination: "shop", secretPaths: SHOP_SECRET_PATHS },
   );
-  return createShopAdapter({ mcp, accounts: accountsOf(owner, connection), credentials });
+  return createShopAdapter({
+    mcp,
+    accounts: accountsOf(owner, connection),
+    credentials,
+    ...(connection.newKey === undefined ? {} : { newKey: connection.newKey }),
+  });
 }
 
 function accountsOf(owner: DisclosedCloud | WalletSession, connection: Pick<ShopConnection, "authUrl" | "timeoutMs">) {

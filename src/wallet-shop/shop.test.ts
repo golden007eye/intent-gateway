@@ -3,7 +3,6 @@
 // message or a later send; a card number and a spend-request tool are never touched; address fields are never sent
 // (no create_checkout when Shop would need them; a forced street address is blocked with a `block` entry); a payment
 // instrument carrying a billing address is never forwarded; Shop's real token names never reach audit.jsonl.
-import { randomUUID } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,8 +33,12 @@ import { createShopAdapter, createShopMcpTransport, MCP_PROTOCOL, SHOP_TOOLS, Sh
 type Json = Record<string, unknown>;
 const ZIP = FAKE_BUYER.zip;
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-/** A complete_checkout idempotency key: a fresh UUID v4, as the completion step makes one. */
-const KEY = randomUUID();
+// Fixed UUID v4s, so every run sends the same bytes. Both have leading digit groups that form a Luhn-valid run, which
+// the card check once read as a PAN, refusing a random fraction of checkouts.
+const CREATE_UUID = "52738107-9017-4321-abcd-ef0123456789";
+const COMPLETE_UUID = "87654321-1002-4000-8000-0000000000ab";
+/** The complete_checkout idempotency key. */
+const KEY = COMPLETE_UUID;
 
 let store: Store;
 let shop: FakeShop;
@@ -56,7 +59,7 @@ async function setup(faults: FakeShopFaults = {}): Promise<Harness> {
   store = await openStore(dir);
   const session = openWalletSession(store);
   const vaultText = shopCredentialsText({ clientId: shop.clientId, accessToken: shop.accessToken, refreshToken: shop.refreshToken });
-  return { session, wallet: connectShop(session, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText }) };
+  return { session, wallet: connectShop(session, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText, newKey: () => CREATE_UUID }) };
 }
 
 const purchase = "ap_TEST0001";
@@ -133,7 +136,8 @@ describe("a purchase's Shop calls", () => {
       line_items: [{ item: { id: FAKE_VARIANT }, quantity: 1 }],
       fulfillment: { methods: [{ type: "shipping", destinations: [{ id: FAKE_ADDRESS_ID, type: "shipping_address" }], selected_destination_id: FAKE_ADDRESS_ID }] },
     });
-    expect(((args.meta as Json)["idempotency-key"] as string)).toMatch(UUID_V4);
+    expect((args.meta as Json)["idempotency-key"]).toBe(CREATE_UUID);
+    expect(CREATE_UUID).toMatch(UUID_V4);
 
     const done = await wallet.completeCheckout(created, purchase, KEY, ZIP);
     expect(done).toMatchObject({ status: "completed", orderRef: expect.stringMatching(/^gid:\/\/shopify\/Order\/\d+$/) as unknown, shipTo: "match" });
