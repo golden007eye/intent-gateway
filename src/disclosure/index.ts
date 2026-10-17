@@ -1,7 +1,7 @@
-// The disclosure log in front of Intent Cloud: the only module that reaches src/cloud (invariant 2, log before send).
-// The raw adapter is not re-exported, so no caller can hold a cloud that skips the log; connectCloud builds it here.
-// DestinationTransport is the port an adapter to any other outside destination implements, so it is logged by the
-// same disclosure core.
+// The disclosure log in front of every outside destination (invariant 2, log before send; ADR-0014): the only module
+// that reaches src/cloud and the wallet adapters. The raw adapters are not re-exported, so no caller can hold one
+// that skips the log; connectCloud builds Intent Cloud's here. A wallet adapter implements DestinationTransport and
+// is wrapped by createDisclosedWallet, which shares the disclosed cloud's gateway session and stop.
 export {
   CloudNetworkError,
   CloudRequestError,
@@ -14,10 +14,13 @@ export {
 export {
   type DestinationTransport,
   DisclosureBlockedError,
+  DisclosureRefusedError,
   DisclosureStoppedError,
   type OutboundRequest,
+  type Redaction,
   type TransportResponse,
 } from "./core.ts";
+export { createDisclosedWallet, type DisclosedWallet, type WalletDisclosureOptions, type WalletResult } from "./wallet.ts";
 export {
   connectCloud,
   createDisclosedCloud,

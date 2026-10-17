@@ -7,7 +7,7 @@
 import { INTENT } from "../config/index.ts";
 import { ReceiptRequest } from "../contract/index.ts";
 import { observationProblem } from "../observation/index.ts";
-import { findIdentity } from "../privacy/index.ts";
+import { findIdentity, isCredentialHeader, markerDigest, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
@@ -41,8 +41,22 @@ export interface Report {
   /** The last entry of the verified chain (seq -1 and the genesis hash for an empty one), for outside comparison. */
   head: { seq: number; hash: string };
   checks: Check[];
-  /** `unanswered`: disclosures with no follow-up entry (the gateway stopped before it recorded an answer, or is still waiting). */
-  counts: { disclosures: number; receipts: number; unacknowledged: number; unanswered: number; discarded: number; approvals: number; flags: number };
+  /**
+   * `unanswered`: disclosures with no follow-up entry (the gateway stopped before it recorded an answer, or is still
+   * waiting). `responses`: follow-ups to destinations that sign no receipt. `redactions`: credentials digested in
+   * logged requests.
+   */
+  counts: {
+    disclosures: number;
+    receipts: number;
+    responses: number;
+    unacknowledged: number;
+    unanswered: number;
+    discarded: number;
+    redactions: number;
+    approvals: number;
+    flags: number;
+  };
 }
 
 /** The chain line for a missing or empty chain; the same words as `intent log`. */
@@ -52,7 +66,7 @@ const EMPTY_CHAIN = `No entries yet: the gateway has sent nothing. Start it with
 const USAGE_REASONS: ReadonlySet<FailureReason> = new Set(["package-unreadable", "ref-invalid"]);
 
 export async function runVerify(opts: VerifyOptions): Promise<Report> {
-  const counts = { disclosures: 0, receipts: 0, unacknowledged: 0, unanswered: 0, discarded: 0, approvals: 0, flags: 0 };
+  const counts = { disclosures: 0, receipts: 0, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 0, flags: 0 };
   const empty = { seq: -1, hash: GENESIS };
   if (opts.pinnedRootKeys.length === 0) {
     return usage(["no root key is pinned for this Intent Cloud host; pass --trust-keys"], empty, counts);
@@ -106,8 +120,12 @@ interface SessionMark {
   readonly open: readonly number[];
 }
 
+/** A disclosure entry without `destination` went to Intent Cloud, the only destination that signs receipts. */
+const INTENT_CLOUD = "intent_cloud";
+
 interface Disclosure {
   readonly entry: Entry;
+  readonly destination: string;
   readonly followUps: number[];
   /** Null on a chain written before disclosures carried their session (see the unanswered check). */
   readonly session: SessionMark | null;
@@ -164,9 +182,14 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
       case "disclosure": {
         counts.disclosures += 1;
         const session = sessionMark(body.session);
-        disclosures.set(entry.seq, { entry, followUps: [], session: session === "malformed" ? null : session });
+        const destination = typeof body.destination === "string" ? body.destination : INTENT_CLOUD;
+        disclosures.set(entry.seq, { entry, destination, followUps: [], session: session === "malformed" ? null : session });
         const problem = bodyProblem(body);
         if (problem !== null) disclosureFailures.push(`${at}: the disclosure ${problem}`);
+        for (const where of credentialProblems(body)) disclosureFailures.push(`${at}: the disclosure holds a credential: ${where} is not redacted`);
+        const redactions = redactionProblems(body);
+        counts.redactions += redactions.count;
+        for (const problem of redactions.problems) disclosureFailures.push(`${at}: the disclosure's ${problem}`);
         if (session === "malformed") {
           disclosureFailures.push(`${at}: the disclosure's session is not {id, n, open}`);
         } else if (session !== null) {
@@ -183,9 +206,10 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
         break;
       }
       case "receipt":
+      case "response":
       case "unacknowledged":
       case "discarded": {
-        counts[entry.kind === "receipt" ? "receipts" : entry.kind] += 1;
+        counts[entry.kind === "receipt" ? "receipts" : entry.kind === "response" ? "responses" : entry.kind] += 1;
         if (entry.kind === "unacknowledged" && neverLeft(entry.body)) notSent += 1;
         const target = typeof body.disclosure_seq === "number" ? disclosures.get(body.disclosure_seq) : undefined;
         if (target === undefined) {
@@ -194,7 +218,14 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
         }
         target.followUps.push(entry.seq);
         const of = `the disclosure at seq ${String(target.entry.seq)}`;
-        if (entry.kind === "discarded") {
+        if (entry.kind === "response") {
+          // A destination that signs no receipt is answered by a `response`; Intent Cloud never is.
+          if (target.destination === INTENT_CLOUD) {
+            disclosureFailures.push(`${at}: a response entry answers ${of}, which went to Intent Cloud: its answers are acknowledged by receipts`);
+          }
+        } else if (entry.kind === "receipt" && target.destination !== INTENT_CLOUD) {
+          disclosureFailures.push(`${at}: a receipt entry answers ${of}, which went to ${target.destination}: only Intent Cloud signs receipts`);
+        } else if (entry.kind === "discarded") {
           disclosureFailures.push(`${at}: discarded: a response to ${of} came without a valid receipt (${String(body.reason)})`);
         } else if (entry.kind === "receipt") {
           const problem = receiptProblem(body, target.entry, body.verified === false ? (nextKeys(entry.seq) ?? keys) : keys, ts);
@@ -281,9 +312,11 @@ function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[
         demoChain(entries)
           ? `acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): ${String(counts.receipts)}`
           : `acknowledged by a receipt from Intent Cloud's public edge: ${String(counts.receipts)}`,
+        ...(counts.responses === 0 ? [] : [`answered by a destination that signs no receipt (response recorded, unsigned): ${String(counts.responses)}`]),
         `sent, not acknowledged: ${String(counts.unacknowledged - notSent)}`,
         `discarded: ${String(counts.discarded)}`,
         ...(observed.size === 0 ? [] : [`answers summarised locally (observed, never sent): ${String(observed.size)}`]),
+        ...(counts.redactions === 0 ? [] : [`credentials digested in the log (sent, kept only as sha256): ${String(counts.redactions)}`]),
         ...disclosureFailures,
       ],
     },
@@ -376,6 +409,52 @@ function bodyProblem(body: Record<string, unknown>): string | null {
   const bytes = Buffer.from(body_b64, "base64");
   if (bytes.toString("base64") !== body_b64) return "body_b64 is not base64";
   return contentDigest(bytes) === content_digest ? null : "body does not match its content_digest";
+}
+
+/** The logged body bytes parsed as JSON; null when there are none or they are not JSON. */
+function loggedJson(body: Record<string, unknown>): unknown {
+  if (typeof body.body_b64 !== "string" || body.body_b64 === "") return null;
+  try {
+    return JSON.parse(Buffer.from(body.body_b64, "base64").toString("utf8")) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/** The logged header pairs; malformed ones left out. */
+function loggedHeaders(body: Record<string, unknown>): [string, string][] {
+  if (!Array.isArray(body.headers)) return [];
+  return (body.headers as unknown[]).filter(
+    (pair): pair is [string, string] => Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" && typeof pair[1] === "string",
+  );
+}
+
+/**
+ * Where a disclosure to any destination holds a credential in clear (ADR-0014): a credential header, or a body value
+ * under a secret key, that is not a redaction marker, or a query parameter named as a secret key. The same rules as
+ * the disclosure core's (privacy's credential helpers).
+ */
+function credentialProblems(body: Record<string, unknown>): string[] {
+  const headers = loggedHeaders(body)
+    .filter(([name, value]) => isCredentialHeader(name) && markerDigest(value) === null)
+    .map(([name]) => `the ${name} header`);
+  const query = typeof body.path === "string" ? secretQueryKeys(body.path).map((name) => `the query parameter ${name}`) : [];
+  return [...headers, ...query, ...unredactedSecrets(loggedJson(body))];
+}
+
+/** Each `redacted[]` item must name a path of the logged request that holds the marker for its sha256. */
+function redactionProblems(body: Record<string, unknown>): { count: number; problems: string[] } {
+  const { redacted } = body;
+  if (redacted === undefined) return { count: 0, problems: [] };
+  const items = Array.isArray(redacted) ? (redacted as unknown[]) : null;
+  const well = items?.every((r) => typeof record(r).at === "string" && /^[0-9a-f]{64}$/.test(String(record(r).sha256))) ?? false;
+  if (items === null || !well) return { count: 0, problems: ["redacted is not a list of {at, sha256}"] };
+  const logged = { headers: loggedHeaders(body), body: loggedJson(body) };
+  const problems = items
+    .map((r) => record(r) as { at: string; sha256: string })
+    .filter((r) => !redactionHeld(logged, r.at, r.sha256))
+    .map((r) => `redacted names ${JSON.stringify(r.at)}, which holds no redacted value with that sha256 in the logged request`);
+  return { count: items.length, problems };
 }
 
 /** The request a disclosure logged, in the receipt's field names; keyid, nonce and created are null when unsigned. */

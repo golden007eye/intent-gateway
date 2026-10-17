@@ -15,6 +15,14 @@ export const ENTRY_KINDS = [
   "approval",
   "approver_pin",
   "approver_flag",
+  // The follow-up to a disclosure to a destination other than Intent Cloud: status and a digest of what came back.
+  "response",
+  // One-tap purchases (ADR-0014; written from the outcome and completion work on): reserved so the chain format is
+  // fixed once, before any writer exists.
+  "completion",
+  "complete_attempt",
+  "outcome",
+  "wallet",
 ] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
 

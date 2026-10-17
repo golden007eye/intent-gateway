@@ -27,6 +27,24 @@
 //   product and merchant keys of NAME_ALLOWED (product_name, merchant_name, brand_name, category_name,
 //   store_name), which name a thing for sale or its seller, never the buyer.
 // A 5-digit ZIP or ZIP+4 alone is not identity: the policy may share a postcode.
+//
+// Credentials (credentials.ts) are the other thing a logged request must never hold in clear: the disclosure core
+// digests them before the log append, and `intent verify` refuses an unredacted one (ADR-0014).
+export {
+  formatPath,
+  isCredentialHeader,
+  isSecretKey,
+  markerDigest,
+  parsePath,
+  type PathSegment,
+  redactionHeld,
+  redactionMarker,
+  SECRET_KEYS,
+  secretDigest,
+  secretQueryKeys,
+  unredactedSecrets,
+  valueAt,
+} from "./credentials.ts";
 
 export type FindingKind = "card" | "email" | "phone" | "street_address" | "banned_key";
 
@@ -36,10 +54,31 @@ export interface Finding {
   kind: FindingKind;
 }
 
-export function findIdentity(value: unknown): Finding[] {
+export interface IdentityOptions {
+  /**
+   * Exempt an MCP tool name: drops only the banned_key finding at exactly `$.params.name`, and only when the
+   * top-level `method` is `tools/call` and that name matches MCP_TOOL_NAME. Its value is still scanned. For bodies
+   * to MCP destinations (a wallet), never Intent Cloud.
+   */
+  mcpToolName?: boolean;
+}
+
+/** An MCP tool name the identity check lets through under `$.params.name` (IdentityOptions.mcpToolName). */
+export const MCP_TOOL_NAME = /^[a-z][a-z0-9_]{0,63}$/;
+
+export function findIdentity(value: unknown, options: IdentityOptions = {}): Finding[] {
   const findings: Finding[] = [];
   walk(value, "$", findings);
-  return findings;
+  if (options.mcpToolName !== true || !isToolCall(value)) return findings;
+  return findings.filter((f) => !(f.kind === "banned_key" && f.path === "$.params.name"));
+}
+
+function isToolCall(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const { method, params } = value as { method?: unknown; params?: unknown };
+  if (method !== "tools/call" || typeof params !== "object" || params === null || Array.isArray(params)) return false;
+  const name = (params as { name?: unknown }).name;
+  return typeof name === "string" && MCP_TOOL_NAME.test(name);
 }
 
 function walk(value: unknown, path: string, out: Finding[]): void {

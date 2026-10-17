@@ -5,7 +5,7 @@ The gateway is a self-hosted gateway you run with npx or Docker. Agents reach it
 ## Invariants (never weaken; each one is why the gateway exists)
 
 1. **The policy can only narrow.** A gateway policy decides what leaves the gateway and how much may be spent; it never loosens a rule Intent Cloud enforces. A policy that turns purchase approval off is rejected at load time with an error. Why: a shared library policy must not be able to switch off a safety rule.
-2. **Log before send.** Every field sent to Intent Cloud is appended to the local hash chain before the request leaves. A send whose log append failed does not happen. Why: the disclosure log is the developer's proof of what left the machine; a gap makes it worthless.
+2. **Log before send.** Every field sent to Intent Cloud or to any other outside destination, such as a linked wallet, is appended to the local hash chain before the request leaves; credentials are logged only as their sha256 (ADR-0014). A send whose log append failed does not happen. Why: the disclosure log is the developer's proof of what left the machine; a gap makes it worthless.
 3. **No buyer identity in the gateway.** The gateway never stores or forwards the buyer's name, postal address or card. The buyer gives those to the merchant at checkout. Why: what we never hold, we cannot leak.
 4. **One human approval per purchase.** A purchase proceeds only with a passkey-signed Approval that the gateway has verified and chained. Why: agents search freely; spending is always a human act.
 5. **Claim only what was sent.** Docs, logs and CLI output say what the gateway sent and what Intent Cloud acknowledged receiving, never what Intent Cloud does afterwards. Why: privacy claims must be checkable by the developer.

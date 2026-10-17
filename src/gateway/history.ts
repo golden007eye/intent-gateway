@@ -40,27 +40,32 @@ export function spendHistory(chain: readonly Entry[], now: number): Purchase[] {
 /** What one tool call disclosed, read from the chain entries it appended. Field names only, never values. */
 export interface Disclosed {
   /**
-   * Each logged send: its operationId, the body fields it carried, whether a verified receipt acknowledged it, and
-   * whether any entry answers it (one that none does was logged and maybe sent, with no answer recorded).
+   * Each logged send: its destination (null for Intent Cloud), its operation, the body fields it carried, whether a
+   * verified receipt acknowledged it, and whether any entry answers it (one that none does was logged and maybe
+   * sent, with no answer recorded). A destination other than Intent Cloud signs no receipt: a `response` answers it.
    */
-  readonly sends: readonly { endpoint: string; fields: readonly string[]; acknowledged: boolean; answered: boolean }[];
+  readonly sends: readonly { destination: string | null; endpoint: string; fields: readonly string[]; acknowledged: boolean; answered: boolean }[];
   /** What was held back: `block` entries' items, then any the caller adds. */
   readonly blocked: readonly string[];
 }
 
 /** The entries after `fromSeq` (the chain's head before the call), as a Disclosed. */
 export function disclosedSince(chain: readonly Entry[], fromSeq: number): Disclosed {
-  const sends: { endpoint: string; fields: string[]; acknowledged: boolean; answered: boolean }[] = [];
+  const sends: { destination: string | null; endpoint: string; fields: string[]; acknowledged: boolean; answered: boolean }[] = [];
   const bySeq = new Map<number, (typeof sends)[number]>();
   const blocked: string[] = [];
   for (const entry of chain) {
     if (entry.seq <= fromSeq) continue;
     const body = asBody(entry.body);
     if (entry.kind === "disclosure") {
-      const send = { endpoint: String(body.endpoint), fields: leafFields(strings(body.fields)), acknowledged: false, answered: false };
+      const destination = typeof body.destination === "string" && body.destination !== "intent_cloud" ? body.destination : null;
+      const send = { destination, endpoint: String(body.endpoint), fields: leafFields(strings(body.fields)), acknowledged: false, answered: false };
       sends.push(send);
       bySeq.set(entry.seq, send);
-    } else if ((entry.kind === "receipt" || entry.kind === "unacknowledged" || entry.kind === "discarded") && typeof body.disclosure_seq === "number") {
+    } else if (
+      (entry.kind === "receipt" || entry.kind === "response" || entry.kind === "unacknowledged" || entry.kind === "discarded") &&
+      typeof body.disclosure_seq === "number"
+    ) {
       const send = bySeq.get(body.disclosure_seq);
       if (send !== undefined) {
         send.answered = true;
@@ -84,10 +89,11 @@ export function disclosedSince(chain: readonly Entry[], fromSeq: number): Disclo
  */
 export function summaryLine(disclosed: Disclosed, extraBlocked: readonly string[] = []): string {
   const fieldsOf = (s: Disclosed["sends"][number]) => (s.fields.length === 0 ? "no body fields" : s.fields.join(", "));
-  const sent = disclosed.sends
-    .filter((s) => s.answered)
-    .map((s) => `${s.endpoint} (${fieldsOf(s)}${s.acknowledged ? "; receipt verified" : "; no verified receipt"})`);
-  const unanswered = disclosed.sends.filter((s) => !s.answered).map((s) => `${s.endpoint} (${fieldsOf(s)})`);
+  const nameOf = (s: Disclosed["sends"][number]) => (s.destination === null ? s.endpoint : `${s.destination} ${s.endpoint}`);
+  const answer = (s: Disclosed["sends"][number]) =>
+    s.destination !== null ? "; answered, unsigned" : s.acknowledged ? "; receipt verified" : "; no verified receipt";
+  const sent = disclosed.sends.filter((s) => s.answered).map((s) => `${nameOf(s)} (${fieldsOf(s)}${answer(s)})`);
+  const unanswered = disclosed.sends.filter((s) => !s.answered).map((s) => `${nameOf(s)} (${fieldsOf(s)})`);
   const blocked = [...disclosed.blocked, ...extraBlocked];
   return [
     `Sent: ${sent.length === 0 ? "nothing" : sent.join("; ")}`,

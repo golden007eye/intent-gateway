@@ -33,6 +33,22 @@ module.exports = {
       to: { path: "^src/cloud/" },
     },
     {
+      name: "only-disclosure-reaches-wallets",
+      comment:
+        "Every send to a wallet destination goes through the disclosure log too (invariant 2, ADR-0014), so only " +
+        "src/disclosure/ may use a wallet adapter. The contract suite (test/contract/) may drive it directly.",
+      severity: "error",
+      from: { pathNot: ["^src/(disclosure|wallet-shop)/", "^test/contract/"] },
+      to: { path: "^src/wallet-shop/" },
+    },
+    {
+      name: "wallet-fake-only-in-tests",
+      comment: "The fake Shop wallet holds test accounts; only tests and demo mode (src/demo) may load it.",
+      severity: "error",
+      from: { pathNot: ["\\.test\\.ts$", "^test/", "^src/wallet-shop-fake/", "^src/demo/"] },
+      to: { path: "^src/wallet-shop-fake/" },
+    },
+    {
       name: "fake-only-in-tests",
       comment: "The fake Intent Cloud holds test keys; only tests and demo mode (src/demo) may load it.",
       severity: "error",
@@ -51,13 +67,13 @@ module.exports = {
       comment: "The panel is a read-only local page; it reaches no network module.",
       severity: "error",
       from: { path: "^src/panel/" },
-      to: { path: "^src/(cloud|cloud-fake|demo|disclosure|library|supplychain)/", reachable: true },
+      to: { path: "^src/(cloud|cloud-fake|demo|disclosure|library|supplychain|wallet-shop|wallet-shop-fake)/", reachable: true },
     },
     {
       name: "network-only-in-network-modules",
       comment: "A send must go through the disclosure log (invariant 2), so only these modules open connections (plan §3.2).",
       severity: "error",
-      from: { path: "^src/", pathNot: "^src/(cloud|mcp|panel|cloud-fake|demo)/" },
+      from: { path: "^src/", pathNot: "^src/(cloud|mcp|panel|cloud-fake|demo|wallet-shop|wallet-shop-fake)/" },
       to: {
         dependencyTypes: ["core"],
         path: "^(node:)?(http|https|http2|net|tls|dgram|dns|worker_threads|cluster|inspector)(/promises)?$",
