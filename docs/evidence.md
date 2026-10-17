@@ -11,9 +11,10 @@ evidence: wrote /home/you/evidence-ap_N5bRA9JDjEf8qgb6.json
 $ intent verify --evidence evidence-ap_N5bRA9JDjEf8qgb6.json
 evidence pack: ok
   purchase ap_N5bRA9JDjEf8qgb6: 25 of the 29 entries of the chain
-  every entry hashes to its place in a chain that links from genesis to the head
+  every entry hashes to its row; rows outside the pack are the exporter's account
 purchase: ok
   holds search: 1, cart request: 1, approval request: 1, approval pending: 1, approval: 1, status read: 3, outcome: 2, answer: 6, observed: 6, key statement: 1, approver pin: 1, session: 1
+  an entry of the purchase left out of the pack cannot be detected
 key statements: ok
   1 recorded, checked offline against the pinned root key
 disclosures: ok
@@ -27,7 +28,7 @@ approvals: ok
 outcomes: ok
   re-checked: 2 (handed_off: 1, ordered: 1)
 head: seq 28 hash fe4d220a…4935
-  Compare this head with a copy of the chain taken earlier, or with your receipts.
+  Compare this head with one saved earlier, or with another pack from the same chain.
 verify: ok
 ```
 
@@ -52,7 +53,7 @@ What it never holds: buyer identity (the gateway never stores a name, a postal a
 
 | Check | What it proves | What it does not |
 |---|---|---|
-| `evidence pack` | The file is canonical JSON in format v1, unchanged since export. Each entry hashes to its own content and sits at its row of a skeleton that links from the first entry to the head. The pack's root key is the one this verifier pins. | That the skeleton rows of entries outside the pack are real: their content is not in the pack (see the limits below). |
+| `evidence pack` | The file is canonical JSON in format v1 (this fixes the format; integrity comes from the hashes and signatures). Each entry hashes to its own content and sits at its row of a skeleton that links from the first entry to the head. The pack's root key is the one this verifier pins. | That the skeleton rows of entries outside the pack are real: their content is not in the pack (see the limits below). |
 | `purchase` | Every entry belongs to the purchase the pack names, found from the entries themselves; the pack has its pending entry and its approval; nothing it says was sent looks like buyer identity. | That no entry of the purchase was left out. |
 | `key statements` | Each key statement was signed by the pinned root key and was valid when it was recorded. | |
 | `disclosures` | Each receipt is signed by a receipt key from the statement and covers the bytes the pack says were sent; no request holds a credential in clear. | What Intent Cloud, a merchant or a wallet did with a request after it was received. |
@@ -72,6 +73,6 @@ The format is small enough to check with any JSON and Ed25519 library, against t
 ## Limits
 
 - The signed parts (receipts, the approval proof, key and outcome statements) are what you can check without trusting the developer. The skeleton rows of entries outside the pack are the exporter's account: they cannot be recomputed from the pack. Compare the head with one saved earlier, or with another pack from the same chain: a later head must have a higher `seq` and keep the earlier hash at the earlier `seq`.
-- A pack shows what is in it. One built by hand could leave out an entry of the purchase, such as a later outcome.
+- A pack shows what is in it. One built by hand could leave out an entry of the purchase, such as a later outcome, or a request sent for it (a second `complete_checkout`), and still verify; `intent verify --evidence` says so. Offline checks cannot close this until the head is countersigned by Intent Cloud.
 - A pack says what the gateway sent and what Intent Cloud signs or acknowledged receiving. It says nothing about what happens to that data afterwards.
 - The format is the gateway's own. A mapping to AP2 or ACP mandates and receipts may follow once they publish a stable format.

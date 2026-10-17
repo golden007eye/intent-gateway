@@ -54,6 +54,8 @@ export interface Report {
   exitCode: 0 | 1 | 2;
   /** The last entry of the verified chain (seq -1 and the genesis hash for an empty one), for outside comparison. */
   head: { seq: number; hash: string };
+  /** What to compare the head with, when not the default line (an evidence pack's receipts do not carry the head). */
+  headNote?: string;
   checks: Check[];
   /**
    * `unanswered`: disclosures with no follow-up entry (the gateway stopped before it recorded an answer, or is still

@@ -55,6 +55,11 @@ describe("intent evidence, then intent verify --evidence, offline", () => {
     expect(verified.code).toBe(0);
     expect(verified.out).toMatch(/^evidence pack: ok\n/);
     expect(verified.out).toContain("approvals: ok\n  verified: 1\n");
+    // Invariant 5: the report claims no more than the offline checks show.
+    expect(verified.out).toContain("  every entry hashes to its row; rows outside the pack are the exporter's account\n");
+    expect(verified.out).toContain("  an entry of the purchase left out of the pack cannot be detected\n");
+    expect(verified.out).toContain("  Compare this head with one saved earlier, or with another pack from the same chain.\n");
+    expect(verified.out).not.toContain("your receipts");
     expect(verified.out).toContain("re-checked: 2 (handed_off: 1, ordered: 1)");
     expect(verified.out).not.toContain("self-check");
     expect(verified.out).toMatch(/verify: ok\n$/);

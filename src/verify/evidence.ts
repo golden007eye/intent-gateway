@@ -2,7 +2,8 @@
 // verifier's own pinned root key. No data dir, no network, no install self-check.
 //
 // 1. evidence pack: the file is canonical JSON in the v1 shape; its root key is one this verifier pins; the skeleton
-//    links from genesis to the head; every entry hashes to its own content and to its skeleton row.
+//    links from genesis to the head; every entry hashes to its own content and to its skeleton row. The rows outside
+//    the pack, and which of the purchase's entries it holds, stay the exporter's account.
 // 2. purchase: every entry belongs to the purchase the pack names (src/evidence's rule, run on the pack's entries
 //    alone), it has its pending entry and its approval, and nothing it says was sent looks like buyer identity.
 // 3. the chain checks of `intent verify` on those entries: key statements against the verifier's pin, receipts,
@@ -37,6 +38,9 @@ const ROLE_ORDER: readonly Role[] = [
   "session",
 ];
 
+/** Receipts cover one request each, never the head: only a head saved elsewhere can be compared with this one. */
+const HEAD_NOTE = "Compare this head with one saved earlier, or with another pack from the same chain.";
+
 export function runVerifyEvidence(opts: EvidenceVerifyOptions): Report {
   const counts = { disclosures: 0, receipts: 0, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 0, outcomes: 0, flags: 0 };
   const none = { seq: -1, hash: GENESIS };
@@ -56,7 +60,7 @@ export function runVerifyEvidence(opts: EvidenceVerifyOptions): Report {
   });
   const details = [`purchase ${pack.purchase}: ${String(pack.entries.length)} of the ${String(pack.skeleton.length)} entries of the chain`];
   if (problems.length > 0) return failed({ name: "evidence pack", ok: false, details: [...details, ...problems, "the entries were not checked further"] }, pack.head);
-  const packCheck: Check = { name: "evidence pack", ok: true, details: [...details, "every entry hashes to its place in a chain that links from genesis to the head"] };
+  const packCheck: Check = { name: "evidence pack", ok: true, details: [...details, "every entry hashes to its row; rows outside the pack are the exporter's account"] };
 
   const entries = pack.entries as Entry[];
   const { roles, missing } = purchaseEntries(entries, pack.purchase);
@@ -68,12 +72,12 @@ export function runVerifyEvidence(opts: EvidenceVerifyOptions): Report {
   const held = new Map<Role, number>();
   for (const role of roles.values()) held.set(role, (held.get(role) ?? 0) + 1);
   const holds = ROLE_ORDER.filter((r) => held.has(r)).map((r) => `${r}: ${String(held.get(r))}`);
-  const purchaseCheck: Check = { name: "purchase", ok: purchaseFailures.length === 0, details: [`holds ${holds.join(", ")}`, ...purchaseFailures] };
+  const purchaseCheck: Check = { name: "purchase", ok: purchaseFailures.length === 0, details: [`holds ${holds.join(", ")}`, "an entry of the purchase left out of the pack cannot be detected", ...purchaseFailures] };
 
   // A pack holds no approver_flag entry (they name no purchase), so the flags line would always say 0: left out.
   const checks = [packCheck, purchaseCheck, ...checkEntries(entries, opts.pinnedRootKeys, counts, true).filter((c) => c.name !== "approver flags")];
   const ok = checks.every((c) => c.ok);
-  return { ok, exitCode: ok ? 0 : 1, head: pack.head, checks, counts };
+  return { ok, exitCode: ok ? 0 : 1, head: pack.head, headNote: HEAD_NOTE, checks, counts };
 }
 
 /**

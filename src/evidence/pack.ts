@@ -4,9 +4,11 @@
 // {format, v, purchase, head: {seq, hash}, pinned_root: [{kid, jwk}], skeleton: [{seq, prev, hash}] (every entry of
 // the chain, from genesis to the head), entries: [the purchase's entries, whole, in seq order]}
 //
-// Every byte is checked: an entry must hash to its own skeleton row, the skeleton must link from genesis to the head,
-// and the verifier checks the pinned root against its own pin. Nothing in the pack is the exporter's word alone,
-// so the pack carries no export time and no gateway version.
+// An entry must hash to its own skeleton row, the skeleton must link from genesis to the head, and the verifier checks
+// the pinned root against its own pin. Two things stay the exporter's word: the skeleton rows outside the pack (their
+// content is not in it), and which of the purchase's entries are present (one left out cannot be detected offline,
+// until Intent Cloud countersigns the head). The pack carries no export time and no gateway version, which nothing
+// could check either.
 import { z } from "zod";
 import { canonicalize } from "../jcs/index.ts";
 import { type Entry, entryProblem, GENESIS, verifyChain } from "../store/index.ts";
