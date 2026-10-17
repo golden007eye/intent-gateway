@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
 import type { ApprovalCreated, ApprovalStatus } from "../contract/index.ts";
 import { INTENT } from "../config/index.ts";
-import { CloudNetworkError, connectCloud, type DisclosedCloud, DisclosureStoppedError } from "../disclosure/index.ts";
+import { CloudNetworkError, connectCloud, type DisclosedCloud, DisclosureRefusedError, DisclosureStoppedError } from "../disclosure/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { loadPolicy } from "../policy/index.ts";
 import { createSession } from "../signing/index.ts";
@@ -237,6 +237,14 @@ describe("findOffers when Intent Cloud cannot be reached", () => {
     const result = await h.gateway.findOffers(SHOES);
     expect(result).toMatchObject({ status: "error", message: `${timeout}; the request may have reached it, and is logged as sent but not acknowledged.` });
     expect(result.message).not.toMatch(/not sent|never left/i);
+  });
+
+  it("a logging-rule refusal: a clean 'not sent' to the agent, naming the rule and never a value", async () => {
+    const h = await setup();
+    const reason = "a credential at headers.authorization: requests to Intent Cloud are logged byte for byte and never carry one";
+    h.patch.search = () => Promise.reject(new DisclosureRefusedError("searchCatalog", [reason]));
+    const result = await h.gateway.findOffers(SHOES);
+    expect(result).toMatchObject({ status: "blocked", message: `Not sent: ${reason}.` });
   });
 
   it("a stopped disclosure log: refused plainly to the agent, and said once on the terminal", async () => {

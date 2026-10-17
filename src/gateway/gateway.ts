@@ -44,6 +44,7 @@ import {
   DisclosureDiscardedError,
   DisclosureKeysExpiredError,
   DisclosureNoKeysError,
+  DisclosureRefusedError,
   DisclosureStoppedError,
 } from "../disclosure/index.ts";
 import { INTENT } from "../config/index.ts";
@@ -297,6 +298,8 @@ export function createGateway(options: GatewayOptions): Gateway {
       result = await run();
     } catch (error) {
       if (error instanceof DisclosureBlockedError) return refuse("blocked", "Not sent: the request body looked like buyer identity.");
+      // The reasons are the core's own words (a rule and a field name), never a value from the request.
+      if (error instanceof DisclosureRefusedError) return refuse("blocked", `Not sent: ${error.reasons.join("; ")}.`);
       if (error instanceof DisclosureStoppedError) {
         // Said once on the terminal too: the developer must restart the gateway, the agent cannot fix it.
         if (!stopReported) logger.warn(`intent-gateway: ${error.message}. Restart the gateway, then run ${INTENT} verify.`);

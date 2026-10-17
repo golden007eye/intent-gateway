@@ -318,6 +318,14 @@ describe("wallet settings", () => {
     expect(() => load({ INTENT_SHOP_MCP_URL: "shop.example/mcp?token=SECRET" })).toThrow(/^(?!.*SECRET).*INTENT_SHOP_MCP_URL is not a URL/);
     expect(() => load({ INTENT_SHOP_AUTH_URL: "https://u:p@shop.example/" })).toThrow(/must not carry credentials/);
   });
+
+  it("has no Shop client id by default: the gateway ships none, so one-tap needs INTENT_SHOP_CLIENT_ID", () => {
+    expect(load({}).wallet.shopClientId).toBeNull();
+    expect(load({ INTENT_SHOP_CLIENT_ID: "0f8e2a6c-1111-4222-8333-444455556666" }).wallet.shopClientId).toBe("0f8e2a6c-1111-4222-8333-444455556666");
+    expect(load({ INTENT_SHOP_CLIENT_ID: "https://gateway.example/shop-client.json" }).wallet.shopClientId).toBe("https://gateway.example/shop-client.json");
+    expect(() => load({ INTENT_SHOP_CLIENT_ID: "http://gateway.example/c.json" })).toThrow(/INTENT_SHOP_CLIENT_ID must use https/);
+    expect(() => load({ INTENT_SHOP_CLIENT_ID: "has spaces SECRET" })).toThrow(/^(?!.*SECRET).*INTENT_SHOP_CLIENT_ID/);
+  });
 });
 
 describe("cloud trust", () => {

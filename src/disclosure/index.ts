@@ -20,7 +20,15 @@ export {
   type Redaction,
   type TransportResponse,
 } from "./core.ts";
-export { createDisclosedWallet, type DisclosedWallet, type WalletDisclosureOptions, type WalletResult } from "./wallet.ts";
+export {
+  createDisclosedWallet,
+  type DisclosedWallet,
+  openWalletSession,
+  type WalletDisclosureOptions,
+  type WalletResult,
+  type WalletSession,
+} from "./wallet.ts";
+export { connectShop, type ShopConnection } from "./shop.ts";
 export {
   connectCloud,
   createDisclosedCloud,

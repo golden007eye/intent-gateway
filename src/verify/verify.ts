@@ -7,7 +7,7 @@
 import { INTENT } from "../config/index.ts";
 import { ReceiptRequest } from "../contract/index.ts";
 import { observationProblem } from "../observation/index.ts";
-import { findIdentity, isCredentialHeader, markerDigest, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
+import { bodyValue, findIdentity, isCredentialHeader, markerDigest, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
@@ -418,11 +418,11 @@ function bodyProblem(body: Record<string, unknown>): string | null {
   return contentDigest(bytes) === content_digest ? null : "body does not match its content_digest";
 }
 
-/** The logged body bytes parsed as JSON; null when there are none or they are not JSON. */
+/** The logged body bytes as a value (JSON, or a form by its logged content-type); null when there are none or they do not parse. */
 function loggedJson(body: Record<string, unknown>): unknown {
   if (typeof body.body_b64 !== "string" || body.body_b64 === "") return null;
   try {
-    return JSON.parse(Buffer.from(body.body_b64, "base64").toString("utf8")) as unknown;
+    return bodyValue(loggedHeaders(body), Buffer.from(body.body_b64, "base64"));
   } catch {
     return null;
   }
