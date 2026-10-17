@@ -16,7 +16,8 @@ import { loadPolicy } from "../policy/index.ts";
 import { findIdentity } from "../privacy/index.ts";
 import { createSession, openCompleterKeys } from "../signing/index.ts";
 import { type Entry, openStore, type Store } from "../store/index.ts";
-import { runVerify } from "../verify/index.ts";
+import { buildEvidence, packText } from "../evidence/index.ts";
+import { runVerify, runVerifyEvidence } from "../verify/index.ts";
 import { openCheckoutVault, WalletKey } from "../wallet/index.ts";
 import { FAKE_BUYER, FAKE_OTHER_VARIANT, FAKE_STORE, FAKE_STOREFRONT, FAKE_VARIANT, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
 import { ATTEMPT_WINDOW_MS } from "./complete.ts";
@@ -817,5 +818,26 @@ describe("security review fixes", () => {
     expect(completionOf(await status(p2, handle)).state).toBe("ordered");
     // The winner's id is released at the terminal outcome, the loser's at once: none is left.
     expect(await fsp.readdir(join(base.dir, "wallet", "shop-checkouts")).catch(() => [])).toEqual([]);
+  });
+});
+
+describe("evidence pack of a one-tap purchase (G9)", () => {
+  it("holds the completion, the attempt and every wallet request marked with the purchase, and verify --evidence passes", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    const chain = await chainOf(base);
+    const pack = buildEvidence(chain, handle, [base.fake.keys.rootPin]);
+    const packed = pack.entries as readonly Entry[];
+    const kinds = packed.map((e) => e.kind);
+    expect(kinds).toContain("completion");
+    expect(kinds).toContain("complete_attempt");
+    const wallet = chain.filter((e) => e.kind === "disclosure" && body(e).purchase === handle).map((e) => e.seq);
+    expect(wallet.length).toBeGreaterThanOrEqual(4); // get_account, create_checkout, get_checkout, complete_checkout
+    expect(wallet.every((seq) => packed.some((e) => e.seq === seq))).toBe(true);
+    const report = runVerifyEvidence({ text: packText(pack), pinnedRootKeys: [base.fake.keys.rootPin] });
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(report.exitCode).toBe(0);
   });
 });
