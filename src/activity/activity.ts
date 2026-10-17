@@ -601,11 +601,11 @@ function destinationOf(b: Body): string {
 
 /**
  * What held a request back, from a `block` entry's body: its `rule` when present (the disclosure core writes
- * `logging` or `identity`); any other `rule` is read as `identity`, so its values are never shown. A block without
+ * `logging` or `identity`); any other `rule`, `policy` included (the core never writes it), is read as `identity`, so its values are never shown. A block without
  * `rule` (a policy block, or one written before the core recorded it) is read from its reasons.
  */
 export function blockKind(block: Readonly<Record<string, unknown>>): BlockKind {
-  if (block.rule !== undefined) return block.rule === "logging" || block.rule === "policy" ? block.rule : "identity";
+  if (block.rule !== undefined) return block.rule === "logging" ? "logging" : "identity";
   const reasons = strings(block.blocked);
   if (reasons.some((r) => LOGGING_REFUSAL.test(r))) return "logging";
   if (reasons.some((r) => IDENTITY_REASON.test(r))) return "identity";

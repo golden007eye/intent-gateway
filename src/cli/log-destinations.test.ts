@@ -5,7 +5,7 @@
 // and the blocked email never print; a redaction marker prints as "redacted"; a hand-edited chain holding a
 // credential in clear never prints it, in any view.
 import { createHash } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,6 +17,7 @@ import {
   DisclosureRefusedError,
   type IntentCloud,
 } from "../disclosure/index.ts";
+import { buildModel, renderPage } from "../panel/index.ts";
 import { openStore, type Store } from "../store/index.ts";
 import { formatJson, formatLog, formatVerbose, readLog } from "./log.ts";
 
@@ -221,6 +222,38 @@ describe("intent log: form bodies and the block's rule", () => {
     const block = (items as { kind: string; body: Record<string, unknown> }[]).find((i) => i.kind === "block");
     expect(block?.body.rule).toBe("logging");
     expect(formatLog(items, { style: STYLE })).toContain("Shop accounts refresh: not logged as sent: the form body is not written as the gateway writes it");
+  });
+
+  it("attack: a forged rule: policy on an identity block shows no held value in the timeline, -v, --json or the panel", () => {
+    const items = [
+      {
+        seq: 0,
+        prev: "",
+        ts: "2026-10-16T17:26:30.000Z",
+        kind: "block",
+        hash: "",
+        body: { endpoint: "search", destination: "shop", fields: ["x"], blocked: ["email at $.x"], held: { x: EMAIL }, rule: "policy" },
+      },
+    ];
+    const json = formatJson(items);
+    expect((JSON.parse(json) as { facts: { block_kind: string } }).facts.block_kind).toBe("identity");
+    const page = renderPage(buildModel({ items, now: TS, mode: "real", intent: "intent", policy: null, verify: null, timeZone: "UTC" }));
+    for (const view of [formatLog(items, { style: STYLE }), formatVerbose(items, { style: STYLE }), json, page]) expect(view).not.toContain(EMAIL);
+  });
+
+  it("an old-format chain: the golden fixture's identity block without rule still reads as identity, with no value", () => {
+    const golden = readFileSync(join(import.meta.dirname, "..", "..", "test", "fixtures", "disclosure-golden.jsonl"), "utf8")
+      .trimEnd()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { kind: string; body: Record<string, unknown> });
+    const old = golden.map((e) => (e.kind === "block" ? { ...e, body: Object.fromEntries(Object.entries(e.body).filter(([k]) => k !== "rule")) } : e));
+    const blocks = formatJson(old)
+      .trimEnd()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { action: string; facts: Record<string, unknown> })
+      .filter((a) => a.action === "blocked");
+    expect(blocks.map((b) => [b.facts.block_kind, b.facts.held])).toEqual([["identity", undefined]]);
+    expect(formatLog(old, { style: STYLE })).toContain("search: an email address in product");
   });
 
   it("a block's rule wins over its wording; an unknown rule shows no value; a block without rule is read from its reasons", () => {
