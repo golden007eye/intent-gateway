@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { stringify } from "yaml";
 import { BUILD, type Build, INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
-import { loadPolicy, meet, type Policy } from "../policy/index.ts";
+import { loadPolicy, meet, type Policy, PolicyError } from "../policy/index.ts";
 
 export const LIBRARY_REPO = "golden007eye/intent-gateway";
 export const GITHUB_API = "https://api.github.com";
@@ -117,7 +117,7 @@ export async function planPolicy(name: string, opts: AddOptions): Promise<Policy
   const library = loadPolicy(fetched.text);
   const currentBytes = await readOptional(opts.policyPath);
   const before = currentBytes === undefined ? undefined : new TextDecoder().decode(currentBytes);
-  const result = before === undefined ? library : meet(loadPolicy(before), library);
+  const result = before === undefined ? library : meetCurrent(name, loadPolicy(before), library);
   const yaml = policyYaml(result);
   const lock: Lock = {
     name,
@@ -134,6 +134,19 @@ export async function planPolicy(name: string, opts: AddOptions): Promise<Policy
     return lock;
   };
   return { before, after: yaml, lock, apply };
+}
+
+/** meet(current, library); two policies with no completion mode in common are refused with both lists named. */
+function meetCurrent(name: string, current: Policy, library: Policy): Policy {
+  if (!current.completion.some((mode) => library.completion.includes(mode))) {
+    throw new PolicyError(
+      "POLICY_INVALID",
+      "completion",
+      `\`${name}\` allows only ${library.completion.join(", ")} and policy.yaml allows only ${current.completion.join(", ")}`,
+      "widen `completion` in policy.yaml or pick another library policy",
+    );
+  }
+  return meet(current, library);
 }
 
 async function writePolicy(policyPath: string, yaml: string, lock: Lock): Promise<void> {

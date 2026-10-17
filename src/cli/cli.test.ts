@@ -2,11 +2,12 @@
 // exit codes, `policy add` diff-before-write, `approver accept` (TTY refusal, wrong and right fingerprint),
 // `doctor` (contract mismatch, unreachable host, a healthy fake Intent Cloud), one-line errors with a fix, --help.
 // The real process (stdio serve, pipes) is tested in test/cli.test.ts.
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeCloud, freePort, noDnsAgent, startFakeCloud, startSilentHost } from "../cloud-fake/index.ts";
 import { BUILD, ConfigError, PINNED_HOSTS } from "../config/index.ts";
@@ -537,6 +538,33 @@ describe("intent policy show", () => {
     const shown = await s.run(["policy", "show"]);
     expect(shown.code).toBe(0);
     expect(shown.out).toMatch(/^completion modes allowed: handoff$/m);
+    expect(shown.out).not.toContain("refuses every cart");
+    writeFileSync(join(s.dir, "policy.yaml"), "version: 1\napproval: passkey\ncompletion: [one_tap]\n");
+    const oneTap = await s.run(["policy", "show"]);
+    expect(oneTap.out).toMatch(/^note: .*refuses every cart until one-tap purchases arrive$/m);
+  });
+
+  it("policy add refuses a library policy that shares no completion mode (exit 2), and writes nothing", async () => {
+    const s = setup();
+    mkdirSync(s.dir, { recursive: true });
+    const current = "version: 1\napproval: passkey\ncompletion: [one_tap]\n";
+    writeFileSync(join(s.dir, "policy.yaml"), current);
+    const root = join(dirname(s.dir), "policies");
+    const library = "version: 1\napproval: passkey\ncompletion: [handoff]\n";
+    mkdirSync(join(root, "handoff-only"), { recursive: true });
+    writeFileSync(join(root, "handoff-only", "policy.yaml"), library);
+    const hash = createHash("sha256").update(library, "utf8").digest("hex");
+    writeFileSync(join(root, "index.json"), JSON.stringify({ version: 1, policies: { "handoff-only": { sha256: hash } } }));
+    const result = await s.run(["policy", "add", "handoff-only", "--yes"], {
+      io: { library: { buildCommit: BUILD_SHA, bundledRoot: pathToFileURL(`${root}/`) } },
+    });
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(
+      /^intent: policy .+policy\.yaml: completion: `handoff-only` allows only handoff and policy\.yaml allows only one_tap; widen `completion` in policy\.yaml or pick another library policy$/m,
+    );
+    expect(result.err).not.toContain("fix that line");
+    expect(readFileSync(join(s.dir, "policy.yaml"), "utf8")).toBe(current);
+    expect(existsSync(join(s.dir, "policy.lock"))).toBe(false);
   });
 });
 

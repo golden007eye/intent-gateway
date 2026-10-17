@@ -50,13 +50,13 @@ The **baseline** is the loosest policy the gateway will run, and every loaded po
 `completion` lists how an approved purchase may be completed:
 
 - `handoff`: the buyer leaves the confirm page for the merchant's checkout and pays there. A cart that names no mode is a hand-off.
-- `one_tap`: a wallet adapter in the gateway completes the purchase with the developer's own wallet account.
+- `one_tap`: a wallet adapter in the gateway will complete the purchase with the developer's own wallet account (planned, see below).
 
 Absent means both. `completion: [handoff]` keeps every purchase a hand-off; a cart for any other mode is refused with the rule `completion`. Like every other list, `completion` only narrows: combining two policies keeps the modes both allow, and `intent policy add` refuses a library policy that shares no mode with yours. Every purchase still needs your passkey Approval, whatever the mode.
 
 <!-- feature: one-tap -->
 !!! planned "One-tap purchases"
-    The gateway completes every purchase by hand-off today. `one_tap` is accepted in a policy so that a policy written now keeps its meaning once one-tap purchases arrive; until then it changes nothing.
+    The gateway completes every purchase by hand-off today, so a policy without `handoff` (`completion: [one_tap]`) refuses every cart until one-tap purchases arrive. `one_tap` is accepted now so that a policy written today keeps its meaning later.
 
 ## What is refused at load time
 
