@@ -292,6 +292,33 @@ describe("addPolicy: result is meet(current, library)", () => {
     expect(result).toEqual(current);
     expect(meet(result, current)).toEqual(result);
   });
+
+  it("refuses a library policy that shares no completion mode with current, and writes nothing", async () => {
+    // Attack: combining [one_tap] with [handoff] must not yield a policy, let alone one allowing either mode.
+    const library = "version: 1\napproval: passkey\ncompletion: [handoff]\n";
+    const files = {
+      "policies/index.json": JSON.stringify({ version: 1, policies: { "no-history": { sha256: sha256(library) } } }),
+      "policies/no-history/policy.yaml": library,
+    };
+    const { policyPath, lockPath } = workdir();
+    mkdirSync(dirname(policyPath));
+    const current = "version: 1\napproval: passkey\ncompletion: [one_tap]\n";
+    writeFileSync(policyPath, current);
+    writeFileSync(lockPath, "earlier lock\n");
+    const error = await addPolicy("no-history", { policyPath, commit: SHA, ...github({ files }) }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(PolicyError);
+    expect(error).toMatchObject({
+      code: "POLICY_INVALID",
+      path: "completion",
+      message: "completion: `no-history` allows only handoff and policy.yaml allows only one_tap",
+      fix: "widen `completion` in policy.yaml or pick another library policy",
+    });
+    expect(readFileSync(policyPath, "utf8")).toBe(current);
+    expect(readFileSync(lockPath, "utf8")).toBe("earlier lock\n");
+  });
 });
 
 describe("addPolicy: GitHub reads", () => {

@@ -37,7 +37,19 @@ describe("runCases", () => {
     expect(r?.pass).toBe(false);
   });
 
+  it("runs a cart case that names a completion mode", () => {
+    const handoffOnly = loadPolicy("version: 1\napproval: passkey\ncompletion: [handoff]\n");
+    const cart = "{merchant: shop.example, category: home, price_usd: 20, quantity: 1}";
+    const results = runCases(
+      handoffOnly,
+      `- name: one-tap refused\n  outbound: {kind: cart, completion_mode: one_tap, offer: ${cart}}\n  expect: {send: false, blocked: [completion]}\n` +
+        `- name: hand-off sent\n  outbound: {kind: cart, completion_mode: handoff, offer: ${cart}}\n  expect: {send: true}\n`,
+    );
+    expect(results.map((r) => r.pass)).toEqual([true, true]);
+  });
+
   it.each([
+    ["an unknown completion mode", "- name: x\n  outbound: {kind: cart, completion_mode: auto, offer: {merchant: a.example, category: home, price_usd: 1, quantity: 1}}\n  expect: {send: true}\n", "[0].outbound.completion_mode"],
     ["an unknown case key", "- name: x\n  outbound: {kind: search}\n  expect: {send: true}\n  extra: 1\n", "[0]"],
     ["a bad timestamp", "- name: x\n  now: yesterday\n  outbound: {kind: search}\n  expect: {send: true}\n", "[0].now"],
     ["an unknown outbound kind", "- name: x\n  outbound: {kind: pay}\n  expect: {send: true}\n", "[0].outbound.kind"],

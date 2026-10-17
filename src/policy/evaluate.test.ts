@@ -89,6 +89,41 @@ describe("evaluate: carts", () => {
   });
 });
 
+describe("evaluate: completion modes", () => {
+  const withMode = (mode: unknown): Outbound => ({ ...cart(), completion_mode: mode } as Outbound);
+
+  it("refuses a one-tap cart under a hand-off-only policy, with rule completion", () => {
+    const d = evaluate(policy("completion: [handoff]\n"), withMode("one_tap"), [], NOW);
+    expect(d).toEqual({
+      send: false,
+      blocked: [
+        {
+          path: "completion_mode",
+          rule: "completion",
+          reason: 'completion mode "one_tap" is not allowed; the policy allows handoff',
+        },
+      ],
+    });
+    expect(rules(policy("completion: [handoff]\n"), withMode("handoff"))).toEqual([]);
+  });
+
+  it("reads a cart with no mode as a hand-off", () => {
+    expect(rules(policy("completion: [one_tap]\n"), cart())).toEqual(["completion"]);
+    expect(rules(policy("completion: [handoff]\n"), cart())).toEqual([]);
+    expect(rules(policy(""), cart())).toEqual([]);
+  });
+
+  it("sends a one-tap cart under the baseline", () => {
+    expect(rules(policy(""), withMode("one_tap"))).toEqual([]);
+  });
+
+  it("refuses a mode outside the schema even under the baseline (attack)", () => {
+    for (const mode of ["shop_agent", "auto", "", "HANDOFF"]) {
+      expect(rules(policy(""), withMode(mode))).toEqual(["completion"]);
+    }
+  });
+});
+
 describe("evaluate: searches", () => {
   const search = (fields: Omit<Extract<Outbound, { kind: "search" }>, "kind">): Outbound => ({ kind: "search", ...fields });
 

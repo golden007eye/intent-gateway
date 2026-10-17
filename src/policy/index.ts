@@ -3,11 +3,13 @@
 export { PolicyError, type PolicyErrorCode } from "./parse.ts";
 export {
   CLOUD_BASELINE,
+  COMPLETION_MODES,
   EXCLUDED_CATEGORIES,
   MAX_POLICY_BYTES,
   MAX_QUANTITY,
   loadPolicy,
   meet,
+  type CompletionMode,
   type Policy,
   type ShipTo,
   type Spend,

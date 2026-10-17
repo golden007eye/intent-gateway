@@ -2,7 +2,17 @@
 // b (and, met with the baseline, than CLOUD_BASELINE), both by its rules and by its decisions on random requests.
 import { stringify } from "yaml";
 import { describe, expect, it } from "vitest";
-import { CLOUD_BASELINE, evaluate, loadPolicy, meet, type Outbound, type Policy, type Purchase } from "./index.ts";
+import {
+  CLOUD_BASELINE,
+  evaluate,
+  loadPolicy,
+  meet,
+  PolicyError,
+  type CompletionMode,
+  type Outbound,
+  type Policy,
+  type Purchase,
+} from "./index.ts";
 import { categoryBlocked, merchantMatches } from "./policy.ts";
 
 /** mulberry32: a small seeded PRNG, so a failure reproduces from its seed. */
@@ -37,6 +47,7 @@ function randomPolicyText(rand: () => number): string {
   if (rand() < 0.4) merchants.allow = some(MERCHANTS);
   doc.merchants = merchants;
   doc.categories = { block: some(CATEGORIES) };
+  if (rand() < 0.6) doc.completion = pick([["handoff"], ["one_tap"], ["handoff", "one_tap"], ["one_tap", "one_tap"]]);
   return stringify(doc);
 }
 
@@ -45,8 +56,10 @@ function randomOutbound(rand: () => number): Outbound {
   if (rand() < 0.3) {
     return { kind: "search", category: pick(CATEGORIES), ship_to_zip: pick(["94110", "9411", "SW1A 1AA"]) };
   }
+  const mode = pick<CompletionMode | undefined>([undefined, "handoff", "one_tap"]);
   return {
     kind: "cart",
+    ...(mode === undefined ? {} : { completion_mode: mode }),
     offer: {
       merchant: pick([...MERCHANTS, "x.b.example", "other.example"]),
       category: pick([...CATEGORIES, "home/kitchen"]),
@@ -74,7 +87,8 @@ function narrowerOrEqual(n: Policy, p: Policy): boolean {
     p.merchants.block.every((m) => merchantMatches(m, n.merchants.block)) &&
     (p.merchants.allow === undefined ||
       (n.merchants.allow !== undefined && n.merchants.allow.every((m) => merchantMatches(m, p.merchants.allow ?? [])))) &&
-    p.categories.block.every((c) => categoryBlocked(c, n.categories.block))
+    p.categories.block.every((c) => categoryBlocked(c, n.categories.block)) &&
+    n.completion.every((mode) => p.completion.includes(mode))
   );
 }
 
@@ -86,8 +100,17 @@ describe("meet", () => {
     for (let i = 0; i < 1000; i++) {
       const a = loadPolicy(randomPolicyText(rand));
       const b = loadPolicy(randomPolicyText(rand));
+      const common = a.completion.filter((mode) => b.completion.includes(mode));
+      if (common.length === 0) {
+        // Attack: two policies that share no completion mode must not combine into one that allows any.
+        expect(() => meet(a, b)).toThrow(PolicyError);
+        expect(() => meet(b, a)).toThrow(/completion: the two policies share no completion mode/);
+        continue;
+      }
       const m = meet(a, b);
       const context = { i, a, b, m };
+      expect(m.completion).toEqual(common);
+      expect(m.completion.every((mode) => CLOUD_BASELINE.completion.includes(mode))).toBe(true);
       expect(narrowerOrEqual(m, a), JSON.stringify(context)).toBe(true);
       expect(narrowerOrEqual(m, b), JSON.stringify(context)).toBe(true);
       expect(narrowerOrEqual(meet(m, CLOUD_BASELINE), CLOUD_BASELINE)).toBe(true);
@@ -113,6 +136,22 @@ describe("meet", () => {
     expect(meet(open, a).merchants.allow).toEqual(["a.example", "b.example"]);
     expect(meet(a, open).merchants.allow).toEqual(["a.example", "b.example"]);
     expect(meet(open, open).merchants.allow).toBeUndefined();
+  });
+
+  it("keeps only the completion modes both allow, and refuses two policies that share none", () => {
+    const handoff = loadPolicy("version: 1\napproval: passkey\ncompletion: [handoff]\n");
+    const oneTap = loadPolicy("version: 1\napproval: passkey\ncompletion: [one_tap]\n");
+    const open = loadPolicy("version: 1\napproval: passkey\n");
+    expect(meet(open, handoff).completion).toEqual(["handoff"]);
+    expect(meet(oneTap, CLOUD_BASELINE).completion).toEqual(["one_tap"]);
+    expect(meet(open, open).completion).toEqual(["handoff", "one_tap"]);
+    let error: unknown;
+    try {
+      meet(handoff, oneTap);
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toMatchObject({ name: "PolicyError", code: "POLICY_INVALID", path: "completion" });
   });
 
   it("with the baseline adds every excluded category and keeps the passkey", () => {

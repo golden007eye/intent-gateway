@@ -84,6 +84,7 @@ function worded(error: unknown, ctx: ErrorContext): string {
   if (error instanceof GatewayNotStartedError) return `${message}; run ${INTENT} doctor`;
   if (error instanceof PolicyError) {
     const where = ctx.policyPath ?? "the policy";
+    if (error.fix !== undefined) return `policy ${where}: ${message}; ${error.fix}`;
     return `policy ${where}: ${message}; fix that line, or delete the file to use the bundled ${DEFAULT_POLICY} policy`;
   }
   if (error instanceof LibraryError) return `policy library: ${message}; ${LIBRARY_FIX[error.code]}`;
