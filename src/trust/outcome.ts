@@ -9,10 +9,12 @@
 import { verify } from "node:crypto";
 import { z } from "zod";
 import { type AnySnapshot, ApprovalHandle, Binding, Ed25519Signature, LedgerRef, OutcomeSource, OutcomeState, type SnapshotV2, Timestamp } from "../contract/index.ts";
+import { PINNED_HOSTS } from "../config/index.ts";
 import { canonicalize } from "../jcs/index.ts";
 import { bindingResult, CLOUD_SOURCES, GATEWAY_SOURCES, MODE_STATES, ORDER_REF, REPORT_STATES, REPORTED_ONLY_SOURCES, shipToOptional } from "../outcome/index.ts";
 import { fromBase64Url } from "./bytes.ts";
-import { type KeySet, trustedKeys } from "./statement.ts";
+import { type KeySet, type PinnedRootKey, trustedKeys } from "./statement.ts";
+import { onlyTestRoot } from "./test-root.ts";
 
 export const OUTCOME_PREFIX = "intent-outcome-v1\n";
 
@@ -39,6 +41,25 @@ export interface OutcomeApproval {
   readonly handle: string;
   readonly snapshot: AnySnapshot;
   readonly snapshotHash: string;
+}
+
+/** How a statement is checked beyond the approval: whether a `staging_webhook` source may appear (see stagingSourceAllowed). */
+export interface OutcomeCheckOptions {
+  readonly stagingSource: boolean;
+}
+
+/** The host whose own staging store is the only `staging_webhook` source (Appendix G sources table). */
+const STAGING_HOST = "staging-api.intentai.shop";
+
+/**
+ * Whether outcomes from `staging_webhook` may be accepted under these pinned root keys: only for Intent Cloud staging
+ * (every pinned key is the staging host's pinned root), or for the published test root (the local fake and demo
+ * mode). A `staging_webhook` outcome from any other host is refused (`source`): it never appears on a production host.
+ */
+export function stagingSourceAllowed(pinned: readonly PinnedRootKey[]): boolean {
+  if (onlyTestRoot(pinned)) return true;
+  const staging = PINNED_HOSTS[STAGING_HOST]?.rootKeys ?? [];
+  return pinned.length > 0 && pinned.every((key) => staging.some((s) => s.jwk.x !== undefined && s.jwk.x === key.jwk.x));
 }
 
 export type OutcomeStatementResult = { ok: true } | { ok: false; refused_by: OutcomeRefusal; signed: boolean };
@@ -81,7 +102,13 @@ const BINDING = "binding";
  * Whether `statement` is a valid outcome statement for `approval` at `now`, under the approval keys of `keySet`
  * (Appendix G statement validity, steps 1 to 3). A v1 snapshot never has a valid statement.
  */
-export function verifyOutcomeStatement(statement: unknown, approval: OutcomeApproval, keySet: KeySet, now: Date): OutcomeStatementResult {
+export function verifyOutcomeStatement(
+  statement: unknown,
+  approval: OutcomeApproval,
+  keySet: KeySet,
+  now: Date,
+  options: OutcomeCheckOptions,
+): OutcomeStatementResult {
   const parsed = Statement.safeParse(statement);
   if (!parsed.success) return refuse("schema");
   const st = parsed.data;
@@ -104,14 +131,15 @@ export function verifyOutcomeStatement(statement: unknown, approval: OutcomeAppr
   const sig = fromBase64Url(cloud_signature);
   if (sig === null || !verify(null, Buffer.from(OUTCOME_PREFIX + unsignedJcs, "utf8"), key, sig)) return refuse("cloud_signature");
 
-  const problem = contentProblem(st.outcome, approval.snapshot);
+  const problem = contentProblem(st.outcome, approval.snapshot, options);
   return problem === null ? { ok: true } : { ok: false, refused_by: problem, signed: true };
 }
 
 /** Step 3 of statement validity, plus O1, for a statement whose signature held. */
-function contentProblem(o: StatedOutcome, s: SnapshotV2): OutcomeRefusal | null {
+function contentProblem(o: StatedOutcome, s: SnapshotV2, options: OutcomeCheckOptions): OutcomeRefusal | null {
   if (!MODE_STATES[s.completion_mode].has(o.state)) return "mode";
   if (!CLOUD_SOURCES.has(o.source)) return "source";
+  if (o.source === "staging_webhook" && !options.stagingSource) return "source";
   if (REPORTED_ONLY_SOURCES.has(o.source) && o.assurance !== "reported") return "assurance";
   if (o.state === "reported" && o.assurance !== "reported") return "assurance";
   const binding = o[BINDING];

@@ -73,6 +73,7 @@ import {
   verifyOutcomeStatement,
   SENT_WORDS,
   readSent,
+  stagingSourceAllowed,
   type SentPurchase,
   sentProblems,
   verifyStatement,
@@ -222,13 +223,22 @@ export type CreateCartResult =
  * (rule O1, invariant 5); null when nothing was acted on (no statement, or one that did not verify).
  */
 export interface ShownOutcome {
+  /**
+   * What the gateway shows: this read's outcome when its statement verified (and R5a lets it replace the one adopted
+   * before), else the outcome adopted from an earlier verified statement, else null.
+   */
   readonly state_shown: OutcomeState | null;
-  /** Intent Cloud's own words, as it served them. */
+  /** True when `state_shown` comes from an earlier verified statement, not this read's. */
+  readonly kept_earlier?: true;
+  /** The order the shown outcome's statement names. */
+  readonly order_ref?: string;
+  /** Intent Cloud's own words in this read, as it served them. */
   readonly cloud_state: OutcomeState;
   readonly source: string;
   readonly assurance: string;
+  /** Whether this read's statement verified. */
   readonly statement_verified: boolean;
-  /** The rule the statement failed, when it did not verify. */
+  /** The rule this read's statement failed, when it did not verify. */
   readonly refused_by?: string;
 }
 
@@ -898,8 +908,9 @@ export function createGateway(options: GatewayOptions): Gateway {
   /**
    * Reads Intent Cloud's outcome for a chained approval (ADR-0015) and chains an `outcome` entry, once per distinct
    * outcome and shown state. Only a verified outcome statement whose `outcome` equals the status's (M1) is acted on;
-   * the gateway re-runs the binding result with its own total check and shows no more than that (O1, O2). A verified
-   * outcome that may not replace the one already recorded (R5a: a terminal verified outcome is final) is not adopted.
+   * the gateway re-runs the binding result with its own total check and shows no more than that (O1, O2). A statement
+   * refused by any rule shows nothing of its own: the outcome adopted from an earlier verified statement stays shown.
+   * A verified outcome that may not replace the adopted one (R5a: a terminal verified outcome is final) is not adopted.
    * Nothing here frees spend-cap room: only local evidence does (contract §6).
    */
   async function recordOutcome(handle: string, status: ApprovalStatus | null, snapshot: AnySnapshot, snapshotHash: string, keys: KeySet): Promise<ShownOutcome | null> {
@@ -911,13 +922,14 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (outcome === undefined || statement === undefined || canonicalize(outcome) !== canonicalize(statement.outcome)) {
       check = { ok: false, refused_by: "m1", signed: false };
     } else {
-      check = verifyOutcomeStatement(statement, { handle, snapshot, snapshotHash }, keys, new Date(now()));
+      check = verifyOutcomeStatement(statement, { handle, snapshot, snapshotHash }, keys, new Date(now()), { stagingSource: stagingSourceAllowed(pinnedRootKeys) });
     }
-    const reading = readCloudOutcome(stated, snapshot.total.amount_minor, check);
-    // The statement is kept so `intent verify` can re-check it offline, unless it holds what looks like buyer identity
-    // (then nothing in it is acted on either).
+    // The statement is kept so `intent verify` can re-check it offline, unless it holds what looks like buyer identity:
+    // then it is not kept, and nothing in it is acted on (refused_by "identity").
     const held = statement !== undefined && findIdentity(statement).length === 0;
-    const shownState = statement === undefined || held ? reading.state_shown : null;
+    if (statement !== undefined && !held) check = { ok: false, refused_by: "identity", signed: false };
+    const reading = readCloudOutcome(stated, snapshot.total.amount_minor, check);
+    const shownState = reading.state_shown;
     const cloud = { state: stated.state, source: stated.source, assurance: stated.assurance };
     const named = shownState !== null && stated.order_ref !== undefined && ORDER_REF.test(stated.order_ref);
     const body = CloudOutcomeEntry.parse({
@@ -933,8 +945,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       ...(named ? { order_ref: stated.order_ref } : {}),
       ...(shownState !== null && stated.final_total !== undefined ? { final_total_minor: stated.final_total.amount_minor } : {}),
     });
-    const shown: ShownOutcome = {
-      state_shown: shownState,
+    const words = {
       cloud_state: cloud.state,
       source: cloud.source,
       assurance: cloud.assurance,
@@ -942,16 +953,22 @@ export function createGateway(options: GatewayOptions): Gateway {
       ...(check.ok ? {} : { refused_by: check.refused_by }),
     };
     const recorded = outcomesFor(store.entries(), handle).filter((o): o is CloudOutcomeEntry => o.basis === "cloud");
-    if (recorded.some((o) => o.outcome_hash === body.outcome_hash && o.state_shown === body.state_shown && o.statement_verified === body.statement_verified)) return shown;
-    const adopted = recorded.findLast((o) => o.statement_verified && o.cloud !== null);
-    if (check.ok && adopted?.cloud != null && !replaces(adopted.cloud, cloud)) {
+    // The outcome adopted so far: the latest one a verified statement showed.
+    const adopted = recorded.findLast((o) => o.statement_verified && o.state_shown !== null && o.cloud !== null);
+    const keep = (): ShownOutcome =>
+      adopted?.state_shown == null
+        ? { ...words, state_shown: null }
+        : { ...words, state_shown: adopted.state_shown, kept_earlier: true, ...(adopted.order_ref === undefined ? {} : { order_ref: adopted.order_ref }) };
+    if (shownState !== null && adopted?.cloud != null && !replaces(adopted.cloud, cloud)) {
       logger.warn(
         `intent-gateway: Intent Cloud reported outcome ${cloud.state} for ${handle} after it reported the final outcome ${adopted.cloud.state} (Appendix G R5a); the gateway keeps the earlier one.`,
       );
-      return { ...shown, state_shown: adopted.state_shown, cloud_state: adopted.cloud.state, source: adopted.cloud.source, assurance: adopted.cloud.assurance };
+      return keep();
     }
-    await store.append("outcome", body);
-    return shown;
+    const duplicate = recorded.some((o) => o.outcome_hash === body.outcome_hash && o.state_shown === body.state_shown && o.statement_verified === body.statement_verified);
+    if (!duplicate) await store.append("outcome", body);
+    if (shownState === null) return keep();
+    return { ...words, state_shown: shownState, ...(body.order_ref === undefined ? {} : { order_ref: body.order_ref }) };
   }
 
   function approved(fingerprint: string, status: ApprovalStatus | null, mode: CloudCompletionMode, shown: ShownOutcome | null, fromSeq: number): ApprovalStatusResult {
@@ -969,26 +986,26 @@ export function createGateway(options: GatewayOptions): Gateway {
         summary: summary(fromSeq),
       };
     }
+    // A statement this read refused: say what Intent Cloud reported and which rule failed, and count nothing from it.
+    const refusal =
+      shown === null || shown.statement_verified
+        ? ""
+        : ` Intent Cloud reported ${shown.cloud_state.replace("_", " ")}, but its statement fails ${shown.refused_by ?? "a rule"}; not counted as placed.`;
     if (shown !== null && shown.state_shown === null) {
-      return {
-        status: "approved",
-        fingerprint,
-        outcome: shown,
-        message: `${base} Intent Cloud reported an outcome the gateway could not verify (${shown.refused_by ?? "unverified"}), so it does not repeat it.`,
-        summary: summary(fromSeq),
-      };
+      return { status: "approved", fingerprint, outcome: shown, message: base + refusal, summary: summary(fromSeq) };
     }
     if (shown !== null && shown.state_shown !== null) {
       const state = shown.state_shown;
       const word = shownStatus(state, mode);
-      const order = state === "ordered" ? status?.outcome_statement?.outcome.order_ref : undefined;
+      // The order of the shown outcome's own statement (an earlier one when it was kept), never of a refused one.
+      const order = state === "ordered" ? shown.order_ref : undefined;
       return {
         status: "approved",
         ...(word === "approved" ? {} : { cloud_reported: word }),
         ...(order === undefined ? {} : { order_number: order }),
         outcome: shown,
         fingerprint,
-        message: base + outcomeWords(state, order),
+        message: base + outcomeWords(state, order) + refusal,
         summary: summary(fromSeq),
       };
     }

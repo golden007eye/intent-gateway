@@ -1557,43 +1557,60 @@ describe("outcomes: only a verified statement is acted on, and never more than i
     expect(report.checks.find((c) => c.name === "outcomes")?.details[0]).toBe("re-checked: 2 (handed_off: 1, ordered: 1)");
   });
 
-  it("attack (AC-G4.1): Intent Cloud signs ordered with a final total above the approved one: shown mismatch, never ordered", async () => {
+  it("attack (AC-G4.1): Intent Cloud signs ordered with a final total above the approved one: refused final_total, never ordered", async () => {
     const h = await setup();
     const approval = await orderedPurchase(h);
     serveSigned(h, plusOne);
     const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
-    expect(result).toMatchObject({ outcome: { state_shown: "mismatch", cloud_state: "ordered", statement_verified: false, refused_by: "final_total" }, cloud_reported: "handed_off" });
+    // Nothing is shown from the refused statement; the hand-off adopted from the earlier verified statement stays.
+    expect(result).toMatchObject({
+      outcome: { state_shown: "handed_off", kept_earlier: true, cloud_state: "ordered", statement_verified: false, refused_by: "final_total" },
+      cloud_reported: "handed_off",
+    });
     expect(result).not.toHaveProperty("order_number");
     expect(result.message).not.toContain("placed the order");
-    expect(result.message).toContain("does not match what the buyer approved");
-    expect(outcomes(h).at(-1)).toMatchObject({ state_shown: "mismatch", local_binding: { result: "mismatch", checks: { total: "differs" } } });
+    expect(result.message).toContain("Intent Cloud reported ordered, but its statement fails final_total; not counted as placed.");
+    expect(outcomes(h).at(-1)).toMatchObject({ state_shown: null, statement_verified: false, refused_by: "final_total", local_binding: { result: "mismatch" } });
+    expect(outcomes(h).some((o) => o.state_shown === "mismatch" || o.state_shown === "ordered")).toBe(false);
     expect((await verify(h)).exitCode).toBe(0);
   });
 
-  it("attack (AC-G4.2): ordered signed with assurance reported is shown reported", async () => {
+  it("attack (AC-G4.2): ordered signed with assurance reported: refused o1, never ordered", async () => {
     const h = await setup();
     const approval = await orderedPurchase(h);
     serveSigned(h, (o) => ({ ...o, assurance: "reported" }));
     const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
-    // Intent Cloud's status still says ordered: the sentence repeats nothing, and the reading shows reported.
-    expect(result).toMatchObject({ outcome: { state_shown: "reported", refused_by: "o1" } });
+    // Intent Cloud's status still says ordered: the sentence repeats nothing.
+    expect(result).toMatchObject({ outcome: { state_shown: "handed_off", kept_earlier: true, refused_by: "o1" } });
     expect(result).not.toHaveProperty("cloud_reported");
     expect(result.message).not.toContain("placed the order");
-    expect(outcomes(h).at(-1)).toMatchObject({ state_shown: "reported", statement_verified: false });
+    expect(outcomes(h).at(-1)).toMatchObject({ state_shown: null, statement_verified: false, refused_by: "o1" });
     expect((await verify(h)).exitCode).toBe(0);
   });
 
-  it("attack: a statement signed without the prefix is refused and nothing is shown", async () => {
+  it("attack: a statement signed without the prefix is refused and nothing of it is shown", async () => {
     const h = await setup();
     const approval = await orderedPurchase(h);
     serveSigned(h, (o) => o, "");
     const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
-    expect(result).toMatchObject({ outcome: { state_shown: null, statement_verified: false, refused_by: "cloud_signature" } });
-    expect(result).not.toHaveProperty("cloud_reported");
-    expect(result.message).toContain("could not verify (cloud_signature)");
+    expect(result).toMatchObject({ outcome: { state_shown: "handed_off", kept_earlier: true, statement_verified: false, refused_by: "cloud_signature" } });
+    expect(result).not.toHaveProperty("order_number");
+    expect(result.message).toContain("but its statement fails cloud_signature; not counted as placed.");
     expect(outcomes(h).at(-1)).toMatchObject({ state_shown: null, statement_verified: false });
     expect(outcomes(h).at(-1)).not.toHaveProperty("order_ref");
     expect((await verify(h)).exitCode).toBe(0);
+  });
+
+  it("with no earlier verified outcome, a refused statement shows nothing at all", async () => {
+    const h = await setup();
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.fake.approveWithPasskey(approval, new SoftPasskey());
+    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    h.fake.handoff(approval);
+    serveSigned(h, (o) => o, "");
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result).toMatchObject({ outcome: { state_shown: null, refused_by: "cloud_signature" } });
+    expect(result).not.toHaveProperty("cloud_reported");
   });
 
   it("attack (M1): an outcome without its statement, or one that differs from the statement's, is not acted on", async () => {
@@ -1604,15 +1621,30 @@ describe("outcomes: only a verified statement is acted on, and never more than i
       return r.ok ? { ...r, body: omit(r.body, ["outcome_statement"]) } : r;
     };
     const bare = await h.gateway.getApprovalStatus({ approval_handle: approval });
-    expect(bare).toMatchObject({ outcome: { state_shown: null, refused_by: "m1" } });
-    expect(bare).not.toHaveProperty("cloud_reported");
+    expect(bare).toMatchObject({ outcome: { state_shown: "handed_off", kept_earlier: true, refused_by: "m1" } });
+    expect(bare).not.toHaveProperty("order_number");
     h.patch.getApproval = async (handle, signer) => {
       const r = await h.real.getApproval(handle, signer);
       return r.ok && r.body.outcome !== undefined ? { ...r, body: { ...r.body, outcome: { ...r.body.outcome, order_ref: "ORD-999999" } } } : r;
     };
     const differing = await h.gateway.getApprovalStatus({ approval_handle: approval });
-    expect(differing).toMatchObject({ outcome: { state_shown: null, refused_by: "m1" } });
+    expect(differing).toMatchObject({ outcome: { state_shown: "handed_off", refused_by: "m1" } });
     expect(differing).not.toHaveProperty("order_number");
+    expect((await verify(h)).exitCode).toBe(0);
+  });
+
+  it("attack (invariant 3): a statement holding what looks like a card number (a 16-digit Luhn-valid order id) is not kept: refused identity, and verify passes", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    serveSigned(h, (o) => ({ ...o, order_ref: "gid://shopify/Order/4111111111111111" }));
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result).toMatchObject({ outcome: { state_shown: "handed_off", kept_earlier: true, statement_verified: false, refused_by: "identity" } });
+    expect(result).not.toHaveProperty("order_number");
+    const entry = outcomes(h).at(-1);
+    expect(entry).toMatchObject({ statement_verified: false, refused_by: "identity", state_shown: null });
+    expect(entry).not.toHaveProperty("statement_jcs");
+    expect(entry).not.toHaveProperty("order_ref");
+    expect(h.store.entries().some((e) => e.kind === "outcome" && JSON.stringify(e.body).includes("4111111111111111"))).toBe(false);
     expect((await verify(h)).exitCode).toBe(0);
   });
 
@@ -1628,16 +1660,30 @@ describe("outcomes: only a verified statement is acted on, and never more than i
     expect(before).toHaveLength(1);
   });
 
-  it("R5a: after a verified ordered, a later verified outcome is not adopted", async () => {
+  it("R5a: after a verified ordered, a later verified outcome is not adopted, and the order number stays the adopted one", async () => {
     const h = await setup();
     const approval = await orderedPurchase(h);
-    await h.gateway.getApprovalStatus({ approval_handle: approval });
+    const ordered = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    const orderNumber = ordered.status === "approved" ? ordered.order_number : undefined;
+    expect(orderNumber).toMatch(/^ORD-/);
     const count = outcomes(h).length;
-    serveSigned(h, (o) => ({ state: "handed_off", source: "merchant_api", assurance: "verified", observed_at: o.observed_at }), undefined, "handed_off");
+    serveSigned(h, (o) => ({ ...o, state: "handed_off", source: "merchant_api", order_ref: "ORD-999999" }), undefined, "handed_off");
     const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
-    expect(result).toMatchObject({ outcome: { state_shown: "ordered", cloud_state: "ordered" } });
+    expect(result).toMatchObject({ outcome: { state_shown: "ordered", kept_earlier: true, cloud_state: "handed_off" }, order_number: orderNumber });
     expect(outcomes(h)).toHaveLength(count);
     expect(h.warnings.some((w) => w.includes("R5a"))).toBe(true);
+  });
+
+  it("R5a: a verified terminal ordered is never followed by a shown mismatch, even from a refused statement", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    const ordered = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    const orderNumber = ordered.status === "approved" ? ordered.order_number : undefined;
+    serveSigned(h, (o) => ({ ...plusOne(o), order_ref: "ORD-999999" }));
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result).toMatchObject({ outcome: { state_shown: "ordered", kept_earlier: true, refused_by: "final_total" }, order_number: orderNumber });
+    expect(result.message).toContain("but its statement fails final_total");
+    expect(outcomes(h).some((o) => o.state_shown === "mismatch")).toBe(false);
   });
 
   it("attack: an outcome entry rewritten (and re-hashed) to show ordered fails intent verify", async () => {
@@ -1647,14 +1693,14 @@ describe("outcomes: only a verified statement is acted on, and never more than i
     await h.gateway.getApprovalStatus({ approval_handle: approval });
     let prev = "0".repeat(64);
     const lines = h.store.entries().map(({ seq, ts, kind, body }) => {
-      const edited = kind === "outcome" && (body as { state_shown?: unknown }).state_shown === "mismatch" ? { ...(body as object), state_shown: "ordered" } : body;
-      const fields = { seq, prev, ts, kind, body: edited };
+      const refused = kind === "outcome" && (body as { refused_by?: unknown }).refused_by === "final_total";
+      const fields = { seq, prev, ts, kind, body: refused ? { ...(body as object), state_shown: "ordered" } : body };
       prev = sha256Hex(canonicalize(fields));
       return canonicalize({ ...fields, hash: prev });
     });
     await fsp.writeFile(join(h.dir, "audit.jsonl"), `${lines.join("\n")}\n`);
     const report = await verify(h);
     expect(report.exitCode).toBe(1);
-    expect(report.checks.find((c) => c.name === "outcomes")?.details.join("\n")).toContain("shows ordered, but its statement supports mismatch (rule O1");
+    expect(report.checks.find((c) => c.name === "outcomes")?.details.join("\n")).toContain("shows ordered, but its statement supports null (rule O1");
   });
 });

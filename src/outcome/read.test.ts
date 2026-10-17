@@ -24,17 +24,17 @@ describe("readCloudOutcome", () => {
   it("a verified ordered whose binding holds locally is shown ordered, with the gateway's own binding", () => {
     expect(readCloudOutcome(ORDERED, A, OK)).toEqual({ state_shown: "ordered", local_binding: ORDERED[BINDING] });
   });
-  it("attack (AC-G4.1): Intent Cloud signs ordered with final total A+1: the gateway shows mismatch, never ordered", () => {
+  it("attack (AC-G4.1): Intent Cloud signs ordered with final total A+1 (refused final_total): nothing shown, never ordered", () => {
     const over = { ...ORDERED, final_total: { amount_minor: A + 1, currency: "USD" } };
     const reading = readCloudOutcome(over, A, { ok: false, refused_by: "final_total", signed: true });
-    expect(reading.state_shown).toBe("mismatch");
+    expect(reading.state_shown).toBeNull();
     expect(reading.local_binding).toMatchObject({ result: "mismatch", checks: { total: "differs" } });
     // Even if a verifier let it through, the gateway's own total check would not show ordered.
-    expect(readCloudOutcome(over, A, OK).state_shown).toBe("mismatch");
+    expect(readCloudOutcome(over, A, OK).state_shown).toBeNull();
   });
-  it("attack (AC-G4.2): ordered dressed with assurance reported, or from a reported-only source, is shown reported", () => {
-    expect(readCloudOutcome({ ...ORDERED, assurance: "reported" }, A, { ok: false, refused_by: "o1", signed: true }).state_shown).toBe("reported");
-    expect(readCloudOutcome({ ...ORDERED, source: "checkout_page" }, A, { ok: false, refused_by: "assurance", signed: true }).state_shown).toBe("reported");
+  it("attack (AC-G4.2): ordered dressed with assurance reported (refused o1), or from a reported-only source: nothing shown", () => {
+    expect(readCloudOutcome({ ...ORDERED, assurance: "reported" }, A, { ok: false, refused_by: "o1", signed: true }).state_shown).toBeNull();
+    expect(readCloudOutcome({ ...ORDERED, source: "checkout_page" }, A, { ok: false, refused_by: "assurance", signed: true }).state_shown).toBeNull();
   });
   it("M1: an unverified or unsigned statement shows nothing", () => {
     expect(readCloudOutcome(ORDERED, A, { ok: false, refused_by: "cloud_signature", signed: false }).state_shown).toBeNull();
@@ -43,9 +43,9 @@ describe("readCloudOutcome", () => {
     expect(readCloudOutcome({ state: "handed_off" }, A, { ok: false, refused_by: "final_total", signed: true }).state_shown).toBeNull();
     expect(readCloudOutcome({ state: "failed" }, A, { ok: false, refused_by: "o1", signed: true }).state_shown).toBeNull();
   });
-  it("a verified ordered whose checks are incomplete locally is shown reported", () => {
+  it("a verified ordered whose checks are incomplete locally shows nothing", () => {
     const incomplete = { ...ORDERED, binding: { ...ORDERED[BINDING], checks: { ...CHECKS_OK, ship_to: "unknown" } } };
-    expect(readCloudOutcome(incomplete, A, OK).state_shown).toBe("reported");
+    expect(readCloudOutcome(incomplete, A, OK).state_shown).toBeNull();
   });
   it("other verified states are shown as Intent Cloud stated them, with no binding when none came", () => {
     expect(readCloudOutcome({ state: "handed_off", source: "checkout_page", assurance: "reported" }, A, OK)).toEqual({ state_shown: "handed_off", local_binding: null });
@@ -85,12 +85,18 @@ describe("chargedNothing: cap room only on local evidence (contract §6)", () =>
   it("Shop's terminal not-completed read frees the room", () => {
     expect(chargedNothing([local("failed", "shop_api")], H)).toBe(true);
   });
-  it("the gateway's own refusal frees it only while no complete_checkout disclosure exists for the purchase", () => {
-    expect(chargedNothing([local("failed", "gateway_precheck")], H)).toBe(true);
+  it("the gateway's own refusal frees it only while no complete_checkout disclosure was logged after the approval (fail closed)", () => {
+    const approval = { kind: "approval", body: { handle: H } };
+    expect(chargedNothing([approval, local("failed", "gateway_precheck")], H)).toBe(true);
     const sent = { kind: "disclosure", body: { destination: "shop", endpoint: "complete_checkout", purchase: H } };
-    expect(chargedNothing([sent, local("failed", "gateway_precheck")], H)).toBe(false);
+    expect(chargedNothing([approval, sent, local("failed", "gateway_precheck")], H)).toBe(false);
+    // A send that names no purchase, or another one, still keeps the room: the branch does not rely on `purchase`.
+    const unnamed = { kind: "disclosure", body: { destination: "shop", endpoint: "complete_checkout" } };
+    expect(chargedNothing([approval, unnamed, local("failed", "gateway_precheck")], H)).toBe(false);
     const other = { kind: "disclosure", body: { destination: "shop", endpoint: "complete_checkout", purchase: "ap_OTHER0001" } };
-    expect(chargedNothing([other, null as never, local("failed", "gateway_precheck")].filter(Boolean), H)).toBe(true);
+    expect(chargedNothing([approval, other, local("failed", "gateway_precheck")], H)).toBe(false);
+    // One logged before the approval belongs to an earlier purchase.
+    expect(chargedNothing([other, approval, local("failed", "gateway_precheck")], H)).toBe(true);
   });
   it("the latest local outcome decides; indeterminate holds the room", () => {
     expect(chargedNothing([local("failed", "shop_api"), local("indeterminate", "shop_api")], H)).toBe(false);
