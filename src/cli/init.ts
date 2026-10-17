@@ -35,6 +35,13 @@ export async function init(io: Io, config: Config, options: { yes: boolean }): P
     const args = [...(config.demo ? ["demo"] : []), ...(config.cloud.trust.kind === "file" ? ["--trust-keys", config.cloud.trust.path] : [])];
     line(io.stdout, "Connect an agent (Claude Code):");
     line(io.stdout, `  ${printable(hostConnect(INTENT, io.env, args))}`);
+    // The line never carries INTENT_WALLET_KEY (a secret), so an agent's gateway would not open the vault without it.
+    if (config.wallet.key.kind === "env") {
+      line(
+        io.stdout,
+        "The wallet key comes from INTENT_WALLET_KEY, which this line leaves out: set INTENT_WALLET_KEY_FILE to a file holding it (preferred), or add INTENT_WALLET_KEY to your MCP config yourself",
+      );
+    }
   }
   return shop && !levels.includes("fail") ? 0 : 1;
 }

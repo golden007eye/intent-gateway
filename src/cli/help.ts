@@ -34,7 +34,7 @@ ${pad("policy test <cases.yaml>")}run test cases against the active policy
 ${pad("approver list")}approver pins and flagged passkeys
 ${pad("approver accept")}make a flagged passkey the approver (at a terminal)
 ${pad("wallet status")}whether a Shop wallet is linked and its encrypted vault opens
-${pad("wallet link shop")}link your Shop account for one-tap purchases (you approve in Shop)
+${pad("wallet link shop")}link your Shop account (for one-tap purchases, coming later)
 ${pad("wallet unlink shop")}revoke the gateway's Shop token and delete its vault file
 ${pad("demo [--http]")}run against a local demo Intent Cloud (HTTP when typed in a terminal)
 

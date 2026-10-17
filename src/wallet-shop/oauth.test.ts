@@ -116,7 +116,8 @@ describe("linkShop: the device flow through the disclosure core", () => {
     const run = await setup({ deviceAnswers: ["authorization_pending", "slow_down", "authorization_pending", "ok"], deviceInterval: 2 });
     const linked = await run.link();
     expect(parseShopCredentials(linked.vaultText)?.accessToken).toBe(run.shop.accessToken);
-    expect(run.sleeps).toEqual([2000, 2000, 7000, 7000]);
+    // Shop's 2 s is below RFC 8628's 5 s floor; slow_down adds 5 s.
+    expect(run.sleeps).toEqual([5000, 5000, 10000, 10000]);
     expect(run.shop.oauthRequests.map((r) => r.path)).toEqual(["/oauth/device", "/oauth/token", "/oauth/token", "/oauth/token", "/oauth/token"]);
     expectNoSecrets(run.shop);
   });
@@ -139,6 +140,24 @@ describe("linkShop: the device flow through the disclosure core", () => {
     expect((error as Error).message).not.toContain(FAKE_BUYER.email);
     expect(run.shop.oauthRequests.filter((r) => r.path === "/oauth/token")).toHaveLength(2);
     expectNoSecrets(run.shop);
+  });
+
+  it.each([
+    [0.001, 119, 5000],
+    [1e7, 9, 60_000],
+  ])("attack: Shop's interval %s is clamped to 5-60 s: %i token requests, no wait over the cap, and the flow ends at the 10-minute deadline", { timeout: 60_000 }, async (interval, polls, step) => {
+    const run = await setup({ deviceAnswers: ["authorization_pending"], deviceInterval: interval, deviceExpiresIn: 1e9 });
+    await expect(run.link()).rejects.toMatchObject({ name: "ShopLinkError", failure: "expired" });
+    expect(run.shop.oauthRequests.filter((r) => r.path === "/oauth/token")).toHaveLength(polls);
+    expect(Math.max(...run.sleeps)).toBe(step);
+    expect(run.sleeps.reduce((a, b) => a + b, 0)).toBe(10 * 60_000);
+  });
+
+  it("slow_down past the cap keeps the interval at 60 s", async () => {
+    const run = await setup({ deviceAnswers: [...Array<"slow_down">(4).fill("slow_down"), "ok"], deviceInterval: 50 });
+    await run.link();
+    expect(Math.max(...run.sleeps)).toBe(60_000);
+    expect(run.sleeps.slice(0, 3)).toEqual([50_000, 55_000, 60_000]);
   });
 
   it("stops polling at the code's expiry, without a token request after it", async () => {

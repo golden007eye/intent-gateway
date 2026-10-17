@@ -75,8 +75,9 @@ export async function walletStatus(io: Io, config: Config): Promise<number> {
 /**
  * Links `rail` with Shop's device flow: exit 0 once the tokens are in the vault and the link is chained; 1 when one-tap
  * is unavailable (no client set: nothing is sent) or the flow ends without tokens (the line says how to try again).
- * A wallet already linked is unlinked first, as `wallet unlink` does: its token is revoked (a logged send; a failed
- * revocation warns and linking goes on), its vault file deleted, and `wallet {action: "unlinked", revoked}` chained.
+ * A wallet already linked stays untouched until the new sign-in has succeeded; only then is it unlinked as `wallet
+ * unlink` does (its token revoked by a logged send, a failed revocation warned about; its vault file deleted;
+ * `wallet {action: "unlinked", revoked}` chained), before the new tokens are saved and the link chained.
  */
 export async function walletLink(io: Io, config: Config, rail: string): Promise<number> {
   if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
@@ -101,13 +102,8 @@ export async function walletLink(io: Io, config: Config, rail: string): Promise<
   });
   try {
     const session = openWalletSession(store);
-    if (await hasSecret(config.dataDir, rail)) {
-      line(io.stdout, `${name} wallet already linked: revoking its token before linking again`);
-      const revoked = await revoke(io, config, rail, session);
-      await deleteSecret(config.dataDir, rail);
-      await store.append("wallet", { rail, action: "unlinked", revoked });
-      if (!revoked) line(io.stderr, `intent: warning: the earlier ${name} token was not revoked; revoke it in your ${name} account settings (${RAIL_SETTING[rail]})`);
-    }
+    const relink = await hasSecret(config.dataDir, rail);
+    if (relink) line(io.stdout, `${name} wallet already linked: it stays as it is unless this new link succeeds`);
     const where = { mcpUrl: config.wallet.shopMcpUrl, authUrl: config.wallet.shopAuthUrl };
     let linked;
     try {
@@ -122,12 +118,30 @@ export async function walletLink(io: Io, config: Config, rail: string): Promise<
       });
     } catch (error) {
       if (!(error instanceof ShopLinkError)) throw error;
-      line(io.stderr, `intent: ${name} wallet not linked: ${error.message}; run ${INTENT} wallet link ${rail} to try again`);
+      const kept = relink ? `; the earlier link is kept unchanged` : "";
+      line(io.stderr, `intent: ${name} wallet not linked: ${error.message}${kept}; run ${INTENT} wallet link ${rail} to try again`);
       return 1;
     }
+    if (relink) {
+      // The new tokens are in hand: now end the earlier link, revoking first as `wallet unlink` does.
+      const revoked = await revoke(io, config, rail, session);
+      await deleteSecret(config.dataDir, rail);
+      await store.append("wallet", { rail, action: "unlinked", revoked });
+      if (revoked) line(io.stdout, `${name} acknowledged the revocation of the earlier token (HTTP 200)`);
+      else line(io.stderr, `intent: warning: the earlier ${name} token was not revoked; revoke it in your ${name} account settings (${RAIL_SETTING[rail]})`);
+    }
     await saveSecret(config.dataDir, rail, key, linked.vaultText);
-    const entry = await store.append("wallet", { rail, action: "linked", revoked: false });
+    let entry;
+    try {
+      entry = await store.append("wallet", { rail, action: "linked", revoked: false });
+    } catch (error) {
+      // No link may exist that the chain does not record: the tokens go with the failed entry.
+      await deleteSecret(config.dataDir, rail);
+      line(io.stderr, `intent: the ${name} link could not be recorded in the chain, so its tokens were deleted from this machine; run ${INTENT} wallet link ${rail} again once the chain is writable`);
+      throw error;
+    }
     line(io.stdout, printable(`${name} wallet linked: tokens kept in the encrypted vault ${vaultPath(config.dataDir, rail)} (entry #${String(entry.seq)})`));
+    line(io.stdout, `Purchases are still handed off to the merchant's checkout for now: one-tap with ${name} is not yet wired to purchases`);
     if (!linked.refreshIssued) {
       const life = linked.expiresInS === null ? "" : ` (in about ${String(Math.max(1, Math.round(linked.expiresInS / 3600)))} h)`;
       line(io.stdout, `${name} issued no refresh token: when its access token expires${life}, run ${INTENT} wallet link ${rail} again`);

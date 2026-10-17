@@ -100,6 +100,7 @@ export interface FakeShop {
   readonly mcpUrl: string;
   /** Shop's account server URL (INTENT_SHOP_AUTH_URL). */
   readonly authUrl: string;
+  /** The latest grant's tokens: one pair at start, and a new pair for each device-flow grant. */
   readonly accessToken: string;
   readonly refreshToken: string;
   /** The Shop Pay token inside the offered payment instrument. */
@@ -144,8 +145,15 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function startFakeShop(options: { faults?: FakeShopFaults; clientId?: string } = {}): Promise<FakeShop> {
   const token = (prefix: string) => `${prefix}_${randomBytes(18).toString("base64url")}`;
-  const accessToken = token("shpat_fake_access");
-  const refreshToken = token("shprt_fake_refresh");
+  // Each grant is a token pair; revoking either token ends its grant only (Shop's connection removal).
+  const grants: { access: string; refresh: string }[] = [];
+  const grant = () => {
+    const pair = { access: token("shpat_fake_access"), refresh: token("shprt_fake_refresh") };
+    grants.push(pair);
+    return pair;
+  };
+  grant();
+  const current = () => grants[grants.length - 1] as { access: string; refresh: string };
   const instrumentToken = token("spt_fake_instrument");
   const deviceCode = token("fake_device_code");
   const userCode = "WDJB-MJHT";
@@ -163,8 +171,12 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
   const shop: FakeShop = {
     mcpUrl: "",
     authUrl: "",
-    accessToken,
-    refreshToken,
+    get accessToken() {
+      return current().access;
+    },
+    get refreshToken() {
+      return current().refresh;
+    },
     instrumentToken,
     clientId: options.clientId ?? "fake-shop-client",
     deviceCode,
@@ -339,9 +351,12 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       revocations.push({ token: form.get("token") ?? "", tokenTypeHint: form.get("token_type_hint"), clientId: form.get("client_id"), contentType: headers["content-type"] ?? "" });
       const status = shop.faults.revokeStatus ?? 200;
       if (status === 200) {
-        // Revoking either token ends the grant, as Shop's connection removal does.
-        revoked.add(accessToken);
-        revoked.add(refreshToken);
+        // Revoking either token ends its grant, as Shop's connection removal does.
+        const ended = grants.find((g) => g.access === form.get("token") || g.refresh === form.get("token"));
+        if (ended !== undefined) {
+          revoked.add(ended.access);
+          revoked.add(ended.refresh);
+        }
       }
       send(status, status === 200 ? {} : { error: "server_error", error_description: errorText("revocation failed") });
       return;
@@ -375,15 +390,13 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         send(400, { error: answer, error_description: errorText(answer) });
         return;
       }
-      // A new grant: a revocation of an earlier one does not end it.
-      revoked.delete(accessToken);
-      revoked.delete(refreshToken);
+      const issued = grant();
       send(200, {
-        access_token: accessToken,
+        access_token: issued.access,
         token_type: "Bearer",
         expires_in: 3600,
         scope: form.scope ?? "openid personal_agent",
-        ...(shop.faults.noRefreshToken === true ? {} : { refresh_token: refreshToken }),
+        ...(shop.faults.noRefreshToken === true ? {} : { refresh_token: issued.refresh }),
         // An id token names the buyer; the gateway must drop it.
         id_token: `fake.${Buffer.from(JSON.stringify({ email: FAKE_BUYER.email })).toString("base64url")}.sig`,
       });
@@ -428,7 +441,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       return;
     }
     const bearer = /^Bearer (.+)$/.exec(headers.authorization ?? "")?.[1];
-    if (bearer !== accessToken || revoked.has(bearer)) {
+    if (bearer === undefined || !grants.some((g) => g.access === bearer) || revoked.has(bearer)) {
       send(401, rpcError(body.id, -32001, "invalid token"), { "www-authenticate": 'Bearer error="invalid_token"' });
       return;
     }

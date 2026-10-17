@@ -17,9 +17,13 @@ export const SHOP_SCOPE = "openid personal_agent";
 export const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 /** The longest the gateway waits for the developer to approve, whatever Shop's `expires_in` says. */
 export const MAX_WAIT_MS = 10 * 60_000;
-/** RFC 8628 §3.2: the poll interval when Shop names none; `slow_down` adds this much each time. */
+/** RFC 8628 §3.2: the poll interval when Shop names none, and the floor; `slow_down` adds 5 s each time. */
 const DEFAULT_INTERVAL_S = 5;
 const SLOW_DOWN_S = 5;
+/** The longest wait between two polls, whatever Shop asks for. */
+const MAX_INTERVAL_S = 60;
+/** Shop's interval kept between the RFC's 5 s floor and MAX_INTERVAL_S: never a busy loop, never a setTimeout overflow. */
+const clampInterval = (seconds: number): number => Math.min(Math.max(seconds, DEFAULT_INTERVAL_S), MAX_INTERVAL_S);
 
 /** What the developer is shown to approve the link: where to go and which code to check. */
 export interface DeviceGrantPrompt {
@@ -85,12 +89,13 @@ export async function runDeviceFlow(accounts: ShopCaller, options: DeviceFlowOpt
   }
   const complete = isWebUrl(json.verification_uri_complete) ? json.verification_uri_complete : null;
   const expiresMs = Math.min(positive(json.expires_in) * 1000 || MAX_WAIT_MS, MAX_WAIT_MS);
-  let intervalS = positive(json.interval) || DEFAULT_INTERVAL_S;
+  let intervalS = clampInterval(positive(json.interval) || DEFAULT_INTERVAL_S);
   options.show({ userCode, verificationUri: uri, verificationUriComplete: complete, expiresInS: Math.round(expiresMs / 1000) });
 
   const deadline = started + expiresMs;
   for (;;) {
-    await options.sleep(intervalS * 1000);
+    // Never past the deadline, so the 10-minute cap holds whatever the interval.
+    await options.sleep(Math.max(0, Math.min(intervalS * 1000, deadline - options.now())));
     // No token request after the code expired: Shop would only answer expired_token.
     if (options.now() >= deadline) throw new ShopLinkError("expired", EXPIRED);
     const answer = readForm(await accounts.call(TOKEN, { grant_type: DEVICE_GRANT, device_code: deviceCode, client_id: options.clientId }));
@@ -98,7 +103,7 @@ export async function runDeviceFlow(accounts: ShopCaller, options: DeviceFlowOpt
     const code = answer.json.error;
     if (code === "authorization_pending") continue;
     if (code === "slow_down") {
-      intervalS += SLOW_DOWN_S;
+      intervalS = clampInterval(intervalS + SLOW_DOWN_S);
       continue;
     }
     throw failed(answer.json, "Shop refused the token request");

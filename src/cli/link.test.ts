@@ -98,6 +98,7 @@ describe("intent wallet link shop", () => {
     expect(r.out).toContain(`check that it shows the code ${s.shop.userCode}:\n  ${s.shop.authUrl}activate\n`);
     expect(r.out).toContain("Shop wallet linked: tokens kept in the encrypted vault");
     expect(r.out).toContain("Shop budget left for the gateway: 50.00 USD");
+    expect(r.out).toContain("Purchases are still handed off to the merchant's checkout for now: one-tap with Shop is not yet wired to purchases");
     expect(r.out).not.toContain("refresh token");
 
     const vault = await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"));
@@ -118,28 +119,35 @@ describe("intent wallet link shop", () => {
     expect(verify.out).toContain("credentials digested in the log");
   });
 
-  it("linking again revokes the earlier token first, through the logged revoke, and chains the unlink before the link", async () => {
+  it("linking again: the new sign-in first, then the earlier token revoked (logged), the unlink chained, then the link", async () => {
     const s = await setup();
     expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    const old = { access: s.shop.accessToken, refresh: s.shop.refreshToken };
     const r = await s.run(["wallet", "link", "shop"]);
     expect(r.code, r.err).toBe(0);
     expect(r.err).toBe("");
-    expect(r.out).toContain("Shop wallet already linked: revoking its token before linking again");
-    expect(s.shop.revocations).toEqual([{ token: s.shop.refreshToken, tokenTypeHint: "refresh_token", clientId: s.shop.clientId, contentType: "application/x-www-form-urlencoded" }]);
+    expect(r.out).toContain("Shop wallet already linked: it stays as it is unless this new link succeeds");
+    expect(r.out).toContain("Shop acknowledged the revocation of the earlier token (HTTP 200)");
+    expect(s.shop.revocations).toEqual([{ token: old.refresh, tokenTypeHint: "refresh_token", clientId: s.shop.clientId, contentType: "application/x-www-form-urlencoded" }]);
+    expect(s.shop.refreshToken).not.toBe(old.refresh);
     const chain = readChain(s.dir) as { kind: string; body: Record<string, unknown> }[];
     const second = chain.slice(8);
-    expect(second.map((e) => e.kind)).toEqual(["session", "disclosure", "response", "wallet", "disclosure", "response", "disclosure", "response", "wallet", "disclosure", "response"]);
-    expect(second[1]?.body).toMatchObject({ endpoint: "revoke", destination: "shop_accounts" });
-    expect(second[3]?.body).toEqual({ rail: "shop", action: "unlinked", revoked: true });
+    expect(second.map((e) => e.kind)).toEqual(["session", "disclosure", "response", "disclosure", "response", "disclosure", "response", "wallet", "wallet", "disclosure", "response"]);
+    expect(second.filter((e) => e.kind === "disclosure").map((e) => e.body.endpoint)).toEqual(["device_authorization", "token", "revoke", "get_account"]);
+    expect(second[7]?.body).toEqual({ rail: "shop", action: "unlinked", revoked: true });
     expect(second[8]?.body).toEqual({ rail: "shop", action: "linked", revoked: false });
+    // The new grant survives the revocation of the old one.
     expect(r.out).toContain("Shop budget left for the gateway");
-    expect(existsSync(vaultPath(s.dir, "shop"))).toBe(true);
+    const vault = await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"));
+    expect(JSON.parse(vault ?? "{}")).toMatchObject({ access_token: s.shop.accessToken, refresh_token: s.shop.refreshToken });
     expectNoSecrets(s, r);
+    const audit = readFileSync(join(s.dir, "audit.jsonl"), "utf8");
+    for (const secret of [old.access, old.refresh]) expect(audit + r.out + r.err).not.toContain(secret);
     const verify = await s.run(["verify", "--skip-install-check"]);
     expect(verify.code, verify.out + verify.err).toBe(0);
   });
 
-  it("linking again when the revocation fails: warns, chains revoked:false, and still links", async () => {
+  it("linking again when the revocation fails: warns, chains revoked:false, and the new link stands", async () => {
     const s = await setup({ revokeStatus: 500 });
     expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
     const r = await s.run(["wallet", "link", "shop"]);
@@ -152,8 +160,24 @@ describe("intent wallet link shop", () => {
       { rail: "shop", action: "unlinked", revoked: false },
       { rail: "shop", action: "linked", revoked: false },
     ]);
-    expect(existsSync(vaultPath(s.dir, "shop"))).toBe(true);
+    const vault = await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"));
+    expect(JSON.parse(vault ?? "{}")).toMatchObject({ access_token: s.shop.accessToken });
     expectNoSecrets(s, r);
+  });
+
+  it("linking again when the new sign-in fails: the earlier link is untouched, nothing revoked, nothing chained as unlinked", async () => {
+    const s = await setup();
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    const before = await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"));
+    s.shop.faults.deviceAnswers = ["expired_token"];
+    const r = await s.run(["wallet", "link", "shop"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("the sign-in code expired before it was approved; the earlier link is kept unchanged; run");
+    expect(s.shop.revocations).toEqual([]);
+    expect(await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"))).toBe(before);
+    const bodies = (readChain(s.dir) as { kind: string; body: unknown }[]).filter((e) => e.kind === "wallet").map((e) => e.body);
+    expect(bodies).toEqual([{ rail: "shop", action: "linked", revoked: false }]);
+    expect((await s.run(["wallet", "status"])).out).toContain("Shop wallet: linked");
   });
 
   it("no Shop client set: unavailable, exit 1, nothing sent to Shop and nothing chained", async () => {
@@ -229,6 +253,17 @@ describe("intent init", () => {
     expect(r.out).toContain(`-e INTENT_SHOP_CLIENT_ID=${s.shop.clientId}`);
     expect(s.shop.oauthRequests).toEqual([]);
     expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
+  });
+
+  it("a wallet key from INTENT_WALLET_KEY: says the connect line leaves it out, and never prints the key", async () => {
+    const s = await setup();
+    const key = randomBytes(32).toString("base64");
+    const r = await s.run(["init"], { env: { ...without(s.env, "INTENT_WALLET_KEY_FILE"), INTENT_WALLET_KEY: key } });
+    expect(r.code, r.out + r.err).toBe(0);
+    expect(r.out).toContain("The wallet key comes from INTENT_WALLET_KEY, which this line leaves out: set INTENT_WALLET_KEY_FILE");
+    expect(r.out + r.err).not.toContain(key);
+    const withFile = await s.run(["init"]);
+    expect(withFile.out).not.toContain("comes from INTENT_WALLET_KEY");
   });
 
   it("--yes at a terminal skips the Shop step too", async () => {
