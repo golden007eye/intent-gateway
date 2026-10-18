@@ -15,6 +15,9 @@ import { logCommand } from "./log.ts";
 import { logFlags } from "./log-flags.ts";
 import { policyAdd, policyShow, policyTest } from "./policy.ts";
 import { serve } from "./serve.ts";
+import { pauseCommand, pauseDeps, resumeCommand, statusCommand } from "./pause.ts";
+import { pausedIn, pauseLocally, sendPause } from "../pause/index.ts";
+import { openStore } from "../store/index.ts";
 import { init } from "./init.ts";
 import { walletCheck, walletLink, walletStatus, walletUnlink } from "./wallet.ts";
 import type { Demo } from "../demo/index.ts";
@@ -55,6 +58,9 @@ export const COMMANDS: Readonly<Record<string, Options>> = {
   evidence: { out: { type: "string" } },
   panel: { port: { type: "string" } },
   doctor: {},
+  pause: {},
+  resume: {},
+  status: {},
   init: { yes: { type: "boolean", short: "y" } },
   "policy test": { policy: { type: "string" } },
   "policy add": { commit: { type: "string" }, yes: { type: "boolean", short: "y" } },
@@ -208,12 +214,37 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
         // The chain checks of `intent verify`, offline and read-only; the install self-check stays with the command.
         verify: () =>
           runVerify({ dataDir: config.dataDir, pinnedRootKeys: keys, now: new Date((io.now ?? Date.now)()), skipSupplyChain: true, skipReason: "the panel checks the chain only" }),
+        // The Pause button (ADR-0023): the local pause at once; the send to Intent Cloud goes on after the answer. In
+        // demo mode the demo Intent Cloud runs with `intent demo`, whose retry sends it.
+        pause: async () => {
+          const store = await openStore(config.dataDir);
+          try {
+            if (!pausedIn(store.entries())) await pauseLocally(store, "panel");
+          } catch (error) {
+            await store.close();
+            throw error;
+          }
+          if (config.demo) {
+            await store.close();
+            return;
+          }
+          const deps = pauseDeps(io, config, store, null);
+          void sendPause(deps)
+            .catch(() => undefined)
+            .finally(() => void store.close());
+        },
       });
-      line(io.stdout, `panel: ${panel.url} (read-only; Ctrl-C stops it)`);
+      line(io.stdout, `panel: ${panel.url} (read-only but for the Pause button; Ctrl-C stops it)`);
       return { code: 0, stop: () => panel.close() };
     }
     case "doctor":
       return { code: await doctor(io, config) };
+    case "pause":
+      return { code: await pauseCommand(io, config) };
+    case "resume":
+      return { code: await resumeCommand(io, config) };
+    case "status":
+      return { code: await statusCommand(io, config) };
     case "init":
       return { code: await init(io, config, { yes: values.yes === true }) };
     case "policy test":

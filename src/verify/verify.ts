@@ -26,6 +26,7 @@ import {
   verifyStatement,
 } from "../trust/index.ts";
 import { walletEntryProblem } from "../wallet/index.ts";
+import { pauseProblems } from "../pause/index.ts";
 
 export type Install = { kind: "npm"; pkgDir: string } | { kind: "image"; ref: string; version: string };
 
@@ -43,7 +44,7 @@ export interface VerifyOptions {
 }
 
 export interface Check {
-  name: "usage" | "evidence pack" | "purchase" | "chain" | "key statements" | "disclosures" | "approvals" | "outcomes" | "approver flags" | "self-check";
+  name: "usage" | "evidence pack" | "purchase" | "chain" | "key statements" | "disclosures" | "approvals" | "outcomes" | "approver flags" | "pause" | "self-check";
   ok: boolean;
   details: string[];
 }
@@ -415,7 +416,18 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
           },
         ]),
     { name: "approver flags", ok: true, details: [`flagged: ${String(counts.flags)}`, ...flags] },
+    ...(partial ? [] : pauseCheck(entries)),
   ];
+}
+
+const PAUSE_KINDS: ReadonlySet<string> = new Set(["pause", "pause_sent", "resume", "resume_check", "refused"]);
+
+/** The pause entries' order and counters (ADR-0023); no check at all on a chain without a pause. */
+function pauseCheck(entries: readonly Entry[]): Check[] {
+  const count = entries.filter((e) => PAUSE_KINDS.has(e.kind)).length;
+  if (count === 0) return [];
+  const problems = pauseProblems(entries);
+  return [{ name: "pause", ok: problems.length === 0, details: [`pause entries: ${String(count)}`, ...problems] }];
 }
 
 /** Whether the chain was written in demo mode: its first entry is the demo `session` entry `{mode: "demo"}`. */

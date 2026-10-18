@@ -12,6 +12,7 @@ export {
   type HeaderPair,
   type HttpCloudOptions,
   type IntentCloud,
+  type Operation,
   type PreparedRequest,
   type RawExchange,
   type ReceiptHeaders,

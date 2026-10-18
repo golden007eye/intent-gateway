@@ -11,6 +11,7 @@ import {
   approvalsPath,
   type ApprovalCreated,
   type ApprovalStatus,
+  type Endpoint,
   type Cart,
   type CartRequest,
   type CheckoutRequest,
@@ -26,6 +27,11 @@ import {
   outcomeReportsPath,
   type OutcomeReport,
   type OutcomeReportAccepted,
+  PAUSE_CONTRACT_VERSION,
+  PAUSE_ENDPOINT,
+  type PauseAccepted,
+  PauseError,
+  type PauseRequest,
   type RateLimited,
   type SearchRequest,
   type SearchResponse,
@@ -41,8 +47,11 @@ export const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
 export type HeaderPair = readonly [name: string, value: string];
 
 /** One request exactly as it goes on the wire: the header pairs in send order and the body bytes. */
+/** A contract operation, or `pause` (contract 1.7.0, src/contract's PAUSE_ENDPOINT). */
+export type Operation = OperationId | "pause";
+
 export interface PreparedRequest {
-  readonly operation: OperationId;
+  readonly operation: Operation;
   readonly method: "GET" | "POST";
   readonly path: string;
   readonly headers: readonly HeaderPair[];
@@ -101,6 +110,8 @@ export interface IntentCloud {
   createCheckout(request: CheckoutRequest, options?: CallOptions): Promise<CloudResult<ApprovalCreated>>;
   getApproval(approvalHandle: string, options?: CallOptions): Promise<CloudResult<ApprovalStatus>>;
   reportOutcome(approvalHandle: string, report: OutcomeReport, options?: CallOptions): Promise<CloudResult<OutcomeReportAccepted>>;
+  /** `POST /v1/pause` (contract 1.7.0); a non-200 body is src/contract's PauseError. */
+  pause(request: PauseRequest, options?: CallOptions): Promise<CloudResult<PauseAccepted>>;
 }
 
 export interface HttpCloudOptions {
@@ -274,6 +285,11 @@ interface Exchange {
   body: Buffer | null; // null when the body exceeded the cap
 }
 
+/** The endpoint of an operation: the contract's, or the pause call's (contract 1.7.0). */
+function endpointOf(operation: Operation): Endpoint {
+  return operation === "pause" ? PAUSE_ENDPOINT : ENDPOINTS[operation];
+}
+
 /** Creates the adapter. Throws CloudRequestError for a base URL that is not https or loopback http. */
 export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
   const target = parseBaseUrl(options.baseUrl);
@@ -281,8 +297,8 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 
-  function prepare(operation: OperationId, path: string, payload: unknown, session: Session): PreparedRequest {
-    const endpoint = ENDPOINTS[operation];
+  function prepare(operation: Operation, path: string, payload: unknown, session: Session): PreparedRequest {
+    const endpoint = endpointOf(operation);
     let body: Uint8Array = new Uint8Array(0);
     if (endpoint.request !== null) {
       const checked = endpoint.request.safeParse(payload);
@@ -292,7 +308,7 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
     const headers: HeaderPair[] = [["host", target.host]];
     if (endpoint.request !== null) headers.push(["content-type", "application/json"]);
     // The caller's contract version (contract 1.6.1): unsigned, logged with the rest of the header set.
-    headers.push(["accept", "application/json"], [CONTRACT_VERSION_HEADER, CONTRACT_VERSION]);
+    headers.push(["accept", "application/json"], [CONTRACT_VERSION_HEADER, operation === "pause" ? PAUSE_CONTRACT_VERSION : CONTRACT_VERSION]);
     if (endpoint.signed) {
       const signed = signRequest(session, { method: endpoint.method, path, body, created: Math.floor(now() / 1000) });
       headers.push(
@@ -388,7 +404,7 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
     });
   }
 
-  async function call<T>(operation: OperationId, path: string, payload: unknown, callOptions?: CallOptions): Promise<CloudResult<T>> {
+  async function call<T>(operation: Operation, path: string, payload: unknown, callOptions?: CallOptions): Promise<CloudResult<T>> {
     const request = prepare(operation, path, payload, callOptions?.session ?? options.session);
     // Every refusal comes before beforeSend, so a request that never leaves is never logged as sent.
     const agent = requestAgent();
@@ -406,11 +422,11 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
     if (exchange.body === null) {
       throw new CloudResponseError("too_large", status, common, `${operation} response is larger than ${String(maxBytes)} bytes`);
     }
-    const endpoint = ENDPOINTS[operation];
-    const listed = endpoint.errors as readonly number[];
+    const endpoint = endpointOf(operation);
+    const listed: readonly number[] = endpoint.errors;
     let schema: z.ZodType;
     if (status === endpoint.status) schema = endpoint.response;
-    else if (listed.includes(status)) schema = errorBody(status);
+    else if (listed.includes(status)) schema = operation === "pause" ? PauseError : errorBody(status);
     else return { ...common, ok: false, status, body: null };
 
     let json: unknown;
@@ -450,5 +466,6 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
     createApproval: async (h, o) => call<ApprovalCreated>("createApproval", handlePath(approvalsPath, h), undefined, o),
     getApproval: async (h, o) => call<ApprovalStatus>("getApproval", handlePath(approvalPath, h), undefined, o),
     reportOutcome: async (h, r, o) => call<OutcomeReportAccepted>("reportOutcome", handlePath(outcomeReportsPath, h), r, o),
+    pause: (r, o) => call<PauseAccepted>("pause", PAUSE_ENDPOINT.path, r, o),
   };
 }

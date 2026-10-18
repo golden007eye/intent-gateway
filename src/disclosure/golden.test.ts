@@ -85,6 +85,7 @@ function scriptedCloud(script: Outcome[]): IntentCloud {
     createCheckout: (r, o) => call(prepared("createCheckout", "POST", "/v1/checkouts", r), {}, o),
     getApproval: (h, o) => call(prepared("getApproval", "GET", `/v1/approvals/${h}`, undefined), {}, o),
     reportOutcome: (h, r, o) => call(prepared("reportOutcome", "POST", `/v1/approvals/${h}/outcome-reports`, r), {}, o),
+    pause: (r, o) => call(prepared("pause", "POST", "/v1/pause", r), {}, o),
   };
 }
 

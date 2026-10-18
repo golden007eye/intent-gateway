@@ -30,3 +30,11 @@ export {
   storePairProblem,
   type StorePairReason,
 } from "./store-pair.ts";
+export {
+  isPausedRefusal,
+  PAUSE_CONTRACT_VERSION,
+  PAUSE_ENDPOINT,
+  PAUSE_SIGNING_PREFIX,
+  PauseError,
+  pauseSigningBytes,
+} from "./pause.ts";

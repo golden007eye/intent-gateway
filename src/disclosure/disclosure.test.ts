@@ -533,6 +533,7 @@ describe("an adapter that misbehaves", () => {
       createCheckout: (_r, o) => call(o),
       getApproval: (_h, o) => call(o),
       reportOutcome: (_h, _r, o) => call(o),
+      pause: (_r, o) => call(o),
     };
   };
 

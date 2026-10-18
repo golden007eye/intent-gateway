@@ -1,10 +1,10 @@
 # Panel
 
-The panel is a read-only local web page over the gateway's chain: what the gateway sent, what came back, what waits for your approval and the rules it runs under. It refreshes itself every few seconds.
+The panel is a local web page over the gateway's chain: what the gateway sent, what came back, what waits for your approval and the rules it runs under. It refreshes itself every few seconds. It only reads, except for one button: **Pause purchases** ([below](#pause)).
 
 ```console
 $ intent panel --demo
-panel: http://127.0.0.1:41733/ (read-only; Ctrl-C stops it)
+panel: http://127.0.0.1:41733/ (read-only but for the Pause button; Ctrl-C stops it)
 ```
 
 Open the address it prints. `--port <n>` picks the port; without it, a free one is used. Drop `--demo` for the real chain. The brand bar shows **DEMO** on the demo chain and **REAL** on yours.
@@ -28,12 +28,27 @@ The values the drawers and the server log show are the ones the gateway already 
 
 The activity feed also lists each call to a wallet destination (`Shop get_checkout · answered 200, unsigned`), each wallet change (`Shop wallet linked`, `Shop wallet unlinked · token revoked at Shop`, or `token not revoked (deleted here only)`), each Shop check (`Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (21.49 USD)`, a warning when any order is unmatched or the check is incomplete; see [orders the log does not name](log.md#orders-the-log-does-not-name)), and each request refused before sending, with its reason and "nothing sent": a policy rule, buyer identity (never its value), or a request the gateway would not log as it was. A credential shows as `redacted (sha256 1a2b3c4d…)`, never as its value.
 
+## Pause
+
+Under the brand bar, the panel shows a **Pause purchases** button with the line: `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.
+
+The button does what `intent pause` does ([ADR-0023](adr/0023-pause.md)): it appends the local pause to the chain at once, so the gateway refuses `create_cart` and `complete_checkout` from then on, and then sends the pause to Intent Cloud through the log. In demo mode the panel only pauses locally; `intent demo` sends it.
+
+While purchases are paused, the button gives way to a banner:
+
+- **Paused since <time>. Resume needs your passkey.**
+- where the pause stands at Intent Cloud: acknowledged, not acknowledged yet and retrying while the gateway serves (with the reason), refused, or not sent yet;
+- the purchases stopped: each approval asked for, not expired and not settled, with its total;
+- how many steps were refused since the pause;
+- how to resume: run `intent resume`, which names the confirm page's `/account`, where you resume with your passkey. The panel cannot resume.
+
 ## Why it is safe to leave open
 
 - It binds to `127.0.0.1` only and refuses any other address.
-- It never writes: there is no route that takes input, every method but GET gets 405, and it reads the chain without taking the writer's lease. Verify runs read-only, offline.
+- Its one write is the Pause button: `POST /pause`, accepted only with this panel run's random token in the `x-intent-panel-token` header, an `Origin` that is the panel's own address, and no cross-site `Sec-Fetch-Site`. The token is only in the panel's own page. A custom header cannot be sent from another site without a CORS preflight, which the panel never answers, so another page cannot press the button for you. No GET has a side effect; every other method gets 405. A pause is all it can do: it cannot resume, spend or change the policy.
+- It reads the chain without taking the writer's lease. Verify runs read-only, offline.
 - A request whose `Host` is not the panel's own address gets 421, so a web page that rebinds a DNS name to `127.0.0.1` cannot read your log through your browser.
-- It loads nothing from outside the gateway: no font, image or script from elsewhere, under a strict Content-Security-Policy (`default-src 'none'`, its own script and stylesheet only, no inline script or style, no images, no forms, no framing), with `no-store` caching and no referrer. The only outside link is the approval page, which opens only when you click it.
+- It loads nothing from outside the gateway: no font, image or script from elsewhere, under a strict Content-Security-Policy (`default-src 'none'`, its own script and stylesheet only, no inline script or style, no images, no forms, no framing; the Pause button is a script `fetch`, not a form), with `no-store` caching and no referrer. The only outside link is the approval page, which opens only when you click it.
 - Every value from the chain is written as text, never as markup, and an approval link that is not `http` or `https` is shown as text, not as a link.
 - It refuses to start when the data directory or a file in it can be read by other users, and says which `chmod` fixes it.
 

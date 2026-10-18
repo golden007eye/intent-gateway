@@ -119,6 +119,7 @@ async function build(
           sends.getApproval++, signers.push({ op: "getApproval", keyid: s?.keyid ?? null }), (patch.getApproval ?? real.getApproval)(h, s)
         ),
         reportOutcome: (h, r, s) => (signers.push({ op: "reportOutcome", keyid: s?.keyid ?? null }), (patch.reportOutcome ?? real.reportOutcome)(h, r, s)),
+        pause: (r) => (patch.pause ?? real.pause)(r),
       };
     },
     store,

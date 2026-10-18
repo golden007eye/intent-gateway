@@ -1,6 +1,7 @@
 // What every command gets from the outside world. main.ts passes the real process streams; tests pass their own,
 // which is how `approver accept` is tested without a pseudo-terminal (R3-6).
 import type { AddOptions } from "../library/index.ts";
+import type { AccountKeySource } from "../pause/index.ts";
 import type { DisclosedCloud, DisclosureOptions, HttpCloudOptions } from "../disclosure/index.ts";
 import type { Store } from "../store/index.ts";
 
@@ -31,6 +32,8 @@ export interface Io {
   followMs?: number;
   /** Test seam: how `wallet link` waits between its polls to Shop (setTimeout by default). */
   sleep?: (ms: number) => Promise<void>;
+  /** Test seam: the account key the pause is signed with (ADR-0023); see pause.ts's accountKeyFor. */
+  accountKey?: AccountKeySource;
 }
 
 /** What a command returns: its exit code, and for a long-running one (serve, panel) how to stop it. */

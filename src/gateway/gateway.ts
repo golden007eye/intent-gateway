@@ -53,6 +53,8 @@ import {
   type RefusalCode,
   type SnapshotV3,
   OfferHandle,
+  type PauseAccepted,
+  type PauseRequest,
   type SearchRequest as CloudSearchRequest,
 } from "../contract/index.ts";
 import {
@@ -73,6 +75,7 @@ import {
 import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { CLOUD_BASELINE, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
+import { isPausedAnswer, noteSubmitAnswer, pausedIn, pauseState, refuseForPause } from "../pause/index.ts";
 import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
 import { createShopProvider, filterOffers, newOfferHandle, type SearchOffer, type SearchProvider, searchProviders } from "../search/index.ts";
 import { CloudOutcomeEntry, ORDER_REF, outcomesFor, readCloudOutcome, replaces, shownStatus, type StatementCheck } from "../outcome/index.ts";
@@ -356,6 +359,11 @@ export interface Gateway {
   findOffers(input: unknown): Promise<FindOffersResult>;
   createCart(input: unknown): Promise<CreateCartResult>;
   getApprovalStatus(input: unknown): Promise<ApprovalStatusResult>;
+  /**
+   * Sends a signed pause to Intent Cloud through the disclosure log (ADR-0023); throws as the disclosed cloud does. When
+   * `unless` holds over the chain under the store lease, nothing is logged or sent (DisclosureConflictError).
+   */
+  sendPause(request: PauseRequest, unless?: (entries: readonly Entry[]) => boolean): Promise<DisclosedResult<PauseAccepted>>;
 }
 
 interface RememberedOffer {
@@ -463,12 +471,14 @@ export function createGateway(options: GatewayOptions): Gateway {
   async function call<T>(
     run: () => Promise<DisclosedResult<T>>,
     fromSeq: number,
-  ): Promise<{ ok: true; body: T; seq: number } | { ok: false; refused: Refused }> {
+  ): Promise<{ ok: true; body: T; seq: number } | { ok: false; refused: Refused; paused?: true }> {
     const refuse = (status: Refused["status"], message: string) => ({ ok: false as const, refused: { status, message, summary: summary(fromSeq) } });
     let result: DisclosedResult<T>;
     try {
       result = await run();
     } catch (error) {
+      // Intent Cloud's `paused` refusal (contract 1.7.0) arrives outside the 1.6.1 error schema: the caller records it.
+      if (isPausedAnswer(error)) return { ...refuse("refused", PAUSED_BY_CLOUD), paused: true as const };
       if (error instanceof DisclosureBlockedError) return refuse("blocked", "Not sent: the request body looked like buyer identity.");
       // The reasons are the core's own words (a rule and a field name), never a value from the request.
       if (error instanceof DisclosureRefusedError) return refuse("blocked", `Not sent: ${error.reasons.join("; ")}.`);
@@ -504,7 +514,8 @@ export function createGateway(options: GatewayOptions): Gateway {
       );
     }
     if (result.ok) return { ok: true, body: result.body, seq: result.disclosureSeq };
-    // A 1.7.0 refusal names its reason in `code` (403, or 409 `paused`): said in the gateway's own words, by code.
+    if (isPausedAnswer(result)) return { ...refuse("refused", PAUSED_BY_CLOUD), paused: true as const };
+    // Every other 1.7.0 refusal names its reason in `code` (403, or a 409 ceiling): told in the gateway's words, by code.
     const code = result.body !== null && "code" in result.body ? result.body.code : undefined;
     if (code !== undefined && (result.status === 403 || result.status === 409)) {
       return refuse("refused", `Refused: ${code}. ${REFUSAL_CODE_WORDS[code]}`);
@@ -512,6 +523,13 @@ export function createGateway(options: GatewayOptions): Gateway {
     const said = result.body === null ? "" : `: ${result.body.message}`;
     const retry = result.retryAfter === null ? "" : ` Try again in ${String(result.retryAfter)} s.`;
     return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}`);
+  }
+
+  /** Chains Intent Cloud's `paused` refusal of a request sent since `fromSeq`, and what it says about the pause. */
+  async function pausedByCloud(step: "create_cart" | "create_approval", endpoint: string, fromSeq: number): Promise<void> {
+    const sent = store.entries().findLast((e) => e.seq > fromSeq && e.kind === "disclosure" && bodyOf(e).endpoint === endpoint);
+    await refuseForPause(store, { step, source: "intent_cloud", ...(sent === undefined ? {} : { disclosureSeq: sent.seq }) });
+    await noteSubmitAnswer(store, { paused: true, disclosureSeq: sent?.seq ?? null });
   }
 
   // ---- start ----------------------------------------------------------------------------------------------------
@@ -806,6 +824,10 @@ export function createGateway(options: GatewayOptions): Gateway {
   async function createCart(raw: unknown): Promise<CreateCartResult> {
     started();
     const fromSeq = head();
+    // A pause stops every cart before anything is built or sent (ADR-0023); the refusal is chained under the lease.
+    if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_cart", source: "gateway" }))) {
+      return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
+    }
     const identity = await identityRefusal("createCart", raw, fromSeq);
     if (identity !== null) return identity;
     const parsed = CreateCartInput.safeParse(raw);
@@ -885,7 +907,12 @@ export function createGateway(options: GatewayOptions): Gateway {
     const { quantity } = request;
     const domain = known.offer.merchant.domain;
     const cartCall = await call(() => cloud.createCart(request), fromSeq);
-    if (!cartCall.ok) return cartCall.refused;
+    if (!cartCall.ok) {
+      if (cartCall.paused === true) await pausedByCloud("create_cart", "createCart", fromSeq);
+      return cartCall.refused;
+    }
+    // The submit went through: a resume the developer confirmed at a terminal is confirmed by Intent Cloud's answer.
+    if (pauseState(store.entries()).unconfirmedResume !== null) await noteSubmitAnswer(store, { paused: false, disclosureSeq: cartCall.seq });
     const cart = cartCall.body;
     await store.append("observed", observeCart(cartCall.seq, cart));
     const mode = cart.completion_mode;
@@ -923,8 +950,15 @@ export function createGateway(options: GatewayOptions): Gateway {
         "Refused: the cart and offer do not give what the approval is checked against (Appendix E step 7). No approval was requested.");
     }
 
+    // A pause chained while the cart was being made stops the purchase at its next outward step (ADR-0023).
+    if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_approval", source: "gateway" }))) {
+      return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
+    }
     const approvalCall = await call(() => cloud.createApproval(cart.cart_handle), fromSeq);
-    if (!approvalCall.ok) return approvalCall.refused;
+    if (!approvalCall.ok) {
+      if (approvalCall.paused === true) await pausedByCloud("create_approval", "createApproval", fromSeq);
+      return approvalCall.refused;
+    }
     const served = approvalCall.body;
     await store.append("observed", observeApproval(approvalCall.seq, served));
     // A cart's approval carries a v3 snapshot (1.7.0 keeps v3 for carts); a v4 one belongs to a submitted checkout.
@@ -1166,8 +1200,17 @@ export function createGateway(options: GatewayOptions): Gateway {
     confirmOrigin: string,
     fromSeq: number,
   ): Promise<CreateCartResult> {
+    // A pause chained since create_cart began (another process, the panel) stops the submit too (ADR-0023).
+    if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_cart", source: "gateway" }))) {
+      return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
+    }
     const submitted = await call(() => cloud.createCheckout(request), fromSeq);
-    if (!submitted.ok) return submitted.refused;
+    if (!submitted.ok) {
+      if (submitted.paused === true) await pausedByCloud("create_cart", "createCheckout", fromSeq);
+      return submitted.refused;
+    }
+    // The submit went through: a resume the developer confirmed at a terminal is confirmed by Intent Cloud's answer.
+    if (pauseState(store.entries()).unconfirmedResume !== null) await noteSubmitAnswer(store, { paused: false, disclosureSeq: submitted.seq });
     const created = submitted.body;
     await store.append("observed", observeApproval(submitted.seq, created));
     const s = created.snapshot;
@@ -1555,6 +1598,10 @@ export function createGateway(options: GatewayOptions): Gateway {
     start: () => serial(start),
     findOffers: (input) => serial(() => findOffers(input)),
     createCart: (input) => serial(() => createCart(input)),
+    sendPause: (request, unless) => {
+      started();
+      return cloud.pause(request, unless);
+    },
     getApprovalStatus: (input) =>
       serial(async () => {
         try {
@@ -1581,6 +1628,12 @@ function policyOffer(
   const totalMinor = shipping === null ? price.amount_minor : price.amount_minor * quantity + shipping.amount_minor;
   return { merchant, category, price_usd: totalMinor / 100 / quantity, quantity };
 }
+
+/** What the agent is told when the developer's pause stops a step here. */
+const PAUSED_HERE =
+  `Not sent: the developer paused purchases through intent (\`${INTENT} pause\`). Nothing is bought until they resume with their passkey; do not retry.`;
+/** What the agent is told when Intent Cloud answered `paused`. */
+const PAUSED_BY_CLOUD = "A `paused` answer was received from Intent Cloud for this account. Nothing is bought until the developer resumes with their passkey; do not retry.";
 
 /** The policy's completion mode for a contract mode; an unknown one maps to itself, which the policy refuses. */
 function policyMode(mode: CloudCompletionMode): PolicyCompletionMode {
@@ -1665,6 +1718,7 @@ function completionWords(c: CompletionView): string {
   const note = c.advisory?.includes("title_differs") === true ? " Note: Shop's item title differs from the approved one (variant, quantity, ZIP and total match)." : "";
   switch (c.state) {
     case "completing":
+      if (c.reason === "paused") return `Purchases are paused (\`${INTENT} pause\`): the gateway did not complete this purchase. It goes on only after the developer resumes with their passkey.`;
       return `The gateway is completing the purchase with the linked Shop wallet. ${again}${note}`;
     case "indeterminate":
       return (

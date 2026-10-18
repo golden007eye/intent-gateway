@@ -20,6 +20,7 @@ import { createFakeStorefront, type FakeStorefront } from "../storefront-fake/in
 import { openCheckoutVault, WalletKey } from "../wallet/index.ts";
 import { FAKE_BUYER, FAKE_OTHER_VARIANT, FAKE_STORE, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
 import { RefusalCode } from "../contract/index.ts";
+import { pauseLocally } from "../pause/index.ts";
 import { type ApprovalStatusResult, type CreateCartResult, createGateway, type Gateway } from "./index.ts";
 import { REFUSAL_CODE_WORDS } from "./gateway.ts";
 
@@ -257,12 +258,41 @@ describe("create_cart with a linked Shop wallet: the 1.7.0 submit", () => {
     }
   });
 
-  it("paused: 409 paused is `refused: paused`", async () => {
+  it("paused at Intent Cloud: 409 paused on the submit is `refused: paused (by Intent Cloud)`, listed for intent status", async () => {
     const h = await setup();
     h.fake.checkouts.setPaused(true);
     const result = await cart(h);
     expect(result.status).toBe("refused");
-    expect(result.message).toMatch(/^Refused: paused\. /);
+    expect(result.message).toContain("`paused` answer was received from Intent Cloud");
+    const refused = h.store.entries().findLast((e) => e.kind === "refused");
+    expect(body(refused as Entry)).toMatchObject({ step: "create_cart", reason: "paused", source: "intent_cloud" });
+    expect(h.store.entries().some((e) => e.kind === "pause" && body(e).from === "intent_cloud")).toBe(true);
+  });
+
+  it("paused here: the submit path sends nothing at all, no Shop create and no POST /v1/checkouts", async () => {
+    const h = await setup();
+    const found = await h.gateway.findOffers(STICKERS);
+    if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
+    await pauseLocally(h.store, "cli");
+    const before = h.store.entries().at(-1)?.seq ?? -1;
+    const result = await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
+    expect(result.status).toBe("refused");
+    expect(h.store.entries().filter((e) => e.seq > before && e.kind === "disclosure")).toEqual([]);
+    expect(h.shop.createCount).toBe(0);
+    expect(h.fake.checkouts.received).toHaveLength(0);
+    expect(body(h.store.entries().findLast((e) => e.kind === "refused") as Entry)).toMatchObject({ step: "create_cart", reason: "paused", source: "gateway" });
+  });
+
+  it("paused at Intent Cloud after the passkey: the completing report is refused, chained, and no complete_checkout is sent", async () => {
+    const h = await setup();
+    const result = await submitted(h);
+    expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey).status).toBe(200);
+    h.fake.checkouts.setPaused(true);
+    const done = await status(h, result.approval_handle);
+    if (done.status !== "approved") throw new Error(done.message);
+    expect(done.completion?.state).toBe("completing");
+    expect(completes(h)).toBe(0);
+    expect(h.store.entries().some((e) => e.kind === "refused" && body(e).step === "report_outcome" && body(e).source === "intent_cloud")).toBe(true);
   });
 
   it("a 409 ceiling at the completing report is a refusal before payment: no complete_checkout, a clear line", async () => {

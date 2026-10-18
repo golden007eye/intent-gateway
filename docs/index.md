@@ -16,6 +16,7 @@ intent-gateway is a self-hosted gateway, run with npx or Docker, that gives AI a
 | Local hash chain | Every field the gateway sent, every receipt that came back and every verified Approval, in one file you can check with `intent verify`. |
 | Hand-off | The buyer leaves the confirm page for the merchant's checkout and pays there. |
 | One tap | After the passkey Approval, the gateway completes the purchase with the developer's own Shop account. Demo mode only today; see [One-tap purchases](one-tap.md). |
+| Pause | `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app. `intent status` shows the pause; `intent resume` needs your passkey ([ADR-0023](adr/0023-pause.md)). |
 | Shop wallet | The developer's own Shop account, linked with `intent wallet link shop`. Shop holds the card, the saved addresses and the budget; the gateway keeps only an encrypted token. |
 
 ## What it does not do
@@ -32,5 +33,5 @@ intent-gateway is a self-hosted gateway, run with npx or Docker, that gives AI a
 - [One-tap purchases](one-tap.md): what works today, how to turn it on, what Shop holds.
 - [Gateway policy](policy.md) and [Policy library](policy-library.md): what you can restrict.
 - [Verify](verify.md): how you check what left your machine.
-- [Panel](panel.md): the read-only local page.
+- [Panel](panel.md): the local page, read-only but for its Pause button.
 - [Threat model](threat-model.md), with its [known risks](threat-model.md#known-risks), and [Security](security.md).

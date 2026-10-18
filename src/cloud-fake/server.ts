@@ -11,7 +11,7 @@
 // reports, with the 1.6.0 sums), and one without the header as 1.5.0, byte for byte, with the 1.5.0 sums. An approval
 // is read and reported on only in the version that created it (R8). `versions: ["1.5.0"]` makes a host that predates
 // 1.6.0 and ignores the header.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -58,6 +58,7 @@ import {
   type SnapshotV3,
   type WebAuthnAssertion,
 } from "../contract/index.ts";
+import { PAUSE_CONTRACT_VERSION, PauseRequest, pauseSigningBytes } from "../contract/index.ts";
 import { canonicalize, nonIntegerToken, sha256Hex } from "../jcs/index.ts";
 import { bindingResult, bindingV2 } from "../outcome/index.ts";
 import { contentDigest, createNonceCache, verifyRequest } from "../signing/index.ts";
@@ -296,6 +297,17 @@ export interface FakeCloud {
   tamper: Tamper;
   /** 1.7.0 submitted checkouts: controls and the bodies received. */
   checkouts: CheckoutControls;
+  /**
+   * The account pause (contract 1.7.0 draft, ADR-0023): `register` pins an account key (as the first passkey approval
+   * does), `resume` is the passkey resume on the confirm page's /account. While paused, `POST /v1/carts` answers 409
+   * `paused`.
+   */
+  accountPause: {
+    register(thumbprint: string, x: string): void;
+    resume(): void;
+    readonly paused: boolean;
+    lastCounter(thumbprint: string): number;
+  };
   close(): Promise<void>;
 }
 
@@ -490,6 +502,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   let snapshotPatch: SnapshotPatch | null = null;
   let proofSnapshotPatch: SnapshotPatch | null = null;
   let reportFault: number | null = null;
+  const accountKeys = new Map<string, { x: string; counter: number }>();
+  let accountPaused = false;
 
   const catalog = options.catalog ?? DEFAULT_CATALOG;
   const excluded = options.excludedCategories ?? [];
@@ -602,7 +616,24 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return null;
   }
 
+  /** `POST /v1/pause` (contract 1.7.0 draft): a signed, counted pause of the account. */
+  function pause(body: Buffer, at: number): Reply {
+    const parsed = PauseRequest.safeParse(parseJson(body));
+    if (!parsed.success) return fail(400, "bad_request", "body does not match PauseRequest");
+    const request = parsed.data;
+    const account = accountKeys.get(request.account_key_thumbprint);
+    if (account === undefined) return fail(404, "not_found", "unknown account key");
+    const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: account.x }, format: "jwk" });
+    if (!verifySignature(null, pauseSigningBytes(request), key, Buffer.from(request.signature, "base64url"))) return fail(401, "unauthorized", "bad signature");
+    if (Math.abs(Date.parse(request.issued_at) / 1000 - at) > 300) return fail(400, "clock_skew", "issued_at is more than 5 minutes off");
+    if (request.counter <= account.counter) return { status: 409, body: { error: "counter_replayed", message: "counter replayed", last_counter: account.counter } };
+    account.counter = request.counter;
+    accountPaused = true;
+    return { status: 200, body: { state: "paused", account_key_thumbprint: request.account_key_thumbprint, counter: request.counter, paused_at: timestamp(at) } };
+  }
+
   function createCart(body: Buffer, keyid: string, ipKey: string, version: ServedVersion, at: number): Reply {
+    if (accountPaused) return { status: 409, body: { error: "conflict", message: "purchases are paused for this account", code: "paused" } };
     const json = parseJson(body);
     const v16 = isV16(version);
     // 1.6.x requires the completer key; 1.5.0 has neither 1.6.x field, and its strict schema refuses them.
@@ -830,7 +861,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     }
     if (!totalsAddUp(checkout.totals)) return fail(400, "bad_request", "totals do not add up");
     const thumbprint = accountKeyThumbprint(request.account_key);
-    if (paused) return refused(409, "paused", "purchases are paused for this account key");
+    if (paused || accountPaused) return refused(409, "paused", "purchases are paused for this account key");
     // The refusals, in Appendix A's order.
     if (request.completion_mode === "shop_agent" && !oneTap) return refused(403, "one_tap_off", "one tap is off");
     if (currencies[checkout.currency] === undefined) return refused(403, "currency_unsupported", "the currency is not supported");
@@ -1014,7 +1045,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       if (a.state !== "approved" || at >= a.expiresAt) return fail(410, "gone", "the approval is not approved, or has expired");
       // 1.7.0: the pause and both ceilings again at the completing redemption; the approval stays approved.
       if (snapshot.v === 4) {
-        if (paused) return refused(409, "paused", "purchases are paused for this account key");
+        if (paused || accountPaused) return refused(409, "paused", "purchases are paused for this account key");
         const broken = ceilingBroken(snapshot, a.claimedBy, a.handle, at);
         if (broken !== null) return refused(409, broken, `the ${broken === "ceiling_order" ? "order" : "week"} ceiling is exceeded`);
       }
@@ -1063,6 +1094,11 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (body.length > MAX_BODY_BYTES) return fail(413, "too_large", "body over 16 KiB");
     const retry = take(`requests:${ipKey}`, quotas.requests_per_minute, 60, at);
     if (retry !== null) return limited("requests", retry);
+    if (path === "/v1/pause" && method === "POST" && req.headers["intent-contract-version"] === PAUSE_CONTRACT_VERSION) {
+      const checked = verifyRequest(req.headers, { method, path, body }, { now: at, seenNonce });
+      if (!checked.ok) return checked.status === 400 ? DIGEST_MISMATCH() : UNAUTHORIZED();
+      return pause(body, at);
+    }
     if (version === null) return fail(400, "bad_request", "unsupported contract version");
 
     const endpoint = ENDPOINT_METHODS.find(([pattern]) => pattern.test(path));
@@ -1143,7 +1179,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       "content-type": "application/json",
       "content-length": String(bytes.length),
       // An unsupported request version is answered in the newest version this host serves.
-      "intent-contract-version": version ?? CONTRACT_VERSION,
+      "intent-contract-version": path === "/v1/pause" && req.headers["intent-contract-version"] === PAUSE_CONTRACT_VERSION ? PAUSE_CONTRACT_VERSION : (version ?? CONTRACT_VERSION),
       ...reply.headers,
     };
     const drop = reply.status >= 200 && reply.status < 300 && faultOn("dropReceipt", path);
@@ -1167,7 +1203,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (problem !== null) return { status: 400, state: a.state, reason: problem };
     // 1.7.0: the confirm page refuses an approval over either ceiling, or while paused; the decline still works.
     if (action === "approve" && a.snapshot.v === 4) {
-      if (paused) return { status: 409, state: a.state, reason: "paused" };
+      if (paused || accountPaused) return { status: 409, state: a.state, reason: "paused" };
       const broken = ceilingBroken(a.snapshot, passkey.sub, a.handle, at);
       if (broken !== null) return { status: 409, state: a.state, reason: broken };
     }
@@ -1320,6 +1356,20 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         currencies = { ...table };
       },
       pinned: () => [...pinnedKeys],
+    },
+    accountPause: {
+      register(thumbprint, x) {
+        accountKeys.set(thumbprint, { x, counter: 0 });
+      },
+      resume() {
+        accountPaused = false;
+      },
+      get paused() {
+        return accountPaused;
+      },
+      lastCounter(thumbprint) {
+        return accountKeys.get(thumbprint)?.counter ?? 0;
+      },
     },
     tamper: {
       receiptSignature: setFault("receiptSignature"),
