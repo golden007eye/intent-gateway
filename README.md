@@ -84,21 +84,23 @@ Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`. For a b
 
 Not yet. The preview gateway talks to Intent Cloud staging and pins its root key: `intent serve` without `--demo` serves against it, and when it cannot reach the host it stops with a line saying so and the next step to take. Real purchases wait for the [launch gate](https://github.com/golden007eye/intent-gateway/blob/main/docs/adr/0004-public-pre-alpha.md). When they arrive, the buyer still approves each purchase with their own passkey on intent's confirm page and pays on the merchant's checkout.
 
+**One tap** completes an approved purchase with the developer's own Shop account instead, with no second step at the checkout. It works in the demo today: ask for stickers and buy the holographic sticker. One tap with your own account is planned: it needs a registered Shop client, which does not exist yet, and reaches only stores on their own myshopify domain until the store alias rule is settled. Shop holds the card, the addresses and the budget; the gateway never sees them. See [One-tap purchases](https://github.com/golden007eye/intent-gateway/blob/main/docs/one-tap.md).
+
 ## How privacy is verified
 
 You can check what left your machine instead of taking our word for it.
 
-- **Disclosure log.** The gateway appends every field it is about to send to a local hash chain before each request leaves for Intent Cloud. A send whose log append fails does not happen.
-- **Disclosure receipts.** Intent Cloud returns a signed receipt over the digest of the bytes it received, which the gateway matches against the log.
+- **Disclosure log.** The gateway appends every field it is about to send to a local hash chain before each request leaves for Intent Cloud, or for a linked Shop wallet. A send whose log append fails does not happen. Credentials, such as the Shop token, are logged only as their sha256.
+- **Disclosure receipts.** Intent Cloud returns a signed receipt over the digest of the bytes it received, which the gateway matches against the log. Shop signs no receipt: the log records the status Shop returned and a sha256 and size of its answer.
 - **`intent verify`** re-checks the hash chain, every receipt and every approval offline, and self-checks the installed package. Independent checks with your own tools (`npm audit signatures`, `cosign verify`) are listed in [Verify](https://github.com/golden007eye/intent-gateway/blob/main/docs/verify.md).
 - **`intent evidence <approval handle>`** writes one purchase's [evidence pack](https://github.com/golden007eye/intent-gateway/blob/main/docs/evidence.md): the requests sent, their receipts, the passkey-signed approval and the outcome statements, which anyone can check offline with `intent verify --evidence <file>`.
 
-What this does **not** cover: `intent verify` proves what the gateway sent and what Intent Cloud acknowledged receiving. It makes no claim about what happens to that data afterwards.
+What this does **not** cover: `intent verify` proves what the gateway sent, what Intent Cloud acknowledged receiving and what Shop returned. It makes no claim about what happens to that data afterwards. An evidence pack cannot prove offline that it holds every entry of its purchase; see the [known risks](https://github.com/golden007eye/intent-gateway/blob/main/docs/threat-model.md#known-risks).
 
 ## What it does not do
 
-- It does not store or forward the buyer's name, postal address or card. The buyer gives those to the merchant at checkout.
-- It holds no money: no custody, no crypto wallet.
+- It does not store or forward the buyer's name, postal address or card. The buyer gives those to the merchant at checkout, or keeps them in their Shop account for one tap.
+- It holds no money: no custody, no crypto wallet. With one tap, the gateway sends no payment details; Shop's checkout charges the Shop account.
 - It cannot buy without a person. Every purchase needs one passkey-signed Approval, and a policy that turns approval off is rejected at load time.
 - It ships to US addresses only.
 

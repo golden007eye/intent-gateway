@@ -20,6 +20,7 @@ DEMO: test keys, sample catalog, nothing can be bought.
 | Sample catalog | About seventy US offers from `*.example` merchants across everyday categories: running shoes, water bottles and mugs, coffee and kitchen gear, headphones and phone accessories, backpacks, books, toys and games, home basics, office supplies, camping gear, pet supplies, beauty basics and gifts under $30. Some exist so a seed policy has something to act on: electronics (`no-electronics`), drop-ship merchants (`block-dropship`) and items over $60 (`per-order-60`). See [Searching the sample catalog](#searching-the-sample-catalog). |
 | Local confirm page | `http://127.0.0.1:8788/confirm/c/<link>`, with the receipt (total, items, check code) and **Approve $<total> with demo passkey** and **Reject**; Approve turns on once the six digits of the demo code are in. A click signs on the server with a demo passkey kept in `<data dir>/demo/demo-passkey.json`. Approve also needs the demo code (below). |
 | Demo code | Six digits, new on every start, printed on the gateway's stderr with the next steps and kept in `<data dir>/demo/approval-code` (mode 600). It never appears in a tool result. Type or paste it as it comes: only its digits count, so `469 226`, `469-226` and `Demo code: 469226` all work. When your agent started the gateway, you do not see its stderr: the confirm page shows the command that reads the file. |
+| Demo Shop wallet | A fake Shop on `127.0.0.1`, already linked, for [one-tap purchases](one-tap.md). The catalog's holographic sticker (search for stickers) is sold by its demo store, so a cart for it is completed by the gateway after your approval instead of being handed off. Its checkout ids stay in memory: after a demo restart, an unfinished one-tap purchase cannot be read again. |
 | Demo data dir | `<data dir>/demo`. Its chain starts with a demo `session` entry, and the gateway refuses to mix a demo chain with a real one. |
 
 The gateway itself is the same code as in a real run: the same policy, identity block, disclosure log, receipt checks, approval proof check and approver pin.
@@ -77,7 +78,7 @@ The catalog also holds items in the excluded categories, such as alcohol, tobacc
 
 The demo shows that the gateway's checks work: `intent verify --demo` re-checks every receipt and the approval proof against the test root key, and fails if you edit a line of `<data dir>/demo/audit.jsonl`.
 
-It proves nothing about Intent Cloud. The test keys' private halves are published with the contract's test vectors, so anyone can sign a demo receipt. That is why:
+It proves nothing about Intent Cloud or Shop. The demo Shop wallet follows the shape of Shop's tools as the gateway uses them, not Shop's own behaviour. The test keys' private halves are published with the contract's test vectors, so anyone can sign a demo receipt. That is why:
 
 - the demo trusts the test root key only in demo mode, and it may never be pinned for an Intent Cloud host;
 - a demo chain lives in its own folder and never mixes with a real one;

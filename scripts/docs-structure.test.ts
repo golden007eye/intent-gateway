@@ -22,6 +22,7 @@ const THREAT_HEADINGS = [
   "## Phone hand-off and self-approval",
   "## Local panel",
   "## Supply chain",
+  "## Known risks",
   "## Out of scope",
 ];
 
@@ -29,9 +30,19 @@ const THREAT_STATEMENTS = [
   "Payment by hand at the merchant is the backstop against self-approval.",
   "The TTY check raises the bar but is not a guarantee.",
   "The TLS fingerprint and the carrier-NAT tier are out of scope.",
+  "One-tap spends without a hand at the merchant: the approver pin and the Shop budget are the backstop.",
 ];
 
 const OUT_OF_SCOPE_ITEMS = ["**TLS fingerprint.**", "**Carrier-NAT tier sharing.**", "**Clean tail truncation.**"];
+
+// The one-tap risks left open: each named in the Known risks section until it is closed.
+const KNOWN_RISK_ITEMS = [
+  "**The Shop token at rest.**",
+  "**The legal status of the Shop route.**",
+  "**Shop's personal-use terms.**",
+  "**The store alias.**",
+  "**Evidence-pack completeness.**",
+];
 
 /** The `intent` subcommands the CLI's help lists, such as "verify" or "policy add". */
 export function helpCommands(help: string): string[] {
@@ -76,6 +87,11 @@ describe("docs/threat-model.md", () => {
     const outOfScope = text.split("## Out of scope")[1] ?? "";
     for (const item of OUT_OF_SCOPE_ITEMS) expect(outOfScope).toContain(item);
     expect(outOfScope).toContain(THREAT_STATEMENTS[2]);
+  });
+
+  it("names the open one-tap risks in the Known risks section", () => {
+    const known = text.split("## Known risks")[1]?.split("## Out of scope")[0] ?? "";
+    for (const item of KNOWN_RISK_ITEMS) expect(known).toContain(item);
   });
 });
 

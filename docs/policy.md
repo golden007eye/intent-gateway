@@ -50,13 +50,11 @@ The **baseline** is the loosest policy the gateway will run, and every loaded po
 `completion` lists how an approved purchase may be completed:
 
 - `handoff`: the buyer leaves the confirm page for the merchant's checkout and pays there. A cart that names no mode is a hand-off.
-- `one_tap`: a wallet adapter in the gateway will complete the purchase with the developer's own wallet account (planned, see below).
+- `one_tap`: the gateway completes the purchase with the developer's own linked Shop account, after the passkey Approval ([One-tap purchases](one-tap.md)). Today this runs in demo mode only: one tap with your own account needs a registered Shop client, which does not exist yet.
 
-Absent means both. `completion: [handoff]` keeps every purchase a hand-off; a cart for any other mode is refused with the rule `completion`. Like every other list, `completion` only narrows: combining two policies keeps the modes both allow, and `intent policy add` refuses a library policy that shares no mode with yours. Every purchase still needs your passkey Approval, whatever the mode.
+Absent means both. `completion: [handoff]` keeps every purchase a hand-off; a cart for any other mode is refused with the rule `completion`. With no linked wallet, or for a store one tap cannot reach, a cart is handed off; a policy without `handoff` (`completion: [one_tap]`) then refuses it. Like every other list, `completion` only narrows: combining two policies keeps the modes both allow, and `intent policy add` refuses a library policy that shares no mode with yours. Every purchase still needs your passkey Approval, whatever the mode.
 
-<!-- feature: one-tap -->
-!!! planned "One-tap purchases"
-    The gateway completes every purchase by hand-off today, so a policy without `handoff` (`completion: [one_tap]`) refuses every cart until one-tap purchases arrive. `one_tap` is accepted now so that a policy written today keeps its meaning later.
+For a one-tap purchase the per-order limit is the smaller of `per_order_usd` and the budget Shop returns for the account. As for every purchase, it counts against the daily and weekly limits from the moment it waits for approval, and stops counting only on evidence the gateway holds that nothing was charged.
 
 ## What is refused at load time
 
