@@ -193,19 +193,80 @@ describe("pause and send", () => {
     expect(pausedIn(store.entries())).toBe(true);
   });
 
-  it("attack: serve's retry and `intent pause` sending at once never log the same counter, so verify stays clean", async () => {
+  // serve's retry and `intent pause` on the same data dir (two store handles), each interleaving forced with gates
+  // rather than timers, so the outcome does not depend on how loaded the machine is.
+  const gate = (): { wait: Promise<void>; open: () => void } => {
+    let open = (): void => undefined;
+    const wait = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { wait, open };
+  };
+  const waitFor = async (done: () => boolean): Promise<void> => {
+    while (!done()) await new Promise((resolve) => setImmediate(resolve));
+  };
+  const counters = (store: Store): unknown[] => store.entries().filter((e) => e.kind === "pause_sent").map((e) => (e.body as { counter?: unknown }).counter);
+
+  it("attack: both read the same counter before either logs it: only one send carries it, and verify stays clean", async () => {
     const clock = { at: T0 };
     const a = await freshStore(clock);
-    const b = await freshStore(clock, a.dir); // a second process on the same data dir
+    const b = await freshStore(clock, a.dir);
     await pauseLocally(a.store, "cli");
     const sent: PauseRequest[] = [];
-    // Both connect slowly (a gateway start), so both would read the same counter before either logs its send.
-    const slow = (s: Store) => () => new Promise<ReturnType<typeof transport>>((resolve) => {
-        setTimeout(() => {
-          resolve(transport(s, () => "ok", sent));
-        }, 50);
+    const bConnected = gate(); // B may connect
+    const bRead = gate(); // B has read its counter and is about to log its send
+    const aLogged = gate(); // A's send of counter 1 is logged
+    const inFlight = gate(); // A's answer arrives
+    // A reads counter 1, then waits until B has read counter 1 too; A logs first, B then tries to log the same counter.
+    const connectA = () =>
+      Promise.resolve(async (r: PauseRequest, unless: (entries: readonly Entry[]) => boolean) => {
+        bConnected.open();
+        await bRead.wait;
+        const pending = transport(a.store, () => "ok", sent)(r, unless);
+        await waitFor(() => a.store.entries().some((e) => e.kind === "disclosure"));
+        aLogged.open();
+        await inFlight.wait;
+        return pending;
       });
-    await Promise.all([sendPause(deps(a.store, clock, slow(a.store))), sendPause(deps(b.store, clock, slow(b.store)))]);
+    const bCounters: number[] = [];
+    const connectB = async () => {
+      await bConnected.wait;
+      return async (r: PauseRequest, unless: (entries: readonly Entry[]) => boolean) => {
+        bCounters.push(r.counter);
+        bRead.open();
+        await aLogged.wait;
+        return transport(b.store, () => "ok", sent)(r, unless);
+      };
+    };
+    const runA = sendPause(deps(a.store, clock, connectA));
+    const outB = await sendPause(deps(b.store, clock, connectB));
+    inFlight.open();
+    await runA;
+    // B lost the race for counter 1 (nothing logged or sent), then sent counter 2 while A's was still unanswered.
+    expect(bCounters).toEqual([1, 2]);
+    expect(outB).toEqual({ sent: true, result: "acknowledged", reason: "acknowledged" });
+    expect(sent.map((r) => r.counter).sort()).toEqual([1, 2]);
+    expect(new Set(counters(a.store)).size).toBe(counters(a.store).length);
+    expect(pauseProblems(a.store.entries())).toEqual([]);
+  });
+
+  it("attack: a send that connects after another process's pause was acknowledged sends nothing", async () => {
+    const clock = { at: T0 };
+    const a = await freshStore(clock);
+    const b = await freshStore(clock, a.dir);
+    await pauseLocally(a.store, "cli");
+    const sent: PauseRequest[] = [];
+    const slowB = gate();
+    // B starts first (nothing acknowledged yet) but connects only after A's pause was sent and acknowledged.
+    const runB = sendPause(
+      deps(b.store, clock, async () => {
+        await slowB.wait;
+        return transport(b.store, () => "ok", sent);
+      }),
+    );
+    expect(await sendPause(deps(a.store, clock, () => Promise.resolve(transport(a.store, () => "ok", sent))))).toEqual({ sent: true, result: "acknowledged", reason: "acknowledged" });
+    slowB.open();
+    expect(await runB).toEqual({ sent: false, why: "acknowledged" });
     expect(sent.map((r) => r.counter)).toEqual([1]);
     expect(pauseProblems(a.store.entries())).toEqual([]);
   });
