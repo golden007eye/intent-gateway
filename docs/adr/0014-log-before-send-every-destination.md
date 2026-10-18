@@ -41,3 +41,7 @@ Invariant 2 now reads "any outside destination". The disclosure log holds exact 
 A gateway older than this change reads a chain holding a `response` entry as broken (unknown kind), so `intent log` and `intent verify` need this version or a later one. Chains written before it verify unchanged.
 
 Redaction is by header name, by key name and by declared path. An MCP tool call's `params.name` (when `method` is `tools/call` and the name is a plain lower-case identifier) is exempt from the identity check's name-key rule for wallet destinations; its value is still scanned. A secret sent under another name, and not declared by its destination's adapter, would be logged in clear. Each wallet adapter must therefore declare its secret paths, and its tests must show that its tokens are not in `audit.jsonl`.
+
+The core does not look inside string values. A token in JSON text carried as a string (`state: "{\"access_token\":\"…\"}"`) under a plain key is logged as sent, and `intent verify` does not flag it. `intent log` (every view) and the panel show such a value as "JSON text holding a credential, not shown", but `audit.jsonl` holds it, and so does any copy of the chain the developer shares. The fix stays the same: the adapter declares the path in `secretPaths`.
+
+An opaque-id pattern (ADR-0019) with the `g` or `y` flag is refused when the wallet is built: such a pattern keeps state between tests, so the same id could pass one send and be blocked on the next.

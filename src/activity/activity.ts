@@ -45,6 +45,13 @@ export type Delivery = "acknowledged" | "answered" | "unacknowledged" | "not_sen
 /** What a request's `fields` hold, instead of the value, for a credential the log holds in clear. */
 export const CLEAR_CREDENTIAL = "[a credential in clear, not shown: intent verify fails this entry]";
 
+/**
+ * What a request's `fields` hold, instead of the value, for a string that is JSON text with a secret key in it
+ * (`state: "{\"access_token\":…}"`). The core redacts by key, not inside string values, so the chain holds it as
+ * sent (ADR-0014); the views do not print it.
+ */
+export const NESTED_CREDENTIAL = "[JSON text holding a credential, not shown]";
+
 /** Where a disclosure without `destination` went. */
 export const INTENT_CLOUD = "intent_cloud";
 
@@ -755,8 +762,28 @@ function flatten(value: unknown, prefix: string, out: Record<string, unknown>, s
     const keys = Object.keys(value);
     for (const [key, item] of Object.entries(value)) flatten(item, prefix === "" ? key : `${prefix}.${key}`, out, isSecretKey(key, keys));
   } else if (prefix !== "") {
-    out[prefix] = value;
+    const texts = Array.isArray(value) ? value : [value];
+    out[prefix] = texts.some((v) => typeof v === "string" && nestedSecret(v)) ? NESTED_CREDENTIAL : value;
   }
+}
+
+/** Whether `text` parses as a JSON object or array with a secret key, at any depth, holding anything but a marker. */
+function nestedSecret(text: string): boolean {
+  if (!/^\s*[[{]/.test(text)) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const holds = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(holds);
+    if (typeof value === "string") return nestedSecret(value);
+    if (typeof value !== "object" || value === null) return false;
+    const keys = Object.keys(value);
+    return Object.entries(value).some(([key, item]) => (isSecretKey(key, keys) && item !== null && markerDigest(item) === null) || holds(item));
+  };
+  return holds(parsed);
 }
 
 function searchFacts(fields: Readonly<Record<string, unknown>> | null): ActivityFacts {
