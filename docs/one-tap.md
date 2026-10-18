@@ -9,6 +9,7 @@ With one tap, the buyer approves a purchase with their passkey and the gateway c
 | One tap in [demo mode](demo.md) | Works. Ask for stickers and buy the holographic sticker: the demo completes it with a local fake Shop, and `intent log --demo` and `intent verify --demo` show the whole purchase. |
 | The code path in `intent serve` | Built and tested against a fake Shop that answers with the shapes the S1 spike captured from Shop (one real order, 2026-10-18): when a Shop client is set and a Shop wallet is linked, `get_approval_status` completes a verified one-tap approval. |
 | One tap for you | Planned: it needs a registered Shop client, and none exists yet (below). |
+| One tap on Intent Cloud staging | Not possible: the staging store's test payment gateway makes Shop refuse to pay (`checkout_completion_ineligible`). Staging covers hand-off only; one tap is proven by hand with a small real order at a real store with the developer's own Shop account. |
 | Stores one tap can reach | Only a store whose storefront is its own `*.myshopify.com` domain. Merchants will pair their storefront origin with their `*.myshopify.com` domain (decided); until the public contract carries that pairing, every other merchant's cart is handed off from the start. |
 | Real purchases of any kind | Wait for the [launch gate](adr/0004-public-pre-alpha.md): the preview talks to the Intent Cloud staging host. |
 
@@ -37,7 +38,7 @@ Your policy decides whether one tap may be used: `completion` lists `handoff`, `
 ## What happens in one purchase
 
 1. The agent calls `create_cart`. With a linked wallet and a store Shop can reach, the cart request offers `shop_agent` beside `handoff`, and the snapshot the buyer approves names the mode Intent Cloud returns.
-2. The buyer approves with their passkey on intent's confirm page, as for any purchase.
+2. The buyer approves with their Intent Cloud passkey (invite-only during preview) on intent's confirm page, as for any purchase.
 3. The agent calls `get_approval_status`. The gateway checks the Approval, then completes the purchase inside that call: it reads the account's budget, asks Shop for a checkout with the item and quantity only, checks it against the approved snapshot (store, item, ZIP, total) and that it offers the agent budget as payment, reports `completing` to Intent Cloud, reads the checkout again, and sends one `complete_checkout` paying with the agent budget.
 4. The agent calls again until the status says `ordered`, `failed` or `mismatch`. `ordered (read from Shop)` means Shop returned the order on a checkout read and the binding check passed.
 
