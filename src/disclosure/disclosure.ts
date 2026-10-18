@@ -47,6 +47,8 @@ import type {
   Meta,
   OutcomeReport,
   OutcomeReportAccepted,
+  PauseAccepted,
+  PauseRequest,
   SearchRequest,
   SearchResponse,
 } from "../contract/index.ts";
@@ -72,6 +74,8 @@ export interface DisclosedCloud {
   createApproval(cartHandle: string): Promise<DisclosedResult<ApprovalCreated>>;
   getApproval(approvalHandle: string, signer?: Session): Promise<DisclosedResult<ApprovalStatus>>;
   reportOutcome(approvalHandle: string, report: OutcomeReport, signer?: Session): Promise<DisclosedResult<OutcomeReportAccepted>>;
+  /** `POST /v1/pause` (contract 1.7.0, ADR-0023): logged before it is sent like every call; its receipt is verified. */
+  pause(request: PauseRequest): Promise<DisclosedResult<PauseAccepted>>;
 }
 
 export interface DisclosureOptions {
@@ -196,6 +200,7 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
     getApproval: (handle, signer) => disclosed(true, (beforeSend) => cloud.getApproval(handle, { beforeSend, ...signedBy(signer) })),
     reportOutcome: (handle, report, signer) =>
       disclosed(true, (beforeSend) => cloud.reportOutcome(handle, report, { beforeSend, ...signedBy(signer) })),
+    pause: (request) => disclosed(true, (beforeSend) => cloud.pause(request, { beforeSend })),
   };
   registerCore(disclosedCloud, core);
   return disclosedCloud;

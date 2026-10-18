@@ -9,7 +9,7 @@
 // snapshots, the completer key, outcomes, outcome reports, with the 1.6.0 sums), and one without the header as 1.5.0,
 // byte for byte, with the 1.5.0 sums. An approval is read and reported on only in the version that created it (R8).
 // `versions: ["1.5.0"]` makes a host that predates 1.6.0 and ignores the header.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -45,6 +45,7 @@ import {
   type SnapshotV3,
   type WebAuthnAssertion,
 } from "../contract/index.ts";
+import { PAUSE_CONTRACT_VERSION, PauseRequest, pauseSigningBytes } from "../contract/index.ts";
 import { canonicalize, nonIntegerToken, sha256Hex } from "../jcs/index.ts";
 import { contentDigest, createNonceCache, verifyRequest } from "../signing/index.ts";
 import { type CatalogItem, DEFAULT_CATALOG, searchCatalog } from "./catalog.ts";
@@ -227,6 +228,17 @@ export interface FakeCloud {
    * edge would; null turns it off. */
   simulateCloudflareError(status: number | null): void;
   tamper: Tamper;
+  /**
+   * The account pause (contract 1.7.0 draft, ADR-0023): `register` pins an account key (as the first passkey approval
+   * does), `resume` is the passkey resume on the confirm page's /account. While paused, `POST /v1/carts` answers 409
+   * `paused`.
+   */
+  accountPause: {
+    register(thumbprint: string, x: string): void;
+    resume(): void;
+    readonly paused: boolean;
+    lastCounter(thumbprint: string): number;
+  };
   close(): Promise<void>;
 }
 
@@ -398,6 +410,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   let snapshotPatch: Partial<SnapshotV3> | Partial<SnapshotV2> | null = null;
   let proofSnapshotPatch: Partial<SnapshotV3> | Partial<SnapshotV2> | null = null;
   let reportFault: number | null = null;
+  const accountKeys = new Map<string, { x: string; counter: number }>();
+  let accountPaused = false;
 
   const catalog = options.catalog ?? DEFAULT_CATALOG;
   const excluded = options.excludedCategories ?? [];
@@ -510,7 +524,24 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return null;
   }
 
+  /** `POST /v1/pause` (contract 1.7.0 draft): a signed, counted pause of the account. */
+  function pause(body: Buffer, at: number): Reply {
+    const parsed = PauseRequest.safeParse(parseJson(body));
+    if (!parsed.success) return fail(400, "bad_request", "body does not match PauseRequest");
+    const request = parsed.data;
+    const account = accountKeys.get(request.account_key_thumbprint);
+    if (account === undefined) return fail(404, "not_found", "unknown account key");
+    const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: account.x }, format: "jwk" });
+    if (!verifySignature(null, pauseSigningBytes(request), key, Buffer.from(request.signature, "base64url"))) return fail(401, "unauthorized", "bad signature");
+    if (Math.abs(Date.parse(request.issued_at) / 1000 - at) > 300) return fail(400, "clock_skew", "issued_at is more than 5 minutes off");
+    if (request.counter <= account.counter) return { status: 409, body: { error: "counter_replayed", message: "counter replayed", last_counter: account.counter } };
+    account.counter = request.counter;
+    accountPaused = true;
+    return { status: 200, body: { state: "paused", account_key_thumbprint: request.account_key_thumbprint, counter: request.counter, paused_at: timestamp(at) } };
+  }
+
   function createCart(body: Buffer, keyid: string, ipKey: string, version: ServedVersion, at: number): Reply {
+    if (accountPaused) return fail(409, "paused", "purchases are paused for this account");
     const json = parseJson(body);
     const v16 = isV16(version);
     // 1.6.x requires the completer key; 1.5.0 has neither 1.6.x field, and its strict schema refuses them.
@@ -811,6 +842,11 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (body.length > MAX_BODY_BYTES) return fail(413, "too_large", "body over 16 KiB");
     const retry = take(`requests:${ipKey}`, quotas.requests_per_minute, 60, at);
     if (retry !== null) return limited("requests", retry);
+    if (path === "/v1/pause" && method === "POST" && req.headers["intent-contract-version"] === PAUSE_CONTRACT_VERSION) {
+      const checked = verifyRequest(req.headers, { method, path, body }, { now: at, seenNonce });
+      if (!checked.ok) return checked.status === 400 ? DIGEST_MISMATCH() : UNAUTHORIZED();
+      return pause(body, at);
+    }
     if (version === null) return fail(400, "bad_request", "unsupported contract version");
 
     const endpoint = ENDPOINT_METHODS.find(([pattern]) => pattern.test(path));
@@ -888,7 +924,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       "content-type": "application/json",
       "content-length": String(bytes.length),
       // An unsupported request version is answered in the newest version this host serves.
-      "intent-contract-version": version ?? CONTRACT_VERSION,
+      "intent-contract-version": path === "/v1/pause" && req.headers["intent-contract-version"] === PAUSE_CONTRACT_VERSION ? PAUSE_CONTRACT_VERSION : (version ?? CONTRACT_VERSION),
       ...reply.headers,
     };
     const drop = reply.status >= 200 && reply.status < 300 && faultOn("dropReceipt", path);
@@ -1040,6 +1076,20 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     },
     simulateCloudflareError(status) {
       cloudflareStatus = status;
+    },
+    accountPause: {
+      register(thumbprint, x) {
+        accountKeys.set(thumbprint, { x, counter: 0 });
+      },
+      resume() {
+        accountPaused = false;
+      },
+      get paused() {
+        return accountPaused;
+      },
+      lastCounter(thumbprint) {
+        return accountKeys.get(thumbprint)?.counter ?? 0;
+      },
     },
     tamper: {
       receiptSignature: setFault("receiptSignature"),

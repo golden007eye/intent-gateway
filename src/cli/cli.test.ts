@@ -876,7 +876,7 @@ describe("intent verify and intent panel", () => {
     await writeChain(s.dir);
     const result = await s.run(["panel"]);
     expect(result.code).toBe(0);
-    expect(result.out).toMatch(/^panel: http:\/\/127\.0\.0\.1:\d+\/ \(read-only; Ctrl-C stops it\)\n$/);
+    expect(result.out).toMatch(/^panel: http:\/\/127\.0\.0\.1:\d+\/ \(read-only but for the Pause button; Ctrl-C stops it\)\n$/);
     await result.stop?.();
     stops.pop();
   });

@@ -104,5 +104,6 @@ Later starts reuse the token without printing it: their connect line reads it fr
 
 - `intent init` checks the setup for a real run, offers to link Shop for one tap when a Shop client is set (it skips the step otherwise, and purchases are handed off), and prints the line that connects your agent.
 - `intent doctor --demo` checks the setup; every problem it finds comes with its fix.
+- `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app. `intent status` shows the pause; `intent resume` needs your passkey.
 - [Gateway policy](policy.md): narrow what leaves the gateway.
-- [Panel](panel.md): a read-only page with the same log, pending approvals and the approver pin.
+- [Panel](panel.md): a local page with the same log, pending approvals, the approver pin and a Pause button.

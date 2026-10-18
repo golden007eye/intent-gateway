@@ -25,6 +25,7 @@ import { FAKE_BUYER, FAKE_OTHER_VARIANT, FAKE_STORE, FAKE_STOREFRONT, FAKE_VARIA
 import { ATTEMPT_WINDOW_MS, passedRecently } from "./complete.ts";
 import { type ApprovalStatusResult, type CompletionStep, createGateway, type Gateway } from "./index.ts";
 import { spendHistory } from "./history.ts";
+import { pauseLocally, resumeLocally } from "../pause/index.ts";
 
 vi.setConfig({ testTimeout: 60_000 });
 
@@ -1481,3 +1482,27 @@ function passAge(chain: Entry[], nowMs: number): number {
   const pass = chain.findLast((e) => e.kind === "store_pair" && body(e).result === "pass" && typeof body(e).disclosure_seq === "number");
   return pass === undefined ? Number.POSITIVE_INFINITY : nowMs - Date.parse(pass.ts);
 }
+
+describe("pause (ADR-0023)", () => {
+  it("a pause refuses the completion before any Shop call or complete_checkout; after the resume the purchase is ordered once", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    await pauseLocally(p.store, "panel");
+    const stopped = await status(p, handle);
+    expect(completionOf(stopped)).toEqual({ state: "completing", reason: "paused" });
+    expect(stopped.message).toContain("Purchases are paused");
+    let chain = await chainOf(base);
+    expect(completeSends(chain)).toHaveLength(0);
+    expect(ofKind(chain, "disclosure").filter((d) => d.destination === "shop")).toHaveLength(0);
+    expect(ofKind(chain, "refused")).toEqual([{ step: "complete_checkout", reason: "paused", source: "gateway", purchase: handle }]);
+    expect(base.shop.completeCount).toBe(0);
+
+    await resumeLocally(p.store, "cli");
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    chain = await chainOf(base);
+    expect(completeSends(chain)).toHaveLength(1);
+    expect(base.shop.completeCount).toBe(1);
+    expect((await verify(base)).exitCode).toBe(0);
+  });
+});

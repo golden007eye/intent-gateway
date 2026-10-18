@@ -46,6 +46,7 @@ import {
   type StorePairReason,
 } from "../contract/index.ts";
 import { type DisclosedCloud, DisclosureConflictError, type StorefrontPort } from "../disclosure/index.ts";
+import { isPausedAnswer, pausedIn, refuseForPause } from "../pause/index.ts";
 import { bindingV1, type LocalOutcomeEntry, mayHaveSent, outcomesFor, shipToOptional } from "../outcome/index.ts";
 import type { Session } from "../signing/index.ts";
 import { type Entry, neverLeft, type Store, StoreConflictError } from "../store/index.ts";
@@ -219,6 +220,8 @@ function reportsOf(entries: readonly Entry[], handle: string): LoggedReport[] {
   const statusBySeq = new Map<number, number>();
   const discarded = new Set<unknown>();
   for (const e of entries) if (e.kind === "discarded") discarded.add(asBody(e.body).disclosure_seq);
+  // A report Intent Cloud refused because purchases are paused (ADR-0023) is no answer either: it is sent again later.
+  for (const e of entries) if (e.kind === "refused" && asBody(e.body).reason === "paused") discarded.add(asBody(e.body).disclosure_seq);
   for (const e of entries) {
     const b = asBody(e.body);
     // A discarded answer is no answer at all, whatever else names the disclosure.
@@ -387,13 +390,22 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
 
   /** Sends one report; the answer is in the chain (receipt) for later calls to read. False when it was not accepted. */
   async function send(report: Body): Promise<boolean> {
+    const head = store.entries().at(-1)?.seq ?? -1;
     try {
       const result = await ctx.cloud.reportOutcome(handle, report as OutcomeReport, ctx.signer);
+      if (isPausedAnswer(result)) await pausedReport(head);
       return result.ok && result.status === 201 && asBody(result.body).accepted === true;
-    } catch {
+    } catch (error) {
+      if (isPausedAnswer(error)) await pausedReport(head);
       // A refusal before the send, no answer, or a discarded answer: retried on a later call.
       return false;
     }
+  }
+
+  /** Intent Cloud refused the report sent after `head` because purchases are paused: chained, and sent again later. */
+  async function pausedReport(head: number): Promise<void> {
+    const sent = store.entries().find((e) => e.seq > head && e.kind === "disclosure" && asBody(e.body).endpoint === "reportOutcome");
+    await refuseForPause(store, { step: "report_outcome", source: "intent_cloud", purchase: handle, ...(sent === undefined ? {} : { disclosureSeq: sent.seq }) });
   }
 
   /**
@@ -472,6 +484,13 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
   const terminal = localOutcomes(entries, handle).at(-1);
   // A terminal outcome (a local refusal before redemption included): nothing more happens but reporting it.
   if (terminal !== undefined && TERMINAL.has(terminal.state)) return finish(completion);
+
+  // A pause (ADR-0023) stops the completion before any outward step, until complete_checkout may have been sent; past
+  // that, only reads and reports go on. The refusal is chained under the lease, so a resume chained meanwhile wins.
+  if (attemptsOf(entries, handle).length === 0 && pausedIn(entries)) {
+    if (await refuseForPause(store, { step: "complete_checkout", source: "gateway", purchase: handle })) return { state: "completing", reason: "paused" };
+    entries = store.entries();
+  }
 
   // ---- Steps 1 to 4: before the purchase is redeemed ------------------------------------------------------------
   const advisory: string[] = [];
@@ -682,7 +701,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
       const attempts = attemptsOf(chain, handle);
       // Past the attempt window another process may call the attempt never sent: the owner no longer sends.
       const stale = now() - (attemptAt(chain, handle) ?? 0) >= ATTEMPT_WINDOW_MS;
-      return attempts.length !== 1 || attempts[0]?.owner !== owner || stale || maybeSent(chain, handle) || localOutcomes(chain, handle).length > 0;
+      return attempts.length !== 1 || attempts[0]?.owner !== owner || stale || maybeSent(chain, handle) || localOutcomes(chain, handle).length > 0 || pausedIn(chain as readonly Entry[]);
     };
     let answer: WalletCheckout;
     try {
@@ -693,7 +712,11 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
         const chained = await local({ state: "failed", source: "gateway_precheck", reason }, (chain) => maybeSent(chain, handle));
         return chained ? "settled" : "reconcile";
       }
-      if (error instanceof DisclosureConflictError) return "reconcile";
+      if (error instanceof DisclosureConflictError) {
+        // A pause chained since the attempt was claimed: complete_checkout was not sent, and the refusal says why.
+        if (pausedIn(store.entries())) await refuseForPause(store, { step: "complete_checkout", source: "gateway", purchase: handle });
+        return "reconcile";
+      }
       // Logged and maybe sent, with no usable answer: indeterminate, never re-sent. Not logged: never sent. A tool-level
       // error from Shop (HTTP 200, isError, e.g. checkout_completion_ineligible) is never a success: it is chained
       // under Shop's code, and later calls read the checkout to settle it.

@@ -89,6 +89,19 @@ export const APP_JS = `"use strict";
     filterLog(null);
   }
 
+  // The panel's only write (ADR-0023): a POST carrying this run's token in a header, which no other page can read or send.
+  function pausePurchases(button) {
+    var meta = document.querySelector('meta[name="intent-panel-token"]');
+    if (!meta) return;
+    button.disabled = true;
+    fetch("/pause", { method: "POST", cache: "no-store", headers: { "x-intent-panel-token": meta.getAttribute("content") } })
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        refresh();
+      })
+      .catch(function () { button.disabled = false; document.body.classList.add("stale"); });
+  }
+
   function refresh() {
     if (document.hidden) return;
     fetch("/", { cache: "no-store" })
@@ -132,6 +145,8 @@ export const APP_JS = `"use strict";
     document.addEventListener("click", function (e) {
       var a = e.target.closest ? e.target.closest("[data-drawer]") : null;
       if (a) opener = a.getAttribute("href");
+      var pause = e.target.closest ? e.target.closest("[data-pause]") : null;
+      if (pause) pausePurchases(pause);
     });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && document.body.classList.contains("has-drawer")) {
@@ -160,6 +175,12 @@ h1:focus,h2:focus{outline:none}
 .bar{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:16px 28px;border-bottom:1px solid var(--card-line);flex-wrap:wrap}
 .bar .brand{display:flex;align-items:center;gap:10px;text-decoration:none}
 .product{font-size:15px;color:var(--on-card-muted)}
+.pause-bar,.pause-banner{grid-column:1/-1;margin:0;padding:12px 28px;border-bottom:1px solid var(--card-line);display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.pause-bar p,.pause-banner p{margin:0}
+.pause-banner{display:block;border-left:4px solid var(--warn-text)}
+.pause-banner ul{margin:4px 0;padding-left:20px}
+.pause-button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--warn-text);background:transparent;color:inherit;cursor:pointer}
+.pause-button:disabled{opacity:.5;cursor:default}
 .pill-real{background:transparent;color:var(--sage);border:1px solid var(--sage)}
 .bar .live{margin-left:auto}
 .meta{font-size:12px;color:var(--on-card-muted)}

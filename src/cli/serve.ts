@@ -14,6 +14,8 @@ import { type Io, line, type Outcome } from "./io.ts";
 import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
 import { leaseNotice, slowCloudNotice } from "./waiting.ts";
 import { oneTapFor } from "./wallet.ts";
+import { startPauseRetry } from "../pause/index.ts";
+import { accountKeyFor } from "./pause.ts";
 
 export async function serve(io: Io, config: Config, options: { http: boolean; demo: Demo | null }): Promise<Outcome> {
   const { demo } = options;
@@ -55,6 +57,17 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
     });
     await gateway.start();
     starting = false;
+    // A pause not yet acknowledged by Intent Cloud (this process's, the CLI's or the panel's) is sent again with backoff
+    // while serve runs (ADR-0023); the local pause holds meanwhile.
+    const retry = startPauseRetry(
+      { store, accountKey: accountKeyFor(io), connect: () => Promise.resolve((request) => gateway.sendPause(request)), now: io.now ?? Date.now },
+      {
+        onError: (error) => {
+          log(`intent-gateway: the pause could not be sent: ${error instanceof Error ? error.message : String(error)}`);
+        },
+      },
+    );
+    void retry.tick();
     let transport: { close(): Promise<void> };
     if (options.http) {
       const { host, port, token } = config.http;
@@ -87,6 +100,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       else for (const text of nextSteps({ code: { code: demo.code, file: demo.codeFile }, confirm: confirmOf(demo) })) log(text);
     }
     const stop = async (): Promise<void> => {
+      retry.stop();
       await transport.close();
       await store.close();
       await demo?.close();

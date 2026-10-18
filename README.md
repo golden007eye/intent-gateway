@@ -97,6 +97,12 @@ You can check what left your machine instead of taking our word for it.
 
 What this does **not** cover: `intent verify` proves what the gateway sent, what Intent Cloud acknowledged receiving and what Shop returned. It makes no claim about what happens to that data afterwards. An evidence pack cannot prove offline that it holds every entry of its purchase; see the [known risks](https://github.com/golden007eye/intent-gateway/blob/main/docs/threat-model.md#known-risks).
 
+## Stopping purchases
+
+`intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.
+
+The pause holds on your machine at once, then goes to Intent Cloud through the disclosure log. `intent status` says since when purchases are paused and which ones it stopped; the panel has the same Pause button and banner. `intent resume` sends you to the confirm page's `/account`, where you resume with your passkey.
+
 ## What it does not do
 
 - It does not store or forward the buyer's name, postal address or card. The buyer gives those to the merchant at checkout, or keeps them in their Shop account for one tap.

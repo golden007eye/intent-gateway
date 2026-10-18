@@ -25,6 +25,7 @@ import {
 import { withheldAt } from "../observation/index.ts";
 import { isCredentialHeader, markerDigest } from "../privacy/index.ts";
 import { EXCLUDED_CATEGORIES, type Policy } from "../policy/index.ts";
+import { type PauseEntry, pauseReasonWords, pauseState, stoppedPurchases } from "../pause/index.ts";
 import type { ChainResult } from "../store/index.ts";
 
 export type Mode = "demo" | "real";
@@ -193,6 +194,20 @@ export interface PanelModel {
   readonly logKinds: readonly string[];
   readonly verify: VerifyResult | null;
   readonly verifyCommand: string;
+  /** The pause in effect (ADR-0023): the banner, Intent Cloud's word on it, and the purchases it stops; null when none. */
+  readonly pause: PauseView | null;
+}
+
+export interface PauseView {
+  /** "Paused since <time>. Resume needs your passkey." */
+  readonly banner: string;
+  /** Where the pause stands at Intent Cloud, in plain words. */
+  readonly cloud: string;
+  readonly cloudTone: Tone;
+  /** The purchases stopped: `approval apr_… · $12.00`. */
+  readonly stopped: readonly string[];
+  /** How many steps were refused since the pause began. */
+  readonly refusals: number;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -306,6 +321,32 @@ export function buildModel(input: ModelInput): PanelModel {
     logKinds: [...new Set(items.map((i) => text(record(i).kind) || "unreadable"))].sort(),
     verify: input.verify,
     verifyCommand: `${input.intent} verify${input.mode === "demo" ? " --demo" : ""}`,
+    pause: pauseView(items, now, time),
+  };
+}
+
+/** The pause banner's content, read from the chain (src/pause), or null when purchases are not paused. */
+function pauseView(items: readonly unknown[], now: number, time: Clock): PauseView | null {
+  const entries = items.filter((i): i is PauseEntry => typeof record(i).kind === "string" && typeof record(i).seq === "number" && typeof record(i).ts === "string");
+  const state = pauseState(entries);
+  if (state.paused === null) return null;
+  const c = state.cloud;
+  const cloud =
+    c === null
+      ? state.paused.from === "intent_cloud"
+        ? "A `paused` answer was received from Intent Cloud."
+        : "Not sent to Intent Cloud yet."
+      : c.result === "acknowledged"
+        ? "Intent Cloud acknowledged the pause."
+        : c.result === "failed"
+          ? `A refusal of the pause was received from Intent Cloud (${pauseReasonWords(c.reason)}); it holds here only.`
+          : `Intent Cloud has not acknowledged it yet (${pauseReasonWords(c.reason)}); the gateway retries while it serves.`;
+  return {
+    banner: `Paused since ${time(state.paused.since)}. Resume needs your passkey.`,
+    cloud,
+    cloudTone: c?.result === "acknowledged" || (c === null && state.paused.from === "intent_cloud") ? "ok" : c?.result === "failed" ? "bad" : "warn",
+    stopped: stoppedPurchases(entries, now).map((p) => join([`approval ${short(p.handle)}`, p.totalMinor === null ? "" : money(p.totalMinor)])),
+    refusals: state.refusals,
   };
 }
 
@@ -381,6 +422,25 @@ function feedLine(a: Activity, time: Clock): Line {
         text: join([`${destinationLabel(f.destination ?? "")} ${f.endpoint ?? ""}`.trim(), answered ? `answered${status === null ? "" : ` ${String(status)}`}, unsigned` : delivery()]),
       };
     }
+    case "pause":
+      return {
+        ...base,
+        label: "paused",
+        tone: "warn",
+        text: join([
+          f.pause_from === "intent_cloud" ? "Paused answer received from Intent Cloud" : `Purchases paused from the ${f.pause_from === "panel" ? "panel" : "CLI"}`,
+          f.pause_result === "acknowledged" ? "Intent Cloud acknowledged" : f.pause_result === undefined ? "" : `Intent Cloud: ${f.pause_result}`,
+        ]),
+      };
+    case "resume":
+      return { ...base, label: "resumed", tone: f.resume_state === "repaused" ? "bad" : "plain", text: join(["Local pause cleared after the passkey resume", f.resume_state ?? "unconfirmed"]) };
+    case "refused":
+      return {
+        ...base,
+        label: "refused",
+        tone: "bad",
+        text: join([`${f.refused_step ?? "request"} refused: ${a.blocked.join("; ") || "paused"}`, f.refused_by === "intent_cloud" ? "by Intent Cloud" : "nothing sent", short(f.approval_handle)]),
+      };
     case "unreadable":
       return { ...base, label: "unreadable", tone: "bad", text: `Line ${String(f.line ?? "?")} is not an entry (a torn or edited line)` };
   }

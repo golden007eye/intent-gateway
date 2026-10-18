@@ -1,0 +1,8 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the pause signature > signs exactly 'intent-pause-v1\\n' + JCS({account_key_thumbprint, counter, issued_at, action}), and \`action\` is not sent 1`] = `
+{
+  "signature": "e73VoC1wlkksfUSXXk13g-2s0a54c6TuY-T4L2joQTxVeENs78bk94mIABUQU4LvHzb8pKoz7jf8FXjk3mhpDg",
+  "thumbprint": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+}
+`;

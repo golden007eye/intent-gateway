@@ -532,6 +532,7 @@ describe("an adapter that misbehaves", () => {
       createApproval: (_h, o) => call(o),
       getApproval: (_h, o) => call(o),
       reportOutcome: (_h, _r, o) => call(o),
+      pause: (_r, o) => call(o),
     };
   };
 

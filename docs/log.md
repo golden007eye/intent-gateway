@@ -50,7 +50,7 @@ Colour is used only when the output is a terminal, and never with `NO_COLOR` set
 
 | Option | Keeps |
 |---|---|
-| `--action search,cart` | The actions of these kinds: `start`, `keys`, `search`, `cart`, `status`, `outcome` (an outcome report the gateway sent to Intent Cloud), `approval`, `blocked`, `pin`, `flagged`, `wallet`, `call`. |
+| `--action search,cart` | The actions of these kinds: `start`, `keys`, `search`, `cart`, `status`, `outcome` (an outcome report the gateway sent to Intent Cloud), `approval`, `blocked`, `pin`, `flagged`, `wallet`, `call`, `pause`, `resume`, `refused`. |
 | `--since 30m` | Actions from that long ago (`s`, `m`, `h`, `d`, `w`), or from a date (`2026-10-16`, local midnight; UTC with `--utc`) or time (`2026-10-16T09:00:00Z`). |
 | `--last 5` | The last N actions, after the other filters. |
 
@@ -72,6 +72,8 @@ The actions group the chain's entries:
 - `wallet`: a wallet change on this machine: the Shop wallet linked, or unlinked (`intent wallet unlink shop` deletes its vault file) with whether Shop confirmed revoking the token (`token revoked at Shop`) or not (`token not revoked (deleted here only)`); or a Shop check (`intent wallet check shop`, [below](#orders-the-log-does-not-name)): how many orders Shop reported and how many no purchase in the log names.
 - `call`: one request to a wallet destination (Shop) and its response entry: the operation, its argument names, and the status that came back. A call has no receipt; one without a response entry is `maybe sent`.
 
+- `pause`, `resume`, `refused`: a pause, a resume and each step refused because of a pause ([below](#pause)).
+
 A cart or status check the gateway refused after an answer (the cart, snapshot or proof did not match) carries outcome `refused` and the reasons in `blocked`.
 
 ## A one-tap purchase
@@ -84,6 +86,31 @@ A [one-tap purchase](one-tap.md) adds entries after its approval, all appended b
 - On the approval itself, what happened after it: `--json` gives `facts.outcome_state` (`completing`, `ordered`, `failed`, `mismatch`, `indeterminate`, …), `facts.outcome_basis` (`local`, the gateway's own read of Shop's checkout, or `cloud`, the verified statement Intent Cloud returns), `facts.outcome_source` (`shop_api` for "read from Shop", `gateway_precheck` for the gateway's own refusal) and `facts.order_ref`. Once the gateway has evidence of its own, it wins over what Intent Cloud reported.
 
 The chain also holds a `store_pair` entry for each verdict of the store pair check (`result` `pass` or `fail` with its `reason`, and the GET it read, `disclosure_seq`, or the pass it reused, `cached_from`), a `completion` entry (the redemption: the checkout ref hash and the report id) and a `complete_attempt` entry, each of the last two appended once per purchase, and an `outcome` entry for each outcome with its binding check. `-v` lists them by kind; the panel's Server log shows their bodies field by field, and `intent verify` re-checks them. These say what the gateway sent and what came back from Intent Cloud and Shop; none of them says what Shop or the merchant did afterwards.
+
+## Pause
+
+`intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app. ([ADR-0023](adr/0023-pause.md).)
+
+The chain records a pause with five entry kinds, each appended before the step it records:
+
+| Kind | Body | What it records |
+|---|---|---|
+| `pause` | `{from}`: `cli`, `panel` or `intent_cloud` (with `disclosure_seq`) | Purchases stop here, at once, before anything is sent. `intent_cloud`: a submit was answered `paused` with no pause recorded here. |
+| `pause_sent` | `{pause_seq, counter, disclosure_seq, result, reason, status?, last_counter?, retry_after_s?}` | One send of the pause to Intent Cloud (its `disclosure`, logged first) and what came back. `result` is `acknowledged` only for a 200 whose receipt verified; `failed` for a 400 `bad_request` or a 401 (not retried); otherwise `retrying`. `reason` names why: `no_account_key`, `unreachable`, `not_found` (the account key is pinned only at the first passkey approval), `rate_limited`, `clock_skew`, `counter_replayed`, `unauthorized`, `bad_request`, `discarded`, `no_keys`, `stopped`. |
+| `resume` | `{from, confirmed: false, pending: "next submit"}` | The developer typed `resumed` at a terminal after resuming with the passkey on the confirm page's `/account`. The local pause is cleared, unconfirmed. |
+| `resume_check` | `{resume_seq, result, disclosure_seq}` | The next submit's answer: `confirmed` (not answered `paused`) or `repaused` (answered `paused`, so purchases are paused again here). |
+| `refused` | `{step, reason: "paused", source, purchase?, disclosure_seq?}` | A step a pause stopped: `create_cart` or `complete_checkout` refused by the gateway (nothing sent), or `create_cart`, `create_approval` or `report_outcome` answered `paused` (`source: "intent_cloud"`, naming the request). |
+
+The timeline shows them as:
+
+```text
+14:02:11  paused    purchases paused · from the CLI       ✓ Intent Cloud acknowledged
+14:02:40  refused   create_cart                           ✗ refused: paused (by the gateway, nothing sent)
+14:03:05  refused   create_cart                           ✗ refused: paused (by Intent Cloud)
+14:20:17  resumed   local pause cleared after the passkey resume  ⚠ unconfirmed, pending the next submit
+```
+
+A pause line ends with `✓ Intent Cloud acknowledged`, `⚠ not acknowledged by Intent Cloud (<reason>): retrying`, `✗ refusal received from Intent Cloud (<reason>); paused here only` or `⚠ not sent to Intent Cloud yet`. A resume line ends with `⚠ unconfirmed, pending the next submit`, `✓ confirmed by the next submit` or `✗ paused answer received from Intent Cloud: paused again`. A refused step of a one-tap purchase names its approval (`complete_checkout · approval ap_xyCp…lXmw`). `-v` prints each entry, for example `refused  create_cart: refused: paused (by the gateway; nothing sent)` and `pause sent  #41: counter 3, Intent Cloud acknowledged the pause`. `intent status` prints where the pause stands, and `intent verify` checks the entries' order and that each logged pause counter is above every earlier one.
 
 ## Orders the log does not name
 
