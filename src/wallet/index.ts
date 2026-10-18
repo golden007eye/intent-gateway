@@ -3,6 +3,8 @@
 export { CHECK_CURRENCY, checkedEntry, checkOrders, chainedOrderRefs, type WalletCheck } from "./check.ts";
 export {
   AddressFieldsRequiredError,
+  type CatalogHit,
+  type CatalogQuery,
   type ChainEntryView,
   CHECKED_KEYS,
   type CheckoutIdStore,

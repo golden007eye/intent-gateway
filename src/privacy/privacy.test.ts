@@ -83,6 +83,11 @@ const positives: [label: string, body: unknown, expected: Finding][] = [
   ["key full-width name", { "ｎａｍｅ": "x" }, { path: '$["ｎａｍｅ"]', kind: "banned_key" }],
   ["key with a zero-width space", { "e\u200bmail": "x" }, { path: '$["e\u200bmail"]', kind: "banned_key" }],
   ["key customer_name", { customer_name: "x" }, { path: "$.customer_name", kind: "banned_key" }],
+  ["key address_country holding a street", { address_country: "123 Main St" }, { path: "$.address_country", kind: "banned_key" }],
+  ["key address_country holding an object", { address_country: { line1: "x" } }, { path: "$.address_country", kind: "banned_key" }],
+  ["key address_country lower case", { address_country: "us" }, { path: "$.address_country", kind: "banned_key" }],
+  ["key shipping_address_country", { shipping_address_country: "US" }, { path: "$.shipping_address_country", kind: "banned_key" }],
+  ["key AddressCountry", { AddressCountry: "US" }, { path: "$.AddressCountry", kind: "banned_key" }],
 ];
 
 // Product, slug and search content that must pass (false positives would block ordinary searches).
@@ -130,6 +135,7 @@ const negatives: [label: string, body: unknown][] = [
   ["product and merchant name keys", { product_name: "x", merchant_name: "y", brand_name: "z", category_name: "w", store_name: "v" }],
   ["NBSP in a product title", { title: "4\u00a0Wheel Drive RC Truck" }],
   ["Unicode word without at", { q: "café crème" }],
+  ["Shop catalog country code", { catalog: { context: { address_country: "US", currency: "USD" } } }],
 ];
 
 describe("findIdentity positives", () => {

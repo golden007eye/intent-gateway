@@ -380,7 +380,8 @@ export async function oneTapFor(io: Io, config: Config, dataDir: string): Promis
     if (key === null || vaultText === null) return null;
     const checkoutIds = await openCheckoutVault(dataDir, "shop", key, io.now ?? Date.now);
     const where = { mcpUrl: config.wallet.shopMcpUrl, authUrl: config.wallet.shopAuthUrl };
-    return { connect: (cloud) => connectShop(cloud, { ...where, vaultText, checkoutIds, saveVaultText: vaultSaver(dataDir, "shop", key) }) };
+    // The search runs in the gateway, against Shop (G5, ADR-0021): Intent Cloud is sent nothing for it.
+    return { connect: (cloud) => connectShop(cloud, { ...where, vaultText, checkoutIds, saveVaultText: vaultSaver(dataDir, "shop", key) }), searchInGateway: true };
   } catch (error) {
     if (!(error instanceof WalletVaultError)) throw error;
     line(io.stderr, printable(`intent: Shop one-tap is unavailable, purchases are handed off: ${error.message}`));
