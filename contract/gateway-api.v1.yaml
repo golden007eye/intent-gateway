@@ -1973,4 +1973,4 @@ components:
       description: A v4 store's origin (1.7.0, Appendix A); never an IP literal or one label.
       type: string
       maxLength: 261
-      pattern: ^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$
+      pattern: ^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9](?:[a-z0-9-]{0,57}[a-z0-9])?)$

@@ -6,7 +6,7 @@ Status: accepted · 2026-10-18 · Amends ADR-0019 (where a one-tap checkout is c
 
 With the search seam (ADR-0021), a search sends nothing, so an offer from Shop search had no cart to approve: create_cart refused it. Under 1.6.1, a one-tap purchase created the Shop checkout only after the passkey (ADR-0019), so the passkey signed a cart, not the checkout that would be paid, and binding check 2 could not be a bound check in `shop_agent` mode.
 
-Contract 1.7.0 (draft, `SHA256SUMS` sha256 `b6bf35a6…25c1`) adds `POST /v1/checkouts`: the gateway submits a Shop checkout it created and read back, and the 201 Intent Cloud returns is a pending approval whose v4 snapshot is exactly that checkout, one completion mode per approval. 1.6.1 is frozen (`bc035ee3…10d8`) and still answered to callers that name it. A 1.7.0 gateway's carts keep v3 snapshots.
+Contract 1.7.0 (final, `SHA256SUMS` sha256 `dad42cb2…ff5a`; reviewed as the draft `b6bf35a6…25c1`) adds `POST /v1/checkouts`: the gateway submits a Shop checkout it created and read back, and the 201 Intent Cloud returns is a pending approval whose v4 snapshot is exactly that checkout, one completion mode per approval. 1.6.1 is frozen (`bc035ee3…10d8`) and still answered to callers that name it. A 1.7.0 gateway's carts keep v3 snapshots.
 
 ## Decision
 

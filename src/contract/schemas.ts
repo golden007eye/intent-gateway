@@ -419,7 +419,7 @@ const RefHash = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 export const StoreSite = z
   .string()
   .max(261)
-  .regex(/^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/);
+  .regex(/^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9](?:[a-z0-9-]{0,57}[a-z0-9])?)$/);
 export type StoreSite = z.infer<typeof StoreSite>;
 
 /** Integer minor units of the checkout's currency. `total == subtotal + shipping + tax` is a rule for callers (totalsAddUp). */
