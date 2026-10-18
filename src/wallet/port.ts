@@ -176,6 +176,52 @@ export interface WalletAdapter {
    * (invariant 5: say only what was sent and answered). Revoking does not remove the connection in the rail's app.
    */
   revoke(): Promise<RevokeResult>;
+  /**
+   * Searches the rail's catalog (G5, ADR-0021), logged first like every other send. Only a rail that has a catalog
+   * implements it (Shop: `search_catalog`). Returns projected products only: never the rail's own words.
+   */
+  searchCatalog?(query: CatalogQuery): Promise<readonly CatalogHit[]>;
+}
+
+/**
+ * A catalog search in our terms (G5): the text to look for, the most one item may cost, and where it ships. Only the
+ * country and the currency name a place; no postcode is sent to the rail's catalog.
+ */
+export interface CatalogQuery {
+  readonly text: string;
+  /** The highest unit price, integer minor units in `currency`; null for none. */
+  readonly maxPriceMinor: number | null;
+  /** ISO 4217, upper case. */
+  readonly currency: string;
+  /** ISO 3166-1 alpha-2, upper case: the country it ships to. */
+  readonly country: string;
+  /** How many products to ask for (1 to 20). */
+  readonly limit: number;
+}
+
+/**
+ * One purchasable variant the rail's catalog returned, projected: the store and its storefront, the product and
+ * variant ids, titles, price, availability, an image, a product page and the category words the rail gave. Nothing
+ * about the buyer crosses the port (invariant 3).
+ */
+export interface CatalogHit {
+  /** The store as the rail names it (Shop: `*.myshopify.com`). */
+  readonly storeDomain: string;
+  /** The storefront origin (https), or null when the rail gave none. */
+  readonly storefrontOrigin: string | null;
+  readonly productRef: string | null;
+  readonly variantRef: string;
+  readonly title: string;
+  /** The variant's own title (`Default`, `Large / Blue`); "" when none. */
+  readonly variantTitle: string;
+  readonly price: WalletMoney;
+  readonly available: boolean;
+  readonly imageUrl: string | null;
+  readonly productUrl: string | null;
+  /** The product's type, category and tags as the rail gave them, lower case: what the excluded-category filter reads. */
+  readonly categories: readonly string[];
+  /** False when the rail says the item ships nothing (a digital good); null when it does not say. */
+  readonly requiresShipping: boolean | null;
 }
 
 export type RevokeResult = "revoked" | "not_revoked" | "not_sent";

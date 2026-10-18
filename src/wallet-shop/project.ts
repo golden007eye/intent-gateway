@@ -16,6 +16,7 @@
 import { checkoutRefHash } from "../contract/index.ts";
 import { findIdentity, ORDER_REF_AT } from "../privacy/index.ts";
 import {
+  type CatalogHit,
   RAIL_CODE,
   type ShipToMatch,
   type WalletAccount,
@@ -343,6 +344,108 @@ function instant(value: unknown): string | null {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(value)) return null;
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+/** The most variants one search answer may yield, whatever Shop sends. */
+export const MAX_CATALOG_HITS = 60;
+/** A product or image URL kept from a catalog answer: https, no credentials, at most 512 characters. */
+const CATALOG_URL_MAX = 512;
+
+/**
+ * search_catalog's answer in our terms (G5): for each variant only the store (`seller.domain`, a myshopify domain),
+ * the storefront origin (`seller.url`), the product and variant ids, the titles, the price {amount, currency} in
+ * integer minor units, availability, one image, the product page, the category words and whether it ships. As S1 saw
+ * it (step 5), a product has `variants[]`, and each variant carries `id` (a ProductVariant gid), `title`,
+ * `price {amount, currency}`, `availability {available}` and `seller {domain, url}`. The product-level fields (title,
+ * url, media, type, tags) are read where Shop puts them and dropped when absent. A variant with no myshopify store,
+ * no variant gid or no integer price is dropped whole, and so is one whose storefront reads as identity. Titles lose
+ * control and format characters, those that read as identity become "", and URLs keep only their origin and path
+ * (a query can carry a tracking id or a key).
+ */
+export function projectCatalog(content: Json): CatalogHit[] {
+  const hits: CatalogHit[] = [];
+  for (const product of list(content.products)) {
+    const productId = typeof product.id === "string" && REF.test(product.id) ? product.id : null;
+    const productTitle = cleanTitle(product.title);
+    const productUrl = cleanUrl(product.url ?? product.online_store_url ?? product.onlineStoreUrl);
+    const imageUrl = firstImage(product);
+    const categories = categoryWords(product);
+    for (const variant of list(product.variants)) {
+      if (hits.length >= MAX_CATALOG_HITS) return hits;
+      const seller = record(variant.seller) ?? record(product.seller);
+      const store = typeof seller?.domain === "string" ? seller.domain.toLowerCase() : "";
+      const variantRef = variant.id;
+      const price = money(record(variant.price));
+      if (!STORE_DOMAIN.test(store) || typeof variantRef !== "string" || !VARIANT_GID.test(variantRef) || price === null) continue;
+      const storefront = origin(seller?.url);
+      // A storefront that reads as identity drops the variant, not just the name: kept as null, the policy's block
+      // list could no longer match the store by the storefront host it is known by.
+      if (storefront !== null && findIdentity(storefront).length > 0) continue;
+      const variantTitle = cleanTitle(variant.title);
+      const shipping = variant.requires_shipping ?? product.requires_shipping;
+      hits.push({
+        storeDomain: store,
+        storefrontOrigin: storefront,
+        productRef: productId,
+        variantRef,
+        title: productTitle !== "" ? productTitle : variantTitle,
+        variantTitle: productTitle !== "" && variantTitle !== productTitle ? variantTitle : "",
+        price,
+        available: record(variant.availability)?.available === true,
+        imageUrl: firstImage(variant) ?? imageUrl,
+        productUrl: cleanUrl(variant.url) ?? productUrl,
+        categories,
+        requiresShipping: typeof shipping === "boolean" ? shipping : null,
+      });
+    }
+  }
+  return hits;
+}
+
+const VARIANT_GID = /^gid:\/\/shopify\/ProductVariant\/[0-9]{1,20}$/;
+
+function cleanTitle(value: unknown): string {
+  if (typeof value !== "string") return "";
+  // Control and format characters (a terminal escape, a bidi override) never reach the agent or a screen.
+  const title = value.replace(/[\s\p{Cc}]+/gu, " ").replace(/\p{Cf}/gu, "").trim().slice(0, 120);
+  // Merchant text: one that reads as identity (an engraving, a gift note) is dropped.
+  return findIdentity(title).length === 0 ? title : "";
+}
+
+/** origin + path of an https URL, or null. The query and fragment are dropped. */
+function cleanUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username !== "" || url.password !== "") return null;
+    const kept = `${url.origin}${url.pathname}`;
+    return kept.length <= CATALOG_URL_MAX && findIdentity(kept).length === 0 ? kept : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The first image URL a product or variant names (`media[]`, `images[]`, `image`, `featured_image`). */
+function firstImage(holder: Json): string | null {
+  const candidates = [...list(holder.media), ...list(holder.images), record(holder.image), record(holder.featured_image)];
+  for (const candidate of candidates) {
+    const url = cleanUrl(candidate?.url ?? candidate?.src);
+    if (url !== null) return url;
+  }
+  return null;
+}
+
+/** The product's type, category and tags, lower case, each at most 60 characters, at most 20 words. */
+function categoryWords(product: Json): string[] {
+  const category = record(product.category);
+  const raw: unknown[] = [
+    product.product_type,
+    product.productType,
+    typeof product.category === "string" ? product.category : category?.name,
+    category?.full_name,
+    ...(Array.isArray(product.tags) ? (product.tags as unknown[]) : []),
+  ];
+  return [...new Set(raw.filter((w): w is string => typeof w === "string" && w.trim() !== "").map((w) => w.trim().toLowerCase().slice(0, 60)))].slice(0, 20);
 }
 
 /** An address-related error message on a tool answer: the rail asks for address fields (plan K4). */

@@ -28,7 +28,11 @@
 //   of the words name, surname, recipient, address, addr, street, email, phone, card, cvv, cvv2, cvc
 //   ("buyerName", "recipient_name", "credit_card", "shipping_address"). The word "name" is allowed only in the
 //   product and merchant keys of NAME_ALLOWED (product_name, merchant_name, brand_name, category_name,
-//   store_name), which name a thing for sale or its seller, never the buyer.
+//   store_name), which name a thing for sale or its seller, never the buyer. The key "address_country" is allowed
+//   at one path only, `$.params.arguments.catalog.context.address_country` of an MCP `search_catalog` call
+//   (IdentityOptions.mcpEnvelope, Shop's search context, G5), and only while its value is a two-letter upper-case
+//   country code: a country is no more than the policy already shares. Anywhere else, or with any other value, it
+//   is still a banned key, so the key cannot carry text two letters at a time.
 // A 5-digit ZIP or ZIP+4 alone is not identity: the policy may share a postcode.
 //
 // Credentials (credentials.ts) are the other thing a logged request must never hold in clear: the disclosure core
@@ -126,8 +130,13 @@ export function findIdentity(value: unknown, options: IdentityOptions = {}): Fin
   if (options.mcpEnvelope !== true) return findings;
   const toolName = isToolCall(value);
   const clientName = isClientNamed(value);
+  const country = isCatalogCountry(value);
   return findings.filter(
-    (f) => !(f.kind === "banned_key" && ((toolName && f.path === "$.params.name") || (clientName && f.path === CLIENT_NAME_PATH))),
+    (f) =>
+      !(
+        f.kind === "banned_key" &&
+        ((toolName && f.path === "$.params.name") || (clientName && f.path === CLIENT_NAME_PATH) || (country && f.path === CATALOG_COUNTRY_PATH))
+      ),
   );
 }
 
@@ -298,6 +307,16 @@ const BANNED_WORDS = new Set([
 ]);
 // Keys where the word "name" names a product or its seller, never the buyer.
 const NAME_ALLOWED = new Set(["product_name", "merchant_name", "brand_name", "category_name", "store_name"]);
+
+const CATALOG_COUNTRY_PATH = "$.params.arguments.catalog.context.address_country";
+
+/** An MCP `search_catalog` call whose context names the country as an ISO 3166-1 alpha-2 code, as Shop's search does. */
+function isCatalogCountry(value: unknown): boolean {
+  const params = record(record(value)?.params);
+  if (record(value)?.method !== "tools/call" || params?.name !== "search_catalog") return false;
+  const country = record(record(record(params.arguments)?.catalog)?.context)?.address_country;
+  return typeof country === "string" && /^[A-Z]{2}$/.test(country);
+}
 
 function isBannedKey(key: string): boolean {
   const words = key
