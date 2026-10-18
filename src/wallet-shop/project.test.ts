@@ -86,7 +86,7 @@ describe("projectCheckout", () => {
     const { checkout: projected, checkoutId } = projectCheckout({ checkout: base }, "asked.myshopify.com", "94107");
     expect(checkoutId).toBe("gid://shopify/Checkout/abc");
     expect(projected).toEqual({
-      checkoutRef: checkoutRefOf("gid://shopify/Checkout/abc"),
+      checkoutRef: checkoutRefOf("gid://shopify/Checkout/abc") ?? "",
       storeDomain: "real-store.myshopify.com",
       status: "open",
       merchantOrigin: "https://stickers.example",
@@ -99,12 +99,18 @@ describe("projectCheckout", () => {
     expect(projectCheckout({ checkout: base }, "asked.myshopify.com", "10001").checkout.shipTo).toBe("differs");
   });
 
-  it("names a checkout whose id carries a ?key= credential only by its sha256", () => {
+  it("names a checkout whose id carries a ?key= credential only by the sha256 of the part before `?` (amendment L1)", () => {
     const id = "gid://shopify/Checkout/abc?key=SECRET-CHECKOUT-KEY";
     const { checkout, checkoutId } = projectCheckout({ checkout: { ...base, id } }, "asked.myshopify.com", undefined);
     expect(checkoutId).toBe(id);
-    expect(checkout.checkoutRef).toBe(`sha256:${createHash("sha256").update(id, "utf8").digest("hex")}`);
+    expect(checkout.checkoutRef).toBe(`sha256:${createHash("sha256").update("gid://shopify/Checkout/abc", "utf8").digest("hex")}`);
+    // Another read of the same checkout with another key names the same checkout.
+    expect(projectCheckout({ checkout: { ...base, id: "gid://shopify/Checkout/abc?key=OTHER" } }, "asked.myshopify.com", undefined).checkout.checkoutRef).toBe(checkout.checkoutRef);
     expect(JSON.stringify(checkout)).not.toContain("SECRET");
+  });
+
+  it("refuses a checkout id with nothing before its `?`: it has no checkout ref", () => {
+    expect(() => projectCheckout({ checkout: { ...base, id: "?key=SECRET" } }, "asked.myshopify.com", undefined)).toThrow("no usable id");
   });
 
   it("maps statuses, reads an unknown one as processing, and drops what reads as identity, a query or is not https", () => {

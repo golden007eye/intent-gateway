@@ -44,7 +44,7 @@ import {
   secretDigest,
   secretQueryKeys,
 } from "../privacy/index.ts";
-import { NOT_SENT_REASON, type Store } from "../store/index.ts";
+import { type Entry, NOT_SENT_REASON, type Store, StoreConflictError } from "../store/index.ts";
 
 /** Where a request goes: `intent_cloud`, or a wallet destination such as `shop`. A disclosure without `destination` went to Intent Cloud. */
 export type Destination = string;
@@ -121,6 +121,19 @@ export class DisclosureStoppedError extends Error {
   override name = "DisclosureStoppedError";
 }
 
+/**
+ * The send's precondition failed (DiscloseOptions.unless, plan G7b step 6b): the `disclosure` entry was not appended
+ * and nothing was sent. A lost race, not a failure: the core keeps sending.
+ */
+export class DisclosureConflictError extends Error {
+  override name = "DisclosureConflictError";
+  readonly endpoint: string;
+  constructor(endpoint: string) {
+    super(`${endpoint} not sent: its precondition no longer holds in the chain`);
+    this.endpoint = endpoint;
+  }
+}
+
 /** What the core logged for one request: its seq and the body of its `disclosure` entry. */
 export interface Logged<B> {
   readonly seq: number;
@@ -143,8 +156,25 @@ export interface DiscloseSteps<R, B> {
 export interface DiscloseOptions {
   /** Body paths whose values are digested in the log, besides the secret keys found anywhere. */
   readonly secretPaths?: readonly (readonly PathSegment[])[];
+  /**
+   * Opaque ids a wallet issued, let through the identity scan at exactly their path and only while the whole value
+   * matches its pattern (ADR-0019): a Shop checkout id's random token can read as a card number by chance. Any other
+   * value at that path, and every other path, is scanned as usual.
+   */
+  readonly opaqueIds?: readonly OpaqueId[];
   /** The approval handle a wallet send belongs to, kept in the disclosure entry only; never sent. */
   readonly purchase?: string;
+  /**
+   * Compare-and-append (plan G7b step 6b): the `disclosure` entry is appended only if this returns false over the
+   * chain, evaluated under the store lease; otherwise nothing is logged or sent and DisclosureConflictError is thrown.
+   */
+  readonly unless?: (entries: readonly Entry[]) => boolean;
+}
+
+/** A wallet-issued id at one body path, exempt from the identity scan while the whole value matches `pattern`. */
+export interface OpaqueId {
+  readonly at: readonly string[];
+  readonly pattern: RegExp;
 }
 
 export interface DisclosureCore {
@@ -179,6 +209,7 @@ export function createDisclosureCore(store: Store): DisclosureCore {
   const session = { id: randomUUID(), next: 0, open: new Set<number>() };
   let sessionEntry: Promise<unknown> | null = null;
   let stopped: string | null = null;
+  let numbering: Promise<void> = Promise.resolve();
 
   /** Stops every later send, for good (the first reason is kept), and returns the error that says so. */
   function stop(reason: string, cause: unknown): DisclosureStoppedError {
@@ -218,7 +249,7 @@ export function createDisclosureCore(store: Store): DisclosureCore {
         await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: refusals, rule: "logging" });
         throw new DisclosureRefusedError(request.operation, refusals);
       }
-      const findings = findIdentity(json, { mcpEnvelope: destination !== INTENT_CLOUD });
+      const findings = opaqueFiltered(findIdentity(json, { mcpEnvelope: destination !== INTENT_CLOUD }), json, destination === INTENT_CLOUD ? [] : (options.opaqueIds ?? []));
       if (findings.length > 0) {
         await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: findings.map(describe), rule: "identity" });
         throw new DisclosureBlockedError(request.operation, findings);
@@ -231,25 +262,44 @@ export function createDisclosureCore(store: Store): DisclosureCore {
         stop("the session entry could not be logged", error);
         throw error;
       }
-      // From here to the append call nothing awaits, so the store's FIFO queue keeps n in chain order.
-      const n = session.next++;
-      const body = {
-        ...steps.body(kept, fields),
-        ...elsewhere,
-        ...(redacted.length === 0 ? {} : { redacted }),
-        ...(options.purchase === undefined ? {} : { purchase: options.purchase }),
-        session: { id: session.id, n, open: [...session.open].sort((a, b) => a - b) },
-      };
-      session.open.add(n);
-      let entry;
+      // One send at a time from numbering to its append (numbering): a send whose `unless` condition holds gives its
+      // number back before the next send takes one, so the session's numbers never have a gap and a lost race never
+      // stops the core. In turn, nothing awaits before the append call, so the store's FIFO queue keeps n in order.
+      const prior = numbering;
+      let release = (): void => undefined;
+      numbering = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await prior;
       try {
-        entry = await store.append("disclosure", body);
-      } catch (error) {
-        stop(`a request to ${request.operation} could not be logged, so it was not sent`, error);
-        throw error;
+        assertOpen();
+        const n = session.next++;
+        const body = {
+          ...steps.body(kept, fields),
+          ...elsewhere,
+          ...(redacted.length === 0 ? {} : { redacted }),
+          ...(options.purchase === undefined ? {} : { purchase: options.purchase }),
+          session: { id: session.id, n, open: [...session.open].sort((a, b) => a - b) },
+        };
+        session.open.add(n);
+        let entry;
+        try {
+          entry = options.unless === undefined ? await store.append("disclosure", body) : await store.appendUnless("disclosure", body, options.unless);
+        } catch (error) {
+          if (error instanceof StoreConflictError) {
+            // Nothing was written or sent, and no other send was numbered meanwhile: n is given back.
+            session.open.delete(n);
+            session.next = n;
+            throw new DisclosureConflictError(request.operation);
+          }
+          stop(`a request to ${request.operation} could not be logged, so it was not sent`, error);
+          throw error;
+        }
+        logged.entry = { seq: entry.seq, body };
+        logged.n = n;
+      } finally {
+        release();
       }
-      logged.entry = { seq: entry.seq, body };
-      logged.n = n;
     };
 
     /** Appends the follow-up; if that fails, nothing is sent again (the disclosure must stay last in its session). */
@@ -287,6 +337,21 @@ export function createDisclosureCore(store: Store): DisclosureCore {
   }
 
   return { disclose, assertOpen, store };
+}
+
+/** The findings left once those sitting exactly at an opaque id whose whole value matches its pattern are dropped. */
+function opaqueFiltered(findings: Finding[], json: unknown, opaque: readonly OpaqueId[]): Finding[] {
+  if (opaque.length === 0) return findings;
+  const exempt = new Set(
+    opaque
+      .filter((o) => {
+        let value: unknown = json;
+        for (const key of o.at) value = typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
+        return typeof value === "string" && o.pattern.test(value);
+      })
+      .map((o) => `$.${o.at.join(".")}`),
+  );
+  return findings.filter((f) => !exempt.has(f.path));
 }
 
 export function describe(finding: Finding): string {

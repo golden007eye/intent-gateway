@@ -17,7 +17,7 @@ import * as fs from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { inspect } from "node:util";
 import { type WalletConfig, type WalletKeySource, WALLET_KEY_TEXT } from "../config/index.ts";
-import type { WalletRail } from "./port.ts";
+import type { CheckoutIdStore, WalletRail } from "./port.ts";
 
 export type WalletVaultFailure = "tampered" | "no_key" | "bad_key" | "unsafe";
 
@@ -167,23 +167,28 @@ async function defaultKey(path: string, create: boolean): Promise<WalletKey | nu
 
 /** Saves `secret` for `rail`, replacing any earlier one in one step. */
 export async function saveSecret(dataDir: string, rail: WalletRail, key: WalletKey, secret: string): Promise<void> {
-  const file = vaultPath(dataDir, rail);
+  await seal(dataDir, vaultPath(dataDir, rail), aad(rail), key, secret);
+}
+
+/** Encrypts `secret` under `key` and `additional` into `file` (below `dataDir`), replacing any earlier file in one step. */
+async function seal(dataDir: string, file: string, additional: Buffer, key: WalletKey, secret: string): Promise<void> {
   const dir = dirname(file);
   await checkOwnDir(dataDir, true);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   await checkOwnDir(dataDir);
+  await checkOwnDir(dirname(dir));
   await checkOwnDir(dir);
   await fs.chmod(dir, 0o700);
 
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv("aes-256-gcm", bytesOf(key), iv);
-  cipher.setAAD(aad(rail));
+  cipher.setAAD(additional);
   const plain = Buffer.from(secret, "utf8");
   const sealed = Buffer.concat([cipher.update(plain), cipher.final()]);
   plain.fill(0);
   const content = Buffer.concat([MAGIC, iv, cipher.getAuthTag(), sealed]);
 
-  const temp = join(dir, `.${rail}.enc.${randomBytes(8).toString("hex")}.tmp`);
+  const temp = join(dir, `.${randomBytes(8).toString("hex")}.tmp`);
   await writeNew(temp, content);
   try {
     await fs.rename(temp, file);
@@ -196,7 +201,10 @@ export async function saveSecret(dataDir: string, rail: WalletRail, key: WalletK
 
 /** The secret saved for `rail`, or null when none is. Refuses a changed file or a wrong key as "tampered". */
 export async function loadSecret(dataDir: string, rail: WalletRail, key: WalletKey): Promise<string | null> {
-  const file = vaultPath(dataDir, rail);
+  return unseal(dataDir, vaultPath(dataDir, rail), aad(rail), key);
+}
+
+async function unseal(dataDir: string, file: string, additional: Buffer, key: WalletKey): Promise<string | null> {
   await checkOwnDir(dataDir, true);
   await checkOwnDir(dirname(file), true);
   const content = await readOwnFile(file);
@@ -210,7 +218,7 @@ export async function loadSecret(dataDir: string, rail: WalletRail, key: WalletK
   const tag = content.subarray(MAGIC.length + IV_BYTES, HEADER);
   try {
     const decipher = createDecipheriv("aes-256-gcm", bytesOf(key), iv, { authTagLength: TAG_BYTES });
-    decipher.setAAD(aad(rail));
+    decipher.setAAD(additional);
     decipher.setAuthTag(tag);
     const plain = Buffer.concat([decipher.update(content.subarray(HEADER)), decipher.final()]);
     const secret = plain.toString("utf8");
@@ -219,6 +227,55 @@ export async function loadSecret(dataDir: string, rail: WalletRail, key: WalletK
   } catch {
     throw tampered;
   }
+}
+
+const CHECKOUT_REF = /^sha256:([0-9a-f]{64})$/;
+/** How long a checkout id is kept at most: the completer read window (48 h) after a 15-minute snapshot, plus a day. */
+export const CHECKOUT_ID_MAX_AGE_MS = 73 * 3_600_000;
+
+/** `<data>/wallet/<rail>-checkouts`: one encrypted file per checkout id (ADR-0019). */
+export function checkoutVaultDir(dataDir: string, rail: WalletRail): string {
+  return join(dataDir, "wallet", `${rail}-checkouts`);
+}
+
+/**
+ * The rail's raw checkout ids, each AES-256-GCM sealed under the wallet key in its own 0600 file named by the
+ * checkout ref's hex (never the id), with the AAD naming the rail and the ref: a file copied under another ref's
+ * name does not open (ADR-0019). Opening it deletes files older than CHECKOUT_ID_MAX_AGE_MS, by which time no
+ * completer key can read the approval any more.
+ */
+export async function openCheckoutVault(dataDir: string, rail: WalletRail, key: WalletKey, now: () => number = Date.now): Promise<CheckoutIdStore> {
+  const dir = checkoutVaultDir(dataDir, rail);
+  const fileOf = (ref: string): string => {
+    const hex = CHECKOUT_REF.exec(ref)?.[1];
+    if (hex === undefined) throw new WalletVaultError("unsafe", "a checkout is named by its sha256 checkout ref");
+    return join(dir, `${hex}.enc`);
+  };
+  const additional = (ref: string): Buffer => Buffer.concat([MAGIC, Buffer.from(`intent-wallet-v1|${rail}|checkout|${ref}`, "utf8")]);
+  await checkOwnDir(dataDir, true);
+  await checkOwnDir(dir, true);
+  const names = await fs.readdir(dir).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [] as string[];
+    throw error;
+  });
+  for (const name of names) {
+    if (!/^[0-9a-f]{64}\.enc$/.test(name)) continue;
+    const info = await fs.lstat(join(dir, name)).catch(missing);
+    if (info !== null && info.isFile() && now() - info.mtimeMs > CHECKOUT_ID_MAX_AGE_MS) await fs.unlink(join(dir, name)).catch(() => undefined);
+  }
+  return {
+    get: (ref) => unseal(dataDir, fileOf(ref), additional(ref), key),
+    set: (ref, id) => seal(dataDir, fileOf(ref), additional(ref), key, id),
+    async delete(ref) {
+      try {
+        await fs.unlink(fileOf(ref));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      }
+      await syncDir(dir);
+    },
+  };
 }
 
 /** Whether a vault file exists for `rail` (it may still not open). */

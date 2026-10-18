@@ -16,6 +16,7 @@ import {
   createDisclosedWallet,
   type DestinationTransport,
   DisclosureBlockedError,
+  DisclosureConflictError,
   DisclosureRefusedError,
   DisclosureStoppedError,
   type IntentCloud,
@@ -376,5 +377,66 @@ describe("review fixes: wider redaction, refusals, the MCP tool name", () => {
       ["banned_key at $.params.name"],
       ["card at $.params.name"],
     ]);
+  });
+});
+
+describe("compare-and-append on a wallet send (plan G7b step 6b)", () => {
+  it("a send whose condition holds in the chain is neither logged nor sent; the core keeps sending, numbered without a gap", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    await shop.call("get_checkout", rpc("get_checkout", { shop: "s" }), { purchase: "ap_TEST0001" });
+    const blocked = shop.call("complete_checkout", rpc("complete_checkout", { shop: "s" }), { purchase: "ap_TEST0001", unless: () => true });
+    await expect(blocked).rejects.toBeInstanceOf(DisclosureConflictError);
+    expect(sent).toHaveLength(1);
+    expect(logged().filter((e) => e.kind === "disclosure").map((e) => bodyOf(e).endpoint)).toEqual(["get_checkout"]);
+    await shop.call("complete_checkout", rpc("complete_checkout", { shop: "s" }), { purchase: "ap_TEST0001", unless: () => false });
+    expect(sent).toHaveLength(2);
+    const numbers = logged().filter((e) => e.kind === "disclosure").map((e) => (bodyOf(e).session as { n: number }).n);
+    expect(numbers).toEqual([0, 1]);
+    expect(logged().filter((e) => e.kind === "disclosure").every((e) => bodyOf(e).purchase === "ap_TEST0001")).toBe(true);
+  });
+});
+
+describe("L1: a lost send condition never stops the shared core", () => {
+  it("two sends at once, the first losing its condition: the second is sent, numbered without a gap, and the core keeps sending", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    const [lost, won] = await Promise.allSettled([
+      shop.call("complete_checkout", rpc("complete_checkout", { shop: "s" }), { purchase: "ap_TEST0001", unless: () => true }),
+      shop.call("get_checkout", rpc("get_checkout", { shop: "s" }), { purchase: "ap_TEST0001" }),
+    ]);
+    expect(lost.status === "rejected" && lost.reason instanceof DisclosureConflictError).toBe(true);
+    expect(won.status).toBe("fulfilled");
+    await shop.call("get_checkout", rpc("get_checkout", { shop: "s" }), { purchase: "ap_TEST0001" });
+    expect(sent).toHaveLength(2);
+    const numbers = logged().filter((e) => e.kind === "disclosure").map((e) => (bodyOf(e).session as { n: number }).n);
+    expect(numbers).toEqual([0, 1]);
+  });
+
+  it("a complete_checkout without its purchase or its condition is refused before anything is logged", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    await expect(shop.call("complete_checkout", rpc("complete_checkout", {}), { purchase: "ap_TEST0001" })).rejects.toBeInstanceOf(TypeError);
+    await expect(shop.call("complete_checkout", rpc("complete_checkout", {}), { unless: () => false })).rejects.toBeInstanceOf(TypeError);
+    expect(sent).toHaveLength(0);
+    expect(logged()).toEqual([]);
+  });
+});
+
+describe("opaque wallet ids (ADR-0019)", () => {
+  const ID = /^gid:\/\/shopify\/Checkout\/[A-Za-z0-9]{1,128}(?:\?key=[A-Za-z0-9]{1,256})?$/;
+  it("an id of the declared shape at its path passes the identity scan even when it reads as a card; elsewhere, or off-shape, it is blocked", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop", opaqueIds: [{ path: "params.arguments.id", pattern: ID }] });
+    await shop.call("get_checkout", rpc("get_checkout", { id: "gid://shopify/Checkout/4111111111111111?key=ab12" }));
+    expect(sent).toHaveLength(1);
+    await expect(shop.call("get_checkout", rpc("get_checkout", { other: "gid://shopify/Checkout/4111111111111111" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    await expect(shop.call("get_checkout", rpc("get_checkout", { id: "card 4111 1111 1111 1111" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    await expect(shop.call("get_checkout", rpc("get_checkout", { id: "gid://shopify/Checkout/x?key=a b jane@example.com" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    expect(sent).toHaveLength(1);
   });
 });

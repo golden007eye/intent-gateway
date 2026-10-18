@@ -55,7 +55,7 @@ async function demoAt(dataDir: string): Promise<Demo> {
 
 async function gatewayOver(
   demo: Demo,
-  options: { dir?: string; demoMode?: boolean; pins?: PinnedRootKey[]; confirmBaseUrl?: string } = {},
+  options: { dir?: string; demoMode?: boolean; pins?: PinnedRootKey[]; confirmBaseUrl?: string; oneTap?: boolean } = {},
 ): Promise<{ gateway: Gateway; store: Store }> {
   const store = await openStore(options.dir ?? demo.dataDir);
   cleanup.push(() => store.close());
@@ -64,6 +64,7 @@ async function gatewayOver(
     cloud: (keySet) => connectCloud({ baseUrl: demo.cloudUrl, session }, store, { keySet }),
     store,
     completerKeys: openCompleterKeys(options.dir ?? demo.dataDir),
+    ...(options.oneTap === true ? { oneTap: demo.oneTap } : {}),
     policy: loadPolicy(POLICY),
     pinnedRootKeys: options.pins ?? demo.trustKeys.rootKeys,
     ...(options.demoMode === false
@@ -178,6 +179,38 @@ describe("demo flow", () => {
     expect(report.counts.approvals).toBe(1);
     expect(formatReport(report)).toContain("acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): ");
     expect(formatReport(report)).not.toContain("public edge");
+  });
+
+  it("one-tap (plan G7c): the sticker is completed by the gateway with the demo Shop wallet → ordered, the banner on every result", async () => {
+    const demo = await demoAt(await tmpData());
+    const { gateway, store } = await gatewayOver(demo, { oneTap: true });
+    await gateway.start();
+    const http: HttpHandle = await runHttp({ gateway, host: "127.0.0.1", port: 0, token: null, banner: DEMO_BANNER, log: () => undefined });
+    cleanup.push(() => http.close());
+    const client = new Client({ name: "demo-one-tap", version: "0" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(http.url)) as Transport);
+    cleanup.push(() => client.close());
+    const call = async (name: string, args: Record<string, unknown>): Promise<string> => {
+      const result = (await client.callTool({ name, arguments: args })) as CallToolResult;
+      expect(result.content[0]).toEqual({ type: "text", text: DEMO_BANNER });
+      return texts(result).join("\n");
+    };
+    const offers = await call("find_offers", { category: "stickers", budget_usd: 20, zip: "94107" });
+    const offer = /offer_handle: (\S+)/.exec(offers)?.[1] ?? "";
+    const cart = await call("create_cart", { offer_handle: offer });
+    const link = /Approval link: (\S+)/.exec(cart)?.[1] ?? "";
+    const handle = /approval_handle: (\S+)/.exec(cart)?.[1] ?? "";
+    const page = await raw(link);
+    const done = await post(link, { csrf: csrfOf(page.body), action: "approve", code: demo.code }, { origin: new URL(link).origin, "sec-fetch-site": "same-origin" });
+    expect(done.body).toContain("Your gateway completes payment with demo Shop; check your agent.");
+    const status = await call("get_approval_status", { approval_handle: handle });
+    expect(status).toContain("One-tap: ordered (read from Shop), order gid://shopify/Order/");
+    expect(status).toContain("Shop reported the order");
+    expect(demo.shop.completeCount).toBe(1);
+    await store.close();
+    const report = await runVerify({ dataDir: demo.dataDir, pinnedRootKeys: demoTrustKeys().rootKeys, now: new Date(), skipSupplyChain: true });
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(report.exitCode).toBe(0);
   });
 
   it("rejects with the demo passkey", async () => {

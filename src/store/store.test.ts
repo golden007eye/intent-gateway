@@ -16,6 +16,7 @@ import {
   type EntryKind,
   openStore,
   readChain,
+  StoreConflictError,
   StoreCorruptError,
   StoreFencedError,
   type StoreFs,
@@ -666,3 +667,31 @@ describe("paths (attack: a planted symbolic link or a foreign data dir)", () => 
   });
 });
 
+
+describe("appendUnless: compare-and-append (plan G7b)", () => {
+  it("writes when the conflict is absent; on a conflict writes nothing and the handle stays usable", async () => {
+    const store = await openStore(dir, { clock });
+    await store.appendUnless("completion", { handle: "ap_1" }, () => false);
+    const has = (entries: readonly Entry[]) => entries.some((e) => e.kind === "completion");
+    await expect(store.appendUnless("completion", { handle: "ap_1" }, has)).rejects.toBeInstanceOf(StoreConflictError);
+    expect(store.entries().map((e) => e.kind)).toEqual(["completion"]);
+    await store.append("observed", { n: 1 });
+    expect(store.entries().map((e) => e.kind)).toEqual(["completion", "observed"]);
+    expect(verifyChain(store.entries()).ok).toBe(true);
+    await store.close();
+  });
+
+  it("sees what another handle appended: the conflict is judged under the lease, after catching up", async () => {
+    const a = await openStore(dir, { clock });
+    const b = await openStore(dir, { clock });
+    await b.append("observed", { warm: true });
+    await a.append("complete_attempt", { handle: "ap_1", owner: "a" });
+    const attempted = (entries: readonly Entry[]) => entries.some((e) => e.kind === "complete_attempt");
+    await expect(b.appendUnless("complete_attempt", { handle: "ap_1", owner: "b" }, attempted)).rejects.toBeInstanceOf(StoreConflictError);
+    await b.append("observed", { after: true });
+    expect(b.entries().filter((e) => e.kind === "complete_attempt")).toHaveLength(1);
+    expect(verifyChain(b.entries()).ok).toBe(true);
+    await a.close();
+    await b.close();
+  });
+});

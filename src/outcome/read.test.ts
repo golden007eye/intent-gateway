@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { chargedNothing, type OutcomeHead, readCloudOutcome, replaces, shownStatus } from "./index.ts";
+import { chargedNothing, type OutcomeHead, readCloudOutcome, replaces, shownStatus, mayHaveSent } from "./index.ts";
 
 const CHECKS_OK = { merchant_origin: "match", checkout_ref: "match", line: "match", ship_to: "match", total: "match" } as const;
 const ORDERED = {
@@ -85,16 +85,21 @@ describe("chargedNothing: cap room only on local evidence (contract §6)", () =>
   it("Shop's terminal not-completed read frees the room", () => {
     expect(chargedNothing([local("failed", "shop_api")], H)).toBe(true);
   });
-  it("the gateway's own refusal frees it only while no complete_checkout disclosure was logged after the approval (fail closed)", () => {
+  it("the gateway's own refusal frees it only while mayHaveSent is false: a send after the approval naming it, or naming no purchase (fail closed)", () => {
     const approval = { kind: "approval", body: { handle: H } };
     expect(chargedNothing([approval, local("failed", "gateway_precheck")], H)).toBe(true);
     const sent = { kind: "disclosure", body: { destination: "shop", endpoint: "complete_checkout", purchase: H } };
     expect(chargedNothing([approval, sent, local("failed", "gateway_precheck")], H)).toBe(false);
-    // A send that names no purchase, or another one, still keeps the room: the branch does not rely on `purchase`.
+    // A send that names no purchase, or not a valid handle, is ambiguous and keeps the room.
     const unnamed = { kind: "disclosure", body: { destination: "shop", endpoint: "complete_checkout" } };
     expect(chargedNothing([approval, unnamed, local("failed", "gateway_precheck")], H)).toBe(false);
+    const garbled = { kind: "disclosure", body: { destination: "shop", endpoint: "complete_checkout", purchase: 7 } };
+    expect(chargedNothing([approval, garbled, local("failed", "gateway_precheck")], H)).toBe(false);
+    // Another purchase's send, named as such, does not re-count this refusal (ADR-0019).
     const other = { kind: "disclosure", body: { destination: "shop", endpoint: "complete_checkout", purchase: "ap_OTHER0001" } };
-    expect(chargedNothing([approval, other, local("failed", "gateway_precheck")], H)).toBe(false);
+    expect(chargedNothing([approval, other, local("failed", "gateway_precheck")], H)).toBe(true);
+    expect(mayHaveSent([approval, other], H)).toBe(false);
+    expect(mayHaveSent([approval, other], "ap_OTHER0001")).toBe(true);
     // One logged before the approval belongs to an earlier purchase.
     expect(chargedNothing([other, approval, local("failed", "gateway_precheck")], H)).toBe(true);
   });

@@ -2,7 +2,8 @@
 // holds from the whole chain, and checks, on the pack alone, that every entry it holds is one of them. Pure.
 //
 // A purchase's entries, all found from the entries themselves (nothing the exporter says about them is trusted):
-// - its `approval_pending`, `approval` and `outcome` entries (body `handle`);
+// - its `approval_pending`, `approval` and `outcome` entries (body `handle`), and a one-tap purchase's `completion`
+//   and `complete_attempt` entries (ADR-0019), which the double-charge audit of `intent verify` needs;
 // - the disclosures sent for it: the cart request (its logged body is byte for byte the CartRequest the pending entry
 //   chained in `sent`, Appendix E step 7), the approval request (an `observed` entry for it names the handle), the
 //   status reads and outcome reports (the handle is in their path), and wallet requests (local field `purchase`);
@@ -20,6 +21,8 @@ export type Role =
   | "approval pending"
   | "approval"
   | "outcome"
+  | "completion"
+  | "complete attempt"
   | "search"
   | "cart request"
   | "approval request"
@@ -54,6 +57,8 @@ export function purchaseEntries(entries: readonly Entry[], handle: string): Memb
   for (const e of pendings) roles.set(e.seq, "approval pending");
   for (const e of approvals) roles.set(e.seq, "approval");
   for (const e of of("outcome")) roles.set(e.seq, "outcome");
+  for (const e of of("completion")) roles.set(e.seq, "completion");
+  for (const e of of("complete_attempt")) roles.set(e.seq, "complete attempt");
 
   const observedBy = new Map<number, Record<string, unknown>>();
   for (const e of entries) if (e.kind === "observed" && typeof body(e).disclosure_seq === "number") observedBy.set(body(e).disclosure_seq as number, body(e));

@@ -3,7 +3,7 @@
 // its account server (revocation, and the device flow that links the account). Both share the gateway session and
 // the stop of `owner`.
 import { BUILD } from "../config/index.ts";
-import type { WalletAdapter } from "../wallet/index.ts";
+import type { CheckoutIdStore, WalletAdapter } from "../wallet/index.ts";
 import {
   createShopAccountsTransport,
   createShopAdapter,
@@ -14,6 +14,7 @@ import {
   parseShopCredentials,
   runDeviceFlow,
   SHOP_ACCOUNTS_SECRET_PATHS,
+  SHOP_OPAQUE_IDS,
   SHOP_SECRET_PATHS,
   shopCredentialsText,
 } from "../wallet-shop/index.ts";
@@ -30,6 +31,8 @@ export interface ShopConnection {
   readonly timeoutMs?: number;
   /** Makes each create_checkout idempotency key (a UUID v4); random by default, fixed by tests. */
   readonly newKey?: () => string;
+  /** Where Shop's raw checkout ids are kept between processes (the encrypted checkout vault, ADR-0019); memory by default. */
+  readonly checkoutIds?: CheckoutIdStore;
 }
 
 /** The Shop wallet adapter, every send of it logged first by the disclosure core of `owner`. */
@@ -44,13 +47,14 @@ export function connectShop(owner: DisclosedCloud | WalletSession, connection: S
       ...timing,
     }),
     owner,
-    { destination: "shop", secretPaths: SHOP_SECRET_PATHS },
+    { destination: "shop", secretPaths: SHOP_SECRET_PATHS, opaqueIds: SHOP_OPAQUE_IDS },
   );
   return createShopAdapter({
     mcp,
     accounts: accountsOf(owner, connection),
     credentials,
     ...(connection.newKey === undefined ? {} : { newKey: connection.newKey }),
+    ...(connection.checkoutIds === undefined ? {} : { checkoutIds: connection.checkoutIds }),
   });
 }
 

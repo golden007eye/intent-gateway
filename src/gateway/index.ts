@@ -18,6 +18,9 @@ export {
   type GatewayOptions,
   GatewayStartError,
   type MissingDetail,
+  myshopifyStore,
+  type OneTapOptions,
   type Refused,
 } from "./gateway.ts";
 export { type ApprovalQr, approvalQr } from "./qr.ts";
+export { COMPLETION_BUDGET_MS, type CompletionStep, type CompletionView, newReportId } from "./complete.ts";

@@ -211,9 +211,12 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     return layout("Approve this purchase?", body, !locked);
   }
 
-  function decided(outcome: Outcome, action: "approve" | "reject"): string {
+  function decided(outcome: Outcome, action: "approve" | "reject", oneTap: boolean): string {
     if (outcome.status === 200) {
       // The heading names the outcome once; the paragraph says how, and the box what to do next.
+      if (action === "approve" && oneTap) {
+        return result("Approved", "ok", ICONS.check, "Approved with the demo passkey. Your gateway completes payment with demo Shop; check your agent. Nothing real is bought in demo mode.");
+      }
       return action === "approve"
         ? result("Approved", "ok", ICONS.check, "Approved with the demo passkey. Nothing is bought in demo mode.")
         : result("Rejected", "no", ICONS.cross, "You rejected this purchase. Nothing was approved.");
@@ -258,7 +261,9 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
       }
     }
     const outcome = action === "approve" ? fake.approveWithPasskey(approval, passkey) : fake.reject(approval, passkey);
-    return [outcome.status, decided(outcome, action)];
+    const snapshot = fake.inspect(approval)?.snapshot;
+    const oneTap = snapshot?.v === 2 && snapshot.completion_mode === "shop_agent";
+    return [outcome.status, decided(outcome, action, oneTap)];
   }
 
   const server = createServer((req, res) => {

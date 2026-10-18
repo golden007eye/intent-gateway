@@ -5,6 +5,7 @@ export {
   openStore,
   readChain,
   type Store,
+  StoreConflictError,
   StoreCorruptError,
   StoreFencedError,
   type StoreFs,

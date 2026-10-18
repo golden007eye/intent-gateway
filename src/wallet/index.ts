@@ -3,8 +3,14 @@
 export { CHECK_CURRENCY, checkedEntry, checkOrders, chainedOrderRefs, type WalletCheck } from "./check.ts";
 export {
   AddressFieldsRequiredError,
+  type ChainEntryView,
   CHECKED_KEYS,
+  type CheckoutIdStore,
   type CheckoutLocator,
+  type CompleteOptions,
+  CompletionRefusedError,
+  memoryCheckoutIds,
+  type SendCondition,
   type CheckoutRequest,
   isWalletRail,
   type RevokeResult,
@@ -24,11 +30,14 @@ export {
   WalletRailError,
 } from "./port.ts";
 export {
+  CHECKOUT_ID_MAX_AGE_MS,
+  checkoutVaultDir,
   deleteSecret,
   describeKeySource,
   hasSecret,
   loadSecret,
   loadWalletKey,
+  openCheckoutVault,
   saveSecret,
   vaultPath,
   WalletKey,

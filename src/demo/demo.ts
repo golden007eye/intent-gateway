@@ -6,7 +6,11 @@
 import { createPrivateKey, generateKeyPairSync, randomInt } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, type Stats, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { catalogCategories, type FakeCloud, SAMPLE_CATALOG, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
+import { type CatalogItem, catalogCategories, type FakeCloud, SAMPLE_CATALOG, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
+import { connectShop } from "../disclosure/index.ts";
+import type { OneTapOptions } from "../gateway/index.ts";
+import { memoryCheckoutIds } from "../wallet/index.ts";
+import { FAKE_STORE, FAKE_STOREFRONT, FAKE_VARIANT, type FakeShop, SHIPPING_MINOR, startFakeShop, UNIT_PRICE_MINOR } from "../wallet-shop-fake/index.ts";
 import { EXCLUDED_CATEGORIES } from "../policy/index.ts";
 import { type PinnedRootKey, TEST_ROOT_KEY } from "../trust/index.ts";
 import { CONFIRM_PATH, type ConfirmPage, startConfirmPage } from "./confirm.ts";
@@ -18,6 +22,26 @@ export const DEMO_DIR = "demo";
  */
 export const DEMO_CONFIRM_PORT = 8788;
 const PASSKEY_FILE = "demo-passkey.json";
+
+/**
+ * The demo's one-tap item (plan G7c): sold by the demo Shop store, so a cart for it is completed by the gateway with
+ * the fake Shop wallet instead of being handed off. Its price and variant are the fake Shop's.
+ */
+export const DEMO_ONE_TAP_ITEM: CatalogItem = Object.freeze<CatalogItem>({
+  category: "stickers",
+  tags: ["holographic", "sticker"],
+  stock: 100,
+  merchant: { name: "Sticker Store (demo Shop)", domain: new URL(FAKE_STOREFRONT).host },
+  title: "Holographic sticker",
+  variant: "Default",
+  price: { amount_minor: UNIT_PRICE_MINOR, currency: "USD" },
+  shipping: { amount_minor: SHIPPING_MINOR, currency: "USD" },
+  total_kind: "exact",
+  availability: "in_stock",
+  variant_ref: FAKE_VARIANT,
+  completion: ["shop_agent", "handoff"],
+});
+const DEMO_CATALOG: readonly CatalogItem[] = [...SAMPLE_CATALOG, DEMO_ONE_TAP_ITEM];
 /** The demo code of the running demo (0600), for a person whose gateway was started by an agent, with no terminal. */
 export const CODE_FILE = "approval-code";
 
@@ -63,6 +87,10 @@ export interface Demo {
   catalogNote: string;
   /** For tests: the fake behind the demo. */
   cloud: FakeCloud;
+  /** One-tap with the demo Shop wallet (a fake Shop on 127.0.0.1): pass as GatewayOptions.oneTap. */
+  oneTap: OneTapOptions;
+  /** For tests: the fake Shop behind one-tap. */
+  shop: FakeShop;
   close(): Promise<void>;
 }
 
@@ -84,12 +112,22 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
   const codeFile = join(dataDir, CODE_FILE);
   writePrivate(codeFile, `${code}\n`);
   const cloud = await startFakeCloud({
-    catalog: SAMPLE_CATALOG,
+    catalog: DEMO_CATALOG,
+    oneTap: true,
     // As Intent Cloud does: an item in an excluded category is never returned, whatever the search says.
     excludedCategories: EXCLUDED_CATEGORIES,
     ...(options.now === undefined ? {} : { now: options.now }),
   });
+  let shop: FakeShop | null = null;
   try {
+    shop = await startFakeShop();
+    const demoShop = shop;
+    // The demo wallet's tokens are the fake's own; its checkout ids stay in memory (a demo restart hands off anew).
+    const vaultText = JSON.stringify({ v: 1, client_id: demoShop.clientId, access_token: demoShop.accessToken, refresh_token: demoShop.refreshToken });
+    const oneTap: OneTapOptions = {
+      connect: (owner) => connectShop(owner, { mcpUrl: demoShop.mcpUrl, authUrl: demoShop.authUrl, vaultText, checkoutIds: memoryCheckoutIds() }),
+      storeFor: (origin) => (origin === FAKE_STOREFRONT ? FAKE_STORE : null),
+    };
     const pageOn = (port: number): Promise<ConfirmPage> =>
       startConfirmPage({
         fake: cloud,
@@ -122,12 +160,16 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
       codeFile,
       catalogNote: demoCatalogNote(),
       cloud,
+      oneTap,
+      shop: demoShop,
       close: async () => {
         await page.close();
+        await demoShop.close();
         await cloud.close();
       },
     };
   } catch (error) {
+    await shop?.close();
     await cloud.close();
     throw error;
   }
@@ -135,7 +177,7 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
 
 /** "The demo catalog has: running shoes, water bottles, …": the sample catalog's kinds of product, excluded ones left out. */
 export function demoCatalogNote(): string {
-  return `The demo catalog has: ${catalogCategories(SAMPLE_CATALOG, EXCLUDED_CATEGORIES).join(", ")}.`;
+  return `The demo catalog has: ${catalogCategories(DEMO_CATALOG, EXCLUDED_CATEGORIES).join(", ")}.`;
 }
 
 interface PasskeyFile {

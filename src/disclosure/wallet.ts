@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { parsePath } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
-import type { Store } from "../store/index.ts";
+import type { Entry, Store } from "../store/index.ts";
 import {
   coreOf,
   createDisclosureCore,
@@ -30,6 +30,11 @@ export interface WalletDisclosureOptions {
    * the `authorization` header and the secret keys (privacy's SECRET_KEYS), which are digested wherever they are.
    */
   readonly secretPaths?: readonly string[];
+  /**
+   * Wallet-issued ids let through the identity scan at exactly their dotted path (plain keys only), while the whole
+   * value matches the pattern (`{path: "params.arguments.id", pattern}`).
+   */
+  readonly opaqueIds?: readonly { readonly path: string; readonly pattern: RegExp }[];
 }
 
 /** An answer as the transport returned it, plus the seq of the `disclosure` entry that logged its request. */
@@ -41,7 +46,7 @@ export interface DisclosedWallet {
    * Prepares, logs, then sends one request. `purchase` is the approval handle the call belongs to: it is kept in the
    * disclosure entry and never sent.
    */
-  call(operation: string, payload: unknown, options?: { purchase?: string }): Promise<WalletResult>;
+  call(operation: string, payload: unknown, options?: { purchase?: string; unless?: (entries: readonly Entry[]) => boolean }): Promise<WalletResult>;
 }
 
 const PURCHASE = /^[A-Za-z0-9_-]{1,128}$/;
@@ -74,13 +79,23 @@ export function createDisclosedWallet(transport: DestinationTransport, cloud: Di
     if (segments === null || segments.length === 0) throw new TypeError(`not a body path: ${JSON.stringify(path)}`);
     return segments;
   });
+  const opaqueIds = (options.opaqueIds ?? []).map((o) => {
+    const at = o.path.split(".");
+    if (!at.every((k) => /^[A-Za-z_$][\w$]*$/.test(k))) throw new TypeError(`not a plain body path: ${JSON.stringify(o.path)}`);
+    return { at, pattern: o.pattern };
+  });
   const core = coreOf(cloud);
 
   return {
     destination,
     async call(operation, payload, callOptions = {}) {
-      const { purchase } = callOptions;
+      const { purchase, unless } = callOptions;
       if (purchase !== undefined && !PURCHASE.test(purchase)) throw new TypeError(`not an approval handle: ${JSON.stringify(purchase)}`);
+      // The double-charge rules (ADR-0019) count a payment by its purchase and admit it only by compare-and-append:
+      // a complete_checkout without both is refused before anything is logged or sent.
+      if (operation === "complete_checkout" && (purchase === undefined || unless === undefined)) {
+        throw new TypeError("a complete_checkout send needs its purchase and its send condition (unless)");
+      }
       core.assertOpen();
       const request = transport.prepare(operation, payload);
       const { result, seq } = await core.disclose(
@@ -103,7 +118,7 @@ export function createDisclosedWallet(transport: DestinationTransport, cloud: Di
           },
           discard: (logged, _response, reason) => new Error(`response to disclosure #${String(logged.seq)} discarded: ${reason}`),
         },
-        { secretPaths, ...(purchase === undefined ? {} : { purchase }) },
+        { secretPaths, opaqueIds, ...(purchase === undefined ? {} : { purchase }), ...(unless === undefined ? {} : { unless }) },
       );
       return { ...result, disclosureSeq: seq };
     },

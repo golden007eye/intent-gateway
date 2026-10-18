@@ -5,10 +5,10 @@
 // or an approval proof at the time it was chained. A statement that has expired since is still good evidence for
 // what it covered then. `now` is the self-check's clock.
 import { INTENT } from "../config/index.ts";
-import { ApprovalProof, ReceiptRequest } from "../contract/index.ts";
+import { ApprovalHandle, ApprovalProof, ReceiptRequest } from "../contract/index.ts";
 import { canonicalize, parseIntegerJson, sha256Hex } from "../jcs/index.ts";
 import { observationProblem } from "../observation/index.ts";
-import { bindingV1, type CloudOutcomeEntry, type LocalOutcomeEntry, OutcomeEntry, readCloudOutcome } from "../outcome/index.ts";
+import { bindingV1, type CloudOutcomeEntry, COMPLETE_CHECKOUT, type LocalOutcomeEntry, mayHaveSent, OutcomeEntry, readCloudOutcome } from "../outcome/index.ts";
 import { bodyValue, findIdentity, isCredentialHeader, markerDigest, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
@@ -302,6 +302,22 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
         }
         break;
       }
+      case "completion":
+      case "complete_attempt": {
+        // One-tap redemption (plan G7b): one of each per approval, compare-and-appended, the attempt after its
+        // completion, both naming an approval that verified; the checkout is named by its hash, never its raw id.
+        const handle = typeof body.handle === "string" ? body.handle : null;
+        const earlier = entries.slice(0, index).filter((e) => e.kind === entry.kind && record(e.body).handle === handle);
+        const named = handle === null ? "" : `for ${handle} `;
+        if (handle === null || !approvedProofs.has(handle)) outcomeFailures.push(`${at}: the ${entry.kind} ${named}names no approval that verified earlier in the chain`);
+        else if (earlier.length > 0) outcomeFailures.push(`${at}: a second ${entry.kind} ${named}(only one may exist: compare-and-append)`);
+        else if (entry.kind === "complete_attempt" && !entries.slice(0, index).some((e) => e.kind === "completion" && record(e.body).handle === handle)) {
+          outcomeFailures.push(`${at}: the complete_attempt ${named}comes before any completion`);
+        } else if (entry.kind === "completion" && (typeof body.checkout_ref !== "string" || !/^sha256:[0-9a-f]{64}$/.test(body.checkout_ref))) {
+          outcomeFailures.push(`${at}: the completion ${named}names its checkout by something other than its sha256 checkout ref`);
+        }
+        break;
+      }
       case "approver_flag":
         counts.flags += 1;
         flags.push(
@@ -323,6 +339,8 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
   // A follow-up cut from inside the chain changes every later hash, and so the head: compare the head with a saved
   // copy. On a chain written before disclosures carried their session there is nothing to compare, and a disclosure
   // with no follow-up is always reported apart.
+  outcomeFailures.push(...doubleChargeProblems(entries));
+
   const unanswered: number[] = [];
   const all = [...disclosures.values()];
   for (const { entry, followUps, session } of all) {
@@ -549,11 +567,34 @@ function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: ApprovalProof["
     }
     if (canonicalize(rerun) !== canonicalize(entry.local_binding ?? null)) return "holds a local binding other than its recorded inputs give";
   }
-  const shopSends = before.filter((e) => e.kind === "disclosure" && record(e.body).purchase === entry.handle && record(e.body).endpoint === "complete_checkout");
-  if (entry.reason === "not_sent" && shopSends.length > 0) {
-    return "says nothing was sent, but a complete_checkout disclosure for the purchase is logged";
+  // The shared rule (outcome's mayHaveSent): a complete_checkout after the approval naming this purchase, or naming
+  // none, means this purchase was not provably left unsent.
+  if (entry.reason === "not_sent" && mayHaveSent(before, entry.handle)) {
+    return "says nothing was sent, but a complete_checkout disclosure for it (or naming no purchase) is logged after its approval";
   }
   return null;
+}
+
+/**
+ * The double-charge invariant, audited (ADR-0019): every complete_checkout disclosure names its purchase in the local
+ * `purchase` field, comes after that purchase's complete_attempt, and is the only one for the purchase.
+ */
+function doubleChargeProblems(entries: readonly Entry[]): string[] {
+  const problems: string[] = [];
+  const attempted = new Set<unknown>();
+  const sent = new Set<unknown>();
+  for (const entry of entries) {
+    const body = record(entry.body);
+    if (entry.kind === "complete_attempt") attempted.add(body.handle);
+    if (entry.kind !== "disclosure" || body.endpoint !== COMPLETE_CHECKOUT) continue;
+    const at = `seq ${String(entry.seq)}`;
+    const purchase = body.purchase;
+    if (!ApprovalHandle.safeParse(purchase).success) problems.push(`${at}: a complete_checkout disclosure names no purchase (its local purchase field)`);
+    else if (!attempted.has(purchase)) problems.push(`${at}: a complete_checkout disclosure for ${String(purchase)} comes before any complete_attempt for it`);
+    else if (sent.has(purchase)) problems.push(`${at}: a second complete_checkout disclosure for ${String(purchase)} (one send per purchase)`);
+    sent.add(purchase);
+  }
+  return problems;
 }
 
 /** Why a disclosure's logged body bytes are not the bytes its content_digest names, or null when they are. */

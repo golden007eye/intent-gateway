@@ -139,7 +139,7 @@ describe("a purchase's Shop calls", () => {
     expect((args.meta as Json)["idempotency-key"]).toBe(CREATE_UUID);
     expect(CREATE_UUID).toMatch(UUID_V4);
 
-    const done = await wallet.completeCheckout(created, purchase, KEY, ZIP);
+    const done = await wallet.completeCheckout(created, purchase, KEY, { shipToPostalCode: ZIP, sendUnless: () => false });
     expect(done).toMatchObject({ status: "completed", orderRef: expect.stringMatching(/^gid:\/\/shopify\/Order\/\d+$/) as unknown, shipTo: "match" });
     expect(shop.completeCount).toBe(1);
     const complete = shop.calls.find((c) => c.tool === "complete_checkout")?.body.params as Json;
@@ -159,7 +159,7 @@ describe("a purchase's Shop calls", () => {
   it("refuses an idempotency key that is not a UUID v4 (no ik_ keys): nothing is sent", async () => {
     const { wallet } = await setup();
     const created = await wallet.createCheckout(request);
-    await expect(wallet.completeCheckout(created, purchase, "ik_AAAAAAAAAAAAAAAAAAAAAA")).rejects.toBeInstanceOf(TypeError);
+    await expect(wallet.completeCheckout(created, purchase, "ik_AAAAAAAAAAAAAAAAAAAAAA", { sendUnless: () => false })).rejects.toBeInstanceOf(TypeError);
     expect(shop.completeCount).toBe(0);
   });
 
@@ -168,7 +168,7 @@ describe("a purchase's Shop calls", () => {
     const created = await h.wallet.createCheckout(request);
     expect(created.lines[0]?.variantRef).toBe(FAKE_OTHER_VARIANT);
     expect(created.total?.amountMinor).toBe(UNIT_PRICE_MINOR + SHIPPING_MINOR + 100);
-    expect(await h.wallet.completeCheckout(created, purchase, KEY)).toMatchObject({ status: "buyer_review", orderRef: null });
+    expect(await h.wallet.completeCheckout(created, purchase, KEY, { sendUnless: () => false })).toMatchObject({ status: "buyer_review", orderRef: null });
     await store.close();
     await shop.close();
     h = await setup({ ineligible: true });
@@ -178,7 +178,7 @@ describe("a purchase's Shop calls", () => {
   it("a lost complete_checkout answer: logged, sent once, unacknowledged; the error names no content", async () => {
     const { wallet } = await setup({ dropCompleteAnswer: true });
     const created = await wallet.createCheckout(request);
-    await expect(wallet.completeCheckout(created, purchase, KEY)).rejects.toBeInstanceOf(ShopTransportError);
+    await expect(wallet.completeCheckout(created, purchase, KEY, { sendUnless: () => false })).rejects.toBeInstanceOf(ShopTransportError);
     expect(shop.completeCount).toBe(1);
     expect(store.entries().at(-1)?.kind).toBe("unacknowledged");
   });
@@ -190,7 +190,7 @@ describe("invariant 3: Shop's buyer identity never gets past the projection", ()
     const outputs: unknown[] = [];
     outputs.push(await wallet.account());
     const created = await wallet.createCheckout(request);
-    outputs.push(created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, ZIP));
+    outputs.push(created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, { shipToPostalCode: ZIP, sendUnless: () => false }));
     // A checkout reference this process does not hold: refused locally, its error naming nothing.
     const missing = await wallet.getCheckout({ storeDomain: FAKE_STORE, checkoutRef: "gid://shopify/Checkout/0" }, purchase).catch((e: unknown) => e);
     expect(missing).toBeInstanceOf(WalletRailError);
@@ -253,7 +253,7 @@ describe("plan kill criterion K4: no address fields ever leave", () => {
   it("attack: a payment instrument carrying a billing address is never forwarded; no complete_checkout is sent", async () => {
     const { wallet } = await setup({ billingAddressOnInstrument: true });
     const created = await wallet.createCheckout(request);
-    const error = await wallet.completeCheckout(created, purchase, KEY).catch((e: unknown) => e);
+    const error = await wallet.completeCheckout(created, purchase, KEY, { sendUnless: () => false }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(AddressFieldsRequiredError);
     expect((error as AddressFieldsRequiredError).step).toBe("payment");
     expect(shop.completeCount).toBe(0);
@@ -265,7 +265,7 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
   it("the bearer token, the refresh token and the instrument's Shop Pay token are absent from audit.jsonl; verify passes", async () => {
     const { wallet } = await setup();
     const created = await wallet.createCheckout(request);
-    await wallet.completeCheckout(created, purchase, KEY);
+    await wallet.completeCheckout(created, purchase, KEY, { sendUnless: () => false });
     expect(await wallet.revoke()).toBe("revoked");
     expect(shop.revocations).toEqual([{ token: shop.refreshToken, tokenTypeHint: "refresh_token", clientId: shop.clientId, contentType: "application/x-www-form-urlencoded" }]);
     const chain = audit();
@@ -325,7 +325,7 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
   it("attack: a checkout id carrying ?key= flows through create, get and complete; the key is never in the chain, a result or an error", async () => {
     const { wallet } = await setup({ checkoutKey: "SECRET-CHECKOUT-KEY" });
     const created = await wallet.createCheckout(request);
-    const outputs: unknown[] = [created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, ZIP)];
+    const outputs: unknown[] = [created, await wallet.getCheckout(created, purchase, ZIP), await wallet.completeCheckout(created, purchase, KEY, { shipToPostalCode: ZIP, sendUnless: () => false })];
     // It did reach Shop, which needs it: the fake got the full id back on each call.
     const ids = shop.calls.filter((c) => c.tool === "get_checkout" || c.tool === "complete_checkout").map((c) => ((c.body.params as Json).arguments as Json).id);
     expect(ids.every((id) => typeof id === "string" && id.endsWith("?key=SECRET-CHECKOUT-KEY"))).toBe(true);

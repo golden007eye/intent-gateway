@@ -29,6 +29,8 @@ const ROLE_ORDER: readonly Role[] = [
   "approval",
   "status read",
   "outcome report",
+  "completion",
+  "complete attempt",
   "wallet request",
   "outcome",
   "answer",
