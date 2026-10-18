@@ -97,7 +97,7 @@ async function verified(): Promise<void> {
 
 describe("the wire: MCP 2026-07-28, stateless, tools on the allow-list only", () => {
   it("allows exactly get_account, create_checkout, complete_checkout, get_checkout and search_orders (test 5)", () => {
-    expect([...SHOP_TOOLS].sort()).toEqual(["complete_checkout", "create_checkout", "get_account", "get_checkout", "search_orders"]);
+    expect([...SHOP_TOOLS].sort()).toEqual(["complete_checkout", "create_checkout", "get_account", "get_checkout", "search_catalog", "search_orders"]);
   });
 
   it("every request carries Mcp-Method, Mcp-Name, the protocol version and params._meta; no initialize is ever sent", async () => {

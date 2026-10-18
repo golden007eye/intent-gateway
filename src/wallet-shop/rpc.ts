@@ -17,8 +17,8 @@ import { MCP_CLIENT_NAME } from "../privacy/index.ts";
 export const MCP_PROTOCOL = "2026-07-28";
 export const DEFAULT_SHOP_MCP_URL = "https://mcp.shop.com/";
 export const DEFAULT_SHOP_AUTH_URL = "https://accounts.shop.app/";
-/** The only Shop tools the gateway calls (plan G7a). Any other tool Shop advertises, a spend request included, is never called. */
-export const SHOP_TOOLS = ["get_account", "create_checkout", "complete_checkout", "get_checkout", "search_orders"] as const;
+/** The only Shop tools the gateway calls (plan G7a; search_catalog since G5). Any other tool Shop advertises, a spend request included, is never called. */
+export const SHOP_TOOLS = ["get_account", "create_checkout", "complete_checkout", "get_checkout", "search_orders", "search_catalog"] as const;
 export type ShopTool = (typeof SHOP_TOOLS)[number];
 /** The account server's operations, each a form POST: revocation, and the device flow of `intent wallet link shop` (plan G8). */
 export const REVOKE = "revoke";

@@ -17,6 +17,7 @@ import {
   FindOffersInput,
   type FindOffersResult,
   type Gateway,
+  type ShopOfferView,
 } from "../gateway/index.ts";
 
 const LIMITS = "US delivery only.";
@@ -29,7 +30,8 @@ export const TOOLS = {
       "Find physical products that ship to a US address. Pass only what the user said: an exact product or a kind of " +
       "product, any must-haves, their budget in US dollars and their 5-digit US ZIP code. Never guess a ZIP code or a " +
       "budget. If the result lists missing details, ask the user only for those, then call again. " +
-      `${LIMITS} The result ends with what this gateway sent to Intent Cloud and what it blocked.`,
+      `${LIMITS} The result ends with what this gateway sent (to Intent Cloud, or to Shop when the gateway searches a ` +
+      "linked Shop wallet itself) and what it blocked.",
   },
   create_cart: {
     schema: CreateCartInput,
@@ -106,6 +108,7 @@ function told(result: { status: string; message: string; summary: string }, deta
 
 function findOffersResult(result: FindOffersResult): CallToolResult {
   if (result.status === "offers") return told(result, result.offers.length === 0 ? [] : [result.offers.map(offerLine).join("\n")]);
+  if (result.status === "shop_offers") return told(result, result.offers.length === 0 ? [] : [result.offers.map(shopOfferLine).join("\n")]);
   return told(result);
 }
 
@@ -142,6 +145,11 @@ function offerLine(offer: Offer): string {
     `shipping${offer.total_kind === "max" ? " (at most)" : ""}, ${offer.availability.replace("_", " ")}. ` +
     `offer_handle: ${offer.offer_handle}`
   );
+}
+
+function shopOfferLine(offer: ShopOfferView): string {
+  const price = offer.price.currency === "USD" ? money({ amount_minor: offer.price.amount_minor, currency: "USD" }) : `${String(offer.price.amount_minor)} ${offer.price.currency} minor units`;
+  return `- ${offer.title} (${offer.variant}) from ${offer.store}: ${price}, shipping shown at checkout, in stock. offer_handle: ${offer.offer_handle}`;
 }
 
 function totalText(total: Money, kind: "exact" | "max"): string {

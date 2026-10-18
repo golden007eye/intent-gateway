@@ -2,6 +2,7 @@
 // decide what may leave the gateway with `evaluate`.
 export { PolicyError, type PolicyErrorCode } from "./parse.ts";
 export {
+  categoryBlocked,
   CLOUD_BASELINE,
   COMPLETION_MODES,
   EXCLUDED_CATEGORIES,
@@ -9,6 +10,8 @@ export {
   MAX_QUANTITY,
   loadPolicy,
   meet,
+  merchantMatches,
+  normalizeMerchant,
   type CompletionMode,
   type Policy,
   type ShipTo,
