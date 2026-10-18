@@ -6,7 +6,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SnapshotV1, SnapshotV2, SnapshotV3 } from "../contract/index.ts";
-import { instant, SENT_FIELDS, SentPurchase, sentProblems } from "./index.ts";
+import { type CheckoutRequest } from "../contract/index.ts";
+import { instant, SENT_FIELDS, sentCheckoutOf, sentCheckoutProblems, SentPurchase, sentProblems } from "./index.ts";
 
 interface E2Case {
   name: string;
@@ -76,5 +77,27 @@ describe("vector e2: Appendix E step 7", () => {
     for (const bad of ["2026-02-29T00:00:00Z", "2026-10-16T12:15:00.000Z", "2026-10-16 12:15:00Z", "2026-10-16T12:15:00+00:00", ""]) {
       expect(instant(bad), bad).toBeNaN();
     }
+  });
+});
+
+describe("step 7 for a submitted hand-off (contract 1.7.0): the chained continue_url_hash, never the URL", () => {
+  const e3 = JSON.parse(readFileSync(join(import.meta.dirname, "../../contract/vectors/e3-snapshot-v4-request.json"), "utf8")) as {
+    cases: { name: string; input: { checkout_request: CheckoutRequest; snapshot: Record<string, unknown> } }[];
+  };
+  const handoff = e3.cases.find((c) => c.name === "the handoff snapshot for its own request");
+  if (handoff === undefined) throw new Error("e3 has no hand-off case");
+  const { checkout_request: request, snapshot } = handoff.input;
+  const table = String(snapshot.currency_table);
+
+  it("takes the snapshot of its own request, with the URL left out of what is chained", () => {
+    const sent = sentCheckoutOf(request, table);
+    expect(sent.checkout_request.checkout.continue_url).toBeUndefined();
+    expect(sentCheckoutProblems(snapshot, sent)).toEqual([]);
+  });
+
+  it("attack: a snapshot signing another hand-off page is refused, before currency_table when both differ", () => {
+    const other = { ...request, checkout: { ...request.checkout, continue_url: "https://shop.app/checkouts/finalizer/r/OTHER?key=OTHER" } };
+    expect(sentCheckoutProblems(snapshot, sentCheckoutOf(other, table))).toEqual(["continue_url_hash"]);
+    expect(sentCheckoutProblems(snapshot, sentCheckoutOf(other, "ct-0000000000000000"))).toEqual(["continue_url_hash", "currency_table"]);
   });
 });
