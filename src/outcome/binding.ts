@@ -1,11 +1,11 @@
-// binding-v1 (contract 1.6.0, Appendix G; vector o1): an observed order O compared with the snapshot S the passkey
-// approved, in a context M. Five checks, each `match`, `differs` or `unknown`, and a result `ok`, `mismatch` or
+// binding-v1 (contract 1.6.1, Appendix G; vector o1): an observed order O compared with the snapshot S (v2 or v3) the
+// passkey approved, in a context M. Five checks, each `match`, `differs` or `unknown`, and a result `ok`, `mismatch` or
 // `incomplete`. No observed value is copied into the result. Pure.
 //
 // Inputs come from outside (Shop, Intent Cloud, a chain), so every observed value is typed `unknown`: a reference
 // must be a JSON string and an amount or quantity a JSON integer, and anything else is `differs`, never converted.
 // Parse wire JSON with parseIntegerJson (src/jcs) first, so `1.0` reaches this file as a non-number.
-import { type Binding, type BindingCheck, checkoutRefHash, type CompletionMode, type SnapshotV2 } from "../contract/index.ts";
+import { type BindableSnapshot, type Binding, type BindingCheck, checkoutRefHash, type CompletionMode } from "../contract/index.ts";
 
 /** An observed order (Appendix G `O`). `checkout_ref` is the raw checkout id, which never leaves the checking service. */
 export interface ObservedOrder {
@@ -40,9 +40,8 @@ export class BindingError extends Error {
 }
 
 /**
- * The sources table's `ship_to_optional` column (Appendix G). `merchant_api` was answered by S2 (`false`); `shop_api`
- * is PENDING S1 and is `false` until answered: the fallback publishes an unanswered cell as `false`, the strict side.
- * Every other source carries no ship-to cell, and reads as `false`.
+ * The sources table's `ship_to_optional` column (Appendix G). Both live tests answered `false`: `merchant_api` (S2) and
+ * `shop_api` (S1, contract 1.6.1). Every other source carries no ship-to cell, and reads as `false`.
  */
 export const SHIP_TO_OPTIONAL: Readonly<Record<string, boolean>> = {
   shop_api: false,
@@ -87,10 +86,10 @@ export function bindingResult(checks: BindingChecks, shipToIsOptional: boolean):
 }
 
 /** binding-v1 over snapshot `s`, observed order `o` and context `m`. Throws BindingError for an unknown mode. */
-export function bindingV1(s: SnapshotV2, o: ObservedOrder, m: BindingContext): Binding {
+export function bindingV1(s: BindableSnapshot, o: ObservedOrder, m: BindingContext): Binding {
   if (m.mode !== "handoff" && m.mode !== "shop_agent") throw new BindingError(`unknown completion mode ${JSON.stringify(m.mode)}`);
   const checks: BindingChecks = {
-    merchant_origin: checkOrigin(s.merchant_origin, o.merchant_origin),
+    merchant_origin: checkOrigin(originNames(s, m.mode), o.merchant_origin),
     checkout_ref: checkCheckout(s, o, m),
     line: checkLine(s, o.lines),
     ship_to: checkShipTo(s, o.ship_to_postal_code),
@@ -101,14 +100,24 @@ export function bindingV1(s: SnapshotV2, o: ObservedOrder, m: BindingContext): B
 
 const absent = (value: unknown): boolean => value === undefined || value === null;
 
-function checkOrigin(approved: string, observed: unknown): BindingCheck {
-  if (absent(observed)) return "unknown";
-  if (typeof observed !== "string") return "differs";
-  const a = normaliseOrigin(approved);
-  return a !== null && a === normaliseOrigin(observed) ? "match" : "differs";
+/**
+ * The origins check 1 accepts. In `shop_agent` mode with a v3 snapshot that carries `myshopify_domain` (1.6.1, D7):
+ * the storefront origin or `https://` + that myshopify domain, the two names of the one merchant the passkey signed
+ * (Shop reports the store by its myshopify domain, S1). Otherwise, and always in `handoff` mode: the storefront only.
+ */
+function originNames(s: BindableSnapshot, mode: string): string[] {
+  const alias = mode === "shop_agent" && s.v === 3 && s.myshopify_domain !== undefined ? [`https://${s.myshopify_domain}`] : [];
+  return [s.merchant_origin, ...alias];
 }
 
-function checkCheckout(s: SnapshotV2, o: ObservedOrder, m: BindingContext): BindingCheck {
+function checkOrigin(approved: readonly string[], observed: unknown): BindingCheck {
+  if (absent(observed)) return "unknown";
+  if (typeof observed !== "string") return "differs";
+  const o = normaliseOrigin(observed);
+  return o !== null && approved.some((a) => normaliseOrigin(a) === o) ? "match" : "differs";
+}
+
+function checkCheckout(s: BindableSnapshot, o: ObservedOrder, m: BindingContext): BindingCheck {
   // One order, one approval: an order already bound elsewhere differs, whatever else is present or absent.
   if (m.bound_elsewhere === true) return "differs";
   let observed: string | null;
@@ -127,7 +136,7 @@ function checkCheckout(s: SnapshotV2, o: ObservedOrder, m: BindingContext): Bind
   return expected === observed ? "match" : "differs";
 }
 
-function checkLine(s: SnapshotV2, lines: unknown): BindingCheck {
+function checkLine(s: BindableSnapshot, lines: unknown): BindingCheck {
   if (!Array.isArray(lines) || lines.length !== 1) return "differs";
   const line: unknown = lines[0];
   if (typeof line !== "object" || line === null) return "differs";
@@ -136,7 +145,7 @@ function checkLine(s: SnapshotV2, lines: unknown): BindingCheck {
   return variant_ref === s.variant_ref && quantity === s.quantity ? "match" : "differs";
 }
 
-function checkShipTo(s: SnapshotV2, code: unknown): BindingCheck {
+function checkShipTo(s: BindableSnapshot, code: unknown): BindingCheck {
   if (absent(code)) return "unknown";
   if (typeof code !== "string") return "differs";
   const first5 = code.slice(0, 5);

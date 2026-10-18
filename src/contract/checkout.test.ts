@@ -1,4 +1,5 @@
-// The checkout ref hash (contract 1.6.0 hardening amendment L1): over the checkout id up to its first "?".
+// The checkout ref hash (contract 1.6.0 hardening amendment L1; 1.6.1 names Shop's form): over the checkout id up to
+// its first "?".
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { checkoutRefHash } from "./index.ts";
@@ -15,6 +16,13 @@ describe("checkoutRefHash", () => {
     expect(checkoutRefHash("gid://shopify/Checkout/TEST0001?key=TESTKEY0001")).toBe(bare);
     expect(checkoutRefHash("gid://shopify/Checkout/TEST0001?key=other?x=1")).toBe(bare);
     expect(checkoutRefHash("gid://shopify/Checkout/TEST0001?key=TESTKEY0001")).not.toBe(raw("gid://shopify/Checkout/TEST0001?key=TESTKEY0001"));
+  });
+
+  it("1.6.1: Shop's checkout id gid://shopify/Checkout/<token>?key=… hashes the gid only, so create and get agree (S1)", () => {
+    const created = "gid://shopify/Checkout/hWN2abcDEF123456?key=CREATEKEY0001";
+    const read = "gid://shopify/Checkout/hWN2abcDEF123456?key=READKEY0002";
+    expect(checkoutRefHash(created)).toBe(raw("gid://shopify/Checkout/hWN2abcDEF123456"));
+    expect(checkoutRefHash(read)).toBe(checkoutRefHash(created));
   });
 
   it.each(["", "?", "?key=TESTKEY0001", "??"])("attack (item 7): an id with an empty path before '?' (%j) has no hash", (id) => {

@@ -30,6 +30,8 @@ export {
   type WalletSession,
 } from "./wallet.ts";
 export { connectShop, type LinkedShopVault, linkShop, type ShopConnection, type ShopLink } from "./shop.ts";
+export { connectStorefront, STOREFRONT, type StorefrontPort } from "./storefront.ts";
+export type { StorefrontTransport } from "../storefront/index.ts";
 export { type DeviceGrantPrompt, ShopLinkError, type ShopLinkFailure } from "../wallet-shop/index.ts";
 export {
   connectCloud,

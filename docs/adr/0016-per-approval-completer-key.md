@@ -1,6 +1,6 @@
 # ADR-0016: A per-approval completer key
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17 · Amended by ADR-0020 (the gateway speaks contract 1.6.1; the completer key rules are unchanged)
 
 ## Context
 

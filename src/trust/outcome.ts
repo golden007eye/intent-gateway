@@ -8,7 +8,7 @@
 // signature held (`signed`): the content rules run only after it did, so a content refusal is a signed claim.
 import { verify } from "node:crypto";
 import { z } from "zod";
-import { type AnySnapshot, ApprovalHandle, Binding, Ed25519Signature, LedgerRef, OutcomeSource, OutcomeState, type SnapshotV2, Timestamp } from "../contract/index.ts";
+import { type AnySnapshot, ApprovalHandle, Binding, type BindableSnapshot, Ed25519Signature, LedgerRef, OutcomeSource, OutcomeState, Timestamp } from "../contract/index.ts";
 import { PINNED_HOSTS } from "../config/index.ts";
 import { canonicalize } from "../jcs/index.ts";
 import { bindingResult, CLOUD_SOURCES, GATEWAY_SOURCES, MODE_STATES, ORDER_REF, REPORT_STATES, REPORTED_ONLY_SOURCES, shipToOptional } from "../outcome/index.ts";
@@ -120,7 +120,7 @@ export function verifyOutcomeStatement(
     return refuse("schema");
   }
   if (st.approval_handle !== approval.handle || approval.snapshot.approval !== approval.handle) return refuse("approval_handle");
-  if (approval.snapshot.v !== 2) return refuse("v1_snapshot");
+  if (approval.snapshot.v === 1) return refuse("v1_snapshot");
   if (st.snapshot_hash !== approval.snapshotHash) return refuse("snapshot_hash");
 
   const keys = trustedKeys(keySet, now);
@@ -136,7 +136,7 @@ export function verifyOutcomeStatement(
 }
 
 /** Step 3 of statement validity, plus O1, for a statement whose signature held. */
-function contentProblem(o: StatedOutcome, s: SnapshotV2, options: OutcomeCheckOptions): OutcomeRefusal | null {
+function contentProblem(o: StatedOutcome, s: BindableSnapshot, options: OutcomeCheckOptions): OutcomeRefusal | null {
   if (!MODE_STATES[s.completion_mode].has(o.state)) return "mode";
   if (!CLOUD_SOURCES.has(o.source)) return "source";
   if (o.source === "staging_webhook" && !options.stagingSource) return "source";

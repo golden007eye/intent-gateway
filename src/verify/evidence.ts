@@ -27,6 +27,8 @@ const ROLE_ORDER: readonly Role[] = [
   "approval request",
   "approval pending",
   "approval",
+  "store pair",
+  "storefront check",
   "status read",
   "outcome report",
   "completion",

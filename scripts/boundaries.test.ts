@@ -37,12 +37,16 @@ describe("dependency-cruiser rules", () => {
     // ADR-0014: a wallet adapter is reached only through the disclosure log, and its fake only from tests and the demo.
     ["only-disclosure-reaches-wallets", "src/gateway/uses-wallet.ts", "src/wallet-shop/index.ts"],
     ["wallet-fake-only-in-tests", "src/gateway/uses-wallet-fake.ts", "src/wallet-shop-fake/index.ts"],
+    // ADR-0020: the storefront GET is reached only through the disclosure log, and its fake only from tests and the demo.
+    ["only-disclosure-reaches-storefront", "src/gateway/uses-storefront.ts", "src/storefront/index.ts"],
+    ["storefront-fake-only-in-tests", "src/gateway/uses-storefront-fake.ts", "src/storefront-fake/index.ts"],
     ["demo-only-from-cli", "src/gateway/uses-demo.ts", "src/demo/index.ts"],
     ["panel-offline", "src/panel/index.ts", "src/library/index.ts"],
     // Finding 12: panel -> relay -> disclosure -> cloud is caught, not only a direct import.
     ["panel-offline", "src/panel/transitive.ts", "src/disclosure/index.ts"],
     ["panel-offline", "src/panel/transitive.ts", "src/cloud/index.ts"],
     ["panel-offline", "src/panel/transitive.ts", "src/wallet-shop/index.ts"],
+    ["panel-offline", "src/panel/transitive.ts", "src/storefront/index.ts"],
     ["network-only-in-network-modules", "src/gateway/uses-https.ts", "https"],
     ["network-only-in-network-modules", "src/gateway/uses-tls.ts", "tls"],
     ["network-only-in-network-modules", "src/gateway/uses-http2.ts", "http2"],
@@ -57,7 +61,7 @@ describe("dependency-cruiser rules", () => {
   });
 
   it("flags nothing else: disclosure reaches cloud and the wallet, a test and the demo load the fakes, the CLI loads the demo, network modules and scripts/ connect", () => {
-    expect(violations).toHaveLength(19);
+    expect(violations).toHaveLength(22);
   });
 });
 
@@ -121,6 +125,7 @@ describe("eslint network rules", () => {
     "src/demo/index.ts", // node:http
     "src/wallet-shop/index.ts", // node:https
     "src/wallet-shop-fake/index.ts", // node:http
+    "src/storefront/index.ts", // node:tls
     "scripts/runs.ts", // node:child_process
   ])("allows %s", (file) => {
     expect(ruleHits(file)).toEqual([]);

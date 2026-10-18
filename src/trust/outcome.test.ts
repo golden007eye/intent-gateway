@@ -47,6 +47,17 @@ describe("vector o2", () => {
     if (c.verifies) expect(result).toEqual({ ok: true });
     else expect(result).toMatchObject({ ok: false, refused_by: c.refused_by });
   });
+  it("1.6.1: two statements verify, the second naming a 14-digit Shopify order id (S1)", () => {
+    const valid = AMENDED.cases.filter((c) => c.verifies);
+    expect(valid).toHaveLength(2);
+    expect((valid[1]?.statement.outcome as { order_ref?: unknown }).order_ref).toMatch(/^gid:\/\/shopify\/Order\/[0-9]{14}$/);
+  });
+  it("1.6.1: a statement for an approval whose snapshot is v3 is checked like v2 (only v1 has no statement)", () => {
+    const v3 = { ...SNAPSHOT, v: 3 as const, myshopify_domain: "test-shop.myshopify.com" };
+    const valid = AMENDED.cases.find((c) => c.verifies)?.statement as Record<string, unknown>;
+    // The content rules read the total and the mode, which v3 keeps as v2 has them; only a v1 snapshot is refused.
+    expect(verifyOutcomeStatement(valid, { handle: HANDLE, snapshot: v3, snapshotHash: HASH }, keys(), NOW, STAGING_OK)).toEqual({ ok: true });
+  });
   it("content refusals are signed claims; signature and snapshot refusals are not", () => {
     for (const c of AMENDED.cases.filter((x) => !x.verifies)) {
       const result = verifyOutcomeStatement(c.statement, approval, keys(), NOW, STAGING_OK);

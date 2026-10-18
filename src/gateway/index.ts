@@ -18,7 +18,6 @@ export {
   type GatewayOptions,
   GatewayStartError,
   type MissingDetail,
-  myshopifyStore,
   type OneTapOptions,
   type Refused,
 } from "./gateway.ts";
