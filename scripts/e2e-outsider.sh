@@ -812,7 +812,8 @@ sg_completer_keys() {
   if [ -n "$SG_C" ]; then docker exec "$SG_C" ls /data/completer 2>/dev/null | grep -c '\.key$' || true
   else find "$SG_HOME/.local/share/intent-gateway/completer" -name '*.key' 2>/dev/null | grep -c . || true; fi
 }
-sg_call() { helper mcp-call "$SG_URL" "$SG_TOKEN" "$@"; }
+# Bounded, so a hung request cannot stall a polling loop past its deadline.
+sg_call() { timeout 120 node "$HELPER" mcp-call "$SG_URL" "$SG_TOKEN" "$@"; }
 # A package or image built from this checkout carries a released version number but not its files, so the install
 # self-check fails by design there; it runs only against what was published (--npm, --image).
 sg_verify() {
@@ -928,7 +929,7 @@ scenario_s() {
   sg_verify >"$f" 2>&1 || { WHY="verify exited non-zero; see $f"; return 1; }
   must_match "$f" '^verify: ok' "verify after the staging session" || return 1
   stop_staging
-  WHY="doctor: contract $(grep -Eo 'serves 1\.6\.[0-9]+' "$LOGS/s-doctor.txt" | cut -d' ' -f2), key statement ok; $(grep -c 'offer_handle:' "$LOGS/s-offers.txt") offers; cart $(cut -c1-80 "$LOGS/s-cart-line.txt") (exact), handoff, completer key, merchant origin from the snapshot $(pending_value merchant_origin); pending; 4 refusals, no new disclosure; no evidence before approval; verify: ok"
+  WHY="doctor: contract $(grep -Eo 'serves 1\.6\.[0-9]+' "$LOGS/s-doctor.txt" | cut -d' ' -f2), key statement ok; $(grep -c 'offer_handle:' "$LOGS/s-offers.txt") offers; cart $(cut -c1-80 "$LOGS/s-cart-line.txt") (exact), handoff, completer key, the merchant's https origin from the snapshot (in $PENDING); pending; 4 refusals, no new disclosure; no evidence before approval; verify: ok"
 }
 
 # ask the person: printed to the terminal, whatever the output is redirected to.
@@ -1057,7 +1058,7 @@ scenario_j2() {
   sg_cli wallet link shop 2>&1 | tee "$f" >&2 || { WHY="wallet link shop failed; see $f"; return 1; }
   f="$LOGS/j2-wallet.txt"
   sg_cli wallet status >"$f" 2>&1 || { WHY="wallet status exited non-zero; see $f"; return 1; }
-  must_match "$f" 'linked' "a Shop wallet is linked" || return 1
+  must_match "$f" '^Shop wallet: linked' "a Shop wallet is linked" || return 1
   # The gateway reads the wallet at start: restart it so the cart offers shop_agent.
   if [ -n "$SG_C" ]; then docker restart "$SG_C" >/dev/null 2>&1 || { WHY="docker restart failed"; return 1; }; sleep 5
   else stop_gateway; start_gateway j2-serve-linked "$SG_HOME" serve --http || return 1; SG_URL="$GW_URL"; fi
