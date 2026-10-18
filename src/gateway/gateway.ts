@@ -141,7 +141,17 @@ export interface OneTapOptions {
   readonly newKey?: () => string;
 }
 
-/** A storefront origin that is itself a myshopify host names its Shop store; any other is unknown until the alias rule (S1). */
+/**
+ * The Shop store for a storefront origin (D7, decided): a merchant pairs its storefront origin with its
+ * `*.myshopify.com` domain, which is how Shop names the store (S1: `shop=` and the order permalink host are the
+ * myshopify domain, never the storefront's primary domain). Intent Cloud has not yet published the contract field
+ * that will carry the pairing, so today only an origin that is itself a myshopify host names its store; every other
+ * merchant is offered hand-off only.
+ *
+ * SEAM (D7): when Intent Cloud publishes the paired myshopify domain for an offer, it plugs in here (and in the
+ * `storeFor` the completion step and the cart offer read): return the paired domain for that origin. Do not invent
+ * the field before the contract names it.
+ */
 export function myshopifyStore(merchantOrigin: string): string | null {
   const host = /^https:\/\/([a-z0-9][a-z0-9-]{0,62}\.myshopify\.com)$/.exec(merchantOrigin.toLowerCase())?.[1];
   return host ?? null;
@@ -1272,6 +1282,7 @@ function completionWords(c: CompletionView): string {
     case "indeterminate":
       return (
         "The gateway sent the purchase to Shop and does not know the result yet; it will not send it again. " +
+        (c.reason !== undefined && SHOP_ERROR_CODES.has(c.reason) ? `Shop answered with the error ${c.reason}. ` : "") +
         `The amount stays reserved against the spend caps. Check the order in the Shop app if it does not resolve. ${again}`
       );
     case "ordered":
@@ -1281,8 +1292,24 @@ function completionWords(c: CompletionView): string {
     case "failed":
       return c.source === "shop_api"
         ? "Shop reported the checkout as not completed (read from Shop by the gateway). Create a new cart to hand the purchase off to the merchant's checkout."
-        : `The gateway did not send the purchase to Shop (${c.reason ?? "refused"}): no complete_checkout was sent. Create a new cart to hand the purchase off to the merchant's checkout.`;
+        : `The gateway did not send the purchase to Shop (${c.reason ?? "refused"}): no complete_checkout was sent.${refusalWords(c.reason)} Create a new cart to hand the purchase off to the merchant's checkout.`;
   }
+}
+
+/** Shop's tool-level error codes (S1) that an indeterminate outcome may carry as its reason, and that are named to the developer. */
+const SHOP_ERROR_CODES: ReadonlySet<string> = new Set(["checkout_completion_ineligible", "invalid_checkout_id"]);
+
+/** What the developer can do about a one-tap refusal the gateway made before paying (complete.ts reasons). */
+const REFUSAL_WORDS: Readonly<Record<string, string>> = {
+  budget_unknown: 'Shop shows no budget for this connection: turn on "Allow agent to pay" with a budget in the Shop app.',
+  no_budget_instrument: 'Shop offered no agent budget to pay this checkout with, and the gateway never pays with the card: turn on "Allow agent to pay" with a budget in the Shop app.',
+  wallet_disconnected: "Shop says this connection can no longer read the account (it was removed in the Shop app): run intent wallet unlink shop, then intent wallet link shop.",
+  create_unconfirmed: "Shop gave no usable answer to the checkout request, and the gateway never sends it twice.",
+};
+
+function refusalWords(reason: string | undefined): string {
+  const words = reason === undefined ? undefined : REFUSAL_WORDS[reason];
+  return words === undefined ? "" : ` ${words}`;
 }
 
 function approveLabel(totalMinor: unknown): string {

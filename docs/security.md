@@ -12,7 +12,7 @@ These are invariants in the repository's agent guide; each change that touches o
 
 1. **The policy can only narrow.** A gateway policy never loosens a rule Intent Cloud enforces.
 2. **Log before send.** Every field sent to Intent Cloud or to any other outside destination, such as a linked wallet, is appended to the local hash chain before the request leaves; credentials are logged only as their sha256.
-3. **No buyer identity in the gateway.** The gateway never stores or forwards the buyer's name, postal address or card. With one tap, Shop holds them; the gateway sends a saved-address id, never address fields.
+3. **No buyer identity in the gateway.** The gateway never stores or forwards the buyer's name, postal address or card. With one tap, Shop holds them; the gateway sends the item and quantity only, never an address or an address id, and Shop fills the buyer's preferred saved address itself.
 4. **One human approval per purchase.** A purchase proceeds only with a passkey-signed Approval the gateway has verified and chained; with one tap, the gateway sends at most one `complete_checkout` per Approval.
 5. **Claim only what was sent.** Docs, logs and CLI output describe what the gateway sent, what Intent Cloud acknowledged receiving and what Shop returned, nothing more.
 

@@ -630,6 +630,116 @@ describe("refusals before any complete_checkout", () => {
   });
 });
 
+describe("Shop as the S1 spike saw it (2026-10-18)", () => {
+  it("no budget shown for the connection, or not in USD → failed (budget_unknown) before any checkout; never assumed", async () => {
+    for (const faults of [{ budgetMinor: null }, { accountCurrency: "CAD" }] as FakeShopFaults[]) {
+      const base = await setup({ faults });
+      const p = await proc(base);
+      const handle = await approvedCart(base, p);
+      const result = await status(p, handle);
+      expect(completionOf(result)).toMatchObject({ state: "failed", source: "gateway_precheck", reason: "budget_unknown" });
+      expect(result.message).toContain('turn on "Allow agent to pay" with a budget in the Shop app');
+      expect(base.shop.createCount).toBe(0);
+      expect(counted(base, await chainOf(base))).toBe(0);
+    }
+  });
+
+  it("the connection removed in the Shop app (warnings, token still answers) → failed (wallet_disconnected), no checkout", async () => {
+    const base = await setup({ faults: { connectionRemoved: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    const result = await status(p, handle);
+    expect(completionOf(result)).toMatchObject({ state: "failed", reason: "wallet_disconnected" });
+    expect(result.message).toContain("intent wallet unlink shop, then intent wallet link shop");
+    expect(base.shop.createCount).toBe(0);
+  });
+
+  it("attack (card fallback): a checkout that offers only the Shop Pay card → failed (no_budget_instrument), never paid with the card", async () => {
+    const base = await setup({ faults: { noBudgetInstrument: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    const result = await status(p, handle);
+    expect(completionOf(result)).toMatchObject({ state: "failed", source: "gateway_precheck", reason: "no_budget_instrument" });
+    expect(result.message).toContain("never pays with the card");
+    expect(base.shop.completeCount).toBe(0);
+    expect(base.shop.paidWith).toEqual([]);
+    // Nothing was redeemed: no completion entry, no report, the cap room is free.
+    const chain = await chainOf(base);
+    expect(ofKind(chain, "completion")).toHaveLength(0);
+    expect(reportsAt(base, handle)).toEqual([]);
+    expect(counted(base, chain)).toBe(0);
+  });
+
+  it("the happy path pays with the delegated budget; the merchant check binds the store the checkout lives at (Shop names no merchant)", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "ordered" });
+    expect(base.shop.paidWith).toEqual(["delegated_budget"]);
+    const ordered = localOutcomes(await chainOf(base)).at(-1);
+    expect(ordered?.binding_inputs).toMatchObject({ observed: { merchant_origin: FAKE_STOREFRONT } });
+    expect(ordered?.local_binding).toMatchObject({ result: "ok", checks: { merchant_origin: "match" } });
+  });
+
+  it("attack (store swap): the completed order's permalink is on another myshopify store → mismatch, never ordered", async () => {
+    const base = await setup({ faults: { permalinkHost: "other-store.myshopify.com" } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "mismatch" });
+    expect(localOutcomes(await chainOf(base)).at(-1)?.local_binding).toMatchObject({ checks: { merchant_origin: "differs" } });
+  });
+
+  it("attack (idempotency, S1 --replay): create_checkout's answer is lost → failed (create_unconfirmed); later calls never create again", async () => {
+    const base = await setup({ faults: { dropCreateAnswer: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "failed", reason: "create_unconfirmed" });
+    delete base.shop.faults.dropCreateAnswer;
+    for (let i = 0; i < 3; i++) await status(p, handle);
+    // A fresh process (a restart) does not create again either.
+    const p2 = await proc(base);
+    await status(p2, handle);
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(0);
+    // No complete_checkout could follow, so the reservation is freed on local evidence.
+    expect(counted(base, await chainOf(base))).toBe(0);
+  });
+
+  it("a store agents cannot complete at (S1 step 11: requires_escalation, checkout_completion_ineligible) → failed (ineligible), no complete", async () => {
+    const base = await setup({ faults: { ineligible: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "failed", source: "shop_api", reason: "ineligible" });
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(0);
+  });
+
+  it("complete_checkout answered with a tool error (checkout_completion_ineligible) → indeterminate under Shop's code, never ordered, never re-sent", async () => {
+    const base = await setup({ faults: { completeIneligible: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    const result = await status(p, handle);
+    expect(completionOf(result)).toMatchObject({ state: "indeterminate", reason: "checkout_completion_ineligible" });
+    expect(result.message).toContain("Shop answered with the error checkout_completion_ineligible");
+    for (let i = 0; i < 2; i++) expect(completionOf(await status(p, handle)).state).not.toBe("ordered");
+    expect(base.shop.completeCount).toBe(1);
+    // A send happened: the reservation is held.
+    expect(counted(base, await chainOf(base))).toBe(1);
+  });
+
+  it("an expired access token mid-purchase: refreshed through the log, and the purchase is ordered with one complete", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    base.shop.expireAccessTokens();
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    expect(base.shop.oauthRequests.filter((r) => r.form.grant_type === "refresh_token")).toHaveLength(1);
+    expect(base.shop.completeCount).toBe(1);
+    const verdict = await verify(base);
+    expect(verdict.checks.filter((c) => !c.ok)).toEqual([]);
+  });
+});
+
 describe("terminal report retry across a restart (G3 acceptance test 14)", () => {
   it("the ordered report fails with 500, the restarted gateway resends it byte for byte, gets 201, and then deletes the key", async () => {
     const base = await setup();
@@ -834,7 +944,8 @@ describe("evidence pack of a one-tap purchase (G9)", () => {
     expect(kinds).toContain("completion");
     expect(kinds).toContain("complete_attempt");
     const wallet = chain.filter((e) => e.kind === "disclosure" && body(e).purchase === handle).map((e) => e.seq);
-    expect(wallet.length).toBeGreaterThanOrEqual(4); // get_account, create_checkout, get_checkout, complete_checkout
+    // create_checkout, get_checkout, complete_checkout (the budget's get_account names no purchase).
+    expect(wallet.length).toBeGreaterThanOrEqual(3);
     expect(wallet.every((seq) => packed.some((e) => e.seq === seq))).toBe(true);
     const report = runVerifyEvidence({ text: packText(pack), pinnedRootKeys: [base.fake.keys.rootPin] });
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);

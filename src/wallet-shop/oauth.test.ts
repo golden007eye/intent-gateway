@@ -78,7 +78,9 @@ describe("linkShop: the device flow through the disclosure core", () => {
   it("happy path: tokens in the vault text; device code digested, tokens and user code nowhere in the log; verify passes", async () => {
     const run = await setup();
     const linked = await run.link();
-    expect(parseShopCredentials(linked.vaultText)).toEqual({ clientId: run.shop.clientId, accessToken: run.shop.accessToken, refreshToken: run.shop.refreshToken });
+    expect(parseShopCredentials(linked.vaultText)).toEqual({ clientId: run.shop.clientId, accessToken: run.shop.accessToken, refreshToken: run.shop.refreshToken, expiresAt: expect.any(Number) as unknown });
+    // S1: the token answer also has `scope` and `access_type`; neither is kept.
+    expect(linked.vaultText).not.toMatch(/access_type|scope|offline/);
     expect(linked).toMatchObject({ refreshIssued: true, expiresInS: 3600 });
     expect(linked.vaultText).not.toContain(FAKE_BUYER.email);
 

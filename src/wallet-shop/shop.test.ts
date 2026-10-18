@@ -1,8 +1,10 @@
 // The Shop wallet adapter against the fake Shop, through the disclosure core (plan G7a acceptance 1-5; ADR-0017).
 // Attack cases: buyer identity in every Shop answer and error never reaches the chain, a tool result, an error
-// message or a later send; a card number and a spend-request tool are never touched; address fields are never sent
-// (no create_checkout when Shop would need them; a forced street address is blocked with a `block` entry); a payment
-// instrument carrying a billing address is never forwarded; Shop's real token names never reach audit.jsonl.
+// message or a later send; a card number and a spend-request tool are never touched; address fields and address ids
+// are never sent (create_checkout carries the lines only; an answer asking for fields is never retried; a forced
+// street address is blocked with a `block` entry); a payment instrument carrying a billing address is never
+// forwarded; the card is never paid with; Shop's real token names never reach audit.jsonl. The fake answers with the
+// shapes the S1 spike captured (2026-10-18).
 import * as fsp from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,12 +15,14 @@ import { connectShop, createDisclosedWallet, DisclosureBlockedError, openWalletS
 import { findIdentity } from "../privacy/index.ts";
 import { openStore, type Store } from "../store/index.ts";
 import { runVerify } from "../verify/index.ts";
-import { AddressFieldsRequiredError, type WalletAdapter, WalletRailError } from "../wallet/index.ts";
+import { AddressFieldsRequiredError, CheckoutUnconfirmedError, CompletionRefusedError, type WalletAdapter, WalletRailError } from "../wallet/index.ts";
 import {
   FAKE_ADDRESS_ID,
+  FAKE_BUDGET_MINOR,
   FAKE_BUYER,
   FAKE_OTHER_VARIANT,
   FAKE_PAN,
+  FAKE_PICTURE_URL,
   FAKE_STORE,
   FAKE_STOREFRONT,
   FAKE_VARIANT,
@@ -53,13 +57,24 @@ interface Harness {
   session: WalletSession;
 }
 
-async function setup(faults: FakeShopFaults = {}): Promise<Harness> {
+/** The vault texts the adapter handed back after a token refresh (what the CLI saves to the vault). */
+let saved: string[] = [];
+
+async function setup(faults: FakeShopFaults = {}, extra: { expiresAt?: number; now?: () => number } = {}): Promise<Harness> {
   shop = await startFakeShop({ faults });
   dir = join(await fsp.mkdtemp(join(tmpdir(), "shop-")), "data");
   store = await openStore(dir);
+  saved = [];
   const session = openWalletSession(store);
-  const vaultText = shopCredentialsText({ clientId: shop.clientId, accessToken: shop.accessToken, refreshToken: shop.refreshToken });
-  return { session, wallet: connectShop(session, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText, newKey: () => CREATE_UUID }) };
+  const vaultText = shopCredentialsText({ clientId: shop.clientId, accessToken: shop.accessToken, refreshToken: shop.refreshToken, expiresAt: extra.expiresAt ?? null });
+  const saveVaultText = (text: string): Promise<void> => {
+    saved.push(text);
+    return Promise.resolve();
+  };
+  return {
+    session,
+    wallet: connectShop(session, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText, newKey: () => CREATE_UUID, saveVaultText, ...(extra.now === undefined ? {} : { now: extra.now }) }),
+  };
 }
 
 const purchase = "ap_TEST0001";
@@ -91,7 +106,7 @@ describe("the wire: MCP 2026-07-28, stateless, tools on the allow-list only", ()
     const checkout = await wallet.createCheckout(request);
     await wallet.getCheckout(checkout, purchase, ZIP);
     expect(shop.protocolErrors).toEqual([]);
-    expect(shop.calls.map((c) => c.method)).toEqual(["tools/call", "tools/call", "tools/call", "tools/call"]);
+    expect(shop.calls.map((c) => c.method)).toEqual(["tools/call", "tools/call", "tools/call"]);
     for (const call of shop.calls) {
       expect(call.headers).toMatchObject({ "mcp-method": "tools/call", "mcp-name": call.tool, "mcp-protocol-version": MCP_PROTOCOL });
       expect((call.body.params as Json)._meta).toEqual({
@@ -105,7 +120,7 @@ describe("the wire: MCP 2026-07-28, stateless, tools on the allow-list only", ()
   it("attack (raw card): a spend-request tool is advertised and a PAN is in get_account; the tool is never called, the PAN never chained (test 2)", async () => {
     const { wallet, session } = await setup({ spendRequestTool: true });
     const account = await wallet.account();
-    expect(account).toEqual({ budgetRemaining: { amountMinor: 5000, currency: "USD" } });
+    expect(account).toEqual({ budgetRemaining: { amountMinor: FAKE_BUDGET_MINOR, currency: "USD" }, connected: true });
     expect(JSON.stringify(account)).not.toContain("4111");
     // Even asked directly, the transport refuses the tool before anything is logged or sent.
     const raw = createDisclosedWallet(createShopMcpTransport({ url: shop.mcpUrl, accessToken: shop.accessToken, clientVersion: "0" }), session, { destination: "shop" });
@@ -117,33 +132,39 @@ describe("the wire: MCP 2026-07-28, stateless, tools on the allow-list only", ()
 });
 
 describe("a purchase's Shop calls", () => {
-  it("creates by saved-address id only, completes once with a UUID v4 key, and projects every answer", async () => {
+  it("creates with the lines only (Shop fills the preferred address), completes once with the agent budget and a UUID v4 key, and projects every answer", async () => {
     const { wallet } = await setup();
     const created = await wallet.createCheckout(request);
     expect(created).toEqual({
       checkoutRef: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) as unknown,
       storeDomain: FAKE_STORE,
       status: "open",
-      merchantOrigin: FAKE_STOREFRONT,
+      // S1: a checkout names no merchant; the gateway binds the store instead (complete.ts).
+      merchantOrigin: null,
       lines: [{ variantRef: FAKE_VARIANT, quantity: 1, title: "Holographic sticker" }],
       total: { amountMinor: UNIT_PRICE_MINOR + SHIPPING_MINOR, currency: "USD" },
       shipTo: "match",
       orderRef: null,
+      budgetOffered: true,
     });
+    // One send: no get_account first, and no address or address id in it.
+    expect(sentTools()).toEqual(["create_checkout"]);
     const create = shop.calls.find((c) => c.tool === "create_checkout")?.body.params as Json;
     const args = create.arguments as Json;
-    expect(args.checkout).toEqual({
-      line_items: [{ item: { id: FAKE_VARIANT }, quantity: 1 }],
-      fulfillment: { methods: [{ type: "shipping", destinations: [{ id: FAKE_ADDRESS_ID, type: "shipping_address" }], selected_destination_id: FAKE_ADDRESS_ID }] },
-    });
-    expect((args.meta as Json)["idempotency-key"]).toBe(CREATE_UUID);
+    expect(args).toEqual({ shop: FAKE_STORE, checkout: { line_items: [{ item: { id: FAKE_VARIANT }, quantity: 1 }] }, meta: { "idempotency-key": CREATE_UUID } });
+    expect(JSON.stringify(shop.calls)).not.toContain(FAKE_ADDRESS_ID);
     expect(CREATE_UUID).toMatch(UUID_V4);
 
     const done = await wallet.completeCheckout(created, purchase, KEY, { shipToPostalCode: ZIP, sendUnless: () => false });
-    expect(done).toMatchObject({ status: "completed", orderRef: expect.stringMatching(/^gid:\/\/shopify\/Order\/\d+$/) as unknown, shipTo: "match" });
+    expect(done).toMatchObject({ status: "completed", orderRef: expect.stringMatching(/^gid:\/\/shopify\/Order\/\d+$/) as unknown, shipTo: "match", storeDomain: FAKE_STORE });
     expect(shop.completeCount).toBe(1);
+    // Paid with the delegated budget, never the Shop Pay card offered beside it (S1 step 6).
+    expect(shop.paidWith).toEqual(["delegated_budget"]);
     const complete = shop.calls.find((c) => c.tool === "complete_checkout")?.body.params as Json;
     expect(((complete.arguments as Json).meta as Json)["idempotency-key"]).toBe(KEY);
+    const sentInstruments = (((complete.arguments as Json).checkout as Json).payment as Json).instruments as Json[];
+    expect(sentInstruments).toHaveLength(1);
+    expect(sentInstruments[0]).toMatchObject({ type: "delegated_budget", selected: true, id: expect.stringMatching(/^shop_/) as unknown });
 
     expect(await wallet.getCheckout(created, purchase, "10001")).toMatchObject({ status: "completed", shipTo: "differs" });
     expect(await wallet.getCheckout(created, purchase)).toMatchObject({ shipTo: "unknown" });
@@ -163,7 +184,7 @@ describe("a purchase's Shop calls", () => {
     expect(shop.completeCount).toBe(0);
   });
 
-  it("projects the fake's failure modes: buyer review, another variant, a higher total, an ineligible store", async () => {
+  it("projects the fake's failure modes: buyer review, another variant, a higher total, a refused or ineligible store", async () => {
     let h = await setup({ buyerReview: true, otherVariant: true, totalAboveMinor: 100 });
     const created = await h.wallet.createCheckout(request);
     expect(created.lines[0]?.variantRef).toBe(FAKE_OTHER_VARIANT);
@@ -171,8 +192,58 @@ describe("a purchase's Shop calls", () => {
     expect(await h.wallet.completeCheckout(created, purchase, KEY, { sendUnless: () => false })).toMatchObject({ status: "buyer_review", orderRef: null });
     await store.close();
     await shop.close();
+    // A tool error (S1 step 8 shape): Shop's code kept, its message never.
+    h = await setup({ createRefused: true, identityEverywhere: true });
+    const refused = await h.wallet.createCheckout(request).catch((e: unknown) => e);
+    expect(refused).toMatchObject({ name: "WalletRailError", httpStatus: 200, railCode: "merchant_unavailable" });
+    expect((refused as Error).message).not.toContain(FAKE_BUYER.email);
+    await store.close();
+    await shop.close();
+    // S1 step 11: a store agents cannot complete at answers a checkout asking the buyer, with no instrument.
     h = await setup({ ineligible: true });
-    await expect(h.wallet.createCheckout(request)).rejects.toBeInstanceOf(WalletRailError);
+    expect(await h.wallet.createCheckout(request)).toMatchObject({ status: "buyer_review", budgetOffered: false });
+  });
+
+  it("complete_checkout answered checkout_completion_ineligible (a tool error): an error carrying Shop's code, never a success", async () => {
+    const { wallet } = await setup({ completeIneligible: true });
+    const created = await wallet.createCheckout(request);
+    const error = await wallet.completeCheckout(created, purchase, KEY, { sendUnless: () => false }).catch((e: unknown) => e);
+    expect(error).toMatchObject({ name: "WalletRailError", httpStatus: 200, railCode: "checkout_completion_ineligible" });
+    expect(shop.completeCount).toBe(1);
+  });
+
+  it("no agent budget offered (only the card): CompletionRefusedError no_budget_instrument, and no complete_checkout is sent", async () => {
+    for (const faults of [{ noBudgetInstrument: true }, { twoBudgetInstruments: true }] as FakeShopFaults[]) {
+      const { wallet } = await setup(faults);
+      const created = await wallet.createCheckout(request);
+      expect(created.budgetOffered).toBe(false);
+      const error = await wallet.completeCheckout(created, purchase, KEY, { sendUnless: () => false }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(CompletionRefusedError);
+      expect((error as CompletionRefusedError).reason).toBe("no_budget_instrument");
+      expect(shop.completeCount).toBe(0);
+      expect(shop.paidWith).toEqual([]);
+      await store.close();
+      await shop.close();
+    }
+  });
+
+  it("attack (idempotency, S1 step 6 --replay): a create_checkout whose answer is lost is never sent again; CheckoutUnconfirmedError", async () => {
+    for (const faults of [{ dropCreateAnswer: true }, { toolHttpStatus: { create_checkout: 502 } }] as FakeShopFaults[]) {
+      const { wallet } = await setup(faults);
+      const error = await wallet.createCheckout(request).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(CheckoutUnconfirmedError);
+      expect(shop.calls.filter((c) => c.tool === "create_checkout")).toHaveLength(1);
+      expect(sentTools()).toEqual(["create_checkout"]);
+      await store.close();
+      await shop.close();
+    }
+    // A create that never left (no connection) is plain "not sent", not unconfirmed.
+    await setup();
+    const vaultText = shopCredentialsText({ clientId: shop.clientId, accessToken: shop.accessToken, refreshToken: null });
+    const offline = connectShop(openWalletSession(store), { mcpUrl: "http://127.0.0.1:1/mcp", authUrl: shop.authUrl, vaultText, newKey: () => CREATE_UUID });
+    const notSent = await offline.createCheckout(request).catch((e: unknown) => e);
+    expect(notSent).toBeInstanceOf(ShopTransportError);
+    expect((notSent as ShopTransportError).neverLeft).toBe(true);
   });
 
   it("a lost complete_checkout answer: logged, sent once, unacknowledged; the error names no content", async () => {
@@ -185,7 +256,7 @@ describe("a purchase's Shop calls", () => {
 });
 
 describe("invariant 3: Shop's buyer identity never gets past the projection", () => {
-  it("attack (identity, test 1): name, email, phone, address and order history in every answer and error stay out of the chain, results, errors and sends", async () => {
+  it("attack (identity, test 1): email, phone, names, picture, full address, card and credential in every answer and error stay out of the chain, results, errors and sends", async () => {
     const { wallet } = await setup({ identityEverywhere: true });
     const outputs: unknown[] = [];
     outputs.push(await wallet.account());
@@ -204,7 +275,8 @@ describe("invariant 3: Shop's buyer identity never gets past the projection", ()
     const seen = JSON.stringify(outputs);
     const chain = audit();
     // The order history's order id too ("gid://shopify/Order/4001"); a digest may contain any short digit run.
-    for (const value of [...buyerStrings, "shopify/Order/4001"]) {
+    // The account's picture URL, its card's holder name and payment token, and the address id too.
+    for (const value of [...buyerStrings, "shopify/Order/4001", FAKE_PICTURE_URL, shop.accountCardToken, FAKE_ADDRESS_ID, "Apt 4"]) {
       expect(seen).not.toContain(value);
       expect(chain).not.toContain(value);
       for (const body of loggedBodies()) expect(body).not.toContain(value);
@@ -215,27 +287,25 @@ describe("invariant 3: Shop's buyer identity never gets past the projection", ()
 });
 
 describe("plan kill criterion K4: no address fields ever leave", () => {
-  it("attack (K4 regression, test 3): Shop would need address fields, so no create_checkout is sent", async () => {
+  it("attack (K4 regression, test 3): Shop asks for address fields; the gateway sent none, and never retries with them", async () => {
     const { wallet } = await setup({ requiresAddressFields: true });
     const error = await wallet.createCheckout(request).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(AddressFieldsRequiredError);
     expect((error as AddressFieldsRequiredError).step).toBe("delivery");
-    expect(sentTools()).toEqual(["get_account"]);
+    // One create, lines only: no fulfillment, destination or address id, and no second try.
+    expect(sentTools()).toEqual(["create_checkout"]);
+    const args = (shop.calls[0]?.body.params as Json).arguments as Json;
+    expect(Object.keys(args.checkout as Json)).toEqual(["line_items"]);
     expect(audit()).not.toContain(FAKE_BUYER.address1);
   });
 
-  it("attack: a saved-address id with a query (a token, address text) is never used, so nothing is sent with it", async () => {
-    for (const hostile of [`${FAKE_ADDRESS_ID}?model_name=CustomerAddress&customer_access_token=SECRET-ADDR-TOKEN`, `${FAKE_ADDRESS_ID}?city=Springfield`]) {
-      const { wallet } = await setup({ addressId: hostile });
-      const error = await wallet.createCheckout(request).catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(AddressFieldsRequiredError);
-      expect((error as AddressFieldsRequiredError).step).toBe("delivery");
-      expect(sentTools()).toEqual(["get_account"]);
-      expect(audit()).not.toContain("SECRET-ADDR-TOKEN");
-      for (const body of loggedBodies()) expect(body).not.toContain("?");
-      await store.close();
-      await shop.close();
-    }
+  it("attack: the account's saved-address ids never reach a send, even after get_account read them", async () => {
+    const { wallet } = await setup();
+    await wallet.account();
+    const created = await wallet.createCheckout(request);
+    await wallet.completeCheckout(created, purchase, KEY, { shipToPostalCode: ZIP, sendUnless: () => false });
+    for (const call of shop.calls) expect(JSON.stringify(call.body)).not.toMatch(/destination|fulfillment|address/);
+    for (const body of loggedBodies()) expect(body).not.toContain(FAKE_ADDRESS_ID);
   });
 
   it("attack (K4 regression, test 3): a forced street address is blocked by findIdentity with a block entry, and never sent", async () => {
@@ -267,7 +337,12 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
     const created = await wallet.createCheckout(request);
     await wallet.completeCheckout(created, purchase, KEY, { sendUnless: () => false });
     expect(await wallet.revoke()).toBe("revoked");
-    expect(shop.revocations).toEqual([{ token: shop.refreshToken, tokenTypeHint: "refresh_token", clientId: shop.clientId, contentType: "application/x-www-form-urlencoded" }]);
+    // Both tokens: Shop keeps an access token working after its refresh token is revoked (S1 step 12).
+    const form = "application/x-www-form-urlencoded";
+    expect(shop.revocations).toEqual([
+      { token: shop.refreshToken, tokenTypeHint: "refresh_token", clientId: shop.clientId, contentType: form },
+      { token: shop.accessToken, tokenTypeHint: "access_token", clientId: shop.clientId, contentType: form },
+    ]);
     const chain = audit();
     for (const secret of [shop.accessToken, shop.refreshToken, shop.instrumentToken]) {
       expect(chain).not.toContain(secret);
@@ -279,10 +354,11 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
       "body.params.arguments.id",
       "body.params.arguments.checkout.payment.instruments[0].credential",
     ]);
-    const revoke = store.entries().find((e) => e.kind === "disclosure" && (e.body as Json).endpoint === "revoke")?.body as Json;
-    expect(revoke).toMatchObject({ destination: "shop_accounts", redacted: [{ at: "body.token" }] });
-    // After the revocation Shop refuses the token: the adapter says so in its own words.
-    await expect(wallet.account()).rejects.toMatchObject({ httpStatus: 401 });
+    const revokes = store.entries().filter((e) => e.kind === "disclosure" && (e.body as Json).endpoint === "revoke");
+    expect(revokes).toHaveLength(2);
+    for (const r of revokes) expect(r.body).toMatchObject({ destination: "shop_accounts", redacted: [{ at: "body.token" }] });
+    // After the revocation Shop refuses the token, and its refresh: the adapter says to link again, in its own words.
+    await expect(wallet.account()).rejects.toMatchObject({ httpStatus: 401, message: expect.stringContaining("link the wallet again") as unknown });
     await verified();
   });
 
@@ -314,12 +390,12 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
     const mcp = {
       call: (operation: string) => {
         calls.push(operation);
-        return Promise.resolve(answer({ account: { preferred_address_id: FAKE_ADDRESS_ID } }));
+        return Promise.resolve(answer({}));
       },
     };
     const wallet = createShopAdapter({ mcp, accounts: mcp, credentials: { clientId: "c", accessToken: "a", refreshToken: null }, newKey: () => "ik_AAAAAAAAAAAAAAAAAAAAAA" });
     await expect(wallet.createCheckout(request)).rejects.toBeInstanceOf(TypeError);
-    expect(calls).toEqual(["get_account"]);
+    expect(calls).toEqual([]);
   });
 
   it("attack: a checkout id carrying ?key= flows through create, get and complete; the key is never in the chain, a result or an error", async () => {
@@ -351,6 +427,96 @@ describe("credentials never reach the chain (G2b follow-up 3)", () => {
   });
 });
 
+describe("token refresh (S1: a refresh token is issued, the access token lives 3600 s)", () => {
+  const tokenGrants = () => shop.oauthRequests.filter((r) => r.path === "/oauth/token" && r.form.grant_type === "refresh_token");
+
+  it("a 401 on a read: refreshed through the log (refresh token digested), the read sent again once, the new tokens handed to the vault", async () => {
+    const { wallet } = await setup();
+    const oldAccess = shop.accessToken;
+    const refresh = shop.refreshToken;
+    shop.expireAccessTokens();
+    expect(await wallet.account()).toMatchObject({ connected: true });
+    expect(tokenGrants()).toHaveLength(1);
+    expect(tokenGrants()[0]?.form).toEqual({ grant_type: "refresh_token", refresh_token: refresh, client_id: shop.clientId });
+    expect(shop.accessToken).not.toBe(oldAccess);
+    expect(sentTools()).toEqual(["get_account", "get_account"]);
+    // The second get_account carried the new token.
+    expect(shop.calls[1]?.headers.authorization).toBe(`Bearer ${shop.accessToken}`);
+    expect(saved).toHaveLength(1);
+    expect(JSON.parse(saved[0] ?? "{}")).toMatchObject({ v: 1, access_token: shop.accessToken, refresh_token: refresh, expires_at: expect.any(Number) as unknown });
+    // Logged before it left, the refresh token digested; the new tokens (in the answer) never in the chain.
+    const grant = store.entries().find((e) => e.kind === "disclosure" && (e.body as Json).endpoint === "token")?.body as Json;
+    expect(grant).toMatchObject({ destination: "shop_accounts", redacted: [{ at: "body.refresh_token" }] });
+    for (const secret of [refresh, shop.accessToken, oldAccess]) expect(audit()).not.toContain(secret);
+    await verified();
+  });
+
+  it("an access token past its expiry is refreshed before the send, with no 401 first; a rotated refresh token is kept", async () => {
+    let now = Date.now();
+    const { wallet } = await setup({ rotateRefresh: true }, { expiresAt: now + 30_000, now: () => now });
+    const first = shop.refreshToken;
+    now += 10_000; // inside the refresh margin (60 s)
+    await wallet.orders();
+    expect(tokenGrants()).toHaveLength(1);
+    expect(sentTools()).toEqual(["search_orders"]);
+    expect(shop.refreshToken).not.toBe(first);
+    expect(JSON.parse(saved[0] ?? "{}")).toMatchObject({ refresh_token: shop.refreshToken });
+  });
+
+  it("refresh refused (invalid_grant): a 401 saying to link again, Shop's text not echoed, the read not resent", async () => {
+    const { wallet } = await setup({ refuseRefresh: true, identityEverywhere: true });
+    shop.expireAccessTokens();
+    const error = await wallet.account().catch((e: unknown) => e);
+    expect(error).toMatchObject({ name: "WalletRailError", httpStatus: 401 });
+    expect((error as Error).message).toContain("link the wallet again");
+    expect((error as Error).message).not.toContain(FAKE_BUYER.email);
+    expect(sentTools()).toEqual(["get_account"]);
+    expect(saved).toEqual([]);
+  });
+
+  it("a 401 on create_checkout: tokens refreshed, but create_checkout is not sent again", async () => {
+    const { wallet } = await setup();
+    shop.expireAccessTokens();
+    const error = await wallet.createCheckout(request).catch((e: unknown) => e);
+    expect(error).toMatchObject({ name: "WalletRailError", httpStatus: 401 });
+    expect(shop.createCount).toBe(0);
+    expect(sentTools()).toEqual(["create_checkout"]);
+    expect(tokenGrants()).toHaveLength(1);
+    // The next call goes out with the new token.
+    await wallet.createCheckout(request);
+    expect(shop.createCount).toBe(1);
+  });
+});
+
+describe("unlink and a connection removed in the Shop app (S1 steps 12, 12b)", () => {
+  it("revoking the refresh token alone leaves the access token working at Shop: the adapter revokes both", async () => {
+    const { wallet } = await setup();
+    expect(await wallet.revoke()).toBe("revoked");
+    expect(shop.revocations.map((r) => r.tokenTypeHint)).toEqual(["refresh_token", "access_token"]);
+    await expect(wallet.account()).rejects.toMatchObject({ httpStatus: 401 });
+  });
+
+  it("one revocation refused: not_revoked (invariant 5), both still sent", async () => {
+    const { wallet } = await setup({ revokeStatus: 500 });
+    expect(await wallet.revoke()).toBe("not_revoked");
+    expect(shop.revocations).toHaveLength(2);
+  });
+
+  it("the connection removed in the app: the token answers, the account reads as not connected with no budget", async () => {
+    const { wallet } = await setup({ connectionRemoved: true });
+    expect(await wallet.account()).toEqual({ budgetRemaining: null, connected: false });
+  });
+
+  it("no budget for the connection (S1 step 3), or another currency: the budget is unknown (null) or kept with its currency", async () => {
+    let h = await setup({ budgetMinor: null });
+    expect(await h.wallet.account()).toEqual({ budgetRemaining: null, connected: true });
+    await store.close();
+    await shop.close();
+    h = await setup({ accountCurrency: "CAD", budgetMinor: 700 });
+    expect(await h.wallet.account()).toEqual({ budgetRemaining: { amountMinor: 700, currency: "CAD" }, connected: true });
+  });
+});
+
 describe("search_orders (plan G12, wallet check)", () => {
   it("attack (identity): orders full of the buyer's identity come back as {order_ref, total, merchant_origin, created_at} only; nothing of it is chained", async () => {
     const { wallet } = await setup({ identityEverywhere: true, moreOrders: true });
@@ -368,7 +534,8 @@ describe("search_orders (plan G12, wallet check)", () => {
     });
     const seen = JSON.stringify(reported);
     const chain = audit();
-    for (const value of [...buyerStrings, "Engraved"]) {
+    // Neither the buyer, the line text, nor checkout_id (an order-status URL with a credential, S1 step 10).
+    for (const value of [...buyerStrings, "Engraved", "authenticate", "Sticker Store"]) {
       expect(seen).not.toContain(value);
       expect(chain).not.toContain(value);
     }

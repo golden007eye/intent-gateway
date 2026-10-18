@@ -4,9 +4,15 @@
 //
 // Steps, each chained before its outside effect (record before effect):
 // 1. Preconditions: the policy allows one_tap, a wallet is usable, `now < S.expires_at`.
-// 2. Account: effective per-order cap = min(policy per_order_usd, the wallet's budget left); A above it is refused.
-// 3. Quote and precheck: create the wallet checkout; binding-v1 checks 1, 3, 4 and 5 against it (check 2 is the
-//    checkout's own hash). A title is advisory only.
+// 2. Account: effective per-order cap = min(policy per_order_usd, the wallet's budget left, in USD); A above it is
+//    refused. A budget the wallet does not show (or not in USD), or a connection the buyer removed in the wallet's
+//    app, is refused too: never assumed (S1).
+// 3. Quote and precheck: create the wallet checkout, once: a create with no usable answer is never sent again
+//    (failed, create_unconfirmed), since Shop makes a new checkout for a replayed key. A quote that is not open, or
+//    offers no agent-budget payment, is refused. binding-v1 checks 1, 3, 4 and 5 against it (check 2 is the
+//    checkout's own hash); Shop names no merchant on a checkout, so check 1 reads the store the checkout lives at,
+//    which stands for the approved origin only when it is the store that origin pairs with (storeFor). A title is
+//    advisory only.
 // 4. Redeem: compare-and-append `completion` {handle, checkout_ref, report_id, idempotency_key, …} unless one exists
 //    for the handle (another process owns the purchase: stop) or the caps no longer fit (failed, cap).
 // 5. Report `completing` (its body is fixed by the completion entry, so every retry is byte-identical). A 409/410
@@ -30,7 +36,14 @@ import { bindingV1, type LocalOutcomeEntry, mayHaveSent, outcomesFor, shipToOpti
 import type { Session } from "../signing/index.ts";
 import { type Entry, type Store, StoreConflictError } from "../store/index.ts";
 import { type ChainEntry, type KeySet, verifyApprovalProof } from "../trust/index.ts";
-import { AddressFieldsRequiredError, CompletionRefusedError, type WalletAdapter, type WalletCheckout, WalletRailError } from "../wallet/index.ts";
+import {
+  AddressFieldsRequiredError,
+  CheckoutUnconfirmedError,
+  CompletionRefusedError,
+  type WalletAdapter,
+  type WalletCheckout,
+  WalletRailError,
+} from "../wallet/index.ts";
 
 /** What the step machine needs from the gateway. */
 export interface CompletionContext {
@@ -169,9 +182,9 @@ function reportFate(reports: readonly LoggedReport[], reportId: unknown): "accep
 const timestamp = (ms: number): string => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(".000Z", "Z");
 
 /** The observed order binding-v1 reads from a wallet checkout, as the chain may hold it (the checkout ref as its hash). */
-function observedOf(checkout: WalletCheckout, zip: string): Body {
+function observedOf(checkout: WalletCheckout, zip: string, merchantOrigin: string | null): Body {
   return {
-    ...(checkout.merchantOrigin === null ? {} : { merchant_origin: checkout.merchantOrigin }),
+    ...(merchantOrigin === null ? {} : { merchant_origin: merchantOrigin }),
     checkout_ref_hash: checkout.checkoutRef,
     lines: checkout.lines.map((l) => ({ variant_ref: l.variantRef, quantity: l.quantity })),
     // The ZIP never crosses the wallet port: a match is the snapshot's own ZIP, a difference an empty string.
@@ -180,8 +193,19 @@ function observedOf(checkout: WalletCheckout, zip: string): Body {
   };
 }
 
-function bind(snapshot: SnapshotV2, checkout: WalletCheckout, recordedRef: string): { observed: Body; context: Body; verdict: Binding } {
-  const observed = observedOf(checkout, snapshot.ship_to.postal_code);
+/**
+ * The merchant origin binding check 1 reads from a wallet checkout. Shop reports no merchant on a checkout (S1 step
+ * 6), only the store it lives at (the store the gateway named; the order permalink's host once completed). That store
+ * stands for the approved origin when it is the store the origin pairs with (`pairedStore`, from storeFor); any other
+ * store reads as its own `https://` origin, so check 1 differs. A merchant origin the rail does report wins.
+ */
+function checkoutMerchantOrigin(checkout: WalletCheckout, approvedOrigin: string, pairedStore: string | null): string {
+  if (checkout.merchantOrigin !== null) return checkout.merchantOrigin;
+  return pairedStore !== null && checkout.storeDomain === pairedStore ? approvedOrigin : `https://${checkout.storeDomain}`;
+}
+
+function bind(snapshot: SnapshotV2, checkout: WalletCheckout, recordedRef: string, pairedStore: string | null): { observed: Body; context: Body; verdict: Binding } {
+  const observed = observedOf(checkout, snapshot.ship_to.postal_code, checkoutMerchantOrigin(checkout, snapshot.merchant_origin, pairedStore));
   const context = { mode: "shop_agent", recorded_checkout_ref_hash: recordedRef, ship_to_optional: shipToOptional("shop_api") };
   return { observed, context, verdict: bindingV1(snapshot, observed, { ...context, mode: "shop_agent" }) };
 }
@@ -217,6 +241,8 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
   const totalMinor = snapshot.total.amount_minor;
   const zip = snapshot.ship_to.postal_code;
   const deadline = now() + COMPLETION_BUDGET_MS;
+  /** The wallet's store for the approved merchant origin (Shop: its myshopify domain), or null when none is known. */
+  const pairedStore = ctx.storeFor(snapshot.merchant_origin);
 
   /** Chains a local outcome (once per state in a row), optionally only unless `conflict` holds. */
   async function local(
@@ -296,7 +322,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
   async function settle(checkout: WalletCheckout, completion: Body): Promise<LocalOutcomeEntry | null> {
     const recorded = String(completion.checkout_ref);
     if (checkout.status === "completed" && checkout.orderRef !== null) {
-      const { observed, context, verdict: binding } = bind(snapshot, checkout, recorded);
+      const { observed, context, verdict: binding } = bind(snapshot, checkout, recorded, pairedStore);
       if (binding.result !== "incomplete") {
         await local({
           state: binding.result === "ok" ? "ordered" : "mismatch",
@@ -344,29 +370,47 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     if (ctx.wallet === null) return refuse("no_wallet");
     if (!(now() < expiresAt)) return refuse("expired");
     const wallet = ctx.wallet;
-    let budget;
+    let account;
     try {
-      budget = (await wallet.account()).budgetRemaining;
+      account = await wallet.account();
     } catch {
       return finish(null); // nothing chained: the next call tries again
     }
-    const caps = [ctx.perOrderCapMinor, budget === null ? null : budget.currency === "USD" ? budget.amountMinor : 0].filter((c): c is number => c !== null);
-    if (caps.length > 0 && totalMinor > Math.min(...caps)) return refuse("budget");
-    const storeDomain = ctx.storeFor(snapshot.merchant_origin);
+    // The buyer removed the connection in the Shop app: the token answers, the account does not (S1 step 12b).
+    if (!account.connected) return refuse("wallet_disconnected");
+    const budget = account.budgetRemaining;
+    // No budget shown, or not in USD: one tap never assumes one (the purchase is handed off).
+    if (budget === null || budget.currency !== "USD") return refuse("budget_unknown");
+    if (totalMinor > Math.min(budget.amountMinor, ctx.perOrderCapMinor ?? Number.POSITIVE_INFINITY)) return refuse("budget");
+    const storeDomain = pairedStore;
     if (storeDomain === null) return refuse("store_unknown");
     let quote: WalletCheckout;
     try {
       quote = await wallet.createCheckout({ purchase: handle, storeDomain, lines: [{ variantRef: snapshot.variant_ref, quantity: snapshot.quantity }], shipToPostalCode: zip });
     } catch (error) {
       if (error instanceof AddressFieldsRequiredError) return refuse("address_fields");
+      // It may have reached Shop: never created again for this purchase (Shop makes a new checkout per replay).
+      if (error instanceof CheckoutUnconfirmedError) return refuse("create_unconfirmed");
       if (error instanceof WalletRailError && error.httpStatus === 200) return refuse("ineligible", "shop_api");
-      return finish(null); // no answer: nothing was completed, and the next call tries again
+      // Refused by Shop (a 4xx other than a token Shop refused): no checkout exists.
+      if (error instanceof WalletRailError && error.httpStatus >= 400 && error.httpStatus < 500 && error.httpStatus !== 401) return refuse("shop_refused", "shop_api");
+      return finish(null); // not sent, or the token refused: no checkout exists, and the next call tries again
     }
-    const { observed, context, verdict: binding } = bind(snapshot, quote, quote.checkoutRef);
-    if (titleDiffers(snapshot, quote)) advisory.push("title_differs");
-    const problem = precheckProblem(binding);
     // A quote that goes no further: its checkout id is forgotten at once (nothing will read that checkout again).
     const forget = (): Promise<void> => wallet.release({ storeDomain: quote.storeDomain, checkoutRef: quote.checkoutRef }).catch(() => undefined);
+    // Shop asks for the buyer (S1 step 11: requires_escalation, checkout_completion_ineligible), or is not ready.
+    if (quote.status !== "open") {
+      await forget();
+      return refuse("ineligible", "shop_api");
+    }
+    // Only the agent budget pays; a checkout that offers only the card is handed off (S1 step 6).
+    if (!quote.budgetOffered) {
+      await forget();
+      return refuse("no_budget_instrument");
+    }
+    const { observed, context, verdict: binding } = bind(snapshot, quote, quote.checkoutRef, pairedStore);
+    if (titleDiffers(snapshot, quote)) advisory.push("title_differs");
+    const problem = precheckProblem(binding);
     if (problem !== null) {
       await forget();
       return refuse(problem, "gateway_precheck", { binding_inputs: { observed, context }, local_binding: binding });
@@ -486,7 +530,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     if (wallet === null) return "reconcile";
     const recheck = (fresh: WalletCheckout): string | null => {
       if (fresh.checkoutRef !== done.checkout_ref) return "checkout_ref";
-      const problem = precheckProblem(bind(snapshot, fresh, fresh.checkoutRef).verdict);
+      const problem = precheckProblem(bind(snapshot, fresh, fresh.checkoutRef, pairedStore).verdict);
       if (problem !== null) return problem;
       if (!(now() < expiresAt)) return "expired";
       // Appendix E again, step 7 included, against the chain without this approval's own entry (not a replay).
@@ -510,9 +554,12 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
         return chained ? "settled" : "reconcile";
       }
       if (error instanceof DisclosureConflictError) return "reconcile";
-      // Logged and maybe sent, with no usable answer: indeterminate, never re-sent. Not logged: never sent.
+      // Logged and maybe sent, with no usable answer: indeterminate, never re-sent. Not logged: never sent. A tool-level
+      // error from Shop (HTTP 200, isError, e.g. checkout_completion_ineligible) is never a success: it is chained
+      // under Shop's code, and later calls read the checkout to settle it.
       if (maybeSent(store.entries(), handle)) {
-        await local({ state: "indeterminate", source: "shop_api", reason: "no_answer" });
+        const reason = error instanceof WalletRailError && error.railCode !== null ? error.railCode : "no_answer";
+        await local({ state: "indeterminate", source: "shop_api", reason });
         return "settled";
       }
       return "reconcile";

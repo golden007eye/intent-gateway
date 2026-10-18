@@ -51,9 +51,15 @@ export interface WalletMoney {
   readonly currency: string;
 }
 
-/** The linked account as the gateway needs it: how much the rail lets the gateway spend (null when it sets no budget). */
+/**
+ * The linked account as the gateway needs it. `budgetRemaining`: how much the rail's budget for this connection has
+ * left, or null when the rail shows none or shows it in a shape the adapter does not read (never assumed: one tap
+ * then hands off). `connected`: false when the rail says this connection can no longer read the account (Shop: the
+ * buyer removed it in the Shop app, while the token itself still answers, S1 step 12b).
+ */
 export interface WalletAccount {
   readonly budgetRemaining: WalletMoney | null;
+  readonly connected: boolean;
 }
 
 export interface WalletLine {
@@ -93,6 +99,11 @@ export interface WalletCheckout extends CheckoutLocator {
   readonly shipTo: ShipToMatch;
   /** The merchant's order reference once completed, else null. */
   readonly orderRef: string | null;
+  /**
+   * Whether the rail offers to pay the checkout from the buyer's agent budget (Shop: a `delegated_budget`
+   * instrument). One tap pays only that way; a checkout that offers only a card is never completed (S1 step 6).
+   */
+  readonly budgetOffered: boolean;
 }
 
 /**
@@ -132,14 +143,17 @@ export interface WalletAdapter {
   readonly rail: WalletRail;
   account(): Promise<WalletAccount>;
   /**
-   * Delivery is chosen by the account's saved-address id only. Throws AddressFieldsRequiredError, with nothing sent
-   * to create the checkout, when the rail would need address fields.
+   * Sends the lines only: no address and no address id. The rail fills delivery from the account (Shop: the
+   * preferred saved address, S1 step 6). Sent once per call and never retried. Throws AddressFieldsRequiredError when
+   * the rail answers that it needs address fields (nothing more is sent), and CheckoutUnconfirmedError when the
+   * request may have reached the rail but no usable answer came back.
    */
   createCheckout(request: CheckoutRequest): Promise<WalletCheckout>;
   /**
    * Sent at most once per purchase (plan G7b step 6); a lost answer is reconciled with getCheckout, never re-sent.
-   * `idempotencyKey` is a UUID v4. Throws AddressFieldsRequiredError, with no completion sent, when completing
-   * would forward a postal address (a billing address on the payment instrument).
+   * `idempotencyKey` is a UUID v4. Pays with the rail's agent budget only (`budgetOffered`): with none offered it
+   * throws CompletionRefusedError (`no_budget_instrument`) and sends nothing. Throws AddressFieldsRequiredError, with
+   * no completion sent, when completing would forward a postal address (a billing address on the payment instrument).
    */
   completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, options: CompleteOptions): Promise<WalletCheckout>;
   getCheckout(checkout: CheckoutLocator, purchase: string, shipToPostalCode?: string): Promise<WalletCheckout>;
@@ -151,8 +165,10 @@ export interface WalletAdapter {
   /** The account's recent orders as the rail reports them, projected (plan G12, `intent wallet check`). */
   orders(): Promise<WalletOrders>;
   /**
-   * Asks the rail to revoke the gateway's token. `revoked` only when the rail acknowledged it; `not_sent` when there
-   * was no token or client to revoke with, so nothing was sent (invariant 5: say only what was sent and answered).
+   * Asks the rail to revoke the gateway's tokens: the refresh token and the access token, one request each (Shop
+   * keeps an access token working after its refresh token is revoked, S1 step 12). `revoked` only when the rail
+   * acknowledged every revocation; `not_sent` when there was no token or client to revoke with, so nothing was sent
+   * (invariant 5: say only what was sent and answered). Revoking does not remove the connection in the rail's app.
    */
   revoke(): Promise<RevokeResult>;
 }
@@ -226,8 +242,8 @@ export function memoryCheckoutIds(): CheckoutIdStore {
 }
 
 /**
- * The rail would need the buyer's postal address (invariant 3; plan kill criterion K4): delivery chosen by address
- * fields rather than a saved-address id, or a payment instrument that carries a billing address. Nothing was sent
+ * The rail would need the buyer's postal address (invariant 3; plan kill criterion K4): it asks for address fields
+ * to choose delivery, or its payment instrument carries a billing address. Nothing more was sent
  * for the step it names; the purchase can still be handed off.
  */
 export class AddressFieldsRequiredError extends Error {
@@ -236,16 +252,20 @@ export class AddressFieldsRequiredError extends Error {
   constructor(step: "delivery" | "payment") {
     super(
       step === "delivery"
-        ? "not sent: the wallet would need the buyer's address fields to choose delivery, and the gateway sends only a saved-address id"
+        ? "not sent: the wallet asked for the buyer's address fields to choose delivery, and the gateway never sends them"
         : "not sent: completing would forward the payment instrument's billing address, which the gateway never sends",
     );
     this.step = step;
   }
 }
 
+/** A rail error code that may be kept and shown: a short lower-case token, so no message text fits. */
+export const RAIL_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+
 /**
- * The rail answered with an error. Only a numeric code and a fixed local label are kept: the rail's own message can
- * carry buyer identity and never reaches a tool result, stderr or the chain.
+ * The rail answered with an error. Only the HTTP status, a JSON-RPC numeric code, the rail's error code token and a
+ * fixed local label are kept: the rail's own message can carry buyer identity and never reaches a tool result,
+ * stderr or the chain.
  */
 export class WalletRailError extends Error {
   override name = "WalletRailError";
@@ -253,10 +273,26 @@ export class WalletRailError extends Error {
   readonly code: number | null;
   readonly label: string;
   readonly httpStatus: number;
-  constructor(httpStatus: number, code: number | null, label: string) {
-    super(`the wallet answered an error: ${label} (HTTP ${String(httpStatus)}${code === null ? "" : `, code ${String(code)}`})`);
+  /** A tool-level error's code as the rail names it (`checkout_completion_ineligible`) when it fits RAIL_CODE; else null. */
+  readonly railCode: string | null;
+  constructor(httpStatus: number, code: number | null, label: string, railCode: string | null = null) {
+    const kept = railCode !== null && RAIL_CODE.test(railCode) ? railCode : null;
+    super(`the wallet answered an error: ${label} (HTTP ${String(httpStatus)}${code === null ? "" : `, code ${String(code)}`}${kept === null ? "" : `, ${kept}`})`);
     this.httpStatus = httpStatus;
     this.code = code;
     this.label = label;
+    this.railCode = kept;
+  }
+}
+
+/**
+ * create_checkout may have reached the rail and no usable answer came back (a timeout, a cut connection). A checkout
+ * may exist; the gateway does not hold its id, so it can never complete it, and it never sends create_checkout again
+ * for that purchase: Shop makes a new checkout for a replayed idempotency key (S1 step 6 `--replay`).
+ */
+export class CheckoutUnconfirmedError extends Error {
+  override name = "CheckoutUnconfirmedError";
+  constructor(cause?: unknown) {
+    super("create_checkout may have reached the wallet with no usable answer; it is not sent again for this purchase", cause === undefined ? undefined : { cause });
   }
 }

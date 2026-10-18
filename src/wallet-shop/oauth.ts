@@ -99,7 +99,7 @@ export async function runDeviceFlow(accounts: ShopCaller, options: DeviceFlowOpt
     // No token request after the code expired: Shop would only answer expired_token.
     if (options.now() >= deadline) throw new ShopLinkError("expired", EXPIRED);
     const answer = readForm(await accounts.call(TOKEN, { grant_type: DEVICE_GRANT, device_code: deviceCode, client_id: options.clientId }));
-    if (answer.status === 200) return tokens(answer.json, options.clientId);
+    if (answer.status === 200) return tokens(answer.json, options.clientId, options.now());
     const code = answer.json.error;
     if (code === "authorization_pending") continue;
     if (code === "slow_down") {
@@ -113,14 +113,35 @@ export async function runDeviceFlow(accounts: ShopCaller, options: DeviceFlowOpt
 /** A user code as RFC 8628 suggests one: short, letters, digits and `-`; anything else is not printed. */
 const USER_CODE = /^[A-Za-z0-9-]{4,32}$/;
 
-function tokens(json: Record<string, unknown>, clientId: string): LinkedShop {
+function tokens(json: Record<string, unknown>, clientId: string, nowMs: number): LinkedShop {
   const access = json.access_token;
   const type = json.token_type;
   if (typeof access !== "string" || access === "" || (type !== undefined && (typeof type !== "string" || type.toLowerCase() !== "bearer"))) {
     throw new ShopLinkError("unreadable", "Shop's token answer has no bearer access token");
   }
+  // Every other key (S1 saw `scope` and `access_type`; an `id_token` would name the buyer) is dropped here.
   const refresh = typeof json.refresh_token === "string" && json.refresh_token !== "" ? json.refresh_token : null;
-  return { credentials: { clientId, accessToken: access, refreshToken: refresh }, expiresInS: positive(json.expires_in) || null };
+  const expiresInS = positive(json.expires_in) || null;
+  return { credentials: { clientId, accessToken: access, refreshToken: refresh, expiresAt: expiresInS === null ? null : nowMs + expiresInS * 1000 }, expiresInS };
+}
+
+/** The refresh grant (RFC 6749 §6). */
+export const REFRESH_GRANT = "refresh_token";
+
+/**
+ * Exchanges the refresh token for a new access token (S1: Shop issues a refresh token to the public client, and its
+ * access token lives 3600 s), through the disclosed account caller: logged before it leaves, with the refresh token
+ * digested; the answer is kept only as a digest and a size. A refresh token Shop does not send again stays the one in
+ * use. Throws ShopLinkError when there is no refresh token, Shop refuses, or its answer has no bearer token: the
+ * wallet has to be linked again.
+ */
+export async function refreshTokens(accounts: ShopCaller, credentials: ShopCredentials, now: () => number): Promise<ShopCredentials> {
+  if (credentials.refreshToken === null) throw new ShopLinkError("refused", "Shop issued no refresh token for this link");
+  const started = now();
+  const answer = readForm(await accounts.call(TOKEN, { grant_type: REFRESH_GRANT, refresh_token: credentials.refreshToken, client_id: credentials.clientId }));
+  if (answer.status !== 200) throw failed(answer.json, "Shop refused to refresh the token");
+  const renewed = tokens(answer.json, credentials.clientId, started).credentials;
+  return { ...renewed, refreshToken: renewed.refreshToken ?? credentials.refreshToken };
 }
 
 function failed(json: Record<string, unknown>, fallback: string): ShopLinkError {

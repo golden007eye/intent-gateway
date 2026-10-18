@@ -1,18 +1,22 @@
-// Allow-list projection of Shop's answers (plan G7a; invariant 3). Shop answers with the buyer's name, email, phone,
-// saved addresses and order history (get_account), and checkouts echo the delivery address. Nothing of that leaves
-// this file: each reader below copies out only the fields it names, so any field Shop adds is dropped by default.
+// Allow-list projection of Shop's answers (plan G7a; invariant 3). Shop answers with the buyer's email, phone, names,
+// picture, full saved addresses and a per-instrument payment `credential {type, token}` (get_account, even under the
+// scope `openid personal_agent`), and checkouts echo the buyer and the delivery address (S1 steps 3 and 6). Nothing of
+// that leaves this file: each reader below copies out only the fields it names, so any field Shop adds is dropped by
+// default.
 //
-// Kept: the budget left; the checkout's sha256 reference (the id itself may hold a credential), its status, lines {variant_ref, quantity, title}, store domain, merchant
-// origin, total and order id; from search_orders, each order's id, total, merchant origin and creation time only. The ship-to ZIP is compared here, in memory, and only `match | differs | unknown`
-// is kept. The saved-address id is kept inside the adapter (it is how delivery is chosen) and never returned.
-// From an error, only the JSON-RPC numeric code and a fixed local label are kept: Shop's message can carry
-// identity and never reaches a tool result, stderr or the chain.
+// Kept: the budget left and whether the connection can still read the account; the checkout's sha256 reference (the
+// id itself may hold a credential), its status, lines {variant_ref, quantity, title}, store domain, merchant origin,
+// total, order id and whether it offers the agent budget as payment; from search_orders, each order's reference,
+// total, merchant origin and time only. The ship-to ZIP is compared here, in memory, and only
+// `match | differs | unknown` is kept. From an error, only the HTTP status, the JSON-RPC numeric code, Shop's error
+// code token and a fixed local label are kept: Shop's message can carry identity and never reaches a tool result,
+// stderr or the chain.
 //
-// The field names follow Shop's published tool schemas (UCP checkout) as of 2026-10-16; the budget's and the
-// address id's exact shape is pending the S1 spike's captured answers (plan G0 questions 2 and 9).
+// The field names are the ones Shop returned in the S1 spike (2026-10-18; UCP 2026-08-25).
 import { checkoutRefHash } from "../contract/index.ts";
 import { findIdentity } from "../privacy/index.ts";
 import {
+  RAIL_CODE,
   type ShipToMatch,
   type WalletAccount,
   type WalletCheckout,
@@ -27,10 +31,12 @@ import type { WireResponse } from "./rpc.ts";
 
 type Json = Record<string, unknown>;
 
-/** A tool's answer: its structured content, and whether Shop marked it an error. */
+/** A tool's answer: its structured content, whether Shop marked it an error, and the first error message's code. */
 export interface ToolAnswer {
   readonly content: Json;
   readonly isError: boolean;
+  /** The code of the answer's first error message (`checkout_completion_ineligible`) when it fits RAIL_CODE, else null. */
+  readonly railCode: string | null;
 }
 
 /** Labels for JSON-RPC error codes; the message Shop sent with them is never read. */
@@ -38,25 +44,48 @@ const RPC_LABELS: Readonly<Record<number, string>> = {
   [-32700]: "Shop could not parse the request",
   [-32600]: "Shop refused the request as invalid",
   [-32601]: "Shop does not have that method",
-  [-32602]: "Shop refused the request's arguments",
+  [-32602]: "Shop refused the request's arguments or tool",
   [-32603]: "Shop had an internal error",
 };
 
-/** Reads one MCP answer. Throws WalletRailError, naming only a status, a code and a fixed label, for every error. */
+/** Labels for the tool-level error codes S1 saw; any other code is named by its token only. */
+const RAIL_LABELS: Readonly<Record<string, string>> = {
+  checkout_completion_ineligible: "Shop says an agent cannot complete this checkout; it needs the buyer at the merchant's checkout",
+  invalid_checkout_id: "Shop does not accept that checkout id",
+};
+
+/** The fixed label for a tool-level error with this code. */
+export function railLabel(code: string | null): string {
+  return (code === null ? undefined : RAIL_LABELS[code]) ?? "Shop refused the request";
+}
+
+/**
+ * Reads one MCP answer. Throws WalletRailError, naming only a status, a code and a fixed label, for every transport
+ * or JSON-RPC error: 401/403 (a bad or expired token, S1 step 8), and a JSON-RPC error at any HTTP status (Shop
+ * answers a schema error or an unknown tool with HTTP 400 and -32602). A tool-level error (HTTP 200, `isError: true`,
+ * `ucp.status: "error"`) is returned with `isError` set, for the caller to refuse.
+ */
 export function readToolAnswer(response: WireResponse): ToolAnswer {
   const { status } = response;
   if (status === 401 || status === 403) throw new WalletRailError(status, null, "Shop refused the token (expired or revoked): link the wallet again");
-  if (status < 200 || status >= 300) throw new WalletRailError(status, null, "Shop answered with an HTTP error");
   const message = parseMessage(response);
-  if (message === null) throw new WalletRailError(status, null, "Shop's answer is not a JSON-RPC message");
-  const error = record(message.error);
+  const error = record(message?.error);
   if (error !== null) {
     const code = Number.isInteger(error.code) ? (error.code as number) : null;
     throw new WalletRailError(status, code, (code === null ? undefined : RPC_LABELS[code]) ?? "Shop answered with an error");
   }
+  if (status < 200 || status >= 300) throw new WalletRailError(status, null, "Shop answered with an HTTP error");
+  if (message === null) throw new WalletRailError(status, null, "Shop's answer is not a JSON-RPC message");
   const result = record(message.result);
   if (result === null) throw new WalletRailError(status, null, "Shop's answer has no result");
-  return { content: structured(result) ?? {}, isError: result.isError === true };
+  const content = structured(result) ?? {};
+  const isError = result.isError === true || record(content.ucp)?.status === "error";
+  return { content, isError, railCode: errorCode(content) };
+}
+
+function errorCode(content: Json): string | null {
+  const code = [...list(content.messages), ...list(checkoutOf(content).messages)].find((m) => m.type === "error")?.code;
+  return typeof code === "string" && RAIL_CODE.test(code) ? code : null;
 }
 
 function parseMessage(response: WireResponse): Json | null {
@@ -91,24 +120,32 @@ function structured(result: Json): Json | null {
 }
 
 /**
- * A saved-address id as Shop gives it: an opaque Shopify gid, nothing that reads as an address. No query suffix: a
- * query could carry a token (`customer_access_token=`), which the log would keep in clear under `id`, or address text.
+ * get_account's warnings when the buyer removed the connection in the Shop app: the token still answers, but the
+ * account's details, addresses, budget and cards are gone (S1 step 12b). Any one of them reads as not connected.
  */
-export const SAVED_ADDRESS_ID = /^gid:\/\/shopify\/[A-Za-z]+\/[0-9]{1,20}$/;
+export const CONNECTION_GONE = ["claims_unavailable", "addresses_unavailable", "budget_unavailable", "payment_instruments_unavailable"] as const;
 
-/** What the adapter keeps from get_account: the budget left, and the saved-address id to choose delivery by. */
-export function projectAccount(content: Json): { account: WalletAccount; savedAddressId: string | null } {
-  const account = record(content.account) ?? content;
-  const budget = record(account.budget);
-  const remaining = money(record(budget?.remaining));
-  const preferred = account.preferred_address_id;
-  const addresses = Array.isArray(account.addresses) ? (account.addresses as unknown[]).map(record) : [];
-  const ids = [preferred, ...addresses.map((a) => a?.id)].filter((id): id is string => isSavedAddressId(id));
-  return { account: { budgetRemaining: remaining }, savedAddressId: ids[0] ?? null };
+/**
+ * What the gateway keeps from get_account: the budget left and whether the connection still reads the account.
+ * The budget is the one `payment.instruments[]` entry whose `display` has `remaining_amount` (integer minor units),
+ * in the answer's top-level `currency` (S1 step 4). None, several, or a value that is not a non-negative integer
+ * gives null: unknown, never assumed. `limit`, `renewal_type` and `renews_at` are not kept.
+ */
+export function projectAccount(content: Json): WalletAccount {
+  const warnings = list(content.messages).map((m) => m.code);
+  const connected = !warnings.some((code) => (CONNECTION_GONE as readonly unknown[]).includes(code));
+  return { budgetRemaining: connected ? budgetOf(content) : null, connected };
 }
 
-function isSavedAddressId(id: unknown): id is string {
-  return typeof id === "string" && SAVED_ADDRESS_ID.test(id) && findIdentity(id).length === 0;
+function budgetOf(content: Json): WalletMoney | null {
+  const currency = content.currency;
+  if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) return null;
+  const budgets = list(record(content.payment)?.instruments)
+    .map((i) => record(i.display))
+    .filter((d): d is Json => d !== null && "remaining_amount" in d);
+  if (budgets.length !== 1) return null;
+  const remaining = budgets[0]?.remaining_amount;
+  return Number.isSafeInteger(remaining) && (remaining as number) >= 0 ? { amountMinor: remaining as number, currency } : null;
 }
 
 const STATUS: Readonly<Record<string, WalletCheckoutStatus>> = {
@@ -127,6 +164,8 @@ export const STORE_DOMAIN = /^[a-z0-9][a-z0-9-]{0,62}\.myshopify\.com$/;
 const REF = /^[A-Za-z0-9:/_.-]{1,256}$/;
 /** A checkout id as Shop sends it. It may carry a credential (`?key=<secret>`), so it is a secret value throughout. */
 const CHECKOUT_ID = /^[A-Za-z0-9:/_.?=&%-]{1,512}$/;
+/** The payment instrument type that pays from the buyer's agent budget, with no Shop prompt (S1 steps 6 and 9). */
+export const BUDGET_INSTRUMENT = "delegated_budget";
 
 /**
  * How a checkout is named wherever it is kept or shown: the contract's checkout ref hash, `sha256:` and the hex
@@ -137,15 +176,26 @@ export function checkoutRefOf(checkoutId: string): string | null {
   return checkoutRefHash(checkoutId);
 }
 
-/** The raw checkout object of an answer (`checkout`, or the answer itself). */
+/** The raw checkout object of an answer (`checkout`, or the answer itself, as Shop sends it). */
 export function checkoutOf(content: Json): Json {
   return record(content.checkout) ?? content;
 }
 
 /**
- * The checkout in our terms, and Shop's raw checkout id for the adapter to hold in memory. `requestedStore` is the
- * store the gateway asked for, kept when Shop reports none. An unknown status reads as `processing`: neither
- * completable nor terminal, so the gateway waits or reconciles.
+ * The checkout's agent-budget instrument, exactly as Shop offered it, or null. Shop offers the buyer's Shop Pay card
+ * (`type: shop_pay`, `selected: false`) beside the budget (`type: delegated_budget`, an id `shop_…`,
+ * `selected: true`); one tap pays with the budget only, never the card. Exactly one budget instrument with a
+ * non-empty id, or none: several cannot be told apart, and picking by position is what Shop's own guidance forbids.
+ */
+export function budgetInstrument(checkout: Json): Json | null {
+  const budgets = list(record(checkout.payment)?.instruments).filter((i) => i.type === BUDGET_INSTRUMENT && typeof i.id === "string" && i.id !== "");
+  return budgets.length === 1 ? (budgets[0] ?? null) : null;
+}
+
+/**
+ * The checkout in our terms, and Shop's raw checkout id for the adapter to hold. `requestedStore` is the store the
+ * gateway named in its request (`shop`), kept when Shop reports none: S1 saw no merchant field on a checkout. An
+ * unknown status reads as `processing`: neither completable nor terminal, so the gateway waits or reconciles.
  */
 export function projectCheckout(
   content: Json,
@@ -162,19 +212,32 @@ export function projectCheckout(
 function projected(checkout: Json, checkoutRef: string, requestedStore: string, shipToPostalCode: string | undefined): WalletCheckout {
   const status = typeof checkout.status === "string" ? (STATUS[checkout.status] ?? "processing") : "processing";
   const merchant = record(checkout.merchant) ?? record(checkout.seller) ?? record(checkout.shop);
-  const reported = merchant?.domain;
   const order = record(checkout.order);
   const orderId = order?.id;
+  // The store as Shop reports it: the host of the order's permalink once completed (S1 step 9: on the myshopify
+  // domain), else a merchant domain if Shop ever sends one, else the store the gateway asked for.
+  const reported = [hostOf(order?.permalink_url), merchant?.domain].find((d): d is string => typeof d === "string" && STORE_DOMAIN.test(d));
   return {
     checkoutRef,
-    storeDomain: typeof reported === "string" && STORE_DOMAIN.test(reported) ? reported : requestedStore,
+    storeDomain: reported ?? requestedStore,
     status,
     merchantOrigin: origin(merchant?.url),
     lines: lines(checkout.line_items),
     total: total(checkout),
     shipTo: shipTo(checkout, shipToPostalCode),
     orderRef: typeof orderId === "string" && REF.test(orderId) && findIdentity(orderId).length === 0 ? orderId : null,
+    budgetOffered: budgetInstrument(checkout) !== null,
   };
+}
+
+function hostOf(url: unknown): string | null {
+  if (typeof url !== "string") return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" ? parsed.hostname : null;
+  } catch {
+    return null;
+  }
 }
 
 function lines(items: unknown): WalletLine[] {
@@ -197,13 +260,6 @@ function total(checkout: Json): WalletMoney | null {
   const totals = Array.isArray(checkout.totals) ? (checkout.totals as unknown[]).map(record) : [];
   const amount = totals.find((t) => t?.type === "total")?.amount;
   return Number.isSafeInteger(amount) && (amount as number) >= 0 ? { amountMinor: amount as number, currency } : null;
-}
-
-function money(value: Json | null): WalletMoney | null {
-  if (value === null) return null;
-  const { amount, currency } = value;
-  if (!Number.isSafeInteger(amount) || (amount as number) < 0 || typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) return null;
-  return { amountMinor: amount as number, currency };
 }
 
 function origin(url: unknown): string | null {
@@ -231,27 +287,54 @@ function shipTo(checkout: Json, expected: string | undefined): ShipToMatch {
 
 /** How many orders `intent wallet check` asks search_orders for: one page, never a cursor (plan G12). */
 export const ORDERS_PAGE = 50;
+/** A host name a seller domain may be: LDH labels, at least one dot. */
+const HOST = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 /**
  * search_orders' answer in our terms (plan G12): for each order only {order_ref, total, merchant_origin, created_at}.
- * Shop's orders carry the shipping address, the buyer's email and phone, and line text; none of it is read. An order
- * whose id is not a plain reference (a query, identity text) is dropped whole: it cannot be matched or shown safely.
- * `complete` is false when Shop says another page exists, or returned a full page.
+ * As S1 saw it (step 10), an order's `id` is Shop's own UUID, and the merchant's order is `shopify_order_id`, the
+ * digits of the `gid://shopify/Order/<digits>` a completed checkout returns: order_ref is that gid, so it matches the
+ * chain's outcomes. An order with no `shopify_order_id` (one Shop read from an email) keeps Shop's id as its ref.
+ * `checkout_id` is an order-status URL with a credential-bearing query, not the checkout gid, and is never read. The
+ * merchant origin is `https://` + `seller.domain` (the storefront's primary domain). Shop's orders carry the seller's
+ * name, line text and the delivery city; none of it is read. `complete` is false when Shop says another page exists,
+ * or returned a full page.
  */
 export function projectOrders(content: Json): WalletOrders {
   const raw = Array.isArray(content.orders) ? (content.orders as unknown[]).map(record) : [];
   const orders = raw.flatMap((order): WalletOrder[] => {
-    const id = order?.id;
-    if (order === null || typeof id !== "string" || !REF.test(id) || findIdentity(id).length > 0) return [];
-    const merchant = record(order.merchant) ?? record(order.seller) ?? record(order.shop);
+    if (order === null) return [];
+    const orderRef = orderRefOf(order);
+    if (orderRef === null) return [];
+    const seller = record(order.seller) ?? record(order.merchant);
+    const domain = typeof seller?.domain === "string" ? seller.domain.toLowerCase() : null;
+    const merchantOrigin = domain !== null && HOST.test(domain) ? `https://${domain}` : origin(seller?.url);
     // An origin is printed to the developer: one that reads as identity (a personal domain, an email-like host) is dropped.
-    const merchantOrigin = origin(merchant?.url);
     const safeOrigin = merchantOrigin !== null && findIdentity(merchantOrigin).length === 0 ? merchantOrigin : null;
-    return [{ orderRef: id, total: total(order) ?? money(record(order.total)), merchantOrigin: safeOrigin, createdAt: instant(order.created_at) }];
+    return [{ orderRef, total: total(order) ?? money(record(order.total)), merchantOrigin: safeOrigin, createdAt: instant(order.placed_at ?? order.created_at) }];
   });
   const page = record(content.pagination) ?? record(content.page_info);
   const more = page?.has_next_page === true || page?.hasNextPage === true || raw.length >= ORDERS_PAGE;
   return { orders, complete: !more };
+}
+
+/**
+ * `gid://shopify/Order/<shopify_order_id>`, built here from digits only, so it is not scanned for a card (a 14-digit
+ * order number passes Luhn about one time in ten); else Shop's own id when it is a plain reference that reads as no
+ * identity; else null, and the order is dropped whole.
+ */
+function orderRefOf(order: Json): string | null {
+  const digits = typeof order.shopify_order_id === "number" && Number.isSafeInteger(order.shopify_order_id) ? String(order.shopify_order_id) : order.shopify_order_id;
+  if (typeof digits === "string" && /^[0-9]{1,20}$/.test(digits)) return `gid://shopify/Order/${digits}`;
+  const id = order.id;
+  return typeof id === "string" && REF.test(id) && findIdentity(id).length === 0 ? id : null;
+}
+
+function money(value: Json | null): WalletMoney | null {
+  if (value === null) return null;
+  const { amount, currency } = value;
+  if (!Number.isSafeInteger(amount) || (amount as number) < 0 || typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) return null;
+  return { amountMinor: amount as number, currency };
 }
 
 /** A creation time as ISO 8601 UTC, or null when it is not a date and time. */

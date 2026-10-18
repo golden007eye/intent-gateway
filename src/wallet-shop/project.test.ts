@@ -1,10 +1,20 @@
 // The allow-list projection of Shop's answers (plan G7a): only named fields come out, a ZIP only as a verdict, and
-// an error only as a status, a code and a fixed label; Shop's own words never do.
+// an error only as a status, a code and a fixed label; Shop's own words never do. Inputs have the shapes the S1 spike
+// captured (2026-10-18), filled with made-up values only.
 import { describe, expect, it } from "vitest";
 import { WalletRailError } from "../wallet/index.ts";
 import { createHash } from "node:crypto";
 import { findIdentity } from "../privacy/index.ts";
-import { asksForAddressFields, checkoutRefOf, ORDERS_PAGE, projectAccount, projectCheckout, projectOrders, readToolAnswer } from "./project.ts";
+import {
+  asksForAddressFields,
+  budgetInstrument,
+  checkoutRefOf,
+  ORDERS_PAGE,
+  projectAccount,
+  projectCheckout,
+  projectOrders,
+  readToolAnswer,
+} from "./project.ts";
 
 const json = (value: unknown, status = 200, type = "application/json") => ({
   status,
@@ -12,32 +22,72 @@ const json = (value: unknown, status = 200, type = "application/json") => ({
   body: Buffer.from(typeof value === "string" ? value : JSON.stringify(value), "utf8"),
 });
 const IDENTITY = "Jane Doe <jane@buyer.example>, 123 Main St";
+const PII = {
+  name: "Jane Doe-Fakename",
+  email: "jane.doe@buyer.example",
+  phone: "+1 415 555 2671",
+  street: "123 Main St",
+  city: "Springfield",
+  picture: "https://cdn.shop.example/b/user-content/jane.jpg",
+  cardToken: "spt_SECRET_CARD_TOKEN_1234",
+};
+/** A saved address as S1 saw one. */
+const address = {
+  first_name: "Jane",
+  last_name: "Doe-Fakename",
+  street_address: PII.street,
+  extended_address: "Apt 4",
+  address_locality: PII.city,
+  address_region: "CA",
+  address_country: "US",
+  postal_code: "94107",
+  phone_number: PII.phone,
+};
+
+function thrown(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (e) {
+    return e;
+  }
+  return null;
+}
 
 describe("readToolAnswer", () => {
   it("reads structuredContent, a text copy, and a streamed (SSE) answer", () => {
-    expect(readToolAnswer(json({ jsonrpc: "2.0", id: 1, result: { structuredContent: { a: 1 } } }))).toEqual({ content: { a: 1 }, isError: false });
-    expect(readToolAnswer(json({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: '{"b":2}' }], isError: true } }))).toEqual({ content: { b: 2 }, isError: true });
+    expect(readToolAnswer(json({ jsonrpc: "2.0", id: 1, result: { structuredContent: { a: 1 } } }))).toEqual({ content: { a: 1 }, isError: false, railCode: null });
+    expect(readToolAnswer(json({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: '{"b":2}' }], isError: true } }))).toEqual({
+      content: { b: 2 },
+      isError: true,
+      railCode: null,
+    });
     const sse = `event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"c":3}}}\n\n`;
     expect(readToolAnswer(json(sse, 200, "text/event-stream")).content).toEqual({ c: 3 });
+  });
+
+  it("a tool error as S1 saw it (HTTP 200, isError, ucp.status error, messages[{code, severity}]): an error with the code only, never the message", () => {
+    const content = {
+      ucp: { version: "2026-08-25", status: "error" },
+      messages: [{ type: "error", content_type: "plain", code: "invalid_checkout_id", content: IDENTITY, severity: "unrecoverable" }],
+    };
+    expect(readToolAnswer(json({ jsonrpc: "2.0", id: 1, result: { structuredContent: content, isError: true } }))).toMatchObject({ isError: true, railCode: "invalid_checkout_id" });
+    // ucp.status error alone marks it an error too; a code with text in it is not kept.
+    const quiet = readToolAnswer(json({ jsonrpc: "2.0", id: 1, result: { structuredContent: { ...content, messages: [{ type: "error", code: IDENTITY }] } } }));
+    expect(quiet).toMatchObject({ isError: true, railCode: null });
   });
 
   it("keeps only the code and a fixed label of an error; Shop's message never comes out", () => {
     const cases: [ReturnType<typeof json>, number, number | null][] = [
       [json({ jsonrpc: "2.0", id: 1, error: { code: -32602, message: IDENTITY, data: { email: "jane@buyer.example" } } }), 200, -32602],
+      // S1 step 8: a schema error and an unknown tool are HTTP 400 with JSON-RPC -32602.
+      [json({ jsonrpc: "2.0", id: 1, error: { code: -32602, message: "$.id: required property missing" } }, 400), 400, -32602],
       [json({ jsonrpc: "2.0", id: 1, error: { code: "weird", message: IDENTITY } }), 200, null],
       [json({ error: "invalid_token", error_description: IDENTITY }, 401), 401, null],
       [json(IDENTITY, 500, "text/plain"), 500, null],
       [json(`not json ${IDENTITY}`), 200, null],
     ];
     for (const [response, status, code] of cases) {
-      const error = (() => {
-        try {
-          readToolAnswer(response);
-        } catch (e) {
-          return e;
-        }
-        return null;
-      })();
+      const error = thrown(() => readToolAnswer(response));
       expect(error).toBeInstanceOf(WalletRailError);
       expect(error).toMatchObject({ httpStatus: status, code });
       expect(JSON.stringify(error) + (error as Error).message).not.toMatch(/Jane|jane@|Main St/);
@@ -45,72 +95,131 @@ describe("readToolAnswer", () => {
   });
 });
 
-describe("projectAccount", () => {
-  it("keeps the budget left and a gid saved-address id; name, email, phone, address fields, orders and cards are dropped", () => {
-    const projected = projectAccount({
-      account: {
-        name: "Jane Doe",
-        email: "jane@buyer.example",
-        budget: { remaining: { amount: 1500, currency: "USD" } },
-        preferred_address_id: "gid://shopify/MailingAddress/42",
-        addresses: [{ id: "gid://shopify/MailingAddress/42", address1: "123 Main St", zip: "94107" }],
-        orders: [{ id: "gid://shopify/Order/1" }],
-        payment: { card_number: "4111 1111 1111 1111" },
+describe("projectAccount (S1 step 4 shape)", () => {
+  const account = (patch: Record<string, unknown> = {}) => ({
+    ucp: { version: "2026-08-25" },
+    signed_in: true,
+    buyer: { email: PII.email },
+    picture: { type: "image", url: PII.picture },
+    addresses: [{ type: "shipping_address", id: "6f9c1e2a-0b7d-4c3e-9a51-2d8e4f7a1b30", ...address }],
+    preferred_address_id: "6f9c1e2a-0b7d-4c3e-9a51-2d8e4f7a1b30",
+    currency: "USD",
+    payment: { instruments: [{ handler_id: "shop_pay", type: "shop_pay", display: { limit: 1500, remaining_amount: 1200, renewal_type: "monthly", renews_at: "2026-11-01T00:00:00Z" } }] },
+    selectable_instruments: [
+      {
+        id: "0b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a40",
+        handler_id: "shop_pay",
+        type: "shop_pay",
+        display: { funding_instrument: { type: "card", brand: "visa", last_digits: "4242", name: PII.name, description: "Visa •••• 4242" } },
+        credential: { type: "shop_token", token: PII.cardToken },
       },
-    });
-    expect(projected).toEqual({ account: { budgetRemaining: { amountMinor: 1500, currency: "USD" } }, savedAddressId: "gid://shopify/MailingAddress/42" });
+    ],
+    messages: [],
+    ...patch,
   });
 
-  it("has no saved-address id unless one is an opaque gid: an address text or a free-form id is never used", () => {
-    expect(projectAccount({ addresses: [{ address1: "123 Main St" }] }).savedAddressId).toBeNull();
-    expect(projectAccount({ preferred_address_id: "123 Main St", addresses: [{ id: "home" }] }).savedAddressId).toBeNull();
-    expect(projectAccount({ addresses: [{ id: "gid://shopify/MailingAddress/7" }] }).savedAddressId).toBe("gid://shopify/MailingAddress/7");
-    expect(projectAccount({}).account.budgetRemaining).toBeNull();
-    expect(projectAccount({ budget: { remaining: { amount: 1.5, currency: "USD" } } }).account.budgetRemaining).toBeNull();
+  it("attack: keeps the budget left and connected only; email, picture, names, addresses, card digits and the credential are dropped", () => {
+    const projected = projectAccount(account());
+    expect(projected).toEqual({ budgetRemaining: { amountMinor: 1200, currency: "USD" }, connected: true });
+    const text = JSON.stringify(projected);
+    for (const value of [...Object.values(PII), "4242", "Apt 4", "6f9c1e2a"]) expect(text).not.toContain(value);
+  });
+
+  it("no budget, an odd one, several or a missing currency: null (unknown, never assumed)", () => {
+    expect(projectAccount(account({ payment: { instruments: [] } })).budgetRemaining).toBeNull();
+    expect(projectAccount(account({ currency: undefined })).budgetRemaining).toBeNull();
+    expect(projectAccount(account({ payment: { instruments: [{ display: { remaining_amount: 1.5 } }] } })).budgetRemaining).toBeNull();
+    expect(projectAccount(account({ payment: { instruments: [{ display: { remaining_amount: -1 } }] } })).budgetRemaining).toBeNull();
+    expect(projectAccount(account({ payment: { instruments: [{ display: { remaining_amount: 100 } }, { display: { remaining_amount: 200 } }] } })).budgetRemaining).toBeNull();
+    // The old guess (budget.remaining) is not read.
+    expect(projectAccount({ currency: "USD", budget: { remaining: { amount: 1500, currency: "USD" } } }).budgetRemaining).toBeNull();
+    expect(projectAccount(account({ currency: "CAD" })).budgetRemaining).toEqual({ amountMinor: 1200, currency: "CAD" });
+  });
+
+  it("the connection removed in the Shop app (S1 step 12b warnings): not connected, no budget", () => {
+    for (const code of ["claims_unavailable", "addresses_unavailable", "budget_unavailable", "payment_instruments_unavailable"]) {
+      expect(projectAccount(account({ messages: [{ type: "warning", code, content: IDENTITY }] }))).toEqual({ budgetRemaining: null, connected: false });
+    }
+    expect(projectAccount(account({ messages: [{ type: "warning", code: "something_else" }] })).connected).toBe(true);
   });
 });
 
-describe("projectCheckout", () => {
+describe("projectCheckout (S1 step 6 shape)", () => {
+  const card = { id: "card-1", handler_id: "shop_pay", type: "shop_pay", selected: false, credential: { type: "x", token: PII.cardToken }, display: { brand: "visa", last_digits: "4242" } };
+  const budget = { id: "shop_abcDEF123", handler_id: "shop_pay", type: "delegated_budget", selected: true, credential: { type: "x" }, display: { remaining_amount: 1500, limit: 1500 } };
   const base = {
+    ucp: { version: "2026-08-25" },
     id: "gid://shopify/Checkout/abc",
     status: "ready_for_complete",
     currency: "USD",
-    line_items: [{ item: { id: "gid://shopify/ProductVariant/1", title: "Sticker" }, quantity: 2 }],
-    totals: [{ type: "total", amount: 1399 }],
-    merchant: { domain: "real-store.myshopify.com", url: "https://stickers.example/path" },
-    fulfillment: { methods: [{ destinations: [{ id: "d1", first_name: "Jane", postal_code: "94107-1234" }], selected_destination_id: "d1" }] },
-    buyer: { email: "jane@buyer.example" },
+    buyer: { email: PII.email, phone_number: PII.phone, consent: {} },
+    line_items: [{ id: "gid://shopify/CartLine/1?cart=x", item: { id: "gid://shopify/ProductVariant/1", title: "Sticker", price: 1000 }, quantity: 2 }],
+    totals: [
+      { type: "subtotal", amount: 1000 },
+      { type: "total", amount: 1399 },
+    ],
+    fulfillment: { methods: [{ id: "m", type: "shipping", selected_destination_id: "d1", destinations: [{ ...address, postal_code: "94107-1234", id: "d1" }] }] },
+    payment: { instruments: [card, budget] },
+    messages: [],
   };
 
-  it("keeps the named fields only and compares the ZIP in memory", () => {
-    const { checkout: projected, checkoutId } = projectCheckout({ checkout: base }, "asked.myshopify.com", "94107");
+  it("attack: keeps the named fields only (no merchant field: the requested store), compares the ZIP in memory, drops buyer, address and card", () => {
+    const { checkout: projected, checkoutId } = projectCheckout(base, "asked.myshopify.com", "94107");
     expect(checkoutId).toBe("gid://shopify/Checkout/abc");
     expect(projected).toEqual({
       checkoutRef: checkoutRefOf("gid://shopify/Checkout/abc") ?? "",
-      storeDomain: "real-store.myshopify.com",
+      storeDomain: "asked.myshopify.com",
       status: "open",
-      merchantOrigin: "https://stickers.example",
+      merchantOrigin: null,
       lines: [{ variantRef: "gid://shopify/ProductVariant/1", quantity: 2, title: "Sticker" }],
       total: { amountMinor: 1399, currency: "USD" },
       shipTo: "match",
       orderRef: null,
+      budgetOffered: true,
     });
-    expect(JSON.stringify(projected)).not.toMatch(/Jane|jane@|94107|Checkout\/abc/);
-    expect(projectCheckout({ checkout: base }, "asked.myshopify.com", "10001").checkout.shipTo).toBe("differs");
+    const text = JSON.stringify(projected);
+    for (const value of [...Object.values(PII), "Jane", "94107", "Checkout/abc", "4242"]) expect(text).not.toContain(value);
+    expect(projectCheckout(base, "asked.myshopify.com", "10001").checkout.shipTo).toBe("differs");
+  });
+
+  it("budgetInstrument: the delegated_budget instrument only, never the card; none or two: none", () => {
+    expect(budgetInstrument(base)).toBe(budget);
+    expect(budgetInstrument({ payment: { instruments: [{ ...card, selected: true }] } })).toBeNull();
+    expect(budgetInstrument({ payment: { instruments: [budget, { ...budget, id: "shop_other" }] } })).toBeNull();
+    expect(budgetInstrument({ payment: { instruments: [{ ...budget, id: "" }] } })).toBeNull();
+    expect(projectCheckout({ ...base, payment: { instruments: [card] } }, "asked.myshopify.com", undefined).checkout.budgetOffered).toBe(false);
+  });
+
+  it("completed (S1 step 9): the order id, and the store from the order permalink's myshopify host", () => {
+    const completed = {
+      ...base,
+      status: "completed",
+      payment: { instruments: [] },
+      order: { id: "gid://shopify/Order/9", label: "ABC", permalink_url: "https://real-store.myshopify.com/checkouts/cn/x/thank_you?key=SECRET" },
+    };
+    expect(projectCheckout(completed, "asked.myshopify.com", undefined).checkout).toMatchObject({
+      status: "completed",
+      orderRef: "gid://shopify/Order/9",
+      storeDomain: "real-store.myshopify.com",
+      budgetOffered: false,
+    });
+    // A permalink on a storefront domain is not a store name: the requested store stays.
+    const other = { ...completed, order: { ...completed.order, permalink_url: "https://stickers.example/x" } };
+    expect(projectCheckout(other, "asked.myshopify.com", undefined).checkout.storeDomain).toBe("asked.myshopify.com");
   });
 
   it("names a checkout whose id carries a ?key= credential only by the sha256 of the part before `?` (amendment L1)", () => {
     const id = "gid://shopify/Checkout/abc?key=SECRET-CHECKOUT-KEY";
-    const { checkout, checkoutId } = projectCheckout({ checkout: { ...base, id } }, "asked.myshopify.com", undefined);
+    const { checkout, checkoutId } = projectCheckout({ ...base, id }, "asked.myshopify.com", undefined);
     expect(checkoutId).toBe(id);
     expect(checkout.checkoutRef).toBe(`sha256:${createHash("sha256").update("gid://shopify/Checkout/abc", "utf8").digest("hex")}`);
     // Another read of the same checkout with another key names the same checkout.
-    expect(projectCheckout({ checkout: { ...base, id: "gid://shopify/Checkout/abc?key=OTHER" } }, "asked.myshopify.com", undefined).checkout.checkoutRef).toBe(checkout.checkoutRef);
+    expect(projectCheckout({ ...base, id: "gid://shopify/Checkout/abc?key=OTHER" }, "asked.myshopify.com", undefined).checkout.checkoutRef).toBe(checkout.checkoutRef);
     expect(JSON.stringify(checkout)).not.toContain("SECRET");
   });
 
   it("refuses a checkout id with nothing before its `?`: it has no checkout ref", () => {
-    expect(() => projectCheckout({ checkout: { ...base, id: "?key=SECRET" } }, "asked.myshopify.com", undefined)).toThrow("no usable id");
+    expect(() => projectCheckout({ ...base, id: "?key=SECRET" }, "asked.myshopify.com", undefined)).toThrow("no usable id");
   });
 
   it("maps statuses, reads an unknown one as processing, and drops what reads as identity, a query or is not https", () => {
@@ -122,6 +231,7 @@ describe("projectCheckout", () => {
     expect(read({ status: "canceled" }).status).toBe("failed");
     expect(read({ status: "something_new" }).status).toBe("processing");
     expect(read({ merchant: { domain: "stickers.example", url: "http://stickers.example" } })).toMatchObject({ storeDomain: "asked.myshopify.com", merchantOrigin: null });
+    expect(read({ merchant: { url: "https://stickers.example/path" } }).merchantOrigin).toBe("https://stickers.example");
     expect(read({ line_items: [{ item: { id: "gid://shopify/ProductVariant/1", title: "Engraved for jane@buyer.example" }, quantity: 1 }] }).lines[0]?.title).toBe("");
     expect(() => read({ id: "jane@buyer.example" })).toThrow(WalletRailError);
   });
@@ -129,68 +239,85 @@ describe("projectCheckout", () => {
 
 describe("asksForAddressFields", () => {
   it("is true for an error message about the destination or an address, false otherwise", () => {
-    expect(asksForAddressFields({ messages: [{ type: "error", code: "missing", path: "$.checkout.fulfillment.methods[0].destinations[0].address1" }] })).toBe(true);
+    expect(asksForAddressFields({ messages: [{ type: "error", code: "missing", path: "$.checkout.fulfillment.methods[0].destinations[0].street_address" }] })).toBe(true);
     expect(asksForAddressFields({ checkout: { messages: [{ type: "error", code: "address_required" }] } })).toBe(true);
     expect(asksForAddressFields({ messages: [{ type: "warning", path: "$.fulfillment" }, { type: "error", code: "out_of_stock", path: "$.line_items[0]" }] })).toBe(false);
+    expect(asksForAddressFields({ messages: [{ type: "error", code: "checkout_completion_ineligible", severity: "requires_buyer_review" }] })).toBe(false);
   });
 });
 
-describe("projectOrders (plan G12)", () => {
-  const PII = {
-    name: "Jane Doe-Fakename",
-    email: "jane.doe@buyer.example",
-    phone: "+1 415 555 2671",
-    address1: "123 Main St",
-    city: "Springfield",
-  };
-  const address = { first_name: "Jane", last_name: "Doe-Fakename", address1: PII.address1, city: PII.city, postal_code: "94107", phone: PII.phone };
-  /** An order as Shop's history might hold it: identity in every field the gateway does not keep, and in some it does. */
-  const hostile = (id: unknown, extra: Record<string, unknown> = {}) => ({
-    id,
-    name: `#1001 for ${PII.name}`,
-    created_at: "2026-10-12T09:30:00-07:00",
+describe("projectOrders (plan G12; S1 step 10 shape)", () => {
+  /** An order as S1 saw one, with identity in fields the gateway does not keep. */
+  const order = (patch: Record<string, unknown> = {}) => ({
+    id: "0a0b0c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+    label: `Engraved for ${PII.name}`,
+    placed_at: "2026-10-12T09:30:00-07:00",
+    status: "paid",
+    source: "shopify",
+    seller: { name: `${PII.name}'s favourite shop`, domain: "stickers.example", myshopify_domain: "sticker-store.myshopify.com", shopify_shop_id: "10000000001" },
+    line_items: [{ id: "x", item: { id: "gid://shopify/ProductVariant/1", title: `Engraved: ${PII.name}, ${PII.street}` }, quantity: { total: 1, fulfilled: 0 } }],
+    fulfillment: { expectations: [{ destination: { address_locality: PII.city, address_country: "US" } }] },
+    checkout_id: "https://stickers.example/10000000001/orders/abc/authenticate?key=SECRET-ORDER-KEY",
+    permalink_url: "https://stickers.example/10000000001/orders/abc/authenticate?key=SECRET-ORDER-KEY",
+    payment_status: "paid",
+    shopify_order_id: "1001",
+    totals: [{ type: "total", amount: 899 }],
     currency: "USD",
-    totals: [
-      { type: "subtotal", amount: 500 },
-      { type: "total", amount: 899 },
-    ],
-    merchant: { domain: "sticker-store.myshopify.com", url: `https://stickers.example/account?email=${PII.email}`, name: `${PII.name}'s favourite shop` },
-    customer: { first_name: "Jane", last_name: "Doe-Fakename", email: PII.email, phone: PII.phone },
-    email: PII.email,
-    phone: PII.phone,
-    shipping_address: address,
-    billing_address: address,
-    line_items: [{ item: { id: "gid://shopify/ProductVariant/1", title: `Engraved: ${PII.name}, ${PII.address1}` }, quantity: 1 }],
-    note: `Call ${PII.phone}`,
-    ...extra,
+    customer: { email: PII.email, phone: PII.phone },
+    ...patch,
   });
 
-  it("attack: keeps only {order_ref, total, merchant_origin, created_at}; every identity string is dropped", () => {
-    const projected = projectOrders({ orders: [hostile("gid://shopify/Order/1001")], buyer: { ...PII }, pagination: { has_next_page: false } });
+  it("attack: keeps only {order_ref (gid from shopify_order_id), total, merchant_origin (seller.domain), created_at}; identity and checkout_id dropped", () => {
+    const projected = projectOrders({ orders: [order()], buyer: { ...PII }, pagination: { has_next_page: false, cursor: "abc" } });
     expect(projected).toEqual({
       orders: [{ orderRef: "gid://shopify/Order/1001", total: { amountMinor: 899, currency: "USD" }, merchantOrigin: "https://stickers.example", createdAt: "2026-10-12T16:30:00.000Z" }],
       complete: true,
     });
     expect(findIdentity(projected)).toEqual([]);
     const text = JSON.stringify(projected);
-    for (const value of [...Object.values(PII), "Jane", "94107"]) expect(text).not.toContain(value);
+    for (const value of [...Object.values(PII), "Jane", "SECRET-ORDER-KEY", "0a0b0c0d", "authenticate"]) expect(text).not.toContain(value);
   });
 
-  it("attack: an order whose id is not a plain reference (a query, an email) is dropped whole", () => {
-    const projected = projectOrders({ orders: [hostile("gid://shopify/Order/1?key=secret"), hostile(PII.email), hostile(42), hostile("gid://shopify/Order/2")] });
+  it("a 14-digit shopify_order_id that passes Luhn is still the order's ref (built from digits, not scanned as a card)", () => {
+    const luhn = (n: string): boolean =>
+      n
+        .split("")
+        .reverse()
+        .map(Number)
+        .map((d, i) => (i % 2 === 1 ? (d * 2 > 9 ? d * 2 - 9 : d * 2) : d))
+        .reduce((a, b) => a + b, 0) %
+        10 ===
+      0;
+    const digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => `1234567890123${d}`).find(luhn) ?? "";
+    // The very case: the identity scan reads it as a card number.
+    expect(findIdentity({ order_ref: `gid://shopify/Order/${digits}` }).map((f) => f.kind)).toContain("card");
+    expect(projectOrders({ orders: [order({ shopify_order_id: digits })] }).orders[0]?.orderRef).toBe(`gid://shopify/Order/${digits}`);
+  });
+
+  it("an order Shop read from an email (no shopify_order_id, no seller domain) keeps Shop's id; a hostile id is dropped whole", () => {
+    const email = order({ shopify_order_id: undefined, seller: { name: "Some Store" }, source: "email" });
+    expect(projectOrders({ orders: [email] }).orders[0]).toMatchObject({ orderRef: "0a0b0c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d", merchantOrigin: null });
+    const projected = projectOrders({
+      orders: [
+        order({ shopify_order_id: "1?key=secret", id: "gid://shopify/Order/1?key=secret" }),
+        order({ shopify_order_id: undefined, id: PII.email }),
+        order({ shopify_order_id: undefined, id: 42 }),
+        order({ shopify_order_id: "2" }),
+      ],
+    });
     expect(projected.orders.map((o) => o.orderRef)).toEqual(["gid://shopify/Order/2"]);
   });
 
   it("a missing or odd total, origin or time becomes null, never a guess", () => {
     const [o] = projectOrders({
-      orders: [hostile("gid://shopify/Order/3", { totals: [{ type: "total", amount: -5 }], merchant: { url: "http://plain.example" }, created_at: "yesterday" })],
+      orders: [order({ totals: [{ type: "total", amount: -5 }], seller: { domain: "not a host" }, placed_at: "yesterday" })],
     }).orders;
-    expect(o).toEqual({ orderRef: "gid://shopify/Order/3", total: null, merchantOrigin: null, createdAt: null });
+    expect(o).toEqual({ orderRef: "gid://shopify/Order/1001", total: null, merchantOrigin: null, createdAt: null });
   });
 
   it("is incomplete when Shop says another page exists, or returned a full page", () => {
     expect(projectOrders({ orders: [], pagination: { has_next_page: true } }).complete).toBe(false);
-    expect(projectOrders({ orders: Array.from({ length: ORDERS_PAGE }, (_, i) => hostile(`gid://shopify/Order/${String(i)}`)) }).complete).toBe(false);
+    expect(projectOrders({ orders: Array.from({ length: ORDERS_PAGE }, (_, i) => order({ shopify_order_id: String(i) })) }).complete).toBe(false);
     expect(projectOrders({})).toEqual({ orders: [], complete: true });
   });
 });

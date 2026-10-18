@@ -54,7 +54,7 @@ The **baseline** is the loosest policy the gateway will run, and every loaded po
 
 Absent means both. `completion: [handoff]` keeps every purchase a hand-off; a cart for any other mode is refused with the rule `completion`. With no linked wallet, or for a store one tap cannot reach, a cart is handed off; a policy without `handoff` (`completion: [one_tap]`) then refuses it. Like every other list, `completion` only narrows: combining two policies keeps the modes both allow, and `intent policy add` refuses a library policy that shares no mode with yours. Every purchase still needs your passkey Approval, whatever the mode.
 
-For a one-tap purchase the per-order limit is the smaller of `per_order_usd` and the budget Shop returns for the account. As for every purchase, it counts against the daily and weekly limits from the moment it waits for approval, and stops counting only on evidence the gateway holds that nothing was charged.
+For a one-tap purchase the per-order limit is the smaller of `per_order_usd` and the agent budget Shop returns for the account (in USD). When Shop shows no budget for the connection, one tap is refused before anything is sent to pay, and a new cart hands the purchase off: a budget is never assumed. As for every purchase, it counts against the daily and weekly limits from the moment it waits for approval, and stops counting only on evidence the gateway holds that nothing was charged.
 
 ## What is refused at load time
 

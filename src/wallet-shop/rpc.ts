@@ -27,6 +27,12 @@ export const TOKEN = "token";
 const ACCOUNT_PATHS: Readonly<Record<string, string>> = { [REVOKE]: "oauth/revoke", [DEVICE_AUTHORIZATION]: "oauth/device", [TOKEN]: "oauth/token" };
 /** The client name the gateway gives in each request's `_meta`: exactly the one the identity check lets through. */
 export const CLIENT_NAME = MCP_CLIENT_NAME;
+/**
+ * The wallet transport's timeout. S1 measured Shop's slowest answers at 2.1 s (create_checkout) and 4.2 s
+ * (complete_checkout, which answers synchronously with the order): 30 s is about seven times the slowest. The
+ * completion's attempt window (ATTEMPT_WINDOW_MS, 60 s) is built on this value; a lost answer is reconciled with
+ * get_checkout, never re-sent.
+ */
 export const TIMEOUT_MS = 30_000;
 export const MAX_ANSWER_BYTES = 1024 * 1024;
 
@@ -83,8 +89,11 @@ export interface TransportOptions {
 }
 
 export interface McpTransportOptions extends TransportOptions {
-  /** The bearer token. It goes only into the `authorization` header, which the disclosure core digests in the log. */
-  readonly accessToken: string;
+  /**
+   * The bearer token, or a reader of the current one (it changes when the adapter refreshes it). It goes only into
+   * the `authorization` header, which the disclosure core digests in the log.
+   */
+  readonly accessToken: string | (() => string);
   /** The gateway's version, for the client name in `_meta`. */
   readonly clientVersion: string;
 }
@@ -123,7 +132,7 @@ export function createShopMcpTransport(options: McpTransportOptions): ShopTransp
         ["mcp-protocol-version", MCP_PROTOCOL],
         ["mcp-method", method],
         ["mcp-name", operation],
-        ["authorization", `Bearer ${options.accessToken}`],
+        ["authorization", `Bearer ${typeof options.accessToken === "string" ? options.accessToken : options.accessToken()}`],
         ["content-length", String(body.length)],
         ["connection", "close"],
       ];
@@ -135,8 +144,8 @@ export function createShopMcpTransport(options: McpTransportOptions): ShopTransp
 
 /**
  * The transport to Shop's account server, one form POST per operation: `device_authorization` {client_id, scope,
- * resource}, `token` {grant_type, device_code, client_id} (RFC 8628) and `revoke` {token, token_type_hint, client_id}
- * (RFC 7009).
+ * resource}, `token` {grant_type, device_code, client_id} (RFC 8628) or {grant_type: refresh_token, refresh_token,
+ * client_id} (RFC 6749 §6), and `revoke` {token, token_type_hint, client_id} (RFC 7009).
  */
 export function createShopAccountsTransport(options: TransportOptions): ShopTransport {
   const target = parseTarget(options.url);

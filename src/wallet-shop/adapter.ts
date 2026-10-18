@@ -1,15 +1,22 @@
 // The Shop wallet adapter (plan G7a; ADR-0017): the WalletAdapter port over the developer's own Shop account.
 // It sends through two callers the disclosure core provides (log before send, invariant 2), one per destination:
-// `shop` (Shop's MCP server) and `shop_accounts` (revocation). It returns only projections (project.ts).
+// `shop` (Shop's MCP server) and `shop_accounts` (token refresh and revocation). It returns only projections
+// (project.ts).
 //
-// Invariant 3 rules kept here, before anything is sent:
-// - Delivery is chosen by the account's saved-address id only, never by address fields. With no saved-address id
-//   the adapter throws AddressFieldsRequiredError and sends no create_checkout; a create_checkout answer that asks
-//   for address fields throws the same and is never retried with fields (plan kill criterion K4).
-// - complete_checkout forwards the payment instrument exactly as Shop offered it (Shop's rule), so an instrument
-//   that carries a billing address, or anything else findIdentity flags, is refused before the send:
-//   AddressFieldsRequiredError("payment"). The adapter does not strip it and try again: whether Shop needs it is
-//   open (K4), and a money path does not improvise.
+// Rules kept here, before anything is sent, each as the S1 spike observed Shop (2026-10-18):
+// - Delivery: create_checkout carries the lines only, no address and no address id; Shop fills the buyer's preferred
+//   saved address itself. An answer that asks for address fields throws AddressFieldsRequiredError and is never
+//   retried with fields (plan kill criterion K4; invariant 3).
+// - create_checkout is sent once per call and never retried: Shop makes a new checkout for a replayed idempotency key.
+//   A send that may have reached Shop with no usable answer is CheckoutUnconfirmedError.
+// - Payment: complete_checkout pays with the checkout's `delegated_budget` instrument only (the buyer's agent budget,
+//   no Shop prompt), forwarded exactly as Shop offered it plus `selected: true`; never the Shop Pay card beside it.
+//   No budget instrument: CompletionRefusedError(`no_budget_instrument`), nothing sent. An instrument that carries a
+//   billing address, or anything else findIdentity flags, is refused before the send (AddressFieldsRequiredError).
+// - Tokens: an access token about to expire, or one Shop answers 401 to, is refreshed through the account server
+//   (logged first, the refresh token digested), and the new tokens are handed to `onCredentials` for the vault. Only
+//   a read (get_account, get_checkout, search_orders) is sent again after a refresh; create_checkout and
+//   complete_checkout never are.
 // - Every idempotency key is a UUID v4 (Shop's schema: `format: uuid`).
 import { randomUUID } from "node:crypto";
 import { findIdentity } from "../privacy/index.ts";
@@ -18,6 +25,7 @@ import {
   type CheckoutIdStore,
   type CheckoutLocator,
   type CheckoutRequest,
+  CheckoutUnconfirmedError,
   type CompleteOptions,
   CompletionRefusedError,
   memoryCheckoutIds,
@@ -26,19 +34,22 @@ import {
   type WalletCheckout,
   WalletRailError,
 } from "../wallet/index.ts";
+import { refreshTokens, ShopLinkError } from "./oauth.ts";
 import {
   asksForAddressFields,
+  budgetInstrument,
   checkoutOf,
   ORDERS_PAGE,
   projectAccount,
   projectCheckout,
   projectOrders,
+  railLabel,
   readToolAnswer,
   record,
   STORE_DOMAIN,
   type ToolAnswer,
 } from "./project.ts";
-import { REVOKE, type ShopTool, type WireResponse } from "./rpc.ts";
+import { REVOKE, type ShopTool, ShopTransportError, type WireResponse } from "./rpc.ts";
 
 /** A disclosed caller (src/disclosure's DisclosedWallet in shape): logs, then sends, one request. */
 export interface ShopCaller {
@@ -47,15 +58,18 @@ export interface ShopCaller {
 
 /** The linked account's tokens, as the wallet vault keeps them (written by `intent wallet link shop`, plan G8). */
 export interface ShopCredentials {
-  /** The Shop OAuth client the tokens were issued to: revocation names it. */
+  /** The Shop OAuth client the tokens were issued to: refresh and revocation name it. */
   readonly clientId: string;
   readonly accessToken: string;
   readonly refreshToken: string | null;
+  /** When the access token expires (milliseconds since the epoch), or null/absent when Shop did not say. */
+  readonly expiresAt?: number | null;
 }
 
-/** The vault text for Shop credentials: `{"v":1,"client_id","access_token","refresh_token"}`. */
+/** The vault text for Shop credentials: `{"v":1,"client_id","access_token","refresh_token"[,"expires_at"]}`. */
 export function shopCredentialsText(credentials: ShopCredentials): string {
-  return JSON.stringify({ v: 1, client_id: credentials.clientId, access_token: credentials.accessToken, refresh_token: credentials.refreshToken });
+  const expires = typeof credentials.expiresAt === "number" ? { expires_at: credentials.expiresAt } : {};
+  return JSON.stringify({ v: 1, client_id: credentials.clientId, access_token: credentials.accessToken, refresh_token: credentials.refreshToken, ...expires });
 }
 
 /** Shop credentials from the vault text, or null when it holds none the adapter can use. */
@@ -69,14 +83,15 @@ export function parseShopCredentials(text: string): ShopCredentials | null {
   const v = record(value);
   if (v?.v !== 1 || typeof v.client_id !== "string" || v.client_id === "" || typeof v.access_token !== "string" || v.access_token === "") return null;
   const refresh = typeof v.refresh_token === "string" && v.refresh_token !== "" ? v.refresh_token : null;
-  return { clientId: v.client_id, accessToken: v.access_token, refreshToken: refresh };
+  const expiresAt = Number.isSafeInteger(v.expires_at) && (v.expires_at as number) > 0 ? (v.expires_at as number) : null;
+  return { clientId: v.client_id, accessToken: v.access_token, refreshToken: refresh, expiresAt };
 }
 
 /**
  * Body paths of a Shop MCP request whose values are digested in the log, besides the `authorization` header and
- * every key whose last word is `token` (privacy's isSecretKey): the payment instrument's credential, which is a
- * Shop Pay token under whatever name Shop gives it, and the checkout id of get_checkout and complete_checkout, which
- * can carry a credential (`?key=`).
+ * every key whose last word is `token` (privacy's isSecretKey): the payment instrument's credential (S1: Shop puts
+ * `credential {type, token}` on each instrument it offers), and the checkout id of get_checkout and
+ * complete_checkout, which carries a credential (`?key=`).
  */
 export const SHOP_SECRET_PATHS: readonly string[] = ["params.arguments.checkout.payment.instruments[0].credential", "params.arguments.id"];
 
@@ -92,21 +107,32 @@ export const SHOP_OPAQUE_IDS: readonly { readonly path: string; readonly pattern
 
 /**
  * Body paths of a request to Shop's account server whose values are digested in the log: the device code (token
- * requests), a refresh token and the token being revoked. privacy's secret keys already cover each one; they are
- * named here too, so the account server's credentials stay digested whatever privacy's list becomes.
+ * requests), a refresh token (a refresh request) and the token being revoked. privacy's secret keys already cover
+ * each one; they are named here too, so the account server's credentials stay digested whatever privacy's list
+ * becomes.
  */
 export const SHOP_ACCOUNTS_SECRET_PATHS: readonly string[] = ["device_code", "refresh_token", "token"];
+
+/** How long before its stated expiry an access token is refreshed. */
+export const REFRESH_MARGIN_MS = 60_000;
 
 export interface ShopAdapterOptions {
   readonly mcp: ShopCaller;
   readonly accounts: ShopCaller;
   /**
    * Null when the vault holds no usable tokens: every call then fails, and revoke sends nothing. Usable credentials
-   * always name the client the tokens were issued to, which is the one revocation names.
+   * always name the client the tokens were issued to, which is the one refresh and revocation name.
    */
   readonly credentials: ShopCredentials | null;
+  /**
+   * Called with the new tokens after each refresh, before the request is sent again: the caller points the MCP
+   * transport at the new access token and keeps the tokens in the vault. An error here fails the call.
+   */
+  readonly onCredentials?: (credentials: ShopCredentials) => Promise<void>;
   /** A UUID v4 for create_checkout; tests may fix it. */
   readonly newKey?: () => string;
+  /** Milliseconds since the epoch, for the access token's expiry; Date.now by default. */
+  readonly now?: () => number;
   /**
    * Where Shop's raw checkout ids are kept between processes (ADR-0019): the encrypted checkout vault in production,
    * so a restarted gateway can still reconcile a checkout it may have completed. In memory only by default.
@@ -116,21 +142,53 @@ export interface ShopAdapterOptions {
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const VARIANT = /^gid:\/\/shopify\/ProductVariant\/[0-9]{1,20}$/;
+/** The tools that only read: the only ones sent again after a token refresh. */
+const READS: ReadonlySet<ShopTool> = new Set(["get_account", "get_checkout", "search_orders"]);
+const RELINK = "Shop refused the token and it could not be refreshed: link the wallet again";
 
 export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
   const newKey = options.newKey ?? randomUUID;
+  const now = options.now ?? Date.now;
+  let current = options.credentials;
+
+  /** Exchanges the refresh token for new tokens; a refusal means the wallet has to be linked again. */
+  async function renew(): Promise<void> {
+    const credentials = current;
+    if (credentials === null || credentials.refreshToken === null) throw new WalletRailError(401, null, RELINK);
+    let renewed: ShopCredentials;
+    try {
+      renewed = await refreshTokens(options.accounts, credentials, now);
+    } catch (error) {
+      if (error instanceof ShopLinkError) throw new WalletRailError(401, null, RELINK);
+      throw error;
+    }
+    current = renewed;
+    await options.onCredentials?.(renewed);
+  }
+
+  const expiring = (): boolean => typeof current?.expiresAt === "number" && current.refreshToken !== null && now() >= current.expiresAt - REFRESH_MARGIN_MS;
 
   async function tool(name: ShopTool, args: unknown, purchase?: string, unless?: SendCondition): Promise<ToolAnswer> {
-    if (options.credentials === null) throw new WalletRailError(0, null, "no Shop token in the wallet vault: link the wallet again");
-    const response = await options.mcp.call(name, args, { ...(purchase === undefined ? {} : { purchase }), ...(unless === undefined ? {} : { unless }) });
-    return readToolAnswer(response);
+    if (current === null) throw new WalletRailError(0, null, "no Shop token in the wallet vault: link the wallet again");
+    if (expiring()) await renew();
+    const send = async (): Promise<ToolAnswer> =>
+      readToolAnswer(await options.mcp.call(name, args, { ...(purchase === undefined ? {} : { purchase }), ...(unless === undefined ? {} : { unless }) }));
+    try {
+      return await send();
+    } catch (error) {
+      if (!(error instanceof WalletRailError) || error.httpStatus !== 401) throw error;
+      // A 401 (S1: an expired or bad token) is refreshed; only a read is sent again, once.
+      await renew();
+      if (!READS.has(name)) throw new WalletRailError(401, null, "Shop refused the token; it was refreshed, and this request was not sent again");
+      return send();
+    }
   }
 
   function refused(answer: ToolAnswer): void {
-    if (answer.isError) throw new WalletRailError(200, null, "Shop refused the request");
+    if (answer.isError) throw new WalletRailError(200, null, railLabel(answer.railCode), answer.railCode);
   }
 
-  // Shop's checkout ids by their sha256 reference: an id can carry a credential (`?key=`), so it is never returned,
+  // Shop's checkout ids by their sha256 reference: an id carries a credential (`?key=`), so it is never returned,
   // recorded or logged in clear (SHOP_SECRET_PATHS digests it in each request). Held in memory, and in the checkout
   // id store (encrypted at rest in production) so a restarted gateway can still reach the checkout.
   const checkoutIds = new Map<string, string>();
@@ -162,7 +220,7 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
     async account() {
       const answer = await tool("get_account", {});
       refused(answer);
-      return projectAccount(answer.content).account;
+      return projectAccount(answer.content);
     },
 
     async createCheckout(request: CheckoutRequest) {
@@ -172,30 +230,26 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
           throw new TypeError("a Shop line is a ProductVariant gid and a positive quantity");
         }
       }
-      const account = await tool("get_account", {}, request.purchase);
-      refused(account);
-      const { savedAddressId } = projectAccount(account.content);
-      // No opaque id to choose delivery by: Shop would need the address fields, which the gateway never sends.
-      if (savedAddressId === null) throw new AddressFieldsRequiredError("delivery");
       const key = newKey();
       if (!UUID_V4.test(key)) throw new TypeError("a Shop idempotency key is a UUID v4");
-      const answer = await tool(
-        "create_checkout",
-        {
-          shop: request.storeDomain,
-          checkout: {
-            line_items: request.lines.map((l) => ({ item: { id: l.variantRef }, quantity: l.quantity })),
-            fulfillment: {
-              methods: [{ type: "shipping", destinations: [{ id: savedAddressId, type: "shipping_address" }], selected_destination_id: savedAddressId }],
-            },
-          },
-          meta: { "idempotency-key": key },
-        },
-        request.purchase,
-      );
+      let answer: ToolAnswer;
+      try {
+        answer = await tool(
+          "create_checkout",
+          { shop: request.storeDomain, checkout: { line_items: request.lines.map((l) => ({ item: { id: l.variantRef }, quantity: l.quantity })) }, meta: { "idempotency-key": key } },
+          request.purchase,
+        );
+      } catch (error) {
+        throw unconfirmed(error);
+      }
       if (asksForAddressFields(answer.content)) throw new AddressFieldsRequiredError("delivery");
       refused(answer);
-      return hold(answer, request.storeDomain, request.shipToPostalCode);
+      try {
+        return await hold(answer, request.storeDomain, request.shipToPostalCode);
+      } catch (error) {
+        // Shop answered without a checkout the gateway can hold: one may exist all the same.
+        throw error instanceof WalletRailError ? new CheckoutUnconfirmedError(error) : error;
+      }
     },
 
     async completeCheckout(checkout: CheckoutLocator, purchase: string, idempotencyKey: string, completeOptions: CompleteOptions) {
@@ -204,15 +258,14 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
       if (!UUID_V4.test(idempotencyKey)) throw new TypeError("a Shop idempotency key is a UUID v4");
       const id = await held(checkout);
       // The fresh read the completer precheck runs on (contract Appendix G step 1): this process, no cached read.
-      const current = await tool("get_checkout", { shop: checkout.storeDomain, id }, purchase);
-      refused(current);
-      const fresh = await hold(current, checkout.storeDomain, shipToPostalCode);
+      const read = await tool("get_checkout", { shop: checkout.storeDomain, id }, purchase);
+      refused(read);
+      const fresh = await hold(read, checkout.storeDomain, shipToPostalCode);
       const refusal = precheck?.(fresh) ?? null;
       if (refusal !== null) throw new CompletionRefusedError(refusal, fresh);
-      const raw = checkoutOf(current.content);
-      const offered = Array.isArray(record(raw.payment)?.instruments) ? (record(raw.payment)?.instruments as unknown[]).map(record) : [];
-      const instrument = offered.find((i) => i?.selected === true) ?? offered[0] ?? null;
-      if (instrument === null) throw new WalletRailError(200, null, "Shop offers no payment instrument for this checkout");
+      // The agent budget, never the card Shop offers beside it (S1 step 6).
+      const instrument = budgetInstrument(checkoutOf(read.content));
+      if (instrument === null) throw new CompletionRefusedError("no_budget_instrument", fresh);
       // Forwarded exactly as offered, so identity in it would leave the gateway: refuse before the send (K4).
       if (findIdentity(instrument).length > 0) throw new AddressFieldsRequiredError("payment");
       const answer = await tool(
@@ -243,22 +296,42 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
     },
 
     async orders() {
-      // One page and no filter: whether search_orders takes a date filter waits for S1, and a cursor would be a
-      // value from Shop sent back unread. The period is applied to the projected times (src/wallet checkOrders).
+      // One page and no filter; a cursor would be a value from Shop sent back unread. The period is applied to the
+      // projected times (src/wallet checkOrders).
       const answer = await tool("search_orders", { pagination: { limit: ORDERS_PAGE } });
       refused(answer);
       return projectOrders(answer.content);
     },
 
     async revoke() {
-      const credentials = options.credentials;
+      const credentials = current;
       if (credentials === null) return "not_sent";
-      const clientId = credentials.clientId;
-      const token = credentials.refreshToken ?? credentials.accessToken;
-      const hint = credentials.refreshToken === null ? "access_token" : "refresh_token";
-      const response = await options.accounts.call(REVOKE, { token, token_type_hint: hint, client_id: clientId });
-      // RFC 7009: 200 means the server holds the token revoked. Anything else is reported as not revoked (invariant 5).
-      return response.status === 200 ? "revoked" : "not_revoked";
+      // Both tokens: Shop answered 200 to the refresh token's revocation and kept the access token working (S1 step 12).
+      const tokens: [string, string][] = [...(credentials.refreshToken === null ? [] : [[credentials.refreshToken, "refresh_token"] as [string, string]]), [credentials.accessToken, "access_token"]];
+      let acknowledged = 0;
+      let failure: Error | null = null;
+      for (const [token, hint] of tokens) {
+        try {
+          const response = await options.accounts.call(REVOKE, { token, token_type_hint: hint, client_id: credentials.clientId });
+          // RFC 7009: 200 means the server holds the token revoked. Anything else is not revoked (invariant 5).
+          if (response.status === 200) acknowledged++;
+        } catch (error) {
+          failure ??= error instanceof Error ? error : new Error(String(error));
+        }
+      }
+      if (failure !== null && acknowledged === 0) throw failure;
+      return acknowledged === tokens.length ? "revoked" : "not_revoked";
     },
   };
+}
+
+/**
+ * What a failed create_checkout send means: refused by Shop (an HTTP 4xx answer, the token included) or never sent (no
+ * connection, refused by the log), so no checkout exists; or anything else (a timeout, a cut connection, a 5xx or an
+ * unreadable answer), so one may exist: CheckoutUnconfirmedError.
+ */
+function unconfirmed(error: unknown): unknown {
+  if (error instanceof ShopTransportError) return error.neverLeft ? error : new CheckoutUnconfirmedError(error);
+  if (error instanceof WalletRailError) return error.httpStatus === 0 || (error.httpStatus >= 400 && error.httpStatus < 500) ? error : new CheckoutUnconfirmedError(error);
+  return error;
 }
