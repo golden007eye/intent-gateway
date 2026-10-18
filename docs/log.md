@@ -11,34 +11,46 @@
 | `intent log --json` | One JSON object per action and per line, for scripts and `jq` (schema below). |
 
 ```text
-intent log · DEMO chain (test keys) · ~/.local/share/intent-gateway/demo · 33 entries
+intent log · DEMO chain (test keys) · ~/.local/share/intent-gateway/demo · 43 entries
 
-Friday 16 October 2026
-16:09:11  start     gateway started · keys signed by cloud-root-1 · valid until 2027-01-14  ✓ 2 receipts
-16:09:11  search    running shoes · under $120 · ZIP 94103                → 6 offers · ✓ receipt
-16:09:11  blocked   search for "alcohol": category excluded by your gateway policy  ✗ nothing sent
-16:09:11  cart      Budget Running Shoe ×1 · $41.98 · Resale Hub          → approval link  ✓ 2 receipts
-16:09:11  status    approval ap_xyCp…lXmw                                 → Intent Cloud says approved · ✓ receipt
-16:09:11  approved  $41.98 · passkey a295…1de0 (pinned now)               ✓ passkey proof checked
-16:09:11  cart      Road Runner 2 ×1 · $64.99 · Road Runners              → approval link  ✓ 2 receipts
-16:09:11  rejected  $64.99 · Road Runner 2 · approval ap_po2-…IqmW        → Intent Cloud says rejected · ✓ receipt
+Sunday 18 October 2026
+16:57:39  start     gateway started · keys signed by cloud-root-1 · valid until 2027-…  ✓ 2 receipts
+16:57:39  call      Shop search_catalog · catalog.context.ad…  ✓ answered 200 (no receipt: unsigned)
+16:57:39  call      Shop create_checkout · checkout.line_ite…  ✓ answered 200 (no receipt: unsigned)
+16:57:39  call      Shop get_checkout · id, shop, params._me…  ✓ answered 200 (no receipt: unsigned)
+16:57:39  call      Shop get_account · params._meta.io.model…  ✓ answered 200 (no receipt: unsigned)
+16:57:39  keys      key reads                                             ✓ receipt
+16:57:39  cart      at most $8.99                                         → approval link  ✓ receipt
+16:57:40  status    approval ap_boLs…Cy1b                   → Intent Cloud says approved · ✓ receipt
+16:57:40  approved  $8.99 · passkey 99ef…0ea3 (pinned now)                ✓ passkey proof checked
+16:57:40  call      Shop get_account · params._meta.io.model…  ✓ answered 200 (no receipt: unsigned)
+16:57:40  call      Storefront meta_json                       ✓ answered 200 (no receipt: unsigned)
+16:57:40  call      Shop get_checkout · id, shop, params._me…  ✓ answered 200 (no receipt: unsigned)
+16:57:40  outcome   outcome report sent to Intent Cloud · approval ap_boLs…Cy1b  ✓ receipt
+16:57:40  call      Shop get_checkout · id, shop, params._me…  ✓ answered 200 (no receipt: unsigned)
+16:57:40  call      Shop complete_checkout · checkout.paymen…  ✓ answered 200 (no receipt: unsigned)
+16:57:40  outcome   outcome report sent to Intent Cloud · approval ap_boLs…Cy1b  ✓ receipt
 
-Sent to Intent Cloud only: category, budget, offer, quantity, ZIP code, country.
-Never sent: your name, postal address, card.
+Sent to Intent Cloud only: account_key.crv, account_key.kty, account_key.x, binding.checks.checkout…
+Sent to Shop only: catalog.context.address_country, catalog.context.currency, catalog.filters.price…
+Sent to Storefront: no request fields.
 
-8 actions · 1 search · 2 carts · 2 status checks · 1 approval · 1 blocked · 9 receipts
-Details: intent log --demo -v · Machine-readable: intent log --demo --json · Integrity: intent verify --demo
+16 actions · 1 cart · 1 status check · 1 approval · 9 wallet calls · 6 receipts · 9 answered unsign…
+Details: log --demo -v · Machine-readable: log --demo --json · Integrity: verify --demo
+Run each as: npx -y intent-gateway@next <command>
 ```
+
+This is the demo's first purchase, on a terminal 100 columns wide: a search through Shop (a `call`, with nothing sent to Intent Cloud), the Shop checkout created and read back, the submit for approval, the passkey Approval, and the one-tap payment with its outcome reports.
 
 Each command in the last line starts with the invocation that runs this gateway (`intent`, `npx -y intent-gateway@next`, `node /abs/dist/main.js`); a long one is named once on a line of its own (`Run each as: … <command>`). That line is never cut to the terminal's width: on a terminal too narrow for it, each command gets a line of its own.
 
-What came back (`→ 6 offers`, the product title, total and merchant of a cart, `→ Intent Cloud says approved`, `rejected`) comes from the `observed` entries the gateway writes after each answer with a verified receipt: a summary of what Intent Cloud returns (the body is not covered by the receipt), kept on this machine and never sent (see [What came back](#what-came-back)). The `✓ receipt` after it is about the request: a receipt covers the request and the status it came back with, not the offers or the state in the body. A chain written before observations existed shows the values sent instead (`offer of_5mOm…t4wK ×1 · at most $41.98 · ZIP 94103`) and no `→ offers` or state.
+What came back (`→ approval link`, `→ Intent Cloud says approved`, `rejected`, and for an Intent Cloud search `→ 6 offers`) comes from the `observed` entries the gateway writes after each answer with a verified receipt: a summary of what Intent Cloud returns (the body is not covered by the receipt), kept on this machine and never sent (see [What came back](#what-came-back)). The `✓ receipt` after it is about the request: a receipt covers the request and the status it came back with, not the offers or the state in the body. A chain written before observations existed shows the values sent instead (`offer of_5mOm…t4wK ×1 · at most $41.98 · ZIP 94103`) and no `→ offers` or state.
 
 Each line's outcome is what the chain records for its requests: `✓ receipt` (a receipt came back), `⚠ sent, no receipt`, `⚠ not sent: no connection was made`, `⚠ maybe sent, no answer recorded` (the gateway stopped first, or is still waiting), `✗ answer discarded: no valid receipt`, `✗ nothing sent` (blocked), `✗ refused` (an answer that did not match what was asked), and for a call to a wallet destination `✓ answered 200 (no receipt: unsigned)` (`⚠` when the status is 400 or more): the destination answered with that status, recorded in a response entry; a wallet signs no receipt. `✓ passkey proof checked` marks an Approval the gateway verified before it chained it; `intent verify` re-checks it. The line "Sent to Intent Cloud only" lists every field of the requests shown that left or may have left. Each wallet destination with a request shown gets a line of its own, "Sent to Shop only: …": its tool arguments by name, then the tool name and the JSON-RPC envelope, and how many credentials went with them (such as the Shop token), which the log holds only as digests. The lines say what was logged as sent, never what a destination does with it. "Never sent: your name, postal address, card" is printed only after the gateway's buyer-identity check finds none in their logged values; otherwise the line names the request where it found one, or says which requests it could not check.
 
 Times and date headers are in the local time zone; `--utc` shows UTC. On a terminal the lines are cut to its width with `…`, the values first so the outcome stays visible; piped, nothing is cut. Without a UTF-8 locale the symbols are plain ASCII (`ok`, `!`, `x`, `->`).
 
-The values are the developer's own record of what left the machine: the category, product, must-haves, budget and ZIP code of a search, the offer handle, quantity and ZIP code of a cart. A request the gateway policy blocked keeps, in its `block` entry, the structured values the policy held back (`held`: the category, such as `alcohol`, the ZIP code, or a cart's offer title and merchant), so the line can name them; they never left the machine. The free text of a search's `product` is never kept: the buyer-identity check cannot tell a name in free text from a product name. A request blocked for buyer identity keeps no value at all: only its field names and the identity finding that held it back. A request the gateway refused to log as it was (a credential in the query, a body that is not plain JSON, a credential in a request to Intent Cloud; see [ADR-0014](adr/0014-log-before-send-every-destination.md)) is shown with that reason as `not logged as sent: …` and `✗ nothing sent`.
+The values are the developer's own record of what left the machine: the query, country, currency and price ceiling of a search through Shop (no postcode), the item and quantity of a Shop checkout, and for the checkout submitted to Intent Cloud the store, item, quantity, totals and currency, country and coarse postcode, checkout reference hash, completion mode and two public keys. A request the gateway policy blocked keeps, in its `block` entry, the structured values the policy held back (`held`: the category, such as `alcohol`, the ZIP code, or a cart's offer title and merchant), so the line can name them; they never left the machine. The free text of a search's `product` is never kept: the buyer-identity check cannot tell a name in free text from a product name. A request blocked for buyer identity keeps no value at all: only its field names and the identity finding that held it back. A request the gateway refused to log as it was (a credential in the query, a body that is not plain JSON, a credential in a request to Intent Cloud; see [ADR-0014](adr/0014-log-before-send-every-destination.md)) is shown with that reason as `not logged as sent: …` and `✗ nothing sent`.
 
 A credential in a request to a wallet destination is logged as `[redacted sha256:<hex>]`; every view shows it as `redacted (sha256 1a2b3c4d…)`, and `-v` lists each redacted header the same way. A value under a credential key that is not a redaction marker (a hand-edited chain, which `intent verify` fails) is never printed: the views and `--json` show `[a credential in clear, not shown: intent verify fails this entry]` instead. One request to Intent Cloud carries a credential too (ADR-0024): a hand-off checkout's `continue_url`, which holds the checkout's key. It is logged the same way, as `[redacted sha256:<hex>]` at `body.checkout.continue_url`, and that sha256 is the `continue_url_hash` the passkey signs; the request's `content_digest` and its receipt still name the bytes sent.
 
@@ -63,7 +75,7 @@ The timeline then lists only the kept actions, counts only them and says how man
 The actions group the chain's entries:
 
 - `start`: a gateway session entry and the key reads that follow it (`getMeta`, `getSignatureKeys`, `getKeyStatement`) with the key statement recorded. `keys` is the same reads and statement without a session start.
-- `search`: one `searchCatalog` request.
+- `search`: one `searchCatalog` request to Intent Cloud, made only when no Shop wallet is linked.
 - `cart`: one `createCart` request, the `createApproval` request after it, and the approval link the gateway gave the agent.
 - `status`: one `getApproval` request. When the state Intent Cloud returns for it is `rejected` or `expired`, that is the action's outcome, and the line reads `rejected` or `expired`.
 - `approval`: an Approval the gateway checked and chained, with the approver pin written with it, if it was the first.
@@ -115,9 +127,7 @@ A pause line ends with `✓ Intent Cloud acknowledged`, `⚠ not acknowledged by
 
 ## Orders the log does not name
 
-<!-- feature: wallet-check -->
-!!! planned "Checking Shop for orders the log does not name"
-    `intent wallet check shop` is in the CLI, but it cannot run for you yet: it needs a linked wallet, and Shop does not accept the gateway's own client yet (a formal registration is pending), so linking needs `INTENT_SHOP_CLIENT_ID` set explicitly to a client Shop accepts, such as Shop's public client for your own agent ([One-tap purchases](one-tap.md#how-to-turn-it-on)). The fields it reads from Shop's order list (`shopify_order_id`, `seller.domain`, `placed_at`, `totals`, `pagination.has_next_page`) are the ones the S1 spike saw on a real Shop account (2026-10-18); an order whose fields differ comes back with no total, origin or time, never with buyer details.
+`intent wallet check shop` needs a linked wallet. Shop does not accept the gateway's own client yet (a formal registration is pending), so link with `INTENT_SHOP_CLIENT_ID` set explicitly to a client Shop accepts, such as Shop's public client for your own agent ([One-tap purchases](one-tap.md#how-to-turn-it-on)). The fields it reads from Shop's order list (`shopify_order_id`, `seller.domain`, `placed_at`, `totals`, `pagination.has_next_page`) are the ones the S1 spike saw on a real Shop account (2026-10-18); an order whose fields differ comes back with no total, origin or time, never with buyer details.
 
 The log shows what went through this gateway. A linked Shop account can also be spent from in other ways: in the Shop app, by another agent, or by Shop's own agent payments. `intent wallet check shop` compares the two, on demand; nothing polls in the background.
 
@@ -153,15 +163,15 @@ The `observed` entry kind is new in this version: a gateway older than it reads 
 
 ## JSON lines
 
-Each line is one action. Fields are always present; `null` means the chain does not hold the value.
+Each line is one action. The example is a `search` action, an Intent Cloud search made without a linked Shop wallet. Fields are always present; `null` means the chain does not hold the value.
 
 ```json
 {"v":2,"time":"2026-10-16T17:27:37.000Z","seq":1,"seqs":[1,2,3],"action":"search","outcome":"acknowledged",
- "facts":{"category":"running shoes","must_haves":["road"],"budget_minor":12000,"currency":"USD","zip":"94103","country":"US",
-   "offers_count":3,"offers_hidden":0,"offers":[{"offer_handle":"of_…","title":"Budget Running Shoe","merchant":"Resale Hub","price_minor":3999,"shipping_minor":199,"currency":"USD"}]},
+ "facts":{"category":"stickers","must_haves":["holographic"],"budget_minor":2000,"currency":"USD","zip":"94107","country":"US",
+   "offers_count":3,"offers_hidden":0,"offers":[{"offer_handle":"of_…","title":"Holographic sticker","merchant":"stickers.example","price_minor":3999,"shipping_minor":199,"currency":"USD"}]},
  "blocked":[],
  "requests":[{"seq":1,"time":"2026-10-16T17:27:37.000Z","endpoint":"searchCatalog","method":"POST","path":"/v1/catalog/search",
-   "fields":{"category":"running shoes","must_haves":["road"],"budget_max.amount_minor":12000,"budget_max.currency":"USD","ship_to.country":"US","ship_to.postal_code":"94103"},
+   "fields":{"category":"stickers","must_haves":["holographic"],"budget_max.amount_minor":2000,"budget_max.currency":"USD","ship_to.country":"US","ship_to.postal_code":"94107"},
    "field_names":["category","must_haves","budget_max.amount_minor","budget_max.currency","ship_to.country","ship_to.postal_code"],
    "content_digest":"sha-256=:…:","keyid":"gw-…","delivery":"acknowledged",
    "response":{"seq":2,"kind":"receipt","status":200,"acknowledged":true,"signature_checked":true,"receipt_kid":"cloud-receipt-202610","reason":null},

@@ -13,7 +13,7 @@ share:
   ship_to: postcode_only
 ```
 
-Only a 5-digit ZIP leaves the gateway as the ship-to location, which is the minimum a search needs. Everything else is the baseline below. `intent policy show` prints the policy in force and where it came from.
+At most a 5-digit ZIP leaves the gateway as the ship-to location: a search through Shop sends only the country, and a submitted checkout carries the country and the coarse postcode (for the US, the 5-digit ZIP). Everything else is the baseline below. `intent policy show` prints the policy in force and where it came from.
 
 The policy file is `<data dir>/policy.yaml` (on Linux `~/.local/share/intent-gateway/policy.yaml`), or `<data dir>/demo/policy.yaml` in demo mode. Set `INTENT_POLICY` to use another path. A running gateway reads its policy at start; restart it after a change.
 
@@ -41,20 +41,20 @@ categories:
 completion: [handoff]         # handoff, one_tap, or both (the default)
 ```
 
-The offers Intent Cloud returns carry no category of their own, so the gateway checks each offer and cart against the category of the search that found it. When `categories.block` lists anything, a search must therefore name a category. A search for a product alone is not sent; `find_offers` asks the agent for the category.
+Offers carry no category of their own, so the gateway checks each offer and cart against the category of the search that found it. When `categories.block` lists anything, a search must therefore name a category. A search for a product alone is not sent; `find_offers` asks the agent for the category.
 
-The **baseline** is the loosest policy the gateway will run, and every loaded policy is combined with it: passkey approval, at most 3 items per cart, a 5-digit US ZIP as the only ship-to detail, the categories excluded under the rules Intent Cloud enforces (health and medical; alcohol, tobacco, cannabis, adult and weapons; gift cards, crypto, subscriptions and digital goods), and both completion modes.
+The **baseline** is the loosest policy the gateway will run, and every loaded policy is combined with it: passkey approval, at most 3 items per cart, a 5-digit US ZIP as the only ship-to detail, the categories excluded under the rules Intent Cloud enforces (health and medical; alcohol, tobacco, cannabis, adult and weapons; gift cards, crypto, subscriptions and digital goods), and both completion modes. In the preview, Intent Cloud also enforces a ceiling of $50 per order and $100 per week, in US dollars only; a policy limit above it changes nothing, since a checkout over the ceiling is refused at submit. The suggested caps are $20 per order and $40 per week: `intent policy add per-order-20` and `intent policy add weekly-40` ([Policy library](policy-library.md)). Spend limits are in US dollars and are never converted: a checkout in another currency is refused.
 
 ### Completion modes
 
 `completion` lists how an approved purchase may be completed:
 
-- `handoff`: the buyer leaves the confirm page for the merchant's checkout and pays there. A cart that names no mode is a hand-off.
-- `one_tap`: the gateway completes the purchase with the developer's own linked Shop account, after the passkey Approval ([One-tap purchases](one-tap.md)). Today this runs in demo mode only: one tap with your own account waits: Shop does not accept the gateway's own client yet (a formal registration is pending).
+- `handoff`: the buyer pays by hand on the checkout page (Shop's, for a Shop checkout). A cart that names no mode is a hand-off.
+- `one_tap`: the gateway pays the purchase from the agent budget of the developer's own linked Shop account, after the passkey Approval ([One-tap purchases](one-tap.md)).
 
-Absent means both. `completion: [handoff]` keeps every purchase a hand-off; a cart for any other mode is refused with the rule `completion`. With no linked wallet, or for a store one tap cannot reach, a cart is handed off; a policy without `handoff` (`completion: [one_tap]`) then refuses it. Like every other list, `completion` only narrows: combining two policies keeps the modes both allow, and `intent policy add` refuses a library policy that shares no mode with yours. Every purchase still needs your passkey Approval, whatever the mode.
+Absent means both. `completion: [handoff]` keeps every purchase a hand-off; a cart for any other mode is refused with the rule `completion`. The mode is chosen at `create_cart`, before the passkey: one tap when the policy allows it and the agent budget covers the total, otherwise a hand-off; a policy without `handoff` (`completion: [one_tap]`) then refuses it. When one tap cannot pay an approved purchase, the hand-off is a new cart that needs a second approval. Like every other list, `completion` only narrows: combining two policies keeps the modes both allow, and `intent policy add` refuses a library policy that shares no mode with yours. Every purchase still needs your passkey Approval, whatever the mode.
 
-For a one-tap purchase the per-order limit is the smaller of `per_order_usd` and the agent budget Shop returns for the account (in USD). When Shop shows no budget for the connection, one tap is refused before anything is sent to pay, and a new cart hands the purchase off: a budget is never assumed. As for every purchase, it counts against the daily and weekly limits from the moment it waits for approval, and stops counting only on evidence the gateway holds that nothing was charged.
+For a one-tap purchase the per-order limit is the smallest of `per_order_usd`, the agent budget Shop returns for the account and the ceiling. When Shop shows no budget for the connection, a budget is never assumed: the cart is a hand-off, if the policy allows one. As for every purchase, it counts against the daily and weekly limits from the moment it waits for approval, and stops counting only on evidence the gateway holds that nothing was charged.
 
 ## What is refused at load time
 
@@ -111,4 +111,5 @@ An `outbound` is a `search` (`category`, `must_haves`, `budget_usd`, `ship_to_zi
 
 - Turn off the passkey Approval for a purchase.
 - Send the buyer's name, postal address or card: the gateway never holds them.
-- Raise a limit above the rules Intent Cloud enforces.
+- Raise a limit above the rules Intent Cloud enforces, such as the preview ceiling of $50 per order and $100 per week.
+- Stop a program that reads the Shop token and pays Shop directly. The Shop budget is the only hard stop, because any program running as you can read the Shop token.
