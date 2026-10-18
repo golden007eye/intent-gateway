@@ -18,7 +18,12 @@ export const VIEWS = [
   ["verify", "Verify"],
 ] as const;
 
-export function renderPage(m: PanelModel): string {
+/** Render options: `pauseToken`, this panel run's token, shows the Pause button (the panel's only write, ADR-0023). */
+export interface RenderOptions {
+  readonly pauseToken?: string;
+}
+
+export function renderPage(m: PanelModel, options: RenderOptions = {}): string {
   const views: Record<(typeof VIEWS)[number][0], string> = {
     overview: overview(m),
     purchases: purchases(m),
@@ -30,9 +35,11 @@ export function renderPage(m: PanelModel): string {
   return (
     `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
     `<meta name="color-scheme" content="dark"><title>intent gateway panel${m.mode === "demo" ? " · demo" : ""}</title>` +
+    (options.pauseToken === undefined ? "" : `<meta name="intent-panel-token" content="${esc(options.pauseToken)}">`) +
     `<link rel="stylesheet" href="/app.css"><script src="/app.js" defer></script></head><body>` +
     `<a class="skip" href="#main">Skip to the content</a><div class="app">` +
     header(m) +
+    pauseBar(m, options.pauseToken !== undefined) +
     nav(m) +
     `<main id="main" tabindex="-1">` +
     VIEWS.map(
@@ -51,6 +58,31 @@ function header(m: PanelModel): string {
     `<header class="bar"><a class="brand" href="#/overview">${LOGO_SVG}<span class="product">gateway</span></a>${pill}` +
     live("meta", `<p class="meta">read-only · 127.0.0.1 · updated <time>${esc(m.updated)}</time></p>`) +
     `</header>`
+  );
+}
+
+/**
+ * The pause banner while paused ("Paused since <time>. Resume needs your passkey.", Intent Cloud's word on it, the
+ * purchases stopped); otherwise, on a panel run with a token, the Pause button. Nothing on a panel without one.
+ */
+function pauseBar(m: PanelModel, canPause: boolean): string {
+  const p = m.pause;
+  if (p === null) {
+    if (!canPause) return "";
+    return live(
+      "pause",
+      `<div class="pause-bar"><button type="button" class="pause-button" data-pause>Pause purchases</button>` +
+        `<p>Stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.</p></div>`,
+    );
+  }
+  const stopped =
+    p.stopped.length === 0 ? `<p>No open purchase was waiting.</p>` : `<p>Purchases stopped:</p><ul>${p.stopped.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`;
+  const refused = p.refusals === 0 ? "" : `<p>${String(p.refusals)} step${p.refusals === 1 ? "" : "s"} refused since the pause.</p>`;
+  return live(
+    "pause",
+    `<div class="pause-banner" role="status"><strong>${esc(p.banner)}</strong>` +
+      `<p class="tone-${p.cloudTone}">${esc(p.cloud)}</p>${stopped}${refused}` +
+      `<p>To resume: run <code>${esc(m.intent)} resume</code>, which opens the confirm page's /account for your passkey.</p></div>`,
   );
 }
 

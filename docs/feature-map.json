@@ -12,6 +12,7 @@
     "evidence-pack": { "command": "intent evidence" },
     "panel": { "command": "intent panel" },
     "doctor": { "command": "intent doctor" },
+    "pause": { "command": "intent pause" },
     "policy-show": { "command": "intent policy show" },
     "policy-add": { "command": "intent policy add" },
     "policy-test": { "command": "intent policy test" },

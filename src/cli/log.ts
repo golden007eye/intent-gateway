@@ -16,6 +16,7 @@ import {
 } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 import { withheldAt } from "../observation/index.ts";
+import { pauseReasonWords } from "../pause/index.ts";
 import { neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { type Io, line, type Outcome } from "./io.ts";
 import { formatTimeline, timelineFollow, type TimelineStyle, walletWords } from "./log-timeline.ts";
@@ -308,6 +309,24 @@ function describe(item: Item, demo: boolean): [string, string, Tone] {
         : ["FLAGGED", `${text(b.fingerprint)} is not the pinned approver; if it is your passkey, run ${INTENT} approver accept`, "bad"];
     case "wallet":
       return ["wallet", walletWords({ wallet_rail: text(b.rail), wallet_action: text(b.action), ...(typeof b.revoked === "boolean" ? { revoked: b.revoked } : {}) }, ", "), null];
+    case "pause":
+      return ["paused", `purchases paused here (from ${pauseFrom(b.from)}); create_cart and complete_checkout are refused until a passkey resume`, "warn"];
+    case "pause_sent": {
+      const sent = typeof b.disclosure_seq === "number" ? `#${String(b.disclosure_seq)}` : "not sent";
+      const counter = typeof b.counter === "number" ? `counter ${String(b.counter)}, ` : "";
+      const words = pauseReasonWords(text(b.reason));
+      if (b.result === "acknowledged") return ["pause sent", `${sent}: ${counter}${words}`, "good"];
+      if (b.result === "failed") return ["pause sent", `${sent}: ${counter}${words}; not retried (run ${INTENT} pause again)`, "bad"];
+      return ["pause sent", `${sent}: ${counter}${words}; retrying while ${INTENT} serve runs`, "warn"];
+    }
+    case "resume":
+      return ["resumed", "the local pause is cleared: `resumed` was typed at a terminal (unconfirmed, pending the next submit)", null];
+    case "resume_check":
+      return b.result === "repaused"
+        ? ["paused", "the next submit got paused from Intent Cloud: paused again here", "warn"]
+        : ["resumed", "the next submit was not refused as paused: the resume is confirmed", "good"];
+    case "refused":
+      return ["refused", `${text(b.step)}${typeof b.purchase === "string" ? ` (${b.purchase})` : ""}: refused: ${text(b.reason)} (${b.source === "intent_cloud" ? "by Intent Cloud" : "by the gateway; nothing sent"})`, "bad"];
     case "session":
       return ["session", b.mode === "demo" ? "demo chain (test keys, sample catalog)" : `gateway session ${text(b.id)} started (a local id, never sent)`, null];
     default:
@@ -450,4 +469,9 @@ function actionTail(start: readonly unknown[], flags: LogFlags): (items: readonl
     }
     return out.map((l) => l + "\n").join("");
   };
+}
+
+/** Who paused: the CLI, the panel, or Intent Cloud (a submit answered `paused`). */
+export function pauseFrom(from: unknown): string {
+  return from === "panel" ? "the panel" : from === "intent_cloud" ? "Intent Cloud" : "the CLI";
 }

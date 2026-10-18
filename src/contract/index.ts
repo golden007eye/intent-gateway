@@ -14,3 +14,14 @@ export {
   storePairProblem,
   type StorePairReason,
 } from "./store-pair.ts";
+export {
+  AccountKeyThumbprint,
+  isPausedRefusal,
+  PAUSE_CONTRACT_VERSION,
+  PAUSE_ENDPOINT,
+  PAUSE_SIGNING_PREFIX,
+  PauseAccepted,
+  PauseError,
+  PauseRequest,
+  pauseSigningBytes,
+} from "./pause.ts";

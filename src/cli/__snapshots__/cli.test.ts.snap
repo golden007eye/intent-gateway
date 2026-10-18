@@ -13,12 +13,12 @@ Connect an agent:
 Commands:
   intent serve [--http]             MCP server over stdio (the default), or Streamable HTTP
   intent init [--yes]               first run: check the setup, offer Shop one-tap, print the connect line
-  intent log                        each action: the values it sent, what came back, what was blocked
-                                    (-v, --json, --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
+  intent log                        each action: what it sent, what came back (-v, --json, --since 2h, --action, --last <n>, --follow, --utc)
   intent verify                     re-check the chain, receipts, approvals, this install (--skip-install-check: chain only)
   intent evidence <approval handle> one purchase's evidence pack (--out <file>); check it: verify --evidence <file>
   intent panel [--port <n>]         read-only local page: activity, purchases, approvals, policy, log, verify
   intent doctor                     check the setup; each problem comes with its fix
+  intent pause                      stop every purchase not paid yet (then: status shows it; resume, after your passkey resume)
   intent policy show                the active policy and its policy.lock
   intent policy add <name> [--yes]  narrow the policy with a library policy (shows the diff first)
   intent policy test <cases.yaml>   run test cases against the active policy

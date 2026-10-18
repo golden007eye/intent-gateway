@@ -25,6 +25,13 @@ export const ENTRY_KINDS = [
   "wallet",
   // The store pair check's verdict (contract 1.6.1, ADR-0020): a pass is reused for 24 h at most, a failure never.
   "store_pair",
+  // Pause (ADR-0023): the local pause and its resume, each send of the pause to Intent Cloud and its result, the check
+  // of an unconfirmed resume by the next submit, and every step refused because of a pause.
+  "pause",
+  "pause_sent",
+  "resume",
+  "resume_check",
+  "refused",
 ] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
 

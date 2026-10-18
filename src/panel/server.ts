@@ -1,8 +1,12 @@
-// The read-only panel: a GET-only HTTP server on 127.0.0.1 that serves the page (rendered from the chain on each
-// request), its stylesheet and script, and the chain as JSON.
+// The panel: an HTTP server on 127.0.0.1 that serves the page (rendered from the chain on each request), its
+// stylesheet and script, and the chain as JSON.
 //
-// It never writes: there is no route that takes input, every non-GET is 405, and the store is read with readChain,
-// which opens no lease. The Host check (421) stops a DNS-rebinding page from reading the log through the browser.
+// It reads the store with readChain, which opens no lease. Its one write is the Pause button (ADR-0023), only when
+// the caller passes `pause`: `POST /pause` with this run's random token in the `x-intent-panel-token` header, an Origin
+// that is the panel's own, and no cross-site Sec-Fetch-Site. A custom header cannot be sent cross-origin without a
+// CORS preflight the panel never answers, the token is only in the panel's own page, and no GET has a side effect.
+// Every other non-GET is 405. The Host check (421) stops a DNS-rebinding page from reading the log or the token.
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { lstatSync, readdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -53,6 +57,11 @@ export interface PanelOptions {
   verify?: () => Promise<VerifyResult>;
   /** Milliseconds since the epoch; defaults to Date.now. */
   now?: () => number;
+  /**
+   * The Pause button's action (src/pause: the local pause, then a send to Intent Cloud). Absent, the panel shows no
+   * button and takes no POST at all.
+   */
+  pause?: () => Promise<void>;
 }
 
 export interface Panel {
@@ -73,7 +82,7 @@ export async function startPanel(source: string | Pick<Config, "dataDir">, opts:
   }
   assertPrivate(dataDir);
   const intent = opts.intent ?? "intent";
-  const context: Context = { dataDir, intent, opts, verified: null };
+  const context: Context = { dataDir, intent, opts, verified: null, token: opts.pause === undefined ? null : randomBytes(32).toString("base64url") };
 
   let allowedHosts: ReadonlySet<string> = new Set();
   const server = createServer((req, res) => {
@@ -137,11 +146,37 @@ interface Context {
   readonly opts: PanelOptions;
   /** The last verify result and the chain head it was run for. */
   verified: { key: string; result: Promise<VerifyResult> } | null;
+  /** This run's Pause token, or null when the panel has no pause action. */
+  readonly token: string | null;
+}
+
+/** Whether a request may pause: this run's token, the panel's own Origin, and not a cross-site fetch. */
+function mayPause(req: IncomingMessage, ctx: Context, allowedHosts: ReadonlySet<string>): boolean {
+  if (ctx.token === null) return false;
+  const origin = req.headers.origin;
+  if (typeof origin !== "string" || !origin.startsWith("http://") || !allowedHosts.has(origin.slice("http://".length).toLowerCase())) return false;
+  const site = req.headers["sec-fetch-site"];
+  if (site !== undefined && site !== "same-origin") return false;
+  const given = req.headers["x-intent-panel-token"];
+  if (typeof given !== "string") return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(ctx.token);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, ctx: Context, allowedHosts: ReadonlySet<string>): Promise<void> {
   if (!allowedHosts.has((req.headers.host ?? "").toLowerCase())) {
     send(res, 421, "text/plain; charset=utf-8", "misdirected request: use the panel's own address\n");
+    return;
+  }
+  const path0 = (req.url ?? "/").split("?", 1)[0] ?? "/";
+  if (req.method === "POST" && path0 === "/pause" && ctx.opts.pause !== undefined) {
+    if (!mayPause(req, ctx, allowedHosts)) {
+      send(res, 403, "text/plain; charset=utf-8", "refused: the Pause button needs this panel's own page\n");
+      return;
+    }
+    await ctx.opts.pause();
+    send(res, 200, "application/json; charset=utf-8", JSON.stringify({ paused: true }));
     return;
   }
   if (req.method !== "GET") {
@@ -174,7 +209,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, ctx: Context, a
     send(res, 200, "application/json; charset=utf-8", JSON.stringify({ chain: view.chain, entries: items, view, intent: ctx.intent }));
     return;
   }
-  send(res, 200, "text/html; charset=utf-8", renderPage(await model(ctx, items)));
+  send(res, 200, "text/html; charset=utf-8", renderPage(await model(ctx, items), ctx.token === null ? {} : { pauseToken: ctx.token }));
 }
 
 async function model(ctx: Context, items: readonly unknown[]): Promise<ReturnType<typeof buildModel>> {

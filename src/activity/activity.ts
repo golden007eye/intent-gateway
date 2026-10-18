@@ -25,12 +25,14 @@
 // - approval_pending: handle, approval_url, total_minor, expires_at; approval: handle.
 // - approver_pin, approver_flag: fingerprint, handle, reason. keys: statement.kid, statement.expires_at.
 // - session: mode ("demo" on the first entry of a demo chain) or id.
+// - pause: from; pause_sent: result, reason (joined to its pause, with the `pause` disclosure it names); resume;
+//   resume_check: result (joined to its resume); refused: step, reason, source, purchase (ADR-0023).
 import { ObservedBody, type ObservedOffer, withheldAt } from "../observation/index.ts";
 import { bodyValue, findIdentity, holdsNestedSecret, isSecretKey, markerDigest, SCAN_DEPTH, sentOrderRefAt } from "../privacy/index.ts";
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
 /** What one action was. */
-export const ACTION_KINDS = ["start", "keys", "search", "cart", "status", "outcome", "approval", "blocked", "pin", "flagged", "wallet", "call", "unreadable"] as const;
+export const ACTION_KINDS = ["start", "keys", "search", "cart", "status", "outcome", "approval", "blocked", "pin", "flagged", "wallet", "call", "pause", "resume", "refused", "unreadable"] as const;
 export type ActionKind = (typeof ACTION_KINDS)[number];
 
 /**
@@ -187,6 +189,15 @@ export interface ActivityFacts {
   order_ref?: string;
   /** block: the values a policy block held back (never sent), e.g. {category: "alcohol"}. */
   held?: Record<string, unknown>;
+  /** pause: who paused (`cli`, `panel`, `intent_cloud`), and the latest send's result and reason (`pause_sent`). */
+  pause_from?: string;
+  pause_result?: string;
+  pause_reason?: string;
+  /** resume: `unconfirmed` until the next submit says `confirmed` or `repaused`. */
+  resume_state?: string;
+  /** refused: the step a pause stopped and who refused it (`gateway`, `intent_cloud`). */
+  refused_step?: string;
+  refused_by?: string;
   /** observed: the number facts an observation withheld as possible buyer identity (`total_minor`); shown as "withheld", never as 0. */
   withheld?: string[];
 }
@@ -324,6 +335,8 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
           activity = last("cart", (a) => !a.requests.some((r) => r.endpoint === "createApproval")) ?? open(item, "cart");
         } else if (endpoint === "getApproval") {
           activity = open(item, "status", handleFromPath(request.path));
+        } else if (endpoint === "pause") {
+          activity = last("pause") ?? open(item, "pause");
         } else if (endpoint === "reportOutcome") {
           // The gateway's own outcome report (contract 1.6.0): what it sent, never what Intent Cloud then did.
           activity = open(item, "outcome", handleFromPath(request.path));
@@ -472,6 +485,39 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
           ...(typeof source === "string" ? { outcome_source: source } : {}),
         });
         if (typeof b.order_ref === "string") f.order_ref = b.order_ref;
+        break;
+      }
+      case "pause":
+        open(item, "pause", { pause_from: text(b.from) });
+        break;
+      case "pause_sent": {
+        const pause = last("pause");
+        if (pause === undefined) break;
+        join(pause, item);
+        pause.facts.pause_result = text(b.result);
+        pause.facts.pause_reason = text(b.reason);
+        break;
+      }
+      case "resume":
+        open(item, "resume", { resume_state: "unconfirmed" });
+        break;
+      case "resume_check": {
+        const resume = last("resume", (a) => a.seq === b.resume_seq);
+        if (b.result === "repaused") {
+          open(item, "pause", { pause_from: "intent_cloud" });
+        }
+        if (resume === undefined) break;
+        join(resume, item);
+        resume.facts.resume_state = text(b.result);
+        break;
+      }
+      case "refused": {
+        const activity = open(item, "refused", {
+          refused_step: text(b.step),
+          refused_by: text(b.source),
+          ...(typeof b.purchase === "string" ? { approval_handle: b.purchase } : {}),
+        }, "refused");
+        activity.blocked.push(text(b.reason));
         break;
       }
       case "approver_flag":

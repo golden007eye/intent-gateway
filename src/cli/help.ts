@@ -22,12 +22,12 @@ Connect an agent:
 ${inline ? "Commands:" : `Commands (run each as: ${intent} <command>):`}
 ${pad("serve [--http]")}MCP server over stdio (the default), or Streamable HTTP
 ${pad("init [--yes]")}first run: check the setup, offer Shop one-tap, print the connect line
-${pad("log")}each action: the values it sent, what came back, what was blocked
-${"".padEnd(width)}(-v, --json, --since 2h|<date>, --action search,cart,…, --last <n>, --follow, --utc)
+${pad("log")}each action: what it sent, what came back (-v, --json, --since 2h, --action, --last <n>, --follow, --utc)
 ${pad("verify")}re-check the chain, receipts, approvals, this install (--skip-install-check: chain only)
 ${pad("evidence <approval handle>")}one purchase's evidence pack (--out <file>); check it: verify --evidence <file>
 ${pad("panel [--port <n>]")}read-only local page: activity, purchases, approvals, policy, log, verify
 ${pad("doctor")}check the setup; each problem comes with its fix
+${pad("pause")}stop every purchase not paid yet (then: status shows it; resume, after your passkey resume)
 ${pad("policy show")}the active policy and its policy.lock
 ${pad("policy add <name> [--yes]")}narrow the policy with a library policy (shows the diff first)
 ${pad("policy test <cases.yaml>")}run test cases against the active policy

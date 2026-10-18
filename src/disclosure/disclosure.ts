@@ -47,13 +47,15 @@ import type {
   Meta,
   OutcomeReport,
   OutcomeReportAccepted,
+  PauseAccepted,
+  PauseRequest,
   SearchRequest,
   SearchResponse,
 } from "../contract/index.ts";
 import type { Session } from "../signing/index.ts";
 import type { Store } from "../store/index.ts";
 import { type KeySet, type SentRequest, verifyReceipt } from "../trust/index.ts";
-import { createDisclosureCore, INTENT_CLOUD, type OutboundRequest, registerCore } from "./core.ts";
+import { createDisclosureCore, type DiscloseOptions, INTENT_CLOUD, type OutboundRequest, registerCore } from "./core.ts";
 
 /** A result as the adapter returned it, plus the seq of the `disclosure` entry that logged its request. */
 export type DisclosedResult<T> = CloudResult<T> & { readonly disclosureSeq: number };
@@ -72,6 +74,11 @@ export interface DisclosedCloud {
   createApproval(cartHandle: string): Promise<DisclosedResult<ApprovalCreated>>;
   getApproval(approvalHandle: string, signer?: Session): Promise<DisclosedResult<ApprovalStatus>>;
   reportOutcome(approvalHandle: string, report: OutcomeReport, signer?: Session): Promise<DisclosedResult<OutcomeReportAccepted>>;
+  /**
+   * `POST /v1/pause` (contract 1.7.0, ADR-0023): logged before it is sent like every call; its receipt is verified.
+   * `unless` is evaluated under the store lease: when it holds, nothing is logged or sent (DisclosureConflictError).
+   */
+  pause(request: PauseRequest, unless?: DiscloseOptions["unless"]): Promise<DisclosedResult<PauseAccepted>>;
 }
 
 export interface DisclosureOptions {
@@ -130,6 +137,7 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
   async function disclosed<T>(
     needsKeys: boolean,
     run: (beforeSend: (request: PreparedRequest) => Promise<void>) => Promise<CloudResult<T>>,
+    discloseOptions: DiscloseOptions = {},
   ): Promise<DisclosedResult<T>> {
     core.assertOpen();
     if (needsKeys) {
@@ -146,7 +154,7 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
       answered: (logged, ack) => acknowledge(logged.seq, sentRequest(logged.body), ack),
       answeredError: (logged, error) => acknowledge(logged.seq, sentRequest(logged.body), error),
       discard: (logged, ack, reason) => new DisclosureDiscardedError(logged.seq, ack.status, reason),
-    });
+    }, discloseOptions);
     return { ...result, disclosureSeq: seq };
   }
 
@@ -196,6 +204,7 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
     getApproval: (handle, signer) => disclosed(true, (beforeSend) => cloud.getApproval(handle, { beforeSend, ...signedBy(signer) })),
     reportOutcome: (handle, report, signer) =>
       disclosed(true, (beforeSend) => cloud.reportOutcome(handle, report, { beforeSend, ...signedBy(signer) })),
+    pause: (request, unless) => disclosed(true, (beforeSend) => cloud.pause(request, { beforeSend }), unless === undefined ? {} : { unless }),
   };
   registerCore(disclosedCloud, core);
   return disclosedCloud;

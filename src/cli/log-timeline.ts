@@ -259,6 +259,29 @@ function rawRow(a: Activity, g: Glyphs): Row {
       const ok = status !== null && status < 400;
       return { verb: "call", verbTone: "bold", values, outcome: `${ok ? g.ok : g.warn} answered${status === null ? "" : ` ${String(status)}`} (no receipt: unsigned)`, outcomeTone: ok ? "good" : "warn" };
     }
+    case "pause": {
+      const from = f.pause_from === "panel" ? "from the panel" : f.pause_from === "intent_cloud" ? "paused answer received from Intent Cloud" : "from the CLI";
+      const values = `purchases paused${sep}${from}`;
+      if (f.pause_result === "acknowledged") return { verb: "paused", verbTone: "warn", values, outcome: `${g.ok} Intent Cloud acknowledged`, outcomeTone: "good" };
+      if (f.pause_result === "failed") return { verb: "paused", verbTone: "warn", values, outcome: `${g.bad} refusal received from Intent Cloud (${f.pause_reason ?? "error"}); paused here only`, outcomeTone: "bad" };
+      if (f.pause_reason === "no_account_key") return { verb: "paused", verbTone: "warn", values, outcome: `${g.warn} not sent to Intent Cloud (no account key): paused here only`, outcomeTone: "warn" };
+      if (f.pause_result === "retrying") return { verb: "paused", verbTone: "warn", values, outcome: `${g.warn} not acknowledged by Intent Cloud (${f.pause_reason ?? "error"}): retrying`, outcomeTone: "warn" };
+      if (f.pause_from === "intent_cloud") return { verb: "paused", verbTone: "warn", values, outcome: `${g.ok} recorded`, outcomeTone: "good" };
+      return { verb: "paused", verbTone: "warn", values, outcome: `${g.warn} not sent to Intent Cloud yet`, outcomeTone: "warn" };
+    }
+    case "resume": {
+      const state = f.resume_state ?? "unconfirmed";
+      const values = "local pause cleared (`resumed` typed at a terminal)";
+      if (state === "confirmed") return { verb: "resumed", verbTone: "sage", values, outcome: `${g.ok} confirmed by the next submit`, outcomeTone: "good" };
+      if (state === "repaused") return { verb: "resumed", verbTone: "warn", values, outcome: `${g.bad} paused answer received from Intent Cloud: paused again`, outcomeTone: "bad" };
+      return { verb: "resumed", verbTone: "sage", values, outcome: `${g.warn} unconfirmed, pending the next submit`, outcomeTone: "warn" };
+    }
+    case "refused": {
+      const step = f.refused_step ?? "request";
+      const values = f.approval_handle === undefined ? step : `${step}${sep}approval ${short(f.approval_handle, g)}`;
+      const by = f.refused_by === "intent_cloud" ? "by Intent Cloud" : "by the gateway, nothing sent";
+      return { verb: "refused", verbTone: "bad", values, outcome: `${g.bad} refused: ${a.blocked.join("; ") || "paused"} (${by})`, outcomeTone: "bad" };
+    }
     case "unreadable":
       return { verb: "broken", verbTone: "bad", values: `line ${String(f.line ?? "?")} is not an entry (torn or edited)`, outcome: `${g.bad} run ${INTENT} verify`, outcomeTone: "bad" };
   }
