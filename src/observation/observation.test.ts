@@ -76,6 +76,23 @@ describe("observeCart and observeStatus", () => {
       currency: "USD",
     });
   });
+
+  it("an outcome's Shopify order gid that passes Luhn is kept whole; a card anywhere else is still withheld (ADR-0019)", () => {
+    // Fixed: a 14-digit order number that passes Luhn, so the card check alone reads the gid as a card.
+    const gid = "gid://shopify/Order/12345678901237";
+    const status = (orderRef: string, title = "Budget Running Shoe"): ApprovalStatus => ({
+      state: "approved",
+      display: { merchant: "Resale Hub", title, total: money(4198) },
+      outcome: { state: "ordered", source: "shop_api", assurance: "verified", order_ref: orderRef, observed_at: "2026-10-16T12:00:00Z" },
+    });
+    const kept = observeStatus(9, "ap_x", status(gid));
+    expect(kept).toMatchObject({ outcome: { order_ref: gid } });
+    expect(kept.withheld).toBeUndefined();
+    expect(observationProblem(kept)).toBeNull();
+    // Attack: the same digits bare at the order path, or the gid shape at another path, are withheld.
+    expect(observeStatus(9, "ap_x", status("12345678901237")).withheld).toEqual(["$.outcome.order_ref"]);
+    expect(observeStatus(9, "ap_x", status(gid, gid)).withheld).toEqual(["$.title"]);
+  });
 });
 
 describe("observationProblem", () => {

@@ -1,6 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { bodyText, bodyValue, findIdentity, type Finding, type FindingKind, holdsNestedSecret, isSecretKey, nestedSecrets, SCAN_DEPTH } from "./index.ts";
+import {
+  bodyText,
+  bodyValue,
+  findIdentity,
+  type Finding,
+  type FindingKind,
+  holdsNestedSecret,
+  isSecretKey,
+  nestedSecrets,
+  ORDER_REF_AT,
+  SCAN_DEPTH,
+  SHOPIFY_ORDER_GID,
+} from "./index.ts";
 
 // Invariant 3 (no buyer identity in the gateway): each positive is identity an agent might try to send out.
 const positives: [label: string, body: unknown, expected: Finding][] = [
@@ -230,5 +242,57 @@ describe("credentials inside JSON text and the scan depth (ADR-0014)", () => {
     const findings = findIdentity({ q: deep });
     expect(findings.map((f) => f.kind)).toEqual(["too_deep"]);
     expect(findIdentity({ q: [[["lamp"]]] })).toEqual([]);
+  });
+});
+
+describe("a Shopify order gid at an order path is not a card (ADR-0019)", () => {
+  // Fixed values: a 14-digit Shopify order number and a test PAN, each Luhn-valid, so either reads as a card in a gid.
+  const ORDER = "gid://shopify/Order/12345678901237";
+  const PAN_GID = "gid://shopify/Order/4111111111111111";
+  const report = { orderRefAt: ORDER_REF_AT.outcomeReport };
+
+  it("the whole gid, at exactly a named path, is clean; without the option it is a card", () => {
+    expect(findIdentity({ order_ref: ORDER })).toEqual([{ path: "$.order_ref", kind: "card" }]);
+    expect(findIdentity({ order_ref: ORDER }, report)).toEqual([]);
+    expect(findIdentity({ order_ref: PAN_GID }, report)).toEqual([]);
+    expect(findIdentity(ORDER, { orderRefAt: ORDER_REF_AT.projection })).toEqual([]);
+    expect(findIdentity({ outcome: { order_ref: ORDER, reported: { order_ref: ORDER } } }, { orderRefAt: ORDER_REF_AT.statement })).toEqual([]);
+    expect(findIdentity({ outcome: { order_ref: ORDER } }, { orderRefAt: ORDER_REF_AT.observation })).toEqual([]);
+    expect(SHOPIFY_ORDER_GID.test(ORDER)).toBe(true);
+  });
+
+  it("attack: a card in the gid shape at any other path is still a card", () => {
+    expect(findIdentity({ note: PAN_GID }, report)).toEqual([{ path: "$.note", kind: "card" }]);
+    expect(findIdentity({ items: [{ order_ref: PAN_GID }] }, report)).toEqual([{ path: "$.items[0].order_ref", kind: "card" }]);
+    expect(findIdentity({ outcome: { order_ref: PAN_GID } }, report)).toEqual([{ path: "$.outcome.order_ref", kind: "card" }]);
+    expect(findIdentity({ order_ref: PAN_GID }, { orderRefAt: ORDER_REF_AT.statement })).toEqual([{ path: "$.order_ref", kind: "card" }]);
+    // As a key, never exempt.
+    expect(findIdentity({ [PAN_GID]: 1 }, report)).toEqual([{ path: `$[${JSON.stringify(PAN_GID)}]`, kind: "card" }]);
+  });
+
+  it("attack: the same digits at the order path without the exact gid shape are a card", () => {
+    for (const value of [
+      "4111111111111111",
+      "12345678901237",
+      `${PAN_GID} x`,
+      `x ${PAN_GID}`,
+      `${PAN_GID}\n`,
+      "gid://shopify/Order/4111 1111 1111 1111",
+      "gid://shopify/Checkout/4111111111111111",
+      "GID://shopify/Order/4111111111111111",
+      "gid://shopify/Order/４１１１１１１１１１１１１１１１",
+    ]) {
+      expect(findIdentity({ order_ref: value }, report), value).toEqual([{ path: "$.order_ref", kind: "card" }]);
+    }
+    expect(findIdentity({ order_ref: 4111111111111111 }, report)).toEqual([{ path: "$.order_ref", kind: "card" }]);
+  });
+
+  it("attack: a card split across fields beside an exempt gid is still caught", () => {
+    expect(findIdentity({ order_ref: ORDER, a: "4111", b: "1111", c: "1111", d: "1111" }, report)).toEqual([{ path: "$", kind: "card" }]);
+    expect(findIdentity({ parts: ["4111", "1111", "1111", "1111"], order_ref: ORDER }, report)).toEqual([{ path: "$.parts", kind: "card" }]);
+  });
+
+  it("only the card check is skipped: every other finding at the path stays", () => {
+    expect(findIdentity({ order_ref: "jane@example.com" }, report)).toEqual([{ path: "$.order_ref", kind: "email" }]);
   });
 });

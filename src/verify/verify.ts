@@ -9,7 +9,7 @@ import { ApprovalHandle, ApprovalProof, ReceiptRequest } from "../contract/index
 import { canonicalize, parseIntegerJson, sha256Hex } from "../jcs/index.ts";
 import { observationProblem } from "../observation/index.ts";
 import { bindingV1, type CloudOutcomeEntry, COMPLETE_CHECKOUT, type LocalOutcomeEntry, mayHaveSent, OutcomeEntry, readCloudOutcome } from "../outcome/index.ts";
-import { bodyValue, findIdentity, isCredentialHeader, markerDigest, nestedSecrets, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
+import { bodyValue, findIdentity, isCredentialHeader, ORDER_REF_AT, markerDigest, nestedSecrets, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
@@ -530,7 +530,7 @@ function cloudOutcomeProblem(
   } catch {
     return "holds a statement that is not canonical JSON";
   }
-  if (findIdentity(statement).length > 0) return "holds a statement with what looks like buyer identity";
+  if (findIdentity(statement, { orderRefAt: ORDER_REF_AT.statement }).length > 0) return "holds a statement with what looks like buyer identity";
   const stated = record(record(statement).outcome);
   const cloud = entry.cloud;
   if (cloud === null || cloud.state !== stated.state || cloud.source !== stated.source || cloud.assurance !== stated.assurance) {

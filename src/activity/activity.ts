@@ -26,7 +26,7 @@
 // - approver_pin, approver_flag: fingerprint, handle, reason. keys: statement.kid, statement.expires_at.
 // - session: mode ("demo" on the first entry of a demo chain) or id.
 import { ObservedBody, type ObservedOffer, withheldAt } from "../observation/index.ts";
-import { bodyValue, findIdentity, holdsNestedSecret, isSecretKey, markerDigest, SCAN_DEPTH } from "../privacy/index.ts";
+import { bodyValue, findIdentity, holdsNestedSecret, isSecretKey, markerDigest, SCAN_DEPTH, sentOrderRefAt } from "../privacy/index.ts";
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
 /** What one action was. */
@@ -549,7 +549,7 @@ export function summarise(items: readonly unknown[], activities: readonly Activi
       // A wallet body is checked as the core checked it: whole, with its MCP tool name exempt (flattened, `params.name` reads as a name key).
       let found;
       if (r.destination === INTENT_CLOUD) {
-        found = findIdentity(r.fields);
+        found = findIdentity(r.fields, { orderRefAt: sentOrderRefAt(r.endpoint, true) });
       } else {
         bodies ??= bodiesBySeq(items);
         found = findIdentity(bodies.get(r.seq) ?? r.fields, { mcpEnvelope: true });

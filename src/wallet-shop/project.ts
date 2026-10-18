@@ -14,7 +14,7 @@
 //
 // The field names are the ones Shop returned in the S1 spike (2026-10-18; UCP 2026-08-25).
 import { checkoutRefHash } from "../contract/index.ts";
-import { findIdentity } from "../privacy/index.ts";
+import { findIdentity, ORDER_REF_AT } from "../privacy/index.ts";
 import {
   RAIL_CODE,
   type ShipToMatch,
@@ -225,7 +225,8 @@ function projected(checkout: Json, checkoutRef: string, requestedStore: string, 
     lines: lines(checkout.line_items),
     total: total(checkout),
     shipTo: shipTo(checkout, shipToPostalCode),
-    orderRef: typeof orderId === "string" && REF.test(orderId) && findIdentity(orderId).length === 0 ? orderId : null,
+    // A `gid://shopify/Order/<digits>` is not read as a card (ORDER_REF_AT): its order number passes Luhn one time in ten.
+    orderRef: typeof orderId === "string" && REF.test(orderId) && findIdentity(orderId, { orderRefAt: ORDER_REF_AT.projection }).length === 0 ? orderId : null,
     budgetOffered: budgetInstrument(checkout) !== null,
   };
 }

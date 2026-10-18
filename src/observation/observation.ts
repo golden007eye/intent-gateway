@@ -8,10 +8,12 @@
 // and its path listed in `withheld` (invariant 3: what we never hold, we cannot leak). Pure; no I/O.
 import { z } from "zod";
 import { type ApprovalCreated, type ApprovalStatus, type Cart, CompletionMode, OutcomeSource, OutcomeState, type SearchResponse } from "../contract/index.ts";
-import { findIdentity } from "../privacy/index.ts";
+import { findIdentity, ORDER_REF_AT } from "../privacy/index.ts";
 
 /** At most this many offers of a search are kept in its observation; `offers_count` still counts them all. */
 export const OBSERVED_OFFERS_MAX = 10;
+/** The outcome's order gid is not read as a card (ADR-0019): its order number passes Luhn about one time in ten. */
+const ORDER_REFS = { orderRefAt: ORDER_REF_AT.observation };
 /** What replaces a value findIdentity flagged. */
 export const WITHHELD = "[withheld]";
 
@@ -187,7 +189,7 @@ function outcomeSummary(o: NonNullable<ApprovalStatus["outcome"]>) {
 export function observationProblem(body: unknown): string | null {
   const parsed = ObservedBody.safeParse(body);
   if (!parsed.success) return `is not an observation (${parsed.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ")})`;
-  const found = findIdentity(body);
+  const found = findIdentity(body, ORDER_REFS);
   if (found.length > 0) return `holds what looks like buyer identity (${found.map((f) => `${f.kind} at ${f.path}`).join(", ")})`;
   return null;
 }
@@ -203,7 +205,7 @@ export function withheldAt(withheld: readonly string[] | undefined, path: string
 
 /** Replaces each value findIdentity flags with WITHHELD and lists its path; the keys are fixed, so only values can be. */
 function guarded(body: ObservedBody): ObservedBody {
-  const findings = findIdentity(body);
+  const findings = findIdentity(body, ORDER_REFS);
   if (findings.length === 0) return body;
   const copy = structuredClone(body) as Record<string, unknown>;
   const withheld: string[] = [];
@@ -214,7 +216,7 @@ function guarded(body: ObservedBody): ObservedBody {
   }
   const result = ObservedBody.parse({ ...copy, withheld: withheld.sort() });
   // A finding the replacement did not clear (a container-level split card) withholds every number under it.
-  if (findIdentity(result).length > 0) throw new Error("an observation still looks like buyer identity after withholding");
+  if (findIdentity(result, ORDER_REFS).length > 0) throw new Error("an observation still looks like buyer identity after withholding");
   return result;
 }
 

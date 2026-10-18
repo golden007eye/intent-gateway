@@ -10,7 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type CatalogItem, type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
-import { connectCloud, connectShop, type DisclosedCloud } from "../disclosure/index.ts";
+import { buildActivity } from "../activity/index.ts";
+import { connectCloud, connectShop, type DisclosedCloud, DisclosureBlockedError } from "../disclosure/index.ts";
 import { buildModel } from "../panel/index.ts";
 import { loadPolicy } from "../policy/index.ts";
 import { findIdentity } from "../privacy/index.ts";
@@ -1049,5 +1050,101 @@ describe("a checkout id that reads as a card by chance (the flaky M2 run's root 
     const audit = await fsp.readFile(join(base.dir, "audit.jsonl"), "utf8");
     expect(audit).not.toContain("4111111111111111");
     expect(audit).not.toContain("5500000000000004");
+  });
+});
+
+describe("a Shopify order number that passes Luhn (ADR-0019: the order gid exemption)", () => {
+  // Fixed, never random: 14 digits that pass Luhn (asserted below), so the card check alone reads the gid as a card.
+  const ORDER_NUMBER = "12345678901237";
+  const GID = `gid://shopify/Order/${ORDER_NUMBER}`;
+  const reportBodies = (chain: Entry[]) =>
+    ofKind(chain, "disclosure")
+      .filter((d) => d.endpoint === "reportOutcome")
+      .map((d) => JSON.parse(Buffer.from(String(d.body_b64), "base64").toString("utf8")) as Record<string, unknown>);
+
+  it("flows end to end: projected, ordered, reported and logged, and both verify and verify --evidence pass", async () => {
+    expect(findIdentity({ order_ref: GID }).map((f) => f.kind)).toEqual(["card"]);
+    const base = await setup({ faults: { orderNumber: ORDER_NUMBER } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    const done = completionOf(await status(p, handle));
+    expect(done.state).toBe("ordered");
+    expect(done.order_ref).toBe(GID);
+    // A later read takes Intent Cloud's outcome: its statement is kept (not refused as identity), its observation whole.
+    await status(p, handle);
+    const chain = await chainOf(base);
+    expect(ofKind(chain, "block")).toEqual([]);
+    expect(localOutcomes(chain).at(-1)).toMatchObject({ state: "ordered", order_ref: GID });
+    // The ordered report was logged with the gid before it left, and Intent Cloud received it.
+    expect(reportBodies(chain).find((r) => r.state === "ordered")?.order_ref).toBe(GID);
+    expect(JSON.stringify(reportsAt(base, handle))).toContain(GID);
+    const cloudOutcomes = ofKind(chain, "outcome").filter((o) => o.basis === "cloud");
+    expect(cloudOutcomes.length).toBeGreaterThan(0);
+    expect(cloudOutcomes.filter((o) => o.refused_by === "identity")).toEqual([]);
+    expect(cloudOutcomes.every((o) => o.statement_verified === true && typeof o.statement_jcs === "string" && o.statement_jcs.includes(GID))).toBe(true);
+    expect(ofKind(chain, "observed").filter((o) => o.withheld !== undefined)).toEqual([]);
+    expect(buildActivity(chain).summary.identity.findings).toEqual([]);
+    const verified = await verify(base);
+    expect(verified.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(verified.exitCode).toBe(0);
+    const pack = buildEvidence(chain, handle, [base.fake.keys.rootPin]);
+    const evidence = runVerifyEvidence({ text: packText(pack), pinnedRootKeys: [base.fake.keys.rootPin] });
+    expect(evidence.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(evidence.exitCode).toBe(0);
+  });
+
+  it("attack: verify --evidence still flags a card in the gid shape at another field, and the bare digits at order_ref", async () => {
+    const base = await setup({ faults: { orderNumber: ORDER_NUMBER } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    // A hand-written chain (new hashes): the ordered report's logged body edited, as an attacker or a bug would.
+    const edited = async (edit: (report: Record<string, unknown>) => Record<string, unknown>) => {
+      const copy = join(await fsp.mkdtemp(join(tmpdir(), "one-tap-gid-")), "data");
+      const out = await openStore(copy, { clock: base.now });
+      for (const e of await chainOf(base)) {
+        const b = body(e);
+        if (e.kind === "disclosure" && b.endpoint === "reportOutcome") {
+          const report = JSON.parse(Buffer.from(String(b.body_b64), "base64").toString("utf8")) as Record<string, unknown>;
+          if (report.state === "ordered") {
+            await out.append(e.kind, { ...b, body_b64: Buffer.from(JSON.stringify(edit(report)), "utf8").toString("base64") });
+            continue;
+          }
+        }
+        await out.append(e.kind, e.body);
+      }
+      const chain = out.entries();
+      await out.close();
+      const pack = buildEvidence(chain, handle, [base.fake.keys.rootPin]);
+      return runVerifyEvidence({ text: packText(pack), pinnedRootKeys: [base.fake.keys.rootPin] }).checks.find((c) => c.name === "purchase")?.details.join("\n") ?? "";
+    };
+    expect(await edited((r) => r)).not.toMatch(/buyer identity/);
+    expect(await edited((r) => ({ ...r, note: "gid://shopify/Order/4111111111111111" }))).toMatch(/buyer identity \(card at \$\.note\)/);
+    expect(await edited((r) => ({ ...r, order_ref: ORDER_NUMBER }))).toMatch(/buyer identity \(card at \$\.order_ref\)/);
+    expect(await edited((r) => ({ ...r, order_ref: `gid://shopify/Order/4111111111111111 x` }))).toMatch(/buyer identity \(card at \$\.order_ref\)/);
+    expect(await edited((r) => ({ ...r, a: "4111", b: "1111", c: "1111", d: "1111" }))).toMatch(/buyer identity \(card at \$\)/);
+  });
+
+  it("attack: a card number at the report's order_ref without the gid prefix is blocked before it leaves", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    const report = (order_ref: string) => ({
+      report_id: `or_${randomBytes(16).toString("hex")}`,
+      completing_report_id: `or_${"b".repeat(22)}`,
+      state: "failed",
+      source: "gateway_precheck",
+      order_ref,
+      observed_at: new Date(base.now()).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    });
+    const sentBefore = reportsAt(base, handle).length;
+    for (const ref of ["4111111111111111", ORDER_NUMBER]) {
+      await expect(p.real.reportOutcome(handle, report(ref) as never)).rejects.toThrow(DisclosureBlockedError);
+    }
+    const blocks = ofKind(await chainOf(base), "block").filter((b) => b.endpoint === "reportOutcome");
+    expect(blocks).toHaveLength(2);
+    expect(blocks.every((b) => (b.blocked as string[]).includes("card at $.order_ref"))).toBe(true);
+    expect(reportBodies(await chainOf(base)).filter((r) => r.completing_report_id === `or_${"b".repeat(22)}`)).toEqual([]);
+    expect(reportsAt(base, handle)).toHaveLength(sentBefore);
   });
 });
