@@ -100,7 +100,7 @@ What this does **not** cover: `intent verify` proves what the gateway sent, what
 ## What it does not do
 
 - It does not store or forward the buyer's name, postal address or card. The buyer gives those to the merchant at checkout, or keeps them in their Shop account for one tap.
-- It holds no money: no custody, no crypto wallet. With one tap, payment is between the Shop account and the merchant.
+- It holds no money: no custody, no crypto wallet. With one tap, the gateway sends no payment details; Shop's checkout charges the Shop account.
 - It cannot buy without a person. Every purchase needs one passkey-signed Approval, and a policy that turns approval off is rejected at load time.
 - It ships to US addresses only.
 

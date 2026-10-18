@@ -14,7 +14,7 @@ With one tap, the buyer approves a purchase with their passkey and the gateway c
 
 <!-- feature: one-tap -->
 !!! planned "One tap with your own Shop account"
-    The gateway has no Shop client built in. Shop's public device-flow client is for a shopper's own agent, and a gateway shipped to others needs a client registered with Shop; that registration is being arranged. Until it exists, one tap runs in demo mode only, and the maintainers use their own test account to check the Shop route. Every purchase outside the demo is handed off to the merchant's checkout.
+    The gateway has no Shop client built in. Shop's public device-flow client is for a shopper's own agent, and a gateway shipped to others needs a client registered with Shop; that registration is being arranged. Until it exists, one tap runs in demo mode only. Every purchase outside the demo is handed off to the merchant's checkout.
 
 ## How to turn it on
 
@@ -43,7 +43,7 @@ The per-order limit is the smaller of your policy's `per_order_usd` and the budg
 
 ## What Shop holds, and what the gateway sends
 
-Shop, not the gateway, holds the buyer's card, saved addresses and Shop budget, and gives the merchant what the order needs, under Shop's terms. The gateway never sees or sends them (invariant 3):
+Shop, not the gateway, holds the buyer's card, saved addresses and Shop budget. The gateway never sees or sends them (invariant 3):
 
 - It chooses delivery by a saved-address id, an opaque id from the Shop account, never by address fields. If Shop asks for the fields, the step fails and nothing is sent.
 - It keeps from each Shop answer only the fields it names (status, lines, total, store, order id, the ZIP as `match` or `differs`) and drops the rest on receipt.
@@ -51,7 +51,7 @@ Shop, not the gateway, holds the buyer's card, saved addresses and Shop budget, 
 
 A dispute about a charge, a delivery or a refund is between the buyer, Shop and the merchant. What the gateway gives you is the record: `intent evidence <approval handle>` writes the purchase's [evidence pack](evidence.md), which anyone can check offline.
 
-Shop's terms allow an agent on a shopper's own account for personal use. Use one tap with your own Shop account only, for personal use only unless authorised by Shopify.
+Shop's terms limit use to "personal, individual shopping use only, unless separately authorized by Shopify". Use one tap with your own Shop account only, within those terms.
 
 ## What the gateway keeps
 

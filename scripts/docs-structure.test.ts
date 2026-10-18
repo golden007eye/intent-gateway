@@ -35,7 +35,7 @@ const THREAT_STATEMENTS = [
 
 const OUT_OF_SCOPE_ITEMS = ["**TLS fingerprint.**", "**Carrier-NAT tier sharing.**", "**Clean tail truncation.**"];
 
-// The one-tap risks left open (AC-X3): each named in the Known risks section until it is closed.
+// The one-tap risks left open: each named in the Known risks section until it is closed.
 const KNOWN_RISK_ITEMS = [
   "**The Shop token at rest.**",
   "**The legal status of the Shop route.**",
