@@ -72,6 +72,8 @@ The actions group the chain's entries:
 - `wallet`: a wallet change on this machine: the Shop wallet linked, or unlinked (`intent wallet unlink shop` deletes its vault file) with whether Shop confirmed revoking the token (`token revoked at Shop`) or not (`token not revoked (deleted here only)`); or a Shop check (`intent wallet check shop`, [below](#orders-the-log-does-not-name)): how many orders Shop reported and how many no purchase in the log names.
 - `call`: one request to a wallet destination (Shop) and its response entry: the operation, its argument names, and the status that came back. A call has no receipt; one without a response entry is `maybe sent`.
 
+A search with a linked Shop wallet (the [search seam](adr/0021-search-seam.md)) is a `call` to Shop, `search_catalog`, and no `search` action: nothing is sent to Intent Cloud for it. Its argument names are the query text, the country and currency context, the price ceiling, the ships-to country and the page size; no postcode. Shop's answer is logged as a status, a sha256 and a size, like every Shop answer.
+
 A cart or status check the gateway refused after an answer (the cart, snapshot or proof did not match) carries outcome `refused` and the reasons in `blocked`.
 
 ## A one-tap purchase

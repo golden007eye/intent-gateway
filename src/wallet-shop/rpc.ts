@@ -23,8 +23,8 @@ export const DEFAULT_SHOP_AUTH_URL = "https://accounts.shop.app/";
  * Shop's public client for a shopper's own agent, is used only when INTENT_SHOP_CLIENT_ID names it.
  */
 export const DEFAULT_SHOP_CLIENT_ID = "https://gateway.intentai.shop/shop-client.json";
-/** The only Shop tools the gateway calls (plan G7a). Any other tool Shop advertises, a spend request included, is never called. */
-export const SHOP_TOOLS = ["get_account", "create_checkout", "complete_checkout", "get_checkout", "search_orders"] as const;
+/** The only Shop tools the gateway calls (plan G7a; search_catalog since G5). Any other tool Shop advertises, a spend request included, is never called. */
+export const SHOP_TOOLS = ["get_account", "create_checkout", "complete_checkout", "get_checkout", "search_orders", "search_catalog"] as const;
 export type ShopTool = (typeof SHOP_TOOLS)[number];
 /** The account server's operations, each a form POST: revocation, and the device flow of `intent wallet link shop` (plan G8). */
 export const REVOKE = "revoke";
