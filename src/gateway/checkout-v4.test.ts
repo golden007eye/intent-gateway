@@ -198,6 +198,36 @@ describe("create_cart with a linked Shop wallet: the 1.7.0 submit", () => {
     expect(new URL(request.checkout.continue_url ?? "").host).toBe(FAKE_STORE);
   });
 
+  it("attack: an approved hand-off is never paid by the gateway: no completion entry and no complete_checkout", async () => {
+    const h = await setup({ faults: { ineligible: true } });
+    const result = await submitted(h);
+    expect(result.checkout?.completion_mode).toBe("handoff");
+    // Shop could pay it now: the signed mode still decides.
+    h.shop.faults.ineligible = false;
+    expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey).status).toBe(200);
+    expect((await status(h, result.approval_handle)).status).toBe("approved");
+    expect((await status(h, result.approval_handle)).status).toBe("approved");
+    expect(h.store.entries().some((e) => e.kind === "completion" || e.kind === "complete_attempt")).toBe(false);
+    expect(completes(h)).toBe(0);
+  });
+
+  it("a v4 approval counts against the weekly cap by its signed total: the next purchase is held to the cap, not refused as bad history", async () => {
+    const h = await setup({ policy: "version: 1\napproval: passkey\nspend:\n  per_week_usd: 15\n" });
+    const first = await submitted(h);
+    expect(h.fake.approveWithPasskey(first.approval_handle, h.passkey).status).toBe(200);
+    const done = await status(h, first.approval_handle);
+    if (done.status !== "approved") throw new Error(done.message);
+    expect(done.completion?.state).toBe("ordered");
+    // $8.99 spent; another $8.99 passes $15 a week. Before the fix the v4 total read as NaN: history_invalid on everything.
+    const found = await h.gateway.findOffers(STICKERS);
+    expect(found.message).not.toContain("history_invalid");
+    const wide = await setup({ policy: "version: 1\napproval: passkey\nspend:\n  per_week_usd: 30\n" });
+    const a = await submitted(wide);
+    expect(wide.fake.approveWithPasskey(a.approval_handle, wide.passkey).status).toBe(200);
+    await status(wide, a.approval_handle);
+    expect((await cart(wide)).status).toBe("approval_needed");
+  });
+
   it("attack: the hand-off page's checkout key is a credential: sent to Intent Cloud, found nowhere in the data dir or any output", async () => {
     const h = await setup({ faults: { ineligible: true } });
     const outputs: unknown[] = [];
@@ -320,6 +350,8 @@ describe("create_cart with a linked Shop wallet: the 1.7.0 submit", () => {
     for (const code of RefusalCode.options) {
       expect(REFUSAL_CODE_WORDS[code]).toMatch(/^Intent Cloud answered that .*Nothing was bought/);
     }
+    // Contract 1.7.0 final: there is no unpin, so the line names the recovery, a new account key.
+    expect(REFUSAL_CODE_WORDS.account_key_other_buyer).toMatch(/no unpin.*move account-key\.json out of the gateway's data directory, then run `intent init`/);
   });
 
   it("paused at Intent Cloud: 409 paused on the submit is `refused: paused (by Intent Cloud)`, listed for intent status", async () => {

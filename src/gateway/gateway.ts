@@ -1776,7 +1776,10 @@ export const REFUSAL_CODE_WORDS: Readonly<Record<RefusalCode, string>> = {
   category_excluded: "Intent Cloud answered that this item is in a category it excludes (health and medical, age-restricted, financial or digital goods). Nothing was bought.",
   ceiling_order: "Intent Cloud answered that this order is above its per-order ceiling for the currency. Nothing was bought.",
   ceiling_week: "Intent Cloud answered that this order would pass the buyer's weekly ceiling for the currency. Nothing was bought.",
-  account_key_other_buyer: "Intent Cloud answered that this gateway's account key belongs to another Intent Cloud account (the first buyer who approved with it), so another buyer's passkey cannot approve its checkouts. Nothing was bought.",
+  // Contract 1.7.0 final: there is no unpin; the developer's recovery is a new account key. `intent init` never replaces
+  // a key (ADR-0022), so the key file is moved away first.
+  account_key_other_buyer:
+    `Intent Cloud answered that this gateway's account key is pinned to another buyer (the first buyer who approved with it), and Intent Cloud has no unpin. Nothing was bought. To recover, make a new account key: move account-key.json out of the gateway's data directory, then run \`${INTENT} init\`, which makes a new one.`,
   paused: "Intent Cloud answered that the buyer paused purchases for this account key; the buyer resumes with their passkey on the confirm page. Nothing was bought.",
 };
 

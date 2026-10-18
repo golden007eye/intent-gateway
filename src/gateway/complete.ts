@@ -544,6 +544,8 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
       return finish(null);
     };
     if (!ctx.oneTapAllowed) return refuse("policy");
+    // A v4 approval names its one completion mode, signed by the passkey: only `shop_agent` is ever paid here.
+    if (snapshot.v === 4 && snapshot.completion_mode !== "shop_agent") return refuse("mode");
     if (ctx.wallet === null) return refuse("no_wallet");
     if (!(now() < expiresAt)) return refuse("expired");
     // An earlier create_checkout that may have reached Shop (this process before a crash, or another process) and was

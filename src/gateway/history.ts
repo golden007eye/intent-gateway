@@ -27,7 +27,10 @@ export function spendHistory(chain: readonly Entry[], now: number): Purchase[] {
     const body = asBody(entry.body);
     approved.add(body.handle);
     if (typeof body.handle === "string" && chargedNothing(chain, body.handle)) continue;
-    const total = asBody(asBody(asBody(body.proof).snapshot).total).amount_minor;
+    const snapshot = asBody(asBody(body.proof).snapshot);
+    // A v4 snapshot (contract 1.7.0) signs `totals.total` in `currency`; the policy's caps are in USD and never
+    // converted, so a v4 total in another currency is not a USD amount (NaN: history_invalid, fail closed).
+    const total = snapshot.v === 4 ? (snapshot.currency === "USD" ? asBody(snapshot.totals).total : Number.NaN) : asBody(snapshot.total).amount_minor;
     purchases.push({ at: Date.parse(entry.ts), total_usd: typeof total === "number" ? total / 100 : Number.NaN });
   }
   for (const entry of chain) {
