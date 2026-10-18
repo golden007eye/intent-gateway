@@ -2,8 +2,9 @@
 // goes in each checkout the gateway submits (`account_key`), and it signs a Pause. It is never overwritten: a file
 // that is there but does not read as an account key is an error, never replaced, because a new key would no longer
 // match the one Intent Cloud knows.
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject, sign as edSign } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomBytes, createPrivateKey, createPublicKey, generateKeyPairSync, type KeyObject, sign as edSign } from "node:crypto";
+import { constants } from "node:fs";
+import { link, mkdir, open, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /** The file in the data dir that holds the account key, as a private JWK. */
@@ -41,7 +42,8 @@ export function jwkThumbprint(jwk: AccountPublicJwk): string {
 
 /**
  * The account key of `dataDir`, made first when there is none (`created: true`). The data dir is created (mode 0700)
- * when missing. The file is written with exclusive create, so two gateways starting at once never both write one.
+ * when missing. The key is written whole to a temporary file first, then hard-linked into place, which fails when the
+ * file is already there: two gateways starting at once never both write one, and neither ever reads a half-written one.
  */
 export async function ensureAccountKey(dataDir: string): Promise<{ key: AccountKey; created: boolean }> {
   const existing = await loadAccountKey(dataDir);
@@ -50,14 +52,19 @@ export async function ensureAccountKey(dataDir: string): Promise<{ key: AccountK
   const { privateKey } = generateKeyPairSync("ed25519");
   const jwk = privateKey.export({ format: "jwk" });
   const text = `${JSON.stringify({ kty: "OKP", crv: "Ed25519", x: jwk.x, d: jwk.d })}\n`;
+  const path = join(dataDir, ACCOUNT_KEY_FILE);
+  const temp = join(dataDir, `.${ACCOUNT_KEY_FILE}.${String(process.pid)}.${randomBytes(6).toString("hex")}`);
+  await writeFile(temp, text, { mode: 0o600, flag: "wx" });
   try {
-    await writeFile(join(dataDir, ACCOUNT_KEY_FILE), text, { mode: 0o600, flag: "wx" });
+    await link(temp, path);
   } catch (error) {
-    // Another process made it between the read and the write: use that one.
+    // Another process made it between the read and the link: use that one.
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const raced = await loadAccountKey(dataDir);
     if (raced === null) throw error;
     return { key: raced, created: false };
+  } finally {
+    await unlink(temp).catch(() => undefined);
   }
   const made = await loadAccountKey(dataDir);
   if (made === null) throw new AccountKeyError(`the account key ${join(dataDir, ACCOUNT_KEY_FILE)} was written but cannot be read back`);
@@ -69,16 +76,27 @@ export async function loadAccountKey(dataDir: string): Promise<AccountKey | null
   const path = join(dataDir, ACCOUNT_KEY_FILE);
   let text: string;
   try {
-    text = await readFile(path, "utf8");
+    // Never through a symlink: the key is the file in the data dir itself, not whatever a link points at.
+    const handle = await open(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
+    try {
+      text = await handle.readFile("utf8");
+    } finally {
+      await handle.close();
+    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    if (code === "ELOOP") throw notAccountKey(path);
     throw error;
   }
   return accountKeyFrom(path, text);
 }
 
+const notAccountKey = (path: string): AccountKeyError =>
+  new AccountKeyError(`${path} is not an account key (an Ed25519 private JWK); it was left as it is: move it away to make a new one`);
+
 function accountKeyFrom(path: string, text: string): AccountKey {
-  const bad = new AccountKeyError(`${path} is not an account key (an Ed25519 private JWK); it was left as it is: move it away to make a new one`);
+  const bad = notAccountKey(path);
   let value: unknown;
   try {
     value = JSON.parse(text);

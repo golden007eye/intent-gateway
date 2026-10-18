@@ -2,7 +2,7 @@
 // signatures are Ed25519 (RFC 8037 test vectors). Attack cases: a file that is not a key, or whose public half does
 // not match its private half, is refused and left as it was.
 import { createPublicKey, verify } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -71,5 +71,28 @@ describe("account key", () => {
     const error = await ensureAccountKey(dir).catch((e: unknown) => e);
     expect(String(error)).not.toContain(stored.d ?? "-");
     expect(String(error)).not.toContain(other);
+  });
+
+  it("race: gateways starting at once all get the one key, and none reads a half-written file", async () => {
+    for (let round = 0; round < 25; round++) {
+      const dir = dataDir();
+      const results = await Promise.all(Array.from({ length: 8 }, () => ensureAccountKey(dir)));
+      expect(results.filter((r) => r.created)).toHaveLength(1);
+      expect(new Set(results.map((r) => r.key.thumbprint)).size).toBe(1);
+      expect(readdirSync(dir)).toEqual([ACCOUNT_KEY_FILE]);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("attack: a symlink in place of the key file is refused, never followed or written through", async () => {
+    const root = mkdtempSync(join(tmpdir(), "account-key-"));
+    const dir = join(root, "data");
+    mkdirSync(dir, { mode: 0o700 });
+    const target = join(root, "planted.json");
+    symlinkSync(target, join(dir, ACCOUNT_KEY_FILE));
+    await expect(ensureAccountKey(dir)).rejects.toThrow(AccountKeyError);
+    expect(existsSync(target)).toBe(false);
+    // A link to a valid key elsewhere is refused too: the key is the file in the data dir.
+    writeFileSync(target, JSON.stringify({ kty: "OKP", crv: "Ed25519", x: RFC8037.x, d: RFC8037.d }), { mode: 0o600 });
+    await expect(loadAccountKey(dir)).rejects.toThrow(AccountKeyError);
   });
 });
