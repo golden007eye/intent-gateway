@@ -486,6 +486,18 @@ describe("token refresh (S1: a refresh token is issued, the access token lives 3
     await wallet.createCheckout(request);
     expect(shop.createCount).toBe(1);
   });
+
+  it("the account server unreachable for a refresh before create_checkout: not sent, and not read as unconfirmed", async () => {
+    await setup();
+    const vaultText = shopCredentialsText({ clientId: shop.clientId, accessToken: shop.accessToken, refreshToken: shop.refreshToken, expiresAt: 1 });
+    const wallet = connectShop(openWalletSession(store), { mcpUrl: shop.mcpUrl, authUrl: "http://127.0.0.1:1", vaultText, newKey: () => CREATE_UUID });
+    const error = await wallet.createCheckout(request).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WalletRailError);
+    expect(error).not.toBeInstanceOf(CheckoutUnconfirmedError);
+    expect(error).toMatchObject({ httpStatus: 0 });
+    expect(sentTools()).toEqual([]);
+    expect(shop.createCount).toBe(0);
+  });
 });
 
 describe("unlink and a connection removed in the Shop app (S1 steps 12, 12b)", () => {

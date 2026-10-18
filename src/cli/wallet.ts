@@ -111,7 +111,7 @@ async function accountStatus(io: Io, config: Config, rail: WalletRail, vaultText
 function accountLines(name: string, rail: WalletRail, account: WalletAccount): string[] {
   if (!account.connected) {
     return [
-      `${name} connection: not linked at ${name}: the connection was removed in the ${name} app (${name} answers, but this connection can no longer read the account)`,
+      `${name} connection: not linked at ${name}: ${name} answered that this connection can no longer read the account (as when it is removed in the ${name} app)`,
       `${name} one-tap: unavailable; run ${INTENT} wallet unlink ${rail}, then ${INTENT} wallet link ${rail}`,
     ];
   }

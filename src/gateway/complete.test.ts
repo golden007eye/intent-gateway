@@ -705,6 +705,63 @@ describe("Shop as the S1 spike saw it (2026-10-18)", () => {
     expect(counted(base, await chainOf(base))).toBe(0);
   });
 
+  it("attack (crash after create_checkout left): the restarted gateway waits out the window, then fails it (create_unconfirmed), never creating again", async () => {
+    const base = await setup({ faults: { dropCreateAnswer: true } });
+    // The process dies right after the create_checkout disclosure is on disk: no follow-up, no outcome.
+    let dead = false;
+    const killer = (real: Store): Store => ({
+      append: (kind, b) => {
+        if (dead) return Promise.reject(new Error("killed"));
+        const done = real.append(kind, b);
+        if (kind === "disclosure" && (b as { endpoint?: unknown }).endpoint === "create_checkout") dead = true;
+        return done;
+      },
+      appendUnless: (kind, b, conflict) => {
+        if (dead) return Promise.reject(new Error("killed"));
+        const done = real.appendUnless(kind, b, conflict);
+        if (kind === "disclosure" && (b as { endpoint?: unknown }).endpoint === "create_checkout") dead = true;
+        return done;
+      },
+      entries: () => real.entries(),
+      close: () => real.close(),
+    });
+    const p1 = await proc(base, { wrap: killer });
+    const handle = await approvedCart(base, p1);
+    await status(p1, handle).catch(() => undefined);
+    await p1.store.close();
+    expect(base.shop.createCount).toBe(1);
+    delete base.shop.faults.dropCreateAnswer;
+    const p2 = await proc(base);
+    // Within the attempt window the first process may still be waiting for Shop's answer: a wait, no send.
+    expect(completionOf(await status(p2, handle)).state).toBe("completing");
+    base.clock.at += ATTEMPT_WINDOW_MS;
+    expect(completionOf(await status(p2, handle))).toMatchObject({ state: "failed", source: "gateway_precheck", reason: "create_unconfirmed" });
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(0);
+    expect(counted(base, await chainOf(base))).toBe(0);
+  });
+
+  it("a create_checkout Shop refused for the token (401) made no checkout: the next call creates", async () => {
+    const base = await setup({ faults: { toolHttpStatus: { create_checkout: 401 } } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("completing");
+    expect(base.shop.createCount).toBe(0);
+    delete base.shop.faults.toolHttpStatus;
+    const p2 = await proc(base);
+    expect(completionOf(await status(p2, handle)).state).toBe("ordered");
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(1);
+  });
+
+  it("attack (store swap, merchant reported): the order is on another store while Shop reports the approved origin → mismatch", async () => {
+    const base = await setup({ faults: { merchantUrl: FAKE_STOREFRONT, permalinkHost: "other-store.myshopify.com" } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "mismatch" });
+    expect(localOutcomes(await chainOf(base)).at(-1)?.local_binding).toMatchObject({ checks: { merchant_origin: "differs" } });
+  });
+
   it("a store agents cannot complete at (S1 step 11: requires_escalation, checkout_completion_ineligible) → failed (ineligible), no complete", async () => {
     const base = await setup({ faults: { ineligible: true } });
     const p = await proc(base);

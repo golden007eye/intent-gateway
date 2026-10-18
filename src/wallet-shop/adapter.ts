@@ -160,6 +160,9 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
       renewed = await refreshTokens(options.accounts, credentials, now);
     } catch (error) {
       if (error instanceof ShopLinkError) throw new WalletRailError(401, null, RELINK);
+      // The account server was not reached: the request the refresh was for went no further (a create_checkout it
+      // was for made no checkout, so it is not read as unconfirmed).
+      if (error instanceof ShopTransportError) throw new WalletRailError(0, null, "the Shop token could not be refreshed: Shop's account server cannot be reached");
       throw error;
     }
     current = renewed;
@@ -238,6 +241,7 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
           "create_checkout",
           { shop: request.storeDomain, checkout: { line_items: request.lines.map((l) => ({ item: { id: l.variantRef }, quantity: l.quantity })) }, meta: { "idempotency-key": key } },
           request.purchase,
+          request.sendUnless,
         );
       } catch (error) {
         throw unconfirmed(error);

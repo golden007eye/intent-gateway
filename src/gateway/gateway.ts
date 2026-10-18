@@ -1303,7 +1303,7 @@ const SHOP_ERROR_CODES: ReadonlySet<string> = new Set(["checkout_completion_inel
 const REFUSAL_WORDS: Readonly<Record<string, string>> = {
   budget_unknown: 'Shop shows no budget for this connection: turn on "Allow agent to pay" with a budget in the Shop app.',
   no_budget_instrument: 'Shop offered no agent budget to pay this checkout with, and the gateway never pays with the card: turn on "Allow agent to pay" with a budget in the Shop app.',
-  wallet_disconnected: "Shop says this connection can no longer read the account (it was removed in the Shop app): run intent wallet unlink shop, then intent wallet link shop.",
+  wallet_disconnected: "Shop answered that this connection can no longer read the account (as when it is removed in the Shop app): run intent wallet unlink shop, then intent wallet link shop.",
   create_unconfirmed: "Shop gave no usable answer to the checkout request, and the gateway never sends it twice.",
 };
 

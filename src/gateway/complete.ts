@@ -34,7 +34,7 @@ import type { ApprovalProof, Binding, OutcomeReport, SnapshotV2 } from "../contr
 import { type DisclosedCloud, DisclosureConflictError } from "../disclosure/index.ts";
 import { bindingV1, type LocalOutcomeEntry, mayHaveSent, outcomesFor, shipToOptional } from "../outcome/index.ts";
 import type { Session } from "../signing/index.ts";
-import { type Entry, type Store, StoreConflictError } from "../store/index.ts";
+import { type Entry, neverLeft, type Store, StoreConflictError } from "../store/index.ts";
 import { type ChainEntry, type KeySet, verifyApprovalProof } from "../trust/index.ts";
 import {
   AddressFieldsRequiredError,
@@ -132,6 +132,39 @@ function attemptAt(entries: readonly ChainEntry[], handle: string): number | nul
 /** outcome's mayHaveSent: the one shared rule for "complete_checkout may have left for this purchase" (ADR-0019). */
 const maybeSent = mayHaveSent;
 
+/**
+ * Where the purchase's earlier create_checkout sends stand, read from the chain so a crash or a second process sees
+ * them too (S1: Shop makes a new checkout for a replayed idempotency key, so a create that may have reached it is never
+ * sent again). Each create_checkout `disclosure` logged after the purchase's approval and naming it counts, unless its
+ * follow-up proves no checkout was made: an HTTP 4xx answer (the token's 401 included) or an `unacknowledged` that never
+ * left. `in_flight`: every such send has no follow-up yet and was logged within the attempt window (its process may
+ * still be waiting for the answer); `reached`: one may have reached Shop; `none`: no such send.
+ */
+function createState(entries: readonly { readonly kind: string; readonly body: unknown }[], handle: string, nowMs: number): "none" | "in_flight" | "reached" {
+  const approvedAt = entries.findIndex((e) => e.kind === "approval" && asBody(e.body).handle === handle);
+  const creates = new Map<unknown, number>();
+  entries.forEach((e, i) => {
+    if (i > approvedAt && e.kind === "disclosure" && asBody(e.body).endpoint === "create_checkout" && asBody(e.body).purchase === handle) {
+      const ts = (e as { ts?: unknown }).ts;
+      const at = typeof ts === "string" ? Date.parse(ts) : Number.NaN;
+      creates.set((e as { seq?: unknown }).seq, Number.isFinite(at) ? at : 0);
+    }
+  });
+  const answered = new Set<unknown>();
+  for (const e of entries) {
+    const b = asBody(e.body);
+    if (!creates.has(b.disclosure_seq) || (e.kind !== "response" && e.kind !== "unacknowledged")) continue;
+    answered.add(b.disclosure_seq);
+    const status = b.status;
+    if ((e.kind === "response" && typeof status === "number" && status >= 400 && status < 500) || (e.kind === "unacknowledged" && neverLeft(e.body))) {
+      creates.delete(b.disclosure_seq);
+    }
+  }
+  if (creates.size === 0) return "none";
+  const waiting = [...creates].every(([seq, at]) => !answered.has(seq) && nowMs - at < ATTEMPT_WINDOW_MS);
+  return waiting ? "in_flight" : "reached";
+}
+
 const localOutcomes = (entries: readonly ChainEntry[], handle: string): LocalOutcomeEntry[] =>
   outcomesFor(entries, handle).filter((o): o is LocalOutcomeEntry => o.basis === "local");
 
@@ -197,11 +230,12 @@ function observedOf(checkout: WalletCheckout, zip: string, merchantOrigin: strin
  * The merchant origin binding check 1 reads from a wallet checkout. Shop reports no merchant on a checkout (S1 step
  * 6), only the store it lives at (the store the gateway named; the order permalink's host once completed). That store
  * stands for the approved origin when it is the store the origin pairs with (`pairedStore`, from storeFor); any other
- * store reads as its own `https://` origin, so check 1 differs. A merchant origin the rail does report wins.
+ * store reads as its own `https://` origin, so check 1 differs, whatever merchant the rail reports. At the paired
+ * store, a merchant origin the rail does report wins (it must then be the approved origin itself).
  */
 function checkoutMerchantOrigin(checkout: WalletCheckout, approvedOrigin: string, pairedStore: string | null): string {
-  if (checkout.merchantOrigin !== null) return checkout.merchantOrigin;
-  return pairedStore !== null && checkout.storeDomain === pairedStore ? approvedOrigin : `https://${checkout.storeDomain}`;
+  if (pairedStore === null || checkout.storeDomain !== pairedStore) return `https://${checkout.storeDomain}`;
+  return checkout.merchantOrigin ?? approvedOrigin;
 }
 
 function bind(snapshot: SnapshotV2, checkout: WalletCheckout, recordedRef: string, pairedStore: string | null): { observed: Body; context: Body; verdict: Binding } {
@@ -369,6 +403,11 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     if (!ctx.oneTapAllowed) return refuse("policy");
     if (ctx.wallet === null) return refuse("no_wallet");
     if (!(now() < expiresAt)) return refuse("expired");
+    // An earlier create_checkout that may have reached Shop (this process before a crash, or another process) and was
+    // never redeemed: never created again for this purchase.
+    const created = createState(entries, handle, now());
+    if (created === "in_flight") return finish(null, advisory);
+    if (created === "reached") return refuse("create_unconfirmed");
     const wallet = ctx.wallet;
     let account;
     try {
@@ -386,8 +425,19 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     if (storeDomain === null) return refuse("store_unknown");
     let quote: WalletCheckout;
     try {
-      quote = await wallet.createCheckout({ purchase: handle, storeDomain, lines: [{ variantRef: snapshot.variant_ref, quantity: snapshot.quantity }], shipToPostalCode: zip });
+      quote = await wallet.createCheckout({
+        purchase: handle,
+        storeDomain,
+        lines: [{ variantRef: snapshot.variant_ref, quantity: snapshot.quantity }],
+        shipToPostalCode: zip,
+        // Compare-and-append: a second process, or a create logged before a crash, stops this one before it is sent.
+        sendUnless: (chain) =>
+          createState(chain, handle, now()) !== "none" || completionOf(chain as readonly Entry[], handle) !== null || localOutcomes(chain, handle).length > 0,
+      });
     } catch (error) {
+      // The send's condition held: another process creates for (or redeemed, or settled) this purchase; a later call
+      // reads where it stands.
+      if (error instanceof DisclosureConflictError) return finish(null, advisory);
       if (error instanceof AddressFieldsRequiredError) return refuse("address_fields");
       // It may have reached Shop: never created again for this purchase (Shop makes a new checkout per replay).
       if (error instanceof CheckoutUnconfirmedError) return refuse("create_unconfirmed");
@@ -428,7 +478,8 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     const room = { over: false };
     try {
       await store.appendUnless("completion", body, (chain) => {
-        if (completionOf(chain, handle) !== null) return true;
+        // Redeemed by another process, or already settled there (a local outcome): this quote goes no further.
+        if (completionOf(chain, handle) !== null || localOutcomes(chain, handle).length > 0) return true;
         room.over = ctx.overCap?.(chain) === true;
         return room.over;
       });
@@ -436,8 +487,8 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
       if (!(error instanceof StoreConflictError)) throw error;
       await forget();
       if (room.over) return refuse("cap");
-      // Another process redeemed this purchase first: it owns it.
-      return { state: "completing", ...(advisory.length === 0 ? {} : { advisory }) };
+      // Another process redeemed this purchase first (it owns it), or settled it: say where it stands.
+      return finish(null, advisory);
     }
     await ctx.hook?.("completion");
     entries = store.entries();

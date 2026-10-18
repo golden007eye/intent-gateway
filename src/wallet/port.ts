@@ -132,6 +132,11 @@ export interface CheckoutRequest {
   readonly lines: readonly { readonly variantRef: string; readonly quantity: number }[];
   /** The signed snapshot's 5-digit ZIP, compared inside the adapter. */
   readonly shipToPostalCode: string;
+  /**
+   * The condition of the create_checkout send itself (SendCondition): true when another process creates for this
+   * purchase, or an earlier create may have reached the rail, so nothing is logged or sent.
+   */
+  readonly sendUnless?: SendCondition;
 }
 
 /**

@@ -126,7 +126,7 @@ describe("intent wallet status", () => {
     it("the connection removed in the Shop app (S1 step 12b): not linked at Shop, one-tap unavailable, how to link again", async () => {
       const { r } = await statusOf({ faults: { connectionRemoved: true } });
       expect(r.code).toBe(0);
-      expect(r.out).toContain("Shop connection: not linked at Shop: the connection was removed in the Shop app");
+      expect(r.out).toContain("Shop connection: not linked at Shop: Shop answered that this connection can no longer read the account");
       expect(r.out).toContain("Shop one-tap: unavailable; run intent wallet unlink shop, then intent wallet link shop");
     });
   });
