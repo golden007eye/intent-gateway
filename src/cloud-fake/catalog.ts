@@ -28,6 +28,11 @@ export interface CatalogItem {
   variant_ref?: string;
   /** 1.6.0, not on the wire: the merchant's completion modes in preference order (Intent Cloud's config). Default [handoff]. */
   completion?: readonly CompletionMode[];
+  /**
+   * 1.6.1: a Shopify merchant's own host (`<store>.myshopify.com`), Intent Cloud's pairing of it with the storefront;
+   * served on offers, carts and v3 snapshots to 1.6.1 callers only. Absent for a merchant that is not a Shopify store.
+   */
+  myshopify_domain?: string;
 }
 
 const usd = (amount_minor: number): Money => ({ amount_minor, currency: "USD" });

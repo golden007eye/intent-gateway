@@ -215,7 +215,7 @@ describe("start", () => {
     };
     const failure = h.gateway.start();
     await expect(failure).rejects.toThrow(GatewayStartError);
-    await expect(failure).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.6\.0.*contract_sums_sha256 is 0{64}/);
+    await expect(failure).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.6\.1.*contract_sums_sha256 is 0{64}/);
     expect(bodies(h, "keys")).toHaveLength(0);
     await expect(h.gateway.findOffers(SHOES)).rejects.toThrow(GatewayNotStartedError);
     expect(h.totalSends()).toBe(0);
@@ -534,19 +534,20 @@ describe("createCart snapshot checks", () => {
       total_minor: 2 * 8999 + 500,
       expires_at: view?.snapshot.expires_at,
       completion_mode: "handoff",
-      completer_keyid: view?.snapshot.v === 2 ? view.snapshot.completer_keyid : "v1",
+      completer_keyid: view?.snapshot.v === 3 ? view.snapshot.completer_keyid : "v1",
       sent: {
+        contract_version: "1.6.1",
         cart_request: {
           offer_handle: bodies(h, "observed").find((o) => o.endpoint === "searchCatalog") === undefined ? "" : (JSON.parse(Buffer.from(String(bodies(h, "disclosure").find((d) => d.endpoint === "createCart")?.body_b64), "base64").toString("utf8")) as { offer_handle: string }).offer_handle,
           quantity: 2,
           ship_to: { country: "US", postal_code: SHOES.zip },
-          completer_keyid: view?.snapshot.v === 2 ? view.snapshot.completer_keyid : "v1",
+          completer_keyid: view?.snapshot.v === 3 ? view.snapshot.completer_keyid : "v1",
           completion_accepts: ["handoff"],
         },
-        offer: { variant_ref: view?.snapshot.v === 2 ? view.snapshot.variant_ref : "v1", merchant: { name: "Trail Supply Co", domain: "shop.example" } },
+        offer: { variant_ref: view?.snapshot.v === 3 ? view.snapshot.variant_ref : "v1", merchant: { name: "Trail Supply Co", domain: "shop.example" } },
         cart: {
           merchant_origin: "https://shop.example",
-          variant_ref: view?.snapshot.v === 2 ? view.snapshot.variant_ref : "v1",
+          variant_ref: view?.snapshot.v === 3 ? view.snapshot.variant_ref : "v1",
           total: { amount_minor: 2 * 8999 + 500, currency: "USD" },
           expires_at: result.cart.expires_at,
         },
@@ -584,16 +585,25 @@ describe("createCart snapshot checks", () => {
     expect(result.message).toContain("ship_to differs from the ZIP sent");
   });
 
-  it("a v1 snapshot from a 1.6.0 host is refused", async () => {
+  it("a v1 snapshot from a 1.6.1 host is refused", async () => {
     const h = await setup();
     rewriteApproval(h, (c) => {
       const v1 = omit(c.snapshot, ["merchant_origin", "variant_ref", "checkout_ref_hash", "completion_mode", "completer_keyid", "total_estimated"]);
-      // The 1.6.0 schema refuses a v1 snapshot; this one arrives past it, as a faulty adapter would hand it on.
+      // The 1.6.1 schema refuses a v1 snapshot; this one arrives past it, as a faulty adapter would hand it on.
       return { ...c, snapshot: { ...v1, v: 1, ship_to: { country: "US", postal_prefix: "941" } } } as never;
     });
     const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
     expect(result.status).toBe("refused");
-    expect(result.message).toContain("snapshot is v1");
+    expect(result.message).toContain("snapshot is not the version this gateway speaks");
+    expect(bodies(h, "approval_pending")).toHaveLength(0);
+  });
+
+  it("attack (1.6.1): a v2 snapshot from a 1.6.1 host is refused at step 7 before any approval is pending", async () => {
+    const h = await setup();
+    rewriteApproval(h, (c) => ({ ...c, snapshot: { ...c.snapshot, v: 2 } }) as never);
+    const result = await h.gateway.createCart({ offer_handle: await offerHandle(h, "Trail Runner 3") });
+    expect(result.status).toBe("refused");
+    expect(result.message).toContain("snapshot is not the version this gateway speaks");
     expect(bodies(h, "approval_pending")).toHaveLength(0);
   });
 
@@ -1077,9 +1087,9 @@ describe("the key statement expires while the gateway runs", () => {
   });
 });
 
-// ---- contract 1.6.0 (G3) ------------------------------------------------------------------------------------------
+// ---- contract 1.6.x (G3) ------------------------------------------------------------------------------------------
 
-describe("contract 1.6.0: completer key, local checks before any approval request", () => {
+describe("contract 1.6.x: completer key, local checks before any approval request", () => {
   const pendingBody = (h: Harness, handle: string) => bodies(h, "approval_pending").find((b) => b.handle === handle) ?? {};
   const keyidOf = (h: Harness, handle: string): string => String(pendingBody(h, handle).completer_keyid);
   const keyFiles = async (h: Harness): Promise<string[]> => (await h.completerKeys.list()).map((k) => k.keyid);
@@ -1115,7 +1125,7 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     expect(await keyFiles(h)).toEqual([keyid]);
     if (process.platform !== "win32") expect((await fsp.stat(join(h.completerKeys.dir, `${keyid}.key`))).mode & 0o777).toBe(0o600);
     const snapshot = h.fake.inspect(result.approval_handle)?.snapshot;
-    expect(snapshot).toMatchObject({ v: 2, completer_keyid: keyid, completion_mode: "handoff", ship_to: { postal_code: SHOES.zip } });
+    expect(snapshot).toMatchObject({ v: 3, completer_keyid: keyid, completion_mode: "handoff", ship_to: { postal_code: SHOES.zip } });
     const logged = bodies(h, "disclosure").find((d) => d.endpoint === "createCart");
     const sent = JSON.parse(Buffer.from(String(logged?.body_b64), "base64").toString("utf8")) as Record<string, unknown>;
     expect(sent).toMatchObject({ completer_keyid: keyid, completion_accepts: ["handoff"] });
@@ -1138,7 +1148,7 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     // Requests to Intent Cloud are logged byte for byte (G2b): no redaction, and the version header is kept.
     for (const d of bodies(h, "disclosure")) {
       expect(d).not.toHaveProperty("redacted");
-      expect(d.headers).toContainEqual(["intent-contract-version", "1.6.0"]);
+      expect(d.headers).toContainEqual(["intent-contract-version", "1.6.1"]);
     }
   });
 
@@ -1360,7 +1370,7 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
 
   it("against a host that serves only 1.5.0, start fails with contract mismatch", async () => {
     const h = await setup({ start: false, fake: { versions: ["1.5.0"] } });
-    await expect(h.gateway.start()).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.6\.0 .*Intent-Contract-Version is 1\.5\.0/);
+    await expect(h.gateway.start()).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.6\.1 .*Intent-Contract-Version is 1\.5\.0/);
   });
 
   it("the key is gone after a terminal outcome (the merchant's order), read once", async () => {
@@ -1461,7 +1471,7 @@ describe("contract 1.6.0: completer key, local checks before any approval reques
     h.patch.search = async (r) => ({ ...(await h.real.search(r)), contractVersion: "1.5.0" });
     const result = await h.gateway.findOffers(SHOES);
     expect(result.status).toBe("error");
-    expect(result.message).toContain("answered in contract 1.5.0, not 1.6.0");
+    expect(result.message).toContain("answered in contract 1.5.0, not 1.6.1");
     expect(bodies(h, "observed")).toHaveLength(0);
     // A cart whose answer comes back downgraded asks for no approval and keeps no key.
     delete h.patch.search;

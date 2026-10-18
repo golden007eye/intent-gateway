@@ -5,7 +5,7 @@
 // or an approval proof at the time it was chained. A statement that has expired since is still good evidence for
 // what it covered then. `now` is the self-check's clock.
 import { INTENT } from "../config/index.ts";
-import { ApprovalHandle, ApprovalProof, ReceiptRequest } from "../contract/index.ts";
+import { ApprovalHandle, BindableApprovalProof, metaUrl, ReceiptRequest, STORE_PAIR_LIMITS } from "../contract/index.ts";
 import { canonicalize, parseIntegerJson, sha256Hex } from "../jcs/index.ts";
 import { observationProblem } from "../observation/index.ts";
 import { bindingV1, type CloudOutcomeEntry, COMPLETE_CHECKOUT, type LocalOutcomeEntry, mayHaveSent, OutcomeEntry, readCloudOutcome } from "../outcome/index.ts";
@@ -307,6 +307,13 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
         }
         break;
       }
+      case "store_pair": {
+        // The store pair check's verdict (contract 1.6.1, ADR-0020): a pass names the GET it read (a 200 from the
+        // storefront at the signed origin's /meta.json) or the fetched pass it reuses, under 24 h old.
+        const problem = storePairEntryProblem(entry, entries.slice(0, index), disclosures);
+        if (problem !== null) outcomeFailures.push(`${at}: the store_pair entry ${problem}`);
+        break;
+      }
       case "completion":
       case "complete_attempt": {
         // One-tap redemption (plan G7b): one of each per approval, compare-and-appended, the attempt after its
@@ -320,6 +327,9 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
           outcomeFailures.push(`${at}: the complete_attempt ${named}comes before any completion`);
         } else if (entry.kind === "completion" && (typeof body.checkout_ref !== "string" || !/^sha256:[0-9a-f]{64}$/.test(body.checkout_ref))) {
           outcomeFailures.push(`${at}: the completion ${named}names its checkout by something other than its sha256 checkout ref`);
+        } else if (entry.kind === "completion" && !pairPassedBefore(approvedProofs.get(handle), handle, entries.slice(0, index))) {
+          // 1.6.1: a v3 snapshot that signs a myshopify domain is redeemed only after the store pair check passed.
+          outcomeFailures.push(`${at}: the completion ${named}comes before any passing store pair check for its signed store (contract 1.6.1)`);
         }
         break;
       }
@@ -493,6 +503,63 @@ function approvalProblem(
  * than the statement. An entry without a statement shows nothing. A `local` entry re-runs binding-v1 from its
  * recorded inputs, which never hold a raw checkout id.
  */
+const STORE_PAIR_REASONS: ReadonlySet<string> = new Set([
+  "not_https",
+  "bad_origin",
+  "not_public",
+  "bad_domain",
+  "redirect",
+  "status",
+  "content_type",
+  "too_large",
+  "not_json",
+  "not_object",
+  "missing",
+  "not_string",
+  "non_ascii",
+  "differs",
+  "fetch_failed",
+]);
+
+/** Why a `store_pair` entry is not a well-formed verdict of the store pair check, or null when it is. */
+function storePairEntryProblem(entry: Entry, before: readonly Entry[], disclosures: ReadonlyMap<number, Disclosure>): string | null {
+  const b = record(entry.body);
+  const { merchant_origin: origin, myshopify_domain: domain } = b;
+  if (typeof b.handle !== "string" || typeof origin !== "string" || typeof domain !== "string") return "names no purchase, origin or myshopify domain";
+  if (b.result === "fail") return typeof b.reason === "string" && STORE_PAIR_REASONS.has(b.reason) ? null : "fails for no rule of the check";
+  if (b.result !== "pass" || b.reason !== undefined) return "is neither a pass nor a failure with its rule";
+  if (typeof b.cached_from === "number") {
+    const source = before.find((e) => e.seq === b.cached_from);
+    const s = record(source?.body);
+    const age = Date.parse(entry.ts) - Date.parse(source?.ts ?? "");
+    if (source?.kind !== "store_pair" || s.result !== "pass" || typeof s.disclosure_seq !== "number" || s.merchant_origin !== origin || s.myshopify_domain !== domain) {
+      return "reuses something other than an earlier fetched pass for the same origin and myshopify domain";
+    }
+    return age >= 0 && age < STORE_PAIR_LIMITS.cacheTtlMs ? null : "reuses a pass 24 h old or more";
+  }
+  const sent = typeof b.disclosure_seq === "number" ? disclosures.get(b.disclosure_seq) : undefined;
+  const target = metaUrl(origin);
+  if (sent === undefined || sent.destination !== "storefront" || !("url" in target) || record(sent.entry.body).path !== target.url) {
+    return "passes without naming the storefront GET of its origin's /meta.json";
+  }
+  const answered = before.some((e) => e.kind === "response" && record(e.body).disclosure_seq === b.disclosure_seq && record(e.body).status === 200);
+  return answered ? null : "passes, but its GET has no 200 response before it";
+}
+
+/**
+ * Whether the purchase may be redeemed as far as the store pair check goes: its approved snapshot signs no myshopify
+ * domain, or a passing `store_pair` entry for this purchase and that pair comes before.
+ */
+function pairPassedBefore(proof: unknown, handle: string, before: readonly Entry[]): boolean {
+  const parsed = BindableApprovalProof.safeParse(proof);
+  const snapshot = parsed.success ? parsed.data.snapshot : null;
+  if (snapshot?.v !== 3 || snapshot.myshopify_domain === undefined) return true;
+  return before.some((e) => {
+    const b = record(e.body);
+    return e.kind === "store_pair" && b.handle === handle && b.result === "pass" && b.merchant_origin === snapshot.merchant_origin && b.myshopify_domain === snapshot.myshopify_domain;
+  });
+}
+
 function outcomeProblem(
   value: unknown,
   approvedProofs: ReadonlyMap<string, unknown>,
@@ -504,7 +571,7 @@ function outcomeProblem(
   const parsed = OutcomeEntry.safeParse(value);
   if (!parsed.success) return `is not an outcome entry (${parsed.error.issues.map((i) => `${i.path.join(".") || "body"}: ${i.message}`).join("; ")})`;
   const entry = parsed.data;
-  const proof = ApprovalProof.safeParse(approvedProofs.get(entry.handle));
+  const proof = BindableApprovalProof.safeParse(approvedProofs.get(entry.handle));
   if (!proof.success) return "names no approval that verified earlier in the chain";
   const { snapshot, snapshot_hash: snapshotHash } = proof.data;
   const problem = entry.basis === "cloud" ? cloudOutcomeProblem(entry, snapshot, snapshotHash, keys, ts, stagingSource) : localOutcomeProblem(entry, snapshot, before);
@@ -513,7 +580,7 @@ function outcomeProblem(
 
 function cloudOutcomeProblem(
   entry: CloudOutcomeEntry,
-  snapshot: ApprovalProof["snapshot"],
+  snapshot: BindableApprovalProof["snapshot"],
   snapshotHash: string,
   keys: RecordedKeys | null,
   ts: Date,
@@ -558,7 +625,7 @@ function cloudOutcomeProblem(
   return null;
 }
 
-function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: ApprovalProof["snapshot"], before: readonly Entry[]): string | null {
+function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: BindableApprovalProof["snapshot"], before: readonly Entry[]): string | null {
   if (entry.state_shown !== entry.state) return `shows ${entry.state_shown}, but records ${entry.state}`;
   if (entry.source === "gateway_precheck" && entry.state !== "failed") return "names the gateway's precheck for a state other than failed";
   const inputs = entry.binding_inputs;

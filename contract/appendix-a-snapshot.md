@@ -1,6 +1,6 @@
 # Appendix A: Approval snapshot (normative)
 
-Contract version 1.6.0. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/a1-snapshot.json`, `vectors/a2-snapshot-unicode.json` (non-ASCII text), `vectors/j1-jcs.json` (JCS edge cases) and `vectors/a3-snapshot-v2.json` (snapshot v2).
+Contract version 1.6.1. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/a1-snapshot.json`, `vectors/a2-snapshot-unicode.json` (non-ASCII text), `vectors/j1-jcs.json` (JCS edge cases) and `vectors/a3-snapshot-v2.json` (snapshots v2 and v3).
 
 ## Purpose
 What the buyer sees is what the passkey signs. The snapshot `S` is shown in full in the chat (confirm card) and on the confirm page. Its hash is bound into the WebAuthn challenge, and the hand-off only redirects to a URL whose hash is in `S`.
@@ -53,3 +53,19 @@ Callers that send `Intent-Contract-Version: 1.6.0` get v2 snapshots for every ca
 **Hand-off of a `shop_agent` approval.** It is allowed only while no outcome of any kind exists for the approval and no outcome report was accepted. `ApprovalStatus.state` alone does not show this, since it stays `approved` in `shop_agent` mode (Appendix G O3). Otherwise the hand-off endpoint answers `409` and changes nothing. A failed hand-off never moves an approval out of `completing` or an outcome state.
 
 The other fields keep their v1 rules. `snapshot_hash`, `challenge` and `check_code` are derived exactly as for v1, and the hand-off invariant is unchanged. Vector: `vectors/a3-snapshot-v2.json` (one `handoff` and one `shop_agent` snapshot).
+
+## Snapshot v3 (1.6.1)
+Callers that send `Intent-Contract-Version: 1.6.1` get v3 snapshots for every cart, hand-offs included. Only an explicit `1.6.1` header gets one: a 1.6.0 caller keeps getting v2 snapshots exactly as above and never receives `myshopify_domain`, on a snapshot, an offer or a cart. A v3 snapshot `S` MUST contain exactly these fields, with no others:
+
+| Field | Present | Type and rule |
+|---|---|---|
+| `v` | always | integer, `3` |
+| `approval`, `nonce`, `merchant`, `item`, `quantity`, `unit_price`, `shipping`, `total`, `total_kind`, `ship_to`, `continue_url_hash`, `rule_version`, `expires_at` | always | as in snapshot v2 (`ship_to` is the 5-digit ZIP) |
+| `merchant_origin`, `variant_ref`, `checkout_ref_hash`, `completion_mode`, `completer_keyid`, `total_estimated` | always | as in snapshot v2 |
+| `myshopify_domain` | exactly when the merchant is a Shopify store | the store's own host, the name Shop reports for it: ASCII, at most 253 characters, matching `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$`. It equals `myshopify_domain` on the `Offer` and the `Cart` the gateway received (Appendix E step 7) |
+
+**Who vouches for the pair.** `merchant_origin` and `myshopify_domain` are the two names of one merchant, and Intent Cloud asserts that they belong together. Binding check 1 for `shop_agent` accepts either of them and nothing else (Appendix G), so the passkey signs both: once approved, the pair cannot change. The passkey does not show that the pair is right, since the buyer sees only the storefront origin: before paying, the completer verifies the pair against the storefront itself (Appendix G "Store pair check"). Intent Cloud lists each myshopify domain for at most one merchant.
+
+**Confirm page (v3).** The v2 rules apply unchanged: the page and the card show the storefront origin (`merchant_origin`). `myshopify_domain` is not shown, since it names the same store; the gateway checks it against the offer the agent picked (Appendix E step 7).
+
+`snapshot_hash`, `challenge` and `check_code` are derived exactly as for v1, and the hand-off invariant and the `shop_agent` hand-off rule are unchanged. Vector: `vectors/a3-snapshot-v2.json` (after the two v2 snapshots, one v3 `handoff` snapshot of a merchant that is not a Shopify store and one v3 `shop_agent` snapshot of a Shopify store).

@@ -67,7 +67,7 @@ const BODIES: Readonly<Record<string, Json>> = {
     approval_handle: "ap_TEST0001",
     approval_link_path: "/c/abcdefghijklmnop",
     snapshot: {
-      v: 2,
+      v: 3,
       approval: "ap_TEST0001",
       nonce: "AAAAAAAAAAAAAAAAAAAAAA",
       merchant: MERCHANT,
@@ -208,7 +208,7 @@ describe("the fixed header set, as raw bytes", () => {
       `host: 127.0.0.1:${String(stub.port)}\r\n` +
       "content-type: application/json\r\n" +
       "accept: application/json\r\n" +
-      "intent-contract-version: 1.6.0\r\n" +
+      "intent-contract-version: 1.6.1\r\n" +
       `content-digest: ${contentDigest(Buffer.from(body))}\r\n` +
       `signature-input: ${sigInput}\r\n` +
       `signature: ${headerOf(r, "signature")}\r\n` +
@@ -241,7 +241,7 @@ describe("the fixed header set, as raw bytes", () => {
       "GET /v1/meta HTTP/1.1\r\n" +
         `host: 127.0.0.1:${String(stub.port)}\r\n` +
         "accept: application/json\r\n" +
-        "intent-contract-version: 1.6.0\r\n" +
+        "intent-contract-version: 1.6.1\r\n" +
         `content-digest: ${contentDigest(new Uint8Array(0))}\r\n` +
         `signature-input: ${headerOf(r, "signature-input")}\r\n` +
         `signature: ${headerOf(r, "signature")}\r\n` +
@@ -257,7 +257,7 @@ describe("the fixed header set, as raw bytes", () => {
     expect(result.ok).toBe(true);
     const [r] = stub.requests;
     if (r === undefined) throw new Error("no request");
-    expect(r.raw.toString("latin1")).toMatch(/^POST \/v1\/carts\/ct_TEST0001\/approvals HTTP\/1\.1\r\nhost: [^\r]+\r\naccept: application\/json\r\nintent-contract-version: 1\.6\.0\r\ncontent-digest: [^\r]+\r\nsignature-input: [^\r]+\r\nsignature: [^\r]+\r\ncontent-length: 0\r\nconnection: close\r\n\r\n$/);
+    expect(r.raw.toString("latin1")).toMatch(/^POST \/v1\/carts\/ct_TEST0001\/approvals HTTP\/1\.1\r\nhost: [^\r]+\r\naccept: application\/json\r\nintent-contract-version: 1\.6\.1\r\ncontent-digest: [^\r]+\r\nsignature-input: [^\r]+\r\nsignature: [^\r]+\r\ncontent-length: 0\r\nconnection: close\r\n\r\n$/);
     expect(verify(r).ok).toBe(true);
   });
 
@@ -267,7 +267,7 @@ describe("the fixed header set, as raw bytes", () => {
     await cloud.signatureKeys();
     await cloud.keyStatement();
     const host = `host: 127.0.0.1:${String(stub.port)}\r\n`;
-    const rest = `accept: application/json\r\nintent-contract-version: 1.6.0\r\ncontent-digest: ${contentDigest(new Uint8Array(0))}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n`;
+    const rest = `accept: application/json\r\nintent-contract-version: 1.6.1\r\ncontent-digest: ${contentDigest(new Uint8Array(0))}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n`;
     expect(stub.requests.map((r) => r.raw.toString("latin1"))).toEqual([
       `GET /v1/signature-keys HTTP/1.1\r\n${host}${rest}`,
       `GET /v1/key-statement HTTP/1.1\r\n${host}${rest}`,
@@ -330,7 +330,7 @@ describe("the fixed header set, as raw bytes", () => {
   });
 });
 
-describe("contract 1.6.0: a per-call signer and outcome reports", () => {
+describe("contract 1.6.x: a per-call signer and outcome reports", () => {
   it("a per-call session signs that request only; the adapter's session signs the next", async () => {
     const stub = await startStub();
     const cloud = cloudFor(stub);
@@ -348,7 +348,7 @@ describe("contract 1.6.0: a per-call signer and outcome reports", () => {
   it("reportOutcome posts the canonical OutcomeReport to the approval's outcome-reports path, signed", async () => {
     const stub = await startStub(() => ({
       status: 201,
-      headers: [["Intent-Contract-Version", "1.6.0"]],
+      headers: [["Intent-Contract-Version", "1.6.1"]],
       body: JSON.stringify({ accepted: true, outcome: { state: "completing", source: "gateway_report", assurance: "reported", observed_at: "2026-10-15T12:01:00Z", reported: { state: "completing", source: "shop_api" } } }),
     }));
     const report = { report_id: `or_${"A".repeat(22)}`, state: "completing", source: "shop_api", checkout_ref_hash: `sha256:${"0".repeat(64)}`, observed_at: "2026-10-15T12:01:00Z" } as const;
@@ -363,7 +363,7 @@ describe("contract 1.6.0: a per-call signer and outcome reports", () => {
   it("attack (item 9): an answer with a non-integer number token is refused, though JSON.parse would make it an integer", async () => {
     const body = JSON.stringify(BODIES["/v1/carts"]).replace('"amount_minor":8999', '"amount_minor":8999.0');
     expect(body).toContain("8999.0");
-    const stub = await startStub(() => ({ status: 201, headers: [["Intent-Contract-Version", "1.6.0"]], body }));
+    const stub = await startStub(() => ({ status: 201, headers: [["Intent-Contract-Version", "1.6.1"]], body }));
     await expect(cloudFor(stub).createCart(CART_REQUEST)).rejects.toMatchObject({ name: "CloudResponseError", reason: "schema" });
   });
 

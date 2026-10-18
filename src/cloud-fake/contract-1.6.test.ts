@@ -1,9 +1,10 @@
-// The fake Intent Cloud's contract 1.6.0 (version negotiation, snapshot v2, the completer key, mode choice, outcome
-// reports R1–R7 and the state table of Appendix G, vector o3), over real HTTP with requests signed here.
+// The fake Intent Cloud's contract 1.6.x (version negotiation, snapshots v2 and v3, the completer key, mode choice,
+// the myshopify pair, outcome reports R1–R8 and R5 option (a), and the state table of Appendix G, vector o3), over
+// real HTTP with requests signed here. Requests speak 1.6.1, as the gateway does, unless a test names another version.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ApprovalCreated, ApprovalStatus, Cart, type CompletionMode, ErrorBody, Meta, OutcomeReportAccepted, SearchResponse, SnapshotV2 } from "../contract/index.ts";
+import { ApprovalCreated, ApprovalStatus, Cart, type CompletionMode, ErrorBody, Meta, OutcomeReportAccepted, SearchResponse, SnapshotV2, SnapshotV3 } from "../contract/index.ts";
 import { createSession, type Session, signRequest } from "../signing/index.ts";
 import { type CatalogItem, DEFAULT_CATALOG, type FakeCloud, type FakeCloudOptions, SoftPasskey, startFakeCloud, statusState } from "./index.ts";
 
@@ -31,7 +32,7 @@ async function call(
   method: "GET" | "POST",
   path: string,
   value?: unknown,
-  version: string | null = "1.6.0",
+  version: string | null = "1.6.1",
 ): Promise<{ status: number; version: string | null; json: unknown }> {
   const body = Buffer.from(value === undefined ? "" : JSON.stringify(value), "utf8");
   const headers: Record<string, string> = { accept: "application/json", ...signRequest(session, { method, path, body, created: Math.floor(clock / 1000) }) };
@@ -42,7 +43,7 @@ async function call(
   return { status: res.status, version: res.headers.get("intent-contract-version"), json: JSON.parse(text) as unknown };
 }
 
-const SHOP_AGENT_ITEM: CatalogItem = { ...(DEFAULT_CATALOG[0] as CatalogItem), completion: ["shop_agent", "handoff"] };
+const SHOP_AGENT_ITEM: CatalogItem = { ...(DEFAULT_CATALOG[0] as CatalogItem), completion: ["shop_agent", "handoff"], myshopify_domain: "trail-supply.myshopify.com" };
 
 interface Purchase {
   session: Session;
@@ -52,11 +53,11 @@ interface Purchase {
   cart: Cart;
 }
 
-/** Search, cart and approval over 1.6.0 with a fresh session and completer key. */
-async function purchase(cloud: FakeCloud, accepts: CompletionMode[] = ["handoff"]): Promise<Purchase> {
+/** Search, cart and approval in `version` (1.6.1 by default) with a fresh session and completer key. */
+async function purchase(cloud: FakeCloud, accepts: CompletionMode[] = ["handoff"], version = "1.6.1"): Promise<Purchase> {
   const session = createSession();
   const completer = createSession();
-  const search = await call(cloud, session, "POST", "/v1/catalog/search", { category: "running-shoes", ship_to: SHIP });
+  const search = await call(cloud, session, "POST", "/v1/catalog/search", { category: "running-shoes", ship_to: SHIP }, version);
   const offer = SearchResponse.parse(search.json).offers[0];
   if (offer === undefined) throw new Error("no offer");
   expect(offer.variant_ref).toMatch(/^gid:\/\/shopify\/ProductVariant\/\d+$/);
@@ -66,18 +67,22 @@ async function purchase(cloud: FakeCloud, accepts: CompletionMode[] = ["handoff"
     ship_to: SHIP,
     completer_keyid: completer.keyid,
     completion_accepts: accepts,
-  });
+  }, version);
   expect(cartReply.status).toBe(201);
   const cart = Cart.parse(cartReply.json);
-  const approval = await call(cloud, session, "POST", `/v1/carts/${cart.cart_handle}/approvals`);
+  const approval = await call(cloud, session, "POST", `/v1/carts/${cart.cart_handle}/approvals`, undefined, version);
   expect(approval.status).toBe(201);
-  const created = ApprovalCreated.parse(approval.json);
+  const json = approval.json as { snapshot: unknown };
+  const created = (version === "1.6.0" ? ApprovalCreated.extend({ snapshot: SnapshotV2 }) : ApprovalCreated).parse(json) as ApprovalCreated;
   return { session, completer, handle: created.approval_handle, created, cart };
 }
 
-const read = (cloud: FakeCloud, p: Purchase, by: Session, version: string | null = "1.6.0") => call(cloud, by, "GET", `/v1/approvals/${p.handle}`, undefined, version);
-const report = (cloud: FakeCloud, p: Purchase, value: unknown, by: Session = p.completer) => call(cloud, by, "POST", `/v1/approvals/${p.handle}/outcome-reports`, value);
+const read = (cloud: FakeCloud, p: Purchase, by: Session, version: string | null = "1.6.1") => call(cloud, by, "GET", `/v1/approvals/${p.handle}`, undefined, version);
+const report = (cloud: FakeCloud, p: Purchase, value: unknown, by: Session = p.completer, version = "1.6.1") =>
+  call(cloud, by, "POST", `/v1/approvals/${p.handle}/outcome-reports`, value, version);
 const ID = (c: string): string => `or_${c.repeat(22)}`;
+/** The outcome member named like `process.binding`, which src/ lint keeps out of property reads. */
+const BINDING = "binding";
 const COMPLETING = { report_id: ID("A"), state: "completing", source: "shop_api", checkout_ref_hash: `sha256:${"0".repeat(64)}`, observed_at: "2026-10-15T12:01:00Z" };
 const BINDING_OK = {
   rule_version: "binding-v1",
@@ -85,12 +90,16 @@ const BINDING_OK = {
   checks: { merchant_origin: "match", checkout_ref: "match", line: "match", ship_to: "match", total: "match" },
 };
 
-describe("version negotiation (1.6.0 §V1)", () => {
-  it("answers 1.6.0 with the header, 1.5.0 without, and 400 for a version it does not serve", async () => {
+describe("version negotiation (1.6.1)", () => {
+  it("answers 1.6.1 and 1.6.0 each with its own sums, 1.5.0 without the header, and 400 for a version it does not serve", async () => {
     const cloud = await start();
     const s = createSession();
-    const v16 = await call(cloud, s, "GET", "/v1/meta");
+    const v161 = await call(cloud, s, "GET", "/v1/meta");
+    expect([v161.version, Meta.parse(v161.json).contract_version]).toEqual(["1.6.1", "1.6.1"]);
+    expect(Meta.parse(v161.json).contract_sums_sha256).toBe("bc035ee36b0a8fe54e1b87919c8de215c508ab5369d8254fdcdecf18c23710d8");
+    const v16 = await call(cloud, s, "GET", "/v1/meta", undefined, "1.6.0");
     expect([v16.version, Meta.parse(v16.json).contract_version]).toEqual(["1.6.0", "1.6.0"]);
+    expect(Meta.parse(v16.json).contract_sums_sha256).toBe("b75b771e3ae299d74a53f450574af6fab8e63d6bcca2b42aa957046afbf4657d");
     const v15 = await call(cloud, s, "GET", "/v1/meta", undefined, null);
     expect([v15.version, Meta.parse(v15.json).contract_version]).toEqual(["1.5.0", "1.5.0"]);
     const bad = await call(cloud, s, "GET", "/v1/meta", undefined, "1.7.0");
@@ -117,12 +126,13 @@ describe("version negotiation (1.6.0 §V1)", () => {
   });
 });
 
-describe("snapshot v2 and the completer key", () => {
+describe("snapshot v3 and the completer key", () => {
   it("offer = cart = snapshot: variant, origin, mode, 5-digit ZIP and the completer key sent", async () => {
     const cloud = await start();
     const p = await purchase(cloud);
     expect(p.cart).toMatchObject({ completion_mode: "handoff", merchant_origin: `https://${p.cart.merchant.domain}`, total_estimated: false });
-    const s = SnapshotV2.parse(p.created.snapshot);
+    const s = SnapshotV3.parse(p.created.snapshot);
+    expect(s.myshopify_domain).toBeUndefined();
     expect(s).toMatchObject({
       ship_to: SHIP,
       merchant_origin: p.cart.merchant_origin,
@@ -141,7 +151,7 @@ describe("snapshot v2 and the completer key", () => {
     expect((await read(cloud, p, createSession())).status).toBe(404);
     // A 1.5.0 caller has no completer key.
     expect((await read(cloud, p, p.completer, null)).status).toBe(404);
-    const expiresAt = Date.parse(SnapshotV2.parse(p.created.snapshot).expires_at);
+    const expiresAt = Date.parse(SnapshotV3.parse(p.created.snapshot).expires_at);
     clock = expiresAt + 48 * HOUR - 1000;
     expect((await read(cloud, p, p.completer)).status).toBe(200);
     clock = expiresAt + 48 * HOUR;
@@ -233,7 +243,7 @@ describe("outcome reports (Appendix G R1–R7)", () => {
     expect((await report(cloud, pending, COMPLETING)).status).toBe(410);
     const late = await purchase(cloud, ["shop_agent"]);
     cloud.approveWithPasskey(late.handle, new SoftPasskey());
-    clock = Date.parse(SnapshotV2.parse(late.created.snapshot).expires_at);
+    clock = Date.parse(SnapshotV3.parse(late.created.snapshot).expires_at);
     expect((await report(cloud, late, COMPLETING)).status).toBe(410);
     clock = T0;
     const handoff = await purchase(cloud, ["handoff"]);
@@ -246,7 +256,7 @@ describe("outcome reports (Appendix G R1–R7)", () => {
 
 describe("vector o3: ApprovalStatus.state for every outcome", () => {
   interface O3 {
-    cases: { input: { outcome_state: string; mode: CompletionMode }; expected: { "1.6.0": string; "1.5.0": string | null } }[];
+    cases: { input: { outcome_state: string; mode: CompletionMode }; expected: { "1.6.1": string; "1.6.0": string; "1.5.0": string | null } }[];
   }
   const o3 = JSON.parse(readFileSync(join(repo, "contract", "vectors", "o3-status-state.json"), "utf8")) as O3;
 
@@ -261,11 +271,67 @@ describe("vector o3: ApprovalStatus.state for every outcome", () => {
     const reported = state === "reported" ? { reported: { state: "ordered" as const, source: "shop_api" as const } } : {};
     expect(cloud.setOutcome(p.handle, { state: state as never, source, assurance: state === "ordered" ? "verified" : "reported", ...order, ...reported }).status).toBe(200);
     const v16 = ApprovalStatus.parse((await read(cloud, p, p.session)).json);
-    expect(v16.state).toBe(c.expected["1.6.0"]);
+    expect(v16.state).toBe(c.expected["1.6.1"]);
     expect(v16.outcome?.state).toBe(state);
     expect(v16.proof).toBeDefined();
-    // R8: this approval was created by a 1.6.0 request, so a read without the header is 404 whatever the row (the
-    // 1.5.0 column is for approvals created by 1.5.0 requests; statusState is checked against it above).
+    // R8: this approval was created by a 1.6.1 request, so a read without the header, or as 1.6.0, is 404 whatever
+    // the row (the 1.5.0 column is for approvals created by 1.5.0 requests; statusState is checked against it above).
     expect((await read(cloud, p, p.session, null)).status).toBe(404);
+    expect((await read(cloud, p, p.session, "1.6.0")).status).toBe(404);
+  });
+});
+
+describe("contract 1.6.1: the myshopify pair, R8 by exact version and R5 option (a)", () => {
+  it("a Shopify merchant's myshopify_domain is on the 1.6.1 offer, cart and v3 snapshot, and never served to 1.6.0", async () => {
+    const cloud = await start({ oneTap: true, catalog: [SHOP_AGENT_ITEM] });
+    const p161 = await purchase(cloud, ["shop_agent", "handoff"]);
+    expect(p161.cart.myshopify_domain).toBe("trail-supply.myshopify.com");
+    expect(SnapshotV3.parse(p161.created.snapshot)).toMatchObject({ v: 3, myshopify_domain: "trail-supply.myshopify.com" });
+    const p160 = await purchase(cloud, ["shop_agent", "handoff"], "1.6.0");
+    expect(p160.cart).not.toHaveProperty("myshopify_domain");
+    expect(SnapshotV2.parse(p160.created.snapshot)).not.toHaveProperty("myshopify_domain");
+    const offers = SearchResponse.parse((await call(cloud, createSession(), "POST", "/v1/catalog/search", { category: "running-shoes", ship_to: SHIP }, "1.6.0")).json).offers;
+    expect(offers[0]).not.toHaveProperty("myshopify_domain");
+  });
+
+  it("R8: a 1.6.0 approval is read and reported on only as 1.6.0, a 1.6.1 one only as 1.6.1", async () => {
+    const cloud = await start({ oneTap: true, catalog: [SHOP_AGENT_ITEM] });
+    const p160 = await purchase(cloud, ["shop_agent"], "1.6.0");
+    const p161 = await purchase(cloud, ["shop_agent"]);
+    for (const p of [p160, p161]) cloud.approveWithPasskey(p.handle, new SoftPasskey());
+    expect((await read(cloud, p160, p160.completer, "1.6.0")).status).toBe(200);
+    expect((await read(cloud, p160, p160.completer, "1.6.1")).status).toBe(404);
+    expect((await read(cloud, p161, p161.completer, "1.6.0")).status).toBe(404);
+    expect((await report(cloud, p161, COMPLETING, p161.completer, "1.6.0")).status).toBe(404);
+    expect((await report(cloud, p160, COMPLETING, p160.completer, "1.6.1")).status).toBe(404);
+    expect((await report(cloud, p160, COMPLETING, p160.completer, "1.6.0")).status).toBe(201);
+  });
+
+  it("R5 option (a): a gateway's ordered on a v3 snapshot is re-run with every check Intent Cloud cannot observe unknown (incomplete); 1.6.0 keeps check 3 differs", async () => {
+    const cloud = await start({ oneTap: true, catalog: [SHOP_AGENT_ITEM] });
+    const ordered = (p: Purchase) => ({
+      report_id: ID("D"),
+      completing_report_id: ID("A"),
+      state: "ordered",
+      source: "shop_api",
+      order_ref: "gid://shopify/Order/12345678901234",
+      final_total: p.cart.total,
+      binding: BINDING_OK,
+      observed_at: "2026-10-15T12:02:00Z",
+    });
+    const p161 = await purchase(cloud, ["shop_agent"]);
+    cloud.approveWithPasskey(p161.handle, new SoftPasskey());
+    expect((await report(cloud, p161, COMPLETING)).status).toBe(201);
+    const r161 = OutcomeReportAccepted.parse((await report(cloud, p161, ordered(p161))).json).outcome;
+    expect(r161[BINDING]).toEqual({
+      rule_version: "binding-v1",
+      result: "incomplete",
+      checks: { merchant_origin: "unknown", checkout_ref: "unknown", line: "unknown", ship_to: "unknown", total: "match" },
+    });
+    const p160 = await purchase(cloud, ["shop_agent"], "1.6.0");
+    cloud.approveWithPasskey(p160.handle, new SoftPasskey());
+    expect((await report(cloud, p160, COMPLETING, p160.completer, "1.6.0")).status).toBe(201);
+    const r160 = OutcomeReportAccepted.parse((await report(cloud, p160, ordered(p160), p160.completer, "1.6.0")).json).outcome;
+    expect(r160[BINDING]).toMatchObject({ result: "mismatch", checks: { line: "differs" } });
   });
 });

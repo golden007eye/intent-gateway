@@ -42,6 +42,22 @@ module.exports = {
       to: { path: "^src/wallet-shop/" },
     },
     {
+      name: "only-disclosure-reaches-storefront",
+      comment:
+        "The store pair check's GET goes through the disclosure log too (invariant 2, ADR-0020), so only src/disclosure/ " +
+        "may use the storefront transport; the fake storefront builds its requests with the same prepare.",
+      severity: "error",
+      from: { pathNot: ["^src/(disclosure|storefront|storefront-fake)/", "^test/contract/"] },
+      to: { path: "^src/storefront/" },
+    },
+    {
+      name: "storefront-fake-only-in-tests",
+      comment: "The fake storefront answers for stores that do not exist; only tests and demo mode (src/demo) may load it.",
+      severity: "error",
+      from: { pathNot: ["\\.test\\.ts$", "^test/", "^src/storefront-fake/", "^src/demo/"] },
+      to: { path: "^src/storefront-fake/" },
+    },
+    {
       name: "wallet-fake-only-in-tests",
       comment: "The fake Shop wallet holds test accounts; only tests and demo mode (src/demo) may load it.",
       severity: "error",
@@ -67,13 +83,13 @@ module.exports = {
       comment: "The panel is a read-only local page; it reaches no network module.",
       severity: "error",
       from: { path: "^src/panel/" },
-      to: { path: "^src/(cloud|cloud-fake|demo|disclosure|library|supplychain|wallet-shop|wallet-shop-fake)/", reachable: true },
+      to: { path: "^src/(cloud|cloud-fake|demo|disclosure|library|supplychain|storefront|storefront-fake|wallet-shop|wallet-shop-fake)/", reachable: true },
     },
     {
       name: "network-only-in-network-modules",
       comment: "A send must go through the disclosure log (invariant 2), so only these modules open connections (plan §3.2).",
       severity: "error",
-      from: { path: "^src/", pathNot: "^src/(cloud|mcp|panel|cloud-fake|demo|wallet-shop|wallet-shop-fake)/" },
+      from: { path: "^src/", pathNot: "^src/(cloud|mcp|panel|cloud-fake|demo|storefront|wallet-shop|wallet-shop-fake)/" },
       to: {
         dependencyTypes: ["core"],
         path: "^(node:)?(http|https|http2|net|tls|dgram|dns|worker_threads|cluster|inspector)(/promises)?$",

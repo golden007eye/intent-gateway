@@ -20,7 +20,7 @@
 //   policy before any approval is requested; the snapshot against the cart, the ZIP sent, the completer key made for
 //   it and the caps, before the `approval_pending` entry is chained. "Approved" is reported only for a proof the
 //   trust module verified against that entry, that was chained, and whose passkey is the pin.
-// - Completer key (contract 1.6.0, ADR-0016): each cart gets a fresh Ed25519 key, saved to disk before the cart
+// - Completer key (contract 1.6.x, ADR-0016): each cart gets a fresh Ed25519 key, saved to disk before the cart
 //   request names it, so a restarted gateway (new session key) can still read the approval. A cart that goes no
 //   further deletes it; otherwise the retention rules (retention.ts) do, on start and after each status call.
 import { readFileSync } from "node:fs";
@@ -28,13 +28,14 @@ import { z } from "zod";
 import {
   type ApprovalCreated,
   ApprovalHandle,
-  ApprovalProof,
   type ApprovalStatus,
+  BindableApprovalProof,
   type AnySnapshot,
   type Cart,
   type CartRequest as CloudCartRequest,
   type CompletionMode as CloudCompletionMode,
   CONTRACT_VERSION,
+  isMyshopifyDomain,
   type KeyStatement,
   type Offer as CloudOffer,
   type OutcomeState,
@@ -45,6 +46,7 @@ import {
   CloudNetworkError,
   CloudRequestError,
   CloudResponseError,
+  connectStorefront,
   type DisclosedCloud,
   type DisclosedResult,
   DisclosureBlockedError,
@@ -53,6 +55,7 @@ import {
   DisclosureNoKeysError,
   DisclosureRefusedError,
   DisclosureStoppedError,
+  type StorefrontPort,
 } from "../disclosure/index.ts";
 import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
@@ -133,28 +136,15 @@ export interface GatewayOptions {
 
 export interface OneTapOptions {
   readonly connect: (cloud: DisclosedCloud) => WalletAdapter | null;
-  /** The rail's name for the merchant at a storefront origin (Shop: its myshopify domain); default: the host when it is one. */
-  readonly storeFor?: (merchantOrigin: string) => string | null;
+  /**
+   * The merchant storefront the store pair check reaches (contract 1.6.1, ADR-0020), behind the disclosed cloud's log.
+   * Default: the real storefront transport (src/disclosure's connectStorefront); demo mode and tests pass a fake.
+   */
+  readonly storefront?: (cloud: DisclosedCloud) => StorefrontPort;
   /** Test seams (complete.ts). */
   readonly hook?: (step: CompletionStep) => void | Promise<void>;
   readonly newReportId?: () => string;
   readonly newKey?: () => string;
-}
-
-/**
- * The Shop store for a storefront origin (D7, decided): a merchant pairs its storefront origin with its
- * `*.myshopify.com` domain, which is how Shop names the store (S1: `shop=` and the order permalink host are the
- * myshopify domain, never the storefront's primary domain). Intent Cloud has not yet published the contract field
- * that will carry the pairing, so today only an origin that is itself a myshopify host names its store; every other
- * merchant is offered hand-off only.
- *
- * SEAM (D7): when Intent Cloud publishes the paired myshopify domain for an offer, it plugs in here (and in the
- * `storeFor` the completion step and the cart offer read): return the paired domain for that origin. Do not invent
- * the field before the contract names it.
- */
-export function myshopifyStore(merchantOrigin: string): string | null {
-  const host = /^https:\/\/([a-z0-9][a-z0-9-]{0,62}\.myshopify\.com)$/.exec(merchantOrigin.toLowerCase())?.[1];
-  return host ?? null;
 }
 
 /** The first entry of a demo chain. */
@@ -327,6 +317,8 @@ export function createGateway(options: GatewayOptions): Gateway {
   } catch (error) {
     logger.warn(`intent-gateway: the linked wallet cannot be used, so purchases are handed off: ${(error as Error).message}`);
   }
+  // The store pair check's storefront, behind the same disclosure core (log before send to every destination).
+  const storefront: StorefrontPort | null = wallet === null ? null : (options.oneTap?.storefront ?? connectStorefront)(cloud);
   const offers = new Map<string, RememberedOffer>();
   /** Approvals whose cart this process's session key created; any other is read with its completer key. */
   const createdHere = new Set<string>();
@@ -708,7 +700,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const fresh = await currentKeys(fromSeq);
     if (!fresh.ok) return fresh.refused;
     const keys = fresh.keys;
-    const accepts = completionAccepts(`https://${domain.toLowerCase()}`);
+    const accepts = completionAccepts(known.offer.myshopify_domain);
     if (accepts.length === 0) {
       return block("createCart", inputFields(request), ["completion at completion_accepts"], fromSeq, "blocked",
         "Not sent: no completion mode the gateway policy allows is available here (one-tap needs a linked wallet).");
@@ -770,9 +762,20 @@ export function createGateway(options: GatewayOptions): Gateway {
     // What step 7 matches the snapshot to, now and when the approval is accepted (chained below). Checked against its
     // schema before the approval request, so a `sent` that step 7 could not read never reaches the buyer's passkey.
     const sent = readSent({
+      contract_version: CONTRACT_VERSION,
       cart_request: request,
-      offer: { variant_ref: known.offer.variant_ref, merchant: known.offer.merchant },
-      cart: { merchant_origin: cart.merchant_origin, variant_ref: cart.variant_ref, total: cart.total, expires_at: cart.expires_at },
+      offer: {
+        variant_ref: known.offer.variant_ref,
+        merchant: known.offer.merchant,
+        ...(known.offer.myshopify_domain === undefined ? {} : { myshopify_domain: known.offer.myshopify_domain }),
+      },
+      cart: {
+        merchant_origin: cart.merchant_origin,
+        variant_ref: cart.variant_ref,
+        total: cart.total,
+        expires_at: cart.expires_at,
+        ...(cart.myshopify_domain === undefined ? {} : { myshopify_domain: cart.myshopify_domain }),
+      },
     });
     if (sent === null) {
       return block("createCart", ["cart"], ["cart: not what step 7 can check (sent)"], fromSeq, "refused",
@@ -853,11 +856,11 @@ export function createGateway(options: GatewayOptions): Gateway {
    * `completion_accepts` for a cart (contract 1.6.0 §3): the modes the policy, met with Intent Cloud's baseline,
    * allows and this gateway can complete, gateway wallets first and `handoff` last.
    */
-  function completionAccepts(merchantOrigin: string): CloudCompletionMode[] {
+  function completionAccepts(myshopifyDomain: string | undefined): CloudCompletionMode[] {
     const allowed = meet(policy, CLOUD_BASELINE).completion.map((m) => CONTRACT_MODE[m]);
-    // The wallet's mode only where it can name the merchant's store: otherwise the purchase is handed off from the
-    // start, rather than refused locally after the buyer's tap.
-    const storeKnown = (options.oneTap?.storeFor ?? myshopifyStore)(merchantOrigin) !== null;
+    // The wallet's mode only for a Shopify store Intent Cloud names (1.6.1: the offer's myshopify_domain, which the
+    // passkey then signs): otherwise the purchase is handed off from the start, rather than refused after the tap.
+    const storeKnown = myshopifyDomain !== undefined && isMyshopifyDomain(myshopifyDomain);
     const usable = [...(options.walletModes?.() ?? []), ...(wallet === null || !storeKnown ? [] : (["shop_agent"] as const))];
     const wallets = usable.filter((m) => m !== "handoff" && allowed.includes(m));
     return [...new Set(wallets), ...(allowed.includes("handoff") ? ["handoff" as const] : [])];
@@ -904,7 +907,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       return { status: status.state === "pending" ? "pending" : status.state === "rejected" ? "rejected" : "expired", message, summary: summary(fromSeq) };
     }
 
-    // A live approval is a 1.6.0 one, chained with step 7's `sent`. A pending entry without it (written by a 1.5.0
+    // A live approval is a 1.6.x one, chained with step 7's `sent`. A pending entry without it (written by a 1.5.0
     // gateway) is refused here, so the released 1.5.0 proof form is accepted only by `intent verify` on old chains.
     if (readSent(bodyOf(pending).sent) === null) {
       return {
@@ -939,7 +942,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       logger.warn(`intent-gateway: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
     }
     const shown = await recordOutcome(handle, status, verified.snapshot, verified.snapshotHash, keys);
-    const parsedProof = ApprovalProof.safeParse(status.proof);
+    const parsedProof = BindableApprovalProof.safeParse(status.proof);
     const completion = mode === "shop_agent" && parsedProof.success ? await complete(handle, pending, parsedProof.data, keys) : null;
     return approved(check.fingerprint, status, mode, shown, fromSeq, completion);
   }
@@ -968,7 +971,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     keys: KeySet,
     fromSeq: number,
   ): Promise<ApprovalStatusResult> {
-    const proof = ApprovalProof.safeParse(bodyOf(chained).proof);
+    const proof = BindableApprovalProof.safeParse(bodyOf(chained).proof);
     if (!proof.success) return { status: "not_verified", message: `The chained approval is malformed; run ${INTENT} verify.`, summary: summary(fromSeq) };
     const handle = String(bodyOf(chained).handle);
     const shown = await recordOutcome(handle, status, proof.data.snapshot, proof.data.snapshot_hash, keys);
@@ -978,7 +981,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   }
 
   /** Advances a verified `shop_agent` purchase (complete.ts), every Intent Cloud call signed with its completer key. */
-  async function complete(handle: string, pending: Entry, proof: z.infer<typeof ApprovalProof>, keys: KeySet): Promise<CompletionView> {
+  async function complete(handle: string, pending: Entry, proof: BindableApprovalProof, keys: KeySet): Promise<CompletionView> {
     const keyid = bodyOf(pending).completer_keyid;
     let signer: Session | undefined;
     try {
@@ -994,7 +997,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         store,
         cloud,
         wallet,
-        storeFor: oneTap?.storeFor ?? myshopifyStore,
+        storefront,
         oneTapAllowed: met.completion.includes("one_tap"),
         overCap: (chain) => {
           // This purchase counted once: its own approval and pending entries left out, then evaluated as a new cart.
@@ -1206,13 +1209,15 @@ function policyMode(mode: CloudCompletionMode): PolicyCompletionMode {
 }
 
 /**
- * The 1.6.0 checks of a cart against the offer and the request, before any approval is requested (contract 1.6.0
+ * The 1.6.x checks of a cart against the offer and the request, before any approval is requested (contract 1.6.1
  * §3, offer = cart = snapshot): every 1.6.0 field present, a completion mode the gateway offered, the offer's
- * variant, and the origin `https://` + the merchant's domain, lowercased and ASCII only (Appendix G check 1).
+ * variant, the origin `https://` + the merchant's domain, lowercased and ASCII only (Appendix G check 1), and (1.6.1)
+ * the offer's myshopify_domain: a Shopify store's cart must name the same one, and a cart may not name one the offer
+ * did not (Appendix E step 7 then holds the snapshot to it).
  */
 function cartV16Problems(cart: Cart, offer: CloudOffer, accepts: readonly CloudCompletionMode[]): string[] {
   const missing = (["completion_mode", "merchant_origin", "variant_ref", "total_estimated"] as const).filter((k) => cart[k] === undefined);
-  if (missing.length > 0) return [`cart lacks ${missing.join(", ")}, which a 1.6.0 host sends`];
+  if (missing.length > 0) return [`cart lacks ${missing.join(", ")}, which a 1.6.x host sends`];
   const problems: string[] = [];
   const mode = cart.completion_mode as CloudCompletionMode; // present: `missing` above is empty
   if (!accepts.includes(mode)) problems.push(`completion mode ${mode} was not offered (completion_accepts ${accepts.join(", ")})`);
@@ -1223,11 +1228,13 @@ function cartV16Problems(cart: Cart, offer: CloudOffer, accepts: readonly CloudC
   if (!/^[\x00-\x7f]+$/.test(domain) || cart.merchant_origin !== `https://${domain.toLowerCase()}`) {
     problems.push("merchant_origin is not https:// + the merchant's domain");
   }
+  if (offer.myshopify_domain !== undefined && cart.myshopify_domain === undefined) problems.push("myshopify_domain is missing, and the offer names a Shopify store");
+  else if (cart.myshopify_domain !== offer.myshopify_domain) problems.push("myshopify_domain differs from the offer");
   return problems;
 }
 
 /**
- * The snapshot must be the cart under the hash Intent Cloud gave (Appendix A) and, from a 1.6.0 host, a v2 snapshot
+ * The snapshot must be the cart under the hash Intent Cloud gave (Appendix A) and, from a 1.6.1 host, a v3 snapshot
  * that passes Appendix E step 7 against what was sent and received (`sent`, trust's sentProblems): the same check
  * the approval must pass again when it is accepted.
  */
@@ -1242,7 +1249,7 @@ function checkSnapshot(created: ApprovalCreated, cart: Cart, sent: SentPurchase)
   for (const key of ["merchant", "item", "quantity", "unit_price", "shipping", "total", "total_kind"] as const) {
     if (!same(s[key], cart[key])) problems.push(`${key} differs from the cart`);
   }
-  // The schema admits only v2 from a 1.6.0 host; a v1 snapshot that got past it fails step 7 below (snapshot_version).
+  // The schema admits only v3 from a 1.6.1 host; another version that got past it fails step 7 below (`v`).
   for (const key of ["completion_mode", "total_estimated"] as const) {
     if (s[key] !== cart[key]) problems.push(`${key} differs from the cart`);
   }
@@ -1308,6 +1315,9 @@ const REFUSAL_WORDS: Readonly<Record<string, string>> = {
 };
 
 function refusalWords(reason: string | undefined): string {
+  if (reason?.startsWith("store_pair:") === true) {
+    return " The merchant's storefront (its /meta.json) did not confirm the Shopify store in the approved snapshot, so the gateway paid nothing.";
+  }
   const words = reason === undefined ? undefined : REFUSAL_WORDS[reason];
   return words === undefined ? "" : ` ${words}`;
 }

@@ -1,9 +1,9 @@
 # Appendix G: Outcomes (normative)
 
-Contract version 1.6.0. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/o1-binding.json`, `vectors/o2-outcome-statement.json`, `vectors/o3-status-state.json`, `vectors/o4-report-transitions.json`.
+Contract version 1.6.1. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/o1-binding.json`, `vectors/o2-outcome-statement.json`, `vectors/o3-status-state.json`, `vectors/o4-report-transitions.json`, `vectors/o5-store-pair.json`.
 
 ## Purpose
-What happened after an approval, stated only from evidence the stating service checked itself. Intent Cloud compares every observed order with the snapshot the passkey signed (binding-v1), states the outcome with its source and assurance, and signs that statement with its approval key. Served to callers that send `Intent-Contract-Version: 1.6.0`.
+What happened after an approval, stated only from evidence the stating service checked itself. Intent Cloud compares every observed order with the snapshot the passkey signed (binding-v1), states the outcome with its source and assurance, and signs that statement with its approval key. Served to callers that send `Intent-Contract-Version: 1.6.0` or `1.6.1`.
 
 ## Outcome states
 | `outcome.state` | Mode | Meaning | Terminal |
@@ -24,7 +24,7 @@ What happened after an approval, stated only from evidence the stating service c
 ## Sources and assurance
 | `source` | Read by | Assurance at the reader | Carries a ship-to (`ship_to_optional`) |
 |---|---|---|---|
-| `shop_api` | the gateway, over TLS from Shop ("read from Shop") | `verified` | **PENDING S1** |
+| `shop_api` | the gateway, over TLS from Shop ("read from Shop") | `verified` | yes (`false`): S1, 2026-10-18 |
 | `gateway_precheck` | the gateway, its own refusal before `complete_checkout` | `verified` (the gateway knows it did not send) | n/a (`failed` only) |
 | `merchant_api` | Intent Cloud, UCP `get_checkout` on its own checkout id (`status: completed` with an `order`), or `get_order` | `verified` | yes (`false`): S2, 2026-10-17 |
 | `signed_webhook` | Intent Cloud, an RFC 9421-signed UCP order webhook | `verified` | yes (`false`) |
@@ -36,17 +36,17 @@ A source's assurance column is a cap: an outcome from `checkout_page` or `gatewa
 
 Intent Cloud states outcomes only from the sources it reads itself: `merchant_api`, `signed_webhook`, `staging_webhook`, `checkout_page` and `gateway_report`. An Intent Cloud outcome naming `shop_api` or `gateway_precheck` is invalid. `staging_webhook` comes only from Intent Cloud's own staging store and never appears on a production host; a gateway refuses it from any other host.
 
-The **PENDING** cell is filled from the live test S1 (Shop) before this table is final. S2 answered the merchant API's cell: a completed checkout read with `get_checkout` carries the destination ZIP. If S1 is not answered by the fallback date (2026-10-23), the cell is published as `ship_to_optional = false`: an outcome from that source without a ZIP is then `incomplete`, never `ordered`. Strict is the safe side; a later 1.6.x may relax it, with a new frozen tree.
+The live tests answered both ship-to cells. S2 (2026-10-17): a completed merchant checkout read with `get_checkout` carries the destination ZIP. S1 (2026-10-18): Shop's `get_checkout` carries the 5-digit ship-to ZIP before and after completion. So no source has `ship_to_optional = true`: an outcome without a ZIP is `incomplete`, never `ordered`.
 
 ## Binding check `binding-v1`
 **Inputs**
-- the approved snapshot `S` (v2, Appendix A);
+- the approved snapshot `S` (v2 or v3, Appendix A);
 - an observed order `O = {merchant_origin?, checkout_ref?, lines: [{variant_ref, quantity}], ship_to_postal_code?, final_total: Money}`, where `checkout_ref` is the raw checkout id as the checking service observed it. It never leaves that service: what is sent or stored is its hash;
 - a context `M = {mode, recorded_checkout_ref_hash?, ship_to_optional, bound_elsewhere?}`, where `ship_to_optional` comes from the sources table and `bound_elsewhere` is `true` when the observed order is already bound to another approval (Intent Cloud's store knows this; see check 2). A `mode` other than `handoff` or `shop_agent` is an error, not a check result.
 
 Every reference (`merchant_origin`, `checkout_ref`, `recorded_checkout_ref_hash`, `variant_ref`, `ship_to_postal_code`) is a JSON string and every amount and quantity a JSON integer: a value of another type is `differs`, never converted. Inputs are parsed under the integer-only profile of Appendix A, so `1.0`, `"1"` and `true` are not the integer `1`. A parser that cannot tell `1.0` from `1` (such as plain `JSON.parse`) MUST reject non-integer number tokens before binding, which also gives `differs` for the o1 `1.0` case. Every pattern in this contract matches the whole value, as ECMA-262 does with `^…$`: a trailing newline never matches.
 
-**Checkout ref hash.** `checkout_ref_hash(id) = "sha256:" + hex(SHA-256(utf8(p)))`, where `p` is `id` up to but excluding its first `?` (all of `id` when it has none). The query of a checkout id can carry a credential (Shopify: `?key=`) and can differ between reads; the part before it names the checkout. An id whose part before `?` is empty has no checkout ref hash and gives `differs`. The snapshot's `checkout_ref_hash` (Appendix A) and every reported or recorded checkout ref use this one construction. A raw checkout id is never sent in a report, written to a ledger or log, or returned in an error.
+**Checkout ref hash.** `checkout_ref_hash(id) = "sha256:" + hex(SHA-256(utf8(p)))`, where `p` is `id` up to but excluding its first `?` (all of `id` when it has none). The query of a checkout id can carry a credential (Shopify: `?key=`) and can differ between reads; the part before it names the checkout. Shop's checkout `id` is `gid://shopify/Checkout/<token>?key=…`, so its checkout ref hash covers `gid://shopify/Checkout/<token>`; `create_checkout` and `get_checkout` return the same part before `?` (S1, 2026-10-18). An id whose part before `?` is empty has no checkout ref hash and gives `differs`. The snapshot's `checkout_ref_hash` (Appendix A) and every reported or recorded checkout ref use this one construction. A raw checkout id is never sent in a report, written to a ledger or log, or returned in an error.
 
 **Checks.** Each yields `match`, `differs` or `unknown`.
 1. **merchant_origin** (`handoff`).
@@ -54,12 +54,12 @@ Every reference (`merchant_origin`, `checkout_ref`, `recorded_checkout_ref_hash`
    - Each side, compared case-insensitively, must be exactly `"https://" host ["."] [":443"]`: the host is one or more labels joined by `.`, each label 1 to 63 of `a-z`, `0-9` and `-`, not starting or ending with `-`; no empty label; the host at most 253 characters. At most one trailing dot and the default port `:443` are dropped.
    - Anything else is `differs`: another port (`:0443` and `:8443` too), a path (even `/`), a query, a fragment, userinfo, a percent-escape (`%2E`), a backslash or a second trailing dot.
    - Then compare `"https://" + lowercase(host)` for equality. `unknown` only when `O.merchant_origin` is absent.
-   - **`shop_agent`: PENDING S1.** Shop may report the store's myshopify domain rather than its storefront domain; the alias rule is decided after S1.
+   - **`shop_agent` (1.6.1).** Shop reports the store's myshopify domain (`<store>.myshopify.com`), not its storefront domain (S1). With a v3 snapshot that carries `myshopify_domain` (Appendix A), the check is `match` when `O.merchant_origin` equals, by the rules above, either `S.merchant_origin` or `"https://" + S.myshopify_domain`: the two names of the one merchant the passkey signed, never another merchant's. With a v2 snapshot, or a v3 snapshot without `myshopify_domain`, only `S.merchant_origin` matches. In `handoff` mode only `S.merchant_origin` matches.
 2. **checkout_ref.**
    - `handoff`: `checkout_ref_hash(O.checkout_ref) == S.checkout_ref_hash`.
    - `shop_agent`: `checkout_ref_hash(O.checkout_ref) == M.recorded_checkout_ref_hash`, the hash of the checkout the completer chained before completing. This proves **read-after-complete consistency only**: the Shop checkout is created by the completer after the approval, so the passkey does not bind it. The passkey binds the merchant, variant, quantity, ZIP and total, which checks 1, 3, 4 and 5 compare.
    - `unknown` when either checkout ref is absent.
-   - **One order, one approval.** Intent Cloud binds each `(merchant_origin, order_ref)` and each checkout ref hash to at most one approval. When any source gave the canonical order id (Shopify: `gid://shopify/Order/<n>`), that id is the binding key, and every other form of the same order (such as `#1001`) is stored against the same approval. An observed order already bound to another approval (`M.bound_elsewhere`) gives check 2 `differs`, whatever else is present or absent. Intent Cloud never uses a gateway-reported reference to look up a verified source for another approval.
+   - **One order, one approval.** Intent Cloud binds each `(merchant_origin, order_ref)` and each checkout ref hash to at most one approval. When any source gave the canonical order id (Shopify: `gid://shopify/Order/<n>`, where `<n>` is 1 to 20 digits; Shop's are 14, S1), that id is the binding key, and every other form of the same order (such as `#1001`) is stored against the same approval. An observed order already bound to another approval (`M.bound_elsewhere`) gives check 2 `differs`, whatever else is present or absent. Intent Cloud never uses a gateway-reported reference to look up a verified source for another approval.
 3. **line.** Exactly one line, with `variant_ref == S.variant_ref` and `quantity == S.quantity`, both compared as JSON values of the same type. Otherwise `differs`.
 4. **ship_to.** The first 5 characters of `O.ship_to_postal_code` are 5 digits equal to `S.ship_to.postal_code` (a ZIP+4 matches on its first 5 digits). `unknown` when absent; an empty string is present and `differs`.
 5. **total** (rule 25, `recheck-v1`). With `A = S.total.amount_minor` and `R = O.final_total.amount_minor`, the check is `match` iff `currency == "USD"`, `5·R ≥ 4·A` and `R ≤ A`: exactly `ceil(0.8·A) ≤ R ≤ A` for integer `R`. Any other currency is `differs`.
@@ -69,7 +69,7 @@ Every reference (`merchant_origin`, `checkout_ref`, `recorded_checkout_ref_hash`
 - `mismatch` iff any check is `differs`;
 - `incomplete` otherwise.
 
-**Output** `binding = {rule_version: "binding-v1", result, checks: {merchant_origin, checkout_ref, line, ship_to, total}}`. No observed value is copied in. Vector `vectors/o1-binding.json` gives each case's inputs, `ship_to_optional` included, and its expected binding: the 21 cases of the contract table, the cases that pin the origin grammar, and the cases that pin types and the one-order rule (the vector's description gives the counts).
+**Output** `binding = {rule_version: "binding-v1", result, checks: {merchant_origin, checkout_ref, line, ship_to, total}}`. No observed value is copied in. Vector `vectors/o1-binding.json` gives each case's inputs, `ship_to_optional` included, and its expected binding: the 21 cases of the contract table, the cases that pin the origin grammar, the cases that pin types and the one-order rule, and the cases that pin check 1 for `shop_agent` with a v3 snapshot (the vector's description gives the counts).
 
 **1.5.0 callers.** Their approvals carry v1 snapshots, which hold no origin, variant or 5-digit ZIP. Intent Cloud still runs binding-v1 for them, against its own stored quote, so that binding is against values the passkey did not sign. No outcome statement is ever issued for a v1 snapshot.
 
@@ -82,15 +82,27 @@ The passkey binds the merchant, variant, quantity, ZIP and total, but the Shop c
    - that report's `checkout_ref_hash` equals the checkout ref hash of the checkout read in step 1;
    - checks 1, 3, 4 and 5 are `match` (check 4 may be `unknown` only when `ship_to_optional`);
    - the current time is before `S.expires_at`;
-   - the Appendix E proof verifies for this approval, step 7 included.
+   - the Appendix E proof verifies for this approval, step 7 included;
+   - (1.6.1) for a v3 snapshot that carries `myshopify_domain`, the store pair check below passed before the `completing` report and still passes.
 3. Otherwise it sends nothing. After an accepted `completing`, it reports `failed` with source `gateway_precheck`. A refusal before Intent Cloud accepted `completing` is a local outcome only: nothing is reported, and the approval stays `approved` at Intent Cloud.
 
-A final total above the approved total is always refused, `total_estimated` included: the buyer approved at most `S.total`. Check 1 for `shop_agent` follows the alias rule once it is decided (PENDING S1). The gateway's own spending cap and reservation are local policy and stay outside this contract: the precheck is a floor, not the only gate.
+A final total above the approved total is always refused, `total_estimated` included: the buyer approved at most `S.total`. Check 1 for `shop_agent` accepts the storefront origin or the myshopify domain that the v3 snapshot signed, and nothing else (check 1 above); with a v2 snapshot it accepts the storefront origin only. The gateway's own spending cap and reservation are local policy and stay outside this contract: the precheck is a floor, not the only gate.
+
+**Retries.** Shop does not deduplicate `create_checkout` on an idempotency key (S1, 2026-10-18): a replay with the same key creates a new checkout with a new id. A completer MUST NOT rely on that key to make a retry safe. The checkout it may complete is the one whose checkout ref hash its accepted `completing` report named (step 2).
+
+**Store pair check (1.6.1).** Intent Cloud asserts that a v3 snapshot's `myshopify_domain` and `merchant_origin` name the same store. The passkey signs the pair but cannot judge it, since the buyer sees only the storefront origin. So for a v3 snapshot that carries `myshopify_domain`, the completer MUST verify the pair against the storefront itself, **before** its `completing` report:
+1. **Request.** `GET <S.merchant_origin>/meta.json`, with `S.merchant_origin` exactly as signed. A `merchant_origin` that is not `https://` is a failure. A host that is an IP literal (IPv4 or IPv6), `localhost` or a `.localhost` name, a single label, or a name whose last label is numeric (a last label that is all digits, or 0x followed by hex digits, as the WHATWG URL standard reads a name that ends in a number) is a failure. So is a name that resolves to a loopback, private, link-local or otherwise non-public address: the completer's fetcher checks the resolved address before it connects. The request carries no cookies, no credentials, no `Authorization` header and no buyer data. This contract sets no expectation beyond that URL.
+2. **Limits.** 5 s in total. At most 64 KiB of body, counted on the bytes read: more is a failure. Status `200` only: a `3xx` is a failure and is never followed. The media type is `application/json`, compared case-insensitively, parameters such as `charset` allowed. The body parses as a JSON object; a body that is empty, starts with a byte order mark or has a duplicate member name is a failure (parsers disagree on which duplicate wins, so the check fails closed).
+3. **Match.** The object's top-level `myshopify_domain` is a string of ASCII characters only and, lowercased, equals `S.myshopify_domain` exactly: no trimming, no dropped dot. A non-ASCII value is a failure and is never normalised (as binding-v1's ASCII origin rule). A missing member or a value that is not a string is a failure, the same as a different value. The completer compares only against a valid `S.myshopify_domain` (Appendix A).
+4. **Errors.** A network error or a timeout is a failure.
+5. **Cache.** A completer MAY keep a passing result for at most 24 h, keyed by `(merchant_origin, myshopify_domain)`, so a store paired with another domain is checked again. A failure is never cached.
+
+A failure before the `completing` report is local: nothing is reported, the approval stays `approved` and the buyer can still hand off. As a safety net, if the check does not pass at `complete_checkout` time (for example, a cached result expired and the new check fails), the completer sends nothing and reports `failed` with source `gateway_precheck`. Vector `vectors/o5-store-pair.json` gives each case, in the order the checks run.
 
 ## `ApprovalStatus.state` for every outcome
 Before an outcome exists, `state` behaves as in 1.5.0. Afterwards:
 
-| `outcome.state` | Mode | 1.6.0 `state` | 1.5.0 `state` |
+| `outcome.state` | Mode | 1.6.0 and 1.6.1 `state` | 1.5.0 `state` |
 |---|---|---|---|
 | `handed_off` | handoff | `handed_off` | `handed_off` |
 | `checkout_expired` | handoff | `handed_off` | `handed_off` |
@@ -125,14 +137,14 @@ Before an outcome exists, `state` behaves as in 1.5.0. Afterwards:
   | `indeterminate` | `ordered`, `mismatch`, `failed` |
 
   `ordered`, `mismatch` and `failed` are terminal for reports, judged on the **reported** state even though Intent Cloud stores `ordered` and `mismatch` as `reported` (R5). Vector `vectors/o4-report-transitions.json` gives every pair.
-- **R5.** A gateway's `ordered` or `mismatch` is stored as `{state: reported, source: gateway_report, assurance: reported, reported: {state, source, order_ref, final_total, binding}}`, with Intent Cloud's own binding-v1 re-run of the reported values beside it; its check 2 is `unknown`, because Intent Cloud never saw the Shop checkout. A gateway's `failed` is stored as `failed`, and its `completing` and `indeterminate` as those states. Each has `source: gateway_report`, `assurance: reported` and `reported: {state, source}`.
+- **R5.** A gateway's `ordered` or `mismatch` is stored as `{state: reported, source: gateway_report, assurance: reported, reported: {state, source, order_ref, final_total, binding}}`, with Intent Cloud's own binding-v1 re-run of the reported values beside it. In that re-run a check Intent Cloud cannot observe is `unknown`, never `match` or `differs`: check 2 (it never saw the Shop checkout), check 3 (a report carries no line) and checks 1 and 4 (a report carries no origin or ZIP). Only check 5 compares a reported value, so the re-run of a legitimate order is `incomplete`, never `mismatch`. A gateway records Intent Cloud's statement of it as Intent Cloud's report, never as a verdict (O2). An approval made by a 1.6.0 caller (a v2 snapshot) keeps the 1.6.0 re-run, whose check 3 is `differs`. A gateway's `failed` is stored as `failed`, and its `completing` and `indeterminate` as those states. Each has `source: gateway_report`, `assurance: reported` and `reported: {state, source}`.
 - **R5a.** A `verified` outcome from a source Intent Cloud reads itself replaces any `reported` outcome, a gateway's `failed` included. A `reported` outcome never replaces a `verified` one, and replaces a `reported` one only from the same source. A terminal `verified` outcome is final: nothing replaces it.
 - **R6.** Success answers `201` with the edge receipt and `{accepted: true, outcome}`.
 - **R7.** `GET /v1/approvals/{approval_handle}` follows R1 too, so a restarted gateway reads its approval with the completer key. Completer-signed reads are accepted until `S.expires_at` + 48 h, or 48 h after a terminal outcome, whichever is later; after that they get `404`. Completer-signed reports end at a terminal state (R4).
-- **R8.** An approval created by a 1.6.0 request is read only with `Intent-Contract-Version: 1.6.0`; a read without the header gets `404`. The `Intent-Contract-Version` response header names the version that was served, and a 1.6.0 caller treats any other value as Invalid.
+- **R8.** An approval created by a 1.6.0 request is read and reported on only with `Intent-Contract-Version: 1.6.0`, and one created by a 1.6.1 request only with `1.6.1`; any other version, or none, gets `404`. So a 1.6.0 caller never sees a v3 snapshot or `myshopify_domain`. The `Intent-Contract-Version` response header names the version that was served, and a 1.6.x caller treats any other value as Invalid.
 
 ## Outcome statement
-`ApprovalStatus` gains `outcome` (schema `Outcome`, present once the approval is past `approved`) and `outcome_statement`. In 1.6.0 they are both present or both absent, and `JCS(outcome) == JCS(outcome_statement.outcome)`. A reader acts only on the verified statement; a difference between the two is Invalid (Appendix D).
+`ApprovalStatus` gains `outcome` (schema `Outcome`, present once the approval is past `approved`) and `outcome_statement`. In 1.6.0 and 1.6.1 they are both present or both absent (the schema's `dependentRequired` in 1.6.1), and `JCS(outcome) == JCS(outcome_statement.outcome)`. A reader acts only on the verified statement; a difference between the two is Invalid (Appendix D).
 
 `OS = {v: 1, approval_handle, snapshot_hash, outcome, ledger, issued_at, kid, cloud_signature}`, with exactly these fields (schema `OutcomeStatement`):
 - `ledger` is `{seq, entry_hash}` of the ledger entry that recorded the outcome (Appendix B);
@@ -140,7 +152,7 @@ Before an outcome exists, `state` behaves as in 1.5.0. Afterwards:
 - `cloud_signature` is the approval key's Ed25519 signature over `"intent-outcome-v1\n" || JCS(OS without cloud_signature)`, base64url without padding: the Appendix E construction with its own prefix.
 
 A statement is valid for an approval when all of these hold:
-1. It matches the schema and O1. `approval_handle` is that approval and `snapshot_hash` is the hash of the v2 snapshot the passkey approved.
+1. It matches the schema and O1. `approval_handle` is that approval and `snapshot_hash` is the hash of the v2 or v3 snapshot the passkey approved.
 2. `kid` is an approval key of a valid key statement (Appendix F), and `cloud_signature` verifies over the `intent-outcome-v1` input.
 3. Its outcome is consistent:
    - `outcome.binding.result` is what the binding-v1 result rule gives for `outcome.binding.checks`, with `ship_to_optional` from the sources table;
@@ -148,4 +160,4 @@ A statement is valid for an approval when all of these hold:
    - `outcome.state` is a state of the snapshot's `completion_mode` (Outcome states table);
    - `outcome.source` is a source Intent Cloud reads itself, and `outcome.assurance` is within that source's cap (Sources and assurance).
 
-Vector `vectors/o2-outcome-statement.json` has one valid statement and invalid ones: a changed outcome, a signature without the prefix, a signature with the `intent-approval-v1` prefix, another snapshot, and correctly signed statements that break each rule of step 3, the assurance cap included. Only the first is valid.
+Vector `vectors/o2-outcome-statement.json` has two valid statements (the second names a 14-digit Shopify order id) and invalid ones: a changed outcome, a signature without the prefix, a signature with the `intent-approval-v1` prefix, another snapshot, and correctly signed statements that break each rule of step 3, the assurance cap included. Only the first two are valid.

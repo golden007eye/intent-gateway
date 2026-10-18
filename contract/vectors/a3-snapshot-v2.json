@@ -1,7 +1,7 @@
 {
   "id": "A3",
   "appendix": "A",
-  "description": "Snapshot v2 (contract 1.6.0): one handoff and one shop_agent snapshot. checkout_ref_hash and continue_url_hash are over the input checkout_id and continue_url; completer_keyid is gw- + the public key of completer_seed_hex. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "description": "Snapshot v2 (contract 1.6.0): one handoff and one shop_agent snapshot; then snapshot v3 (1.6.1): the same with v 3, without myshopify_domain for a merchant that is not a Shopify store and with it for a Shopify store. checkout_ref_hash and continue_url_hash are over the input checkout_id and continue_url; completer_keyid is gw- + the public key of completer_seed_hex. myshopify_domain lists v3 values a validator takes and refuses: one label of the Appendix G host grammar (LDH, 1 to 63 characters, no leading or trailing hyphen), then .myshopify.com. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
   "cases": [
     {
       "name": "handoff snapshot",
@@ -116,6 +116,188 @@
           "reject": "20Oca4dUqSLm5PVRZuvfW_mje2OgSbiS7joO_nV3hqg"
         }
       }
+    },
+    {
+      "name": "v3 handoff snapshot, not a Shopify store",
+      "input": {
+        "continue_url": "https://shop.example/checkouts/cn/TEST0001",
+        "checkout_id": "gid://shopify/Checkout/TEST0001?key=TESTKEY0001",
+        "completer_seed_hex": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+        "snapshot": {
+          "v": 3,
+          "approval": "ap_TEST0003",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 12500,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:45ed87d3b03a94e1d226e0a3c3cccdea408ff08bf68454c7a393162f34dd3727",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:ec0dd227ace40a3562f73439d5bfb4cf504025ad0baa4ba89cedfc48c1063e36",
+          "completion_mode": "handoff",
+          "completer_keyid": "gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw",
+          "total_estimated": false
+        }
+      },
+      "expected": {
+        "jcs": "{\"approval\":\"ap_TEST0003\",\"checkout_ref_hash\":\"sha256:ec0dd227ace40a3562f73439d5bfb4cf504025ad0baa4ba89cedfc48c1063e36\",\"completer_keyid\":\"gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw\",\"completion_mode\":\"handoff\",\"continue_url_hash\":\"sha256:45ed87d3b03a94e1d226e0a3c3cccdea408ff08bf68454c7a393162f34dd3727\",\"expires_at\":\"2026-10-16T12:15:00Z\",\"item\":{\"title\":\"Trail Runner 3\",\"variant\":\"US 10 / Blue\"},\"merchant\":{\"domain\":\"shop.example\",\"name\":\"Test Shop\"},\"merchant_origin\":\"https://shop.example\",\"nonce\":\"AAECAwQFBgcICQoLDA0ODw\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"},\"shipping\":{\"amount_minor\":500,\"currency\":\"USD\"},\"total\":{\"amount_minor\":12500,\"currency\":\"USD\"},\"total_estimated\":false,\"total_kind\":\"exact\",\"unit_price\":{\"amount_minor\":12000,\"currency\":\"USD\"},\"v\":3,\"variant_ref\":\"gid://shopify/ProductVariant/1001\"}",
+        "snapshot_hash": "c2ed91c0c4cd141ae25d14156036fec5eef687d26a5425606d4045be906dfc1c",
+        "check_code": "c2ed91c0",
+        "challenge": {
+          "approve": "aPKzu4spouWMbL7L4Drsil77L1C4YxMNKVPMl1N5gMY",
+          "reject": "pEW4xXT-Xxmavn4qgcbIEUUDxXmIvNm9MUajyXDKSGk"
+        }
+      }
+    },
+    {
+      "name": "v3 shop_agent snapshot, a Shopify store",
+      "input": {
+        "continue_url": "https://shop.example/checkouts/cn/TEST0002",
+        "checkout_id": "gid://shopify/Checkout/TEST0002?key=TESTKEY0002",
+        "completer_seed_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+        "snapshot": {
+          "v": 3,
+          "approval": "ap_TEST0004",
+          "nonce": "EBESExQVFhcYGRobHB0eHw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "total_kind": "max",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+          "completion_mode": "shop_agent",
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "total_estimated": true,
+          "myshopify_domain": "test-shop.myshopify.com"
+        }
+      },
+      "expected": {
+        "jcs": "{\"approval\":\"ap_TEST0004\",\"checkout_ref_hash\":\"sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344\",\"completer_keyid\":\"gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s\",\"completion_mode\":\"shop_agent\",\"continue_url_hash\":\"sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019\",\"expires_at\":\"2026-10-16T12:15:00Z\",\"item\":{\"title\":\"Trail Runner 3\",\"variant\":\"US 10 / Blue\"},\"merchant\":{\"domain\":\"shop.example\",\"name\":\"Test Shop\"},\"merchant_origin\":\"https://shop.example\",\"myshopify_domain\":\"test-shop.myshopify.com\",\"nonce\":\"EBESExQVFhcYGRobHB0eHw\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_code\":\"94110\"},\"shipping\":{\"amount_minor\":500,\"currency\":\"USD\"},\"total\":{\"amount_minor\":13600,\"currency\":\"USD\"},\"total_estimated\":true,\"total_kind\":\"max\",\"unit_price\":{\"amount_minor\":12000,\"currency\":\"USD\"},\"v\":3,\"variant_ref\":\"gid://shopify/ProductVariant/1001\"}",
+        "snapshot_hash": "17cb1b12fa8cd4a6a901b1bc6749d848a1f61eccdfffe20749efbe197950050f",
+        "check_code": "17cb1b12",
+        "challenge": {
+          "approve": "vwjeG3mLEuKyce1bw8Na9Q4LdpGKJYsZh9gt-19yi70",
+          "reject": "pkrfJuNYEcGRD7x2eSqceeLXuaHvP62cou41lEoVncc"
+        }
+      }
+    }
+  ],
+  "myshopify_domain": [
+    {
+      "name": "a one-character label",
+      "myshopify_domain": "a.myshopify.com",
+      "valid": true
+    },
+    {
+      "name": "a 63-character label",
+      "myshopify_domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.myshopify.com",
+      "valid": true
+    },
+    {
+      "name": "a hyphen inside the label",
+      "myshopify_domain": "test-shop-1.myshopify.com",
+      "valid": true
+    },
+    {
+      "name": "a trailing-hyphen label",
+      "myshopify_domain": "test-shop-.myshopify.com",
+      "valid": false
+    },
+    {
+      "name": "a leading-hyphen label",
+      "myshopify_domain": "-test-shop.myshopify.com",
+      "valid": false
+    },
+    {
+      "name": "a 64-character label",
+      "myshopify_domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.myshopify.com",
+      "valid": false
+    },
+    {
+      "name": "a 70-character label",
+      "myshopify_domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.myshopify.com",
+      "valid": false
+    },
+    {
+      "name": "two labels",
+      "myshopify_domain": "a.b.myshopify.com",
+      "valid": false
+    },
+    {
+      "name": "an uppercase label",
+      "myshopify_domain": "Test-Shop.myshopify.com",
+      "valid": false
+    },
+    {
+      "name": "a trailing dot",
+      "myshopify_domain": "test-shop.myshopify.com.",
+      "valid": false
+    },
+    {
+      "name": "no label",
+      "myshopify_domain": ".myshopify.com",
+      "valid": false
+    },
+    {
+      "name": "another domain",
+      "myshopify_domain": "test-shop.example",
+      "valid": false
+    },
+    {
+      "name": "a non-ASCII label (U+212A)",
+      "myshopify_domain": "Kelvin.myshopify.com",
+      "valid": false
     }
   ]
 }
