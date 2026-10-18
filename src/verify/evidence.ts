@@ -10,7 +10,7 @@
 //    disclosures (no credential in clear), the approval proof (Appendix E, step 7 included), outcomes and binding-v1.
 // The report says what the gateway sent and what Intent Cloud signed or acknowledged, nothing more (invariant 5).
 import { purchaseEntries, readPack, type Role, skeletonProblems } from "../evidence/index.ts";
-import { bodyValue, findIdentity } from "../privacy/index.ts";
+import { bodyValue, findIdentity, sentOrderRefAt } from "../privacy/index.ts";
 import { type Entry, GENESIS } from "../store/index.ts";
 import type { PinnedRootKey } from "../trust/index.ts";
 import { type Check, checkEntries, type Report } from "./verify.ts";
@@ -84,7 +84,8 @@ export function runVerifyEvidence(opts: EvidenceVerifyOptions): Report {
 
 /**
  * Invariant 3 over what the pack says was sent: each disclosure's logged body, read as the disclosure core read it
- * (an MCP envelope's two names exempt for a destination other than Intent Cloud), and the CartRequest the pending
+ * (an MCP envelope's two names exempt for a destination other than Intent Cloud, an outcome report's order gid for
+ * Intent Cloud), and the CartRequest the pending
  * entry chained. Intent Cloud's own content (the snapshot's merchant name) is not buyer identity and is not scanned
  * with these rules, which are made for outbound bodies; observations and outcome statements have their own checks.
  */
@@ -94,6 +95,7 @@ function sentIdentity(entries: readonly Entry[]): string[] {
     const b = typeof e.body === "object" && e.body !== null ? (e.body as Record<string, unknown>) : {};
     let value: unknown = null;
     let mcpEnvelope = false;
+    let orderRefAt: readonly string[] = [];
     if (e.kind === "disclosure" && typeof b.body_b64 === "string" && b.body_b64 !== "") {
       const headers = Array.isArray(b.headers) ? (b.headers as unknown[]).filter((h): h is [string, string] => Array.isArray(h) && h.length === 2 && h.every((x) => typeof x === "string")) : [];
       try {
@@ -102,10 +104,11 @@ function sentIdentity(entries: readonly Entry[]): string[] {
         value = null; // an unreadable body fails the disclosure checks
       }
       mcpEnvelope = typeof b.destination === "string";
+      orderRefAt = sentOrderRefAt(b.endpoint, !mcpEnvelope);
     } else if (e.kind === "approval_pending") {
       value = (b.sent as { cart_request?: unknown } | undefined)?.cart_request ?? null;
     }
-    for (const f of findIdentity(value, { mcpEnvelope })) found.push(`seq ${String(e.seq)}: the ${e.kind} entry holds what looks like buyer identity (${f.kind} at ${f.path})`);
+    for (const f of findIdentity(value, { mcpEnvelope, orderRefAt })) found.push(`seq ${String(e.seq)}: the ${e.kind} entry holds what looks like buyer identity (${f.kind} at ${f.path})`);
   }
   return found;
 }

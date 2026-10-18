@@ -9,7 +9,9 @@
 //   the Luhn check. The run may be glued to a prefix of one or two letters ("cc4111…"), but not to a longer
 //   word, a digit, "_" or "-" (UUIDs, SKUs like "SKU-4111…-BLK" or "ABC4111…"), and not followed by a letter or
 //   digit. Integer numbers are checked as digits. A string whose whole value is a canonical UUID (8-4-4-4-12 ASCII
-//   hex) is never a card: its all-digit groups can form a Luhn-valid run by chance (an idempotency key).
+//   hex) is never a card: its all-digit groups can form a Luhn-valid run by chance (an idempotency key). Nor is a
+//   Shopify order reference (SHOPIFY_ORDER_GID, the whole ASCII value), but only at a path the caller names from
+//   ORDER_REF_AT (IdentityOptions.orderRefAt): about one 14-digit order number in ten passes Luhn (ADR-0019).
 // - split card: in one array or object, consecutive leaves that are each only digits (a string of digit groups,
 //   or a non-negative integer) with at least 3 digits each; any slice of two or more of them whose concatenated
 //   digits are 13–19 long and pass Luhn is reported at the container's path (["4111","1111","1111","1111"]).
@@ -73,6 +75,42 @@ export interface IdentityOptions {
    *   it on every request), when the top-level `jsonrpc` is "2.0" and the name is exactly MCP_CLIENT_NAME.
    */
   mcpEnvelope?: boolean;
+  /**
+   * JSONPaths (findIdentity's own format, from ORDER_REF_AT) where an order reference lives in this value. A string at
+   * exactly one of them whose whole raw value matches SHOPIFY_ORDER_GID is not scanned for a card; every other check
+   * still runs on it, and any other value at that path (a bare digit string, a number, a gid with extra text) and every
+   * other path are scanned as usual. A split card across neighbouring fields is still found: a gid is never a digit leaf.
+   */
+  orderRefAt?: readonly string[];
+}
+
+/**
+ * A Shopify order reference, as the whole string value: `gid://shopify/Order/` and 1 to 20 ASCII digits (ADR-0019).
+ * About one 14-digit order number in ten passes Luhn, so the card check would read the gid as a card number.
+ */
+export const SHOPIFY_ORDER_GID = /^gid:\/\/shopify\/Order\/[0-9]{1,20}$/;
+
+/**
+ * The exact paths where an order reference lives, by what is scanned; the one exemption the projection, the outbound
+ * disclosure scan, the observation and statement checks, `intent verify` and `--evidence` share (IdentityOptions.orderRefAt).
+ */
+export const ORDER_REF_AT = {
+  /** The Shop checkout projection's scan of the completed order's id, a lone string. */
+  projection: ["$"],
+  /** An outcome report body (endpoint reportOutcome, to Intent Cloud), as sent and as its disclosure entry logs it. */
+  outcomeReport: ["$.order_ref"],
+  /** An `observed` entry: the outcome summary a getApproval answer carried. */
+  observation: ["$.outcome.order_ref"],
+  /** Intent Cloud's signed outcome statement: the order it states and the one the gateway reported. */
+  statement: ["$.outcome.order_ref", "$.outcome.reported.order_ref"],
+} as const satisfies Record<string, readonly string[]>;
+
+/**
+ * The order-reference paths of a body sent to `endpoint`: ORDER_REF_AT.outcomeReport for an outcome report to Intent
+ * Cloud, none for any other request. The disclosure core, `intent verify --evidence` and the activity view all ask here.
+ */
+export function sentOrderRefAt(endpoint: unknown, toIntentCloud: boolean): readonly string[] {
+  return toIntentCloud && endpoint === "reportOutcome" ? ORDER_REF_AT.outcomeReport : [];
 }
 
 /** An MCP tool name the identity check lets through under `$.params.name` (IdentityOptions.mcpEnvelope). */
@@ -84,7 +122,7 @@ const CLIENT_NAME_PATH = `$.params._meta[${JSON.stringify(CLIENT_INFO)}].name`;
 
 export function findIdentity(value: unknown, options: IdentityOptions = {}): Finding[] {
   const findings: Finding[] = [];
-  walk(value, "$", findings);
+  walk(value, "$", findings, new Set(options.orderRefAt ?? []));
   if (options.mcpEnvelope !== true) return findings;
   const toolName = isToolCall(value);
   const clientName = isClientNamed(value);
@@ -112,17 +150,18 @@ function isToolCall(value: unknown): boolean {
   return typeof name === "string" && MCP_TOOL_NAME.test(name);
 }
 
-function walk(value: unknown, path: string, out: Finding[], depth = 0): void {
+function walk(value: unknown, path: string, out: Finding[], orderRefAt: ReadonlySet<string>, depth = 0): void {
   if (depth > SCAN_DEPTH && typeof value === "object" && value !== null) {
     out.push({ path, kind: "too_deep" });
   } else if (typeof value === "string") {
-    for (const kind of scanText(normalize(value), isUuid(value))) out.push({ path, kind });
+    const notCard = isUuid(value) || (orderRefAt.has(path) && SHOPIFY_ORDER_GID.test(value));
+    for (const kind of scanText(normalize(value), notCard)) out.push({ path, kind });
   } else if (typeof value === "bigint" || (typeof value === "number" && Number.isInteger(value))) {
     if (isCardDigits(value.toString())) out.push({ path, kind: "card" });
   } else if (Array.isArray(value)) {
     const items: unknown[] = value;
     items.forEach((item, i) => {
-      walk(item, `${path}[${String(i)}]`, out, depth + 1);
+      walk(item, `${path}[${String(i)}]`, out, orderRefAt, depth + 1);
     });
     if (hasSplitCard(items)) out.push({ path, kind: "card" });
   } else if (typeof value === "object" && value !== null) {
@@ -132,7 +171,7 @@ function walk(value: unknown, path: string, out: Finding[], depth = 0): void {
       const normalKey = normalize(key);
       if (isBannedKey(normalKey)) out.push({ path: keyPath, kind: "banned_key" });
       for (const kind of scanText(normalKey, isUuid(key))) out.push({ path: keyPath, kind });
-      walk(item, keyPath, out, depth + 1);
+      walk(item, keyPath, out, orderRefAt, depth + 1);
     }
     if (hasSplitCard(entries.map(([, item]) => item))) out.push({ path, kind: "card" });
   }
@@ -163,10 +202,10 @@ function isUuid(raw: string): boolean {
   return UUID.test(raw);
 }
 
-/** `uuid`: the raw value is a canonical UUID, so it is not scanned for a card. */
-function scanText(text: string, uuid: boolean): FindingKind[] {
+/** `notCard`: the raw value is a canonical UUID or an exempt order gid, so it is not scanned for a card. */
+function scanText(text: string, notCard: boolean): FindingKind[] {
   const kinds: FindingKind[] = [];
-  if (!uuid && hasCard(text)) kinds.push("card");
+  if (!notCard && hasCard(text)) kinds.push("card");
   if (EMAIL.test(text)) kinds.push("email");
   if (E164.test(text) || US_PHONE.test(text)) kinds.push("phone");
   if (STREET.test(text)) kinds.push("street_address");
