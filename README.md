@@ -63,8 +63,8 @@ $ npx -y ./intent-gateway.tgz verify --demo
 The image runs the same package and serves MCP over HTTP. Pull the preview from GHCR and name it `intent-gateway`, the name the commands below and the gateway's own hints use (or build it from a clone: `docker build -t intent-gateway .`):
 
 ```console
-$ docker pull ghcr.io/golden007eye/intent-gateway:0.1.0-preview.4
-$ docker tag ghcr.io/golden007eye/intent-gateway:0.1.0-preview.4 intent-gateway
+$ docker pull ghcr.io/golden007eye/intent-gateway:0.1.0-preview.5
+$ docker tag ghcr.io/golden007eye/intent-gateway:0.1.0-preview.5 intent-gateway
 $ docker run -d --name intent -p 127.0.0.1:8787:8787 -p 127.0.0.1:8788:8788 \
     -e INTENT_DEMO=1 -v intent-data:/data intent-gateway
 $ docker logs intent
