@@ -40,6 +40,8 @@
 export {
   bodyText,
   bodyValue,
+  CLOUD_SECRET_PATHS,
+  cloudRedactionsAllowed,
   FORM_CONTENT_TYPE,
   formatPath,
   holdsNestedSecret,

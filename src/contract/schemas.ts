@@ -106,7 +106,16 @@ export const ErrorName = z.enum([
 export type ErrorName = z.infer<typeof ErrorName>;
 
 /** A 403 refusal of `POST /v1/checkouts`, or `paused` on a 409 (1.7.0, Appendix A "Refusals"). */
-export const RefusalCode = z.enum(["ceiling_order", "ceiling_week", "currency_unsupported", "store_blocked", "category_excluded", "paused", "one_tap_off"]);
+export const RefusalCode = z.enum([
+  "ceiling_order",
+  "ceiling_week",
+  "currency_unsupported",
+  "store_blocked",
+  "category_excluded",
+  "paused",
+  "one_tap_off",
+  "account_key_other_buyer",
+]);
 export type RefusalCode = z.infer<typeof RefusalCode>;
 
 export const ErrorBody = z.strictObject({
@@ -121,7 +130,7 @@ export type ErrorBody = z.infer<typeof ErrorBody>;
 export const RateLimited = z.strictObject({
   error: z.literal("rate_limited"),
   message: z.string().max(200),
-  limit: z.enum(["requests", "carts", "approvals", "enrolments", "pause"]),
+  limit: z.enum(["requests", "carts", "approvals", "enrolments", "pause", "checkouts"]),
   retry_after_seconds: z.int().min(1),
 });
 export type RateLimited = z.infer<typeof RateLimited>;
@@ -406,6 +415,13 @@ export type SnapshotV3 = z.infer<typeof SnapshotV3>;
 
 const RefHash = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 
+/** A v4 store's origin (1.7.0, Appendix A): a real DNS name, never an IP literal, one label or a numeric last label. */
+export const StoreSite = z
+  .string()
+  .max(261)
+  .regex(/^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/);
+export type StoreSite = z.infer<typeof StoreSite>;
+
 /** Integer minor units of the checkout's currency. `total == subtotal + shipping + tax` is a rule for callers (totalsAddUp). */
 export const CheckoutTotals = z.strictObject({
   subtotal: z.int().min(0).max(MAX_SAFE),
@@ -438,7 +454,7 @@ export type ShopContinueUrl = z.infer<typeof ShopContinueUrl>;
 export const SubmittedCheckout = z.strictObject({
   checkout_ref_hash: RefHash,
   myshopify_domain: MyshopifyDomain,
-  store_site: MerchantOrigin,
+  store_site: StoreSite,
   store_name: z.string().min(1).max(80),
   variant_ref: VariantRef,
   title: z.string().min(1).max(120),
@@ -479,7 +495,7 @@ export const SnapshotV4 = z.strictObject({
   expires_at: Timestamp,
   rule_version: z.string().min(1),
   store_name: z.string().min(1).max(80),
-  store_site: MerchantOrigin,
+  store_site: StoreSite,
   myshopify_domain: MyshopifyDomain,
   variant_ref: VariantRef,
   title: z.string().min(1).max(120),
@@ -915,4 +931,5 @@ export const SCHEMAS = {
   PauseAccepted,
   ErrorName,
   RefusalCode,
+  StoreSite,
 } as const satisfies Record<string, z.ZodType>;

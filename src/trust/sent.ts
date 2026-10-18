@@ -10,6 +10,7 @@ import {
   CartRequest,
   CheckoutRequest,
   checkoutRequestProblems,
+  continueUrlHash,
   CurrencyTableVersion,
   Merchant,
   MerchantOrigin,
@@ -120,12 +121,30 @@ export function readSent(value: unknown): SentPurchase | null {
  * which Appendix E step 7 holds the v4 snapshot to (vector e3), and the currency table version Meta served when it
  * was sent, which the snapshot must name.
  */
-export const SentCheckout = z.strictObject({
-  contract_version: z.literal("1.7.0"),
-  checkout_request: CheckoutRequest,
-  currency_table: CurrencyTableVersion,
-});
+//
+// A hand-off's `continue_url` holds the checkout's key, a credential (ADR-0014, ADR-0024): it is never chained. The
+// chained request leaves it out, and `continue_url_hash` (its contract hash, what the snapshot signs) stands for it.
+export const SentCheckout = z
+  .strictObject({
+    contract_version: z.literal("1.7.0"),
+    checkout_request: CheckoutRequest,
+    currency_table: CurrencyTableVersion,
+    continue_url_hash: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(),
+  })
+  .refine((s) => s.checkout_request.checkout.continue_url === undefined, "a chained checkout request never holds its continue_url")
+  .refine((s) => (s.checkout_request.completion_mode === "handoff") === (s.continue_url_hash !== undefined), "continue_url_hash exactly for handoff");
 export type SentCheckout = z.infer<typeof SentCheckout>;
+
+/** What a submit chains for step 7: the request without its continue_url, and that URL's hash for a hand-off. */
+export function sentCheckoutOf(request: CheckoutRequest, currencyTable: string): SentCheckout {
+  const { continue_url: url, ...checkout } = request.checkout;
+  return {
+    contract_version: "1.7.0",
+    checkout_request: { ...request, checkout },
+    currency_table: currencyTable,
+    ...(url === undefined ? {} : { continue_url_hash: continueUrlHash(url) }),
+  };
+}
 
 /** Parses a chained `sent` of a submitted checkout; null when absent, malformed or a cart's. */
 export function readSentCheckout(value: unknown): SentCheckout | null {
@@ -141,8 +160,14 @@ export type SentCheckoutReason = V4Field | "v" | "currency_table";
  * another table version than the one this gateway checked the currency against. [] means it is the request.
  */
 export function sentCheckoutProblems(snapshot: unknown, sent: SentCheckout): SentCheckoutReason[] {
-  const problems: SentCheckoutReason[] = checkoutRequestProblems(snapshot, sent.checkout_request);
+  // The chained request has no continue_url: its hash is compared here, from `sent`, instead of from the URL.
+  const problems: SentCheckoutReason[] = checkoutRequestProblems(snapshot, sent.checkout_request).filter((p) => p !== "continue_url_hash");
   if (problems.includes("v")) return ["v"];
+  const signed = (snapshot as { continue_url_hash?: unknown }).continue_url_hash;
+  if (signed !== sent.continue_url_hash) {
+    const at = problems.findIndex((p) => p === "currency_table");
+    problems.splice(at === -1 ? problems.length : at, 0, "continue_url_hash");
+  }
   if ((snapshot as { currency_table?: unknown }).currency_table !== sent.currency_table) problems.push("currency_table");
   return problems;
 }

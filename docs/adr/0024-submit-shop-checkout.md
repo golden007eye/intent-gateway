@@ -6,7 +6,7 @@ Status: accepted · 2026-10-18 · Amends ADR-0019 (where a one-tap checkout is c
 
 With the search seam (ADR-0021), a search sends nothing, so an offer from Shop search had no cart to approve: create_cart refused it. Under 1.6.1, a one-tap purchase created the Shop checkout only after the passkey (ADR-0019), so the passkey signed a cart, not the checkout that would be paid, and binding check 2 could not be a bound check in `shop_agent` mode.
 
-Contract 1.7.0 (draft, `SHA256SUMS` sha256 `5767b726…decb5`) adds `POST /v1/checkouts`: the gateway submits a Shop checkout it created and read back, and the 201 Intent Cloud returns is a pending approval whose v4 snapshot is exactly that checkout, one completion mode per approval. 1.6.1 is frozen (`bc035ee3…10d8`) and still answered to callers that name it. A 1.7.0 gateway's carts keep v3 snapshots.
+Contract 1.7.0 (draft, `SHA256SUMS` sha256 `b6bf35a6…25c1`) adds `POST /v1/checkouts`: the gateway submits a Shop checkout it created and read back, and the 201 Intent Cloud returns is a pending approval whose v4 snapshot is exactly that checkout, one completion mode per approval. 1.6.1 is frozen (`bc035ee3…10d8`) and still answered to callers that name it. A 1.7.0 gateway's carts keep v3 snapshots.
 
 ## Decision
 
@@ -24,5 +24,13 @@ Contract 1.7.0 (draft, `SHA256SUMS` sha256 `5767b726…decb5`) adds `POST /v1/ch
 
 - The passkey signs the checkout that is paid: a variant, total or store swap at Shop between the submit and the completion fails binding-v2 and sends no `complete_checkout`.
 - A Shop address whose ZIP differs from the search's is refused; the buyer sets the preferred address in the Shop app, or searches with its ZIP.
-- A hand-off `continue_url` can carry a checkout `?key=`; it is sent to Intent Cloud, which redirects the buyer to it, and is logged as sent. Open: whether that key counts as a credential under ADR-0014.
+- A hand-off `continue_url` holds the checkout's `key`, so whoever holds it can open the buyer's checkout: it is a credential (ADR-0014). It is sent to Intent Cloud in clear, as the contract requires, and logged only as its sha256 (`redacted` at `body.checkout.continue_url`, the one credential path a request to Intent Cloud may carry; every other credential to Intent Cloud is still refused). That sha256 is the snapshot's `continue_url_hash`. The chained `sent` keeps only that hash; the URL lives in memory for the submit, and the encrypted checkout vault holds only checkout ids. `content_digest` and the receipt still name the sent bytes; `intent verify` accepts such a redacted body only at that path.
 - Evidence packs do not yet select the disclosures of a submitted checkout (they find a cart request).
+
+## Amendment: platform security review (contract b6bf35a6)
+
+- `store_site` must be a real DNS name (`StoreSite`: two labels or more, a letter or `xn--` top-level label); the gateway refuses another locally before any submit.
+- The currency table lists two-decimal currencies only; a table with any other is not used.
+- `account_key_other_buyer` (403: the account key belongs to the first buyer who approved with it) and the per-IP checkout quota (429 `checkouts`) are each one clear line; the gateway never resubmits by itself.
+- A `completing` redemption answered 409 `one_tap_off` is a refusal before payment, like the ceilings: no `complete_checkout`.
+- A local pause (ADR-0023) stops the submit path before anything is sent; A 409 `paused` that Intent Cloud returns on a submit or at `completing` is chained as G8's `refused` entry (`source: intent_cloud`).

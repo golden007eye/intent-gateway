@@ -420,6 +420,102 @@
       }
     },
     {
+      "name": "an IP literal store_site",
+      "snapshot": {
+        "v": 4,
+        "approval": "ap_TEST0005",
+        "nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "expires_at": "2026-10-18T20:15:00Z",
+        "rule_version": "recheck-v1",
+        "store_name": "Test Shop",
+        "store_site": "https://192.168.0.1",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "variant_ref": "gid://shopify/ProductVariant/1001",
+        "title": "Trail Runner 3 - US 10 / Blue",
+        "quantity": 1,
+        "currency": "USD",
+        "totals": {
+          "subtotal": 1200,
+          "shipping": 500,
+          "tax": 107,
+          "total": 1807
+        },
+        "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+        "ship_to": {
+          "country": "US",
+          "postal_code_coarse": "94110"
+        },
+        "completion_mode": "shop_agent",
+        "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
+      "name": "a single-label store_site",
+      "snapshot": {
+        "v": 4,
+        "approval": "ap_TEST0005",
+        "nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "expires_at": "2026-10-18T20:15:00Z",
+        "rule_version": "recheck-v1",
+        "store_name": "Test Shop",
+        "store_site": "https://localhost",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "variant_ref": "gid://shopify/ProductVariant/1001",
+        "title": "Trail Runner 3 - US 10 / Blue",
+        "quantity": 1,
+        "currency": "USD",
+        "totals": {
+          "subtotal": 1200,
+          "shipping": 500,
+          "tax": 107,
+          "total": 1807
+        },
+        "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+        "ship_to": {
+          "country": "US",
+          "postal_code_coarse": "94110"
+        },
+        "completion_mode": "shop_agent",
+        "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
+      "name": "a store_site with a hex last label",
+      "snapshot": {
+        "v": 4,
+        "approval": "ap_TEST0005",
+        "nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "expires_at": "2026-10-18T20:15:00Z",
+        "rule_version": "recheck-v1",
+        "store_name": "Test Shop",
+        "store_site": "https://shop.0x7f",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "variant_ref": "gid://shopify/ProductVariant/1001",
+        "title": "Trail Runner 3 - US 10 / Blue",
+        "quantity": 1,
+        "currency": "USD",
+        "totals": {
+          "subtotal": 1200,
+          "shipping": 500,
+          "tax": 107,
+          "total": 1807
+        },
+        "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+        "ship_to": {
+          "country": "US",
+          "postal_code_coarse": "94110"
+        },
+        "completion_mode": "shop_agent",
+        "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
       "name": "quantity 4",
       "snapshot": {
         "v": 4,

@@ -5,6 +5,9 @@ import { createHash } from "node:crypto";
 import { canonicalize } from "../jcs/index.ts";
 import { type AccountKey, type AnySnapshot, type CheckoutRequest, type CheckoutTotals, type CurrencyCeiling, SnapshotV4 } from "./schemas.ts";
 
+/** The currencies a 1.7.0 currency table may list: ISO 4217 minor unit 2 (Appendix A "Currency table and ceiling"). */
+export const TWO_DECIMAL_CURRENCIES = ["AUD", "CAD", "CHF", "CZK", "DKK", "EUR", "GBP", "HKD", "MXN", "NOK", "NZD", "PLN", "SEK", "SGD", "USD"] as const;
+
 /** The countries 1.7.0 ships to; any other is refused locally (Intent Cloud would answer 400). */
 export const COARSE_COUNTRIES = ["US", "CA", "AU"] as const;
 export type CoarseCountry = (typeof COARSE_COUNTRIES)[number];

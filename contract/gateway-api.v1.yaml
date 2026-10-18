@@ -413,7 +413,9 @@ paths:
         `completion_mode: handoff`, so a new approval (one mode per approval). The approval belongs
         to the signing session. **Replay window (10 minutes):** the same session sending the same body
         gets the same approval again while it is `pending`. A new request for the same checkout and
-        mode supersedes the session's pending one, which becomes `expired`. A refusal is 403
+        mode supersedes the session's pending one, which becomes `expired`. Checkouts per IP key have the
+        carts' quota (`limits.carts_per_hour`, or `carts_per_hour_passkey`): 429 `checkouts`; a replay is not
+        counted. A refusal is 403
         with a refusal `code` (Appendix A "Refusals"): `one_tap_off`, `currency_unsupported`,
         `store_blocked`, `category_excluded`, `ceiling_order`; a paused account key gets 409 `conflict` with
         `code: paused`.
@@ -717,7 +719,7 @@ components:
         limit:
           description: Which limit was reached.
           type: string
-          enum: [requests, carts, approvals, enrolments, pause]
+          enum: [requests, carts, approvals, enrolments, pause, checkouts]
         retry_after_seconds:
           type: integer
           minimum: 1
@@ -1800,7 +1802,7 @@ components:
         myshopify_domain:
           $ref: "#/components/schemas/MyshopifyDomain"
         store_site:
-          $ref: "#/components/schemas/MerchantOrigin"
+          $ref: "#/components/schemas/StoreSite"
         store_name:
           type: string
           minLength: 1
@@ -1892,7 +1894,7 @@ components:
           minLength: 1
           maxLength: 80
         store_site:
-          $ref: "#/components/schemas/MerchantOrigin"
+          $ref: "#/components/schemas/StoreSite"
         myshopify_domain:
           $ref: "#/components/schemas/MyshopifyDomain"
         variant_ref:
@@ -1966,4 +1968,9 @@ components:
     RefusalCode:
       description: A 403 refusal of POST /v1/checkouts, or `paused` on a 409 (1.7.0, Appendix A).
       type: string
-      enum: [ceiling_order, ceiling_week, currency_unsupported, store_blocked, category_excluded, paused, one_tap_off]
+      enum: [ceiling_order, ceiling_week, currency_unsupported, store_blocked, category_excluded, paused, one_tap_off, account_key_other_buyer]
+    StoreSite:
+      description: A v4 store's origin (1.7.0, Appendix A); never an IP literal or one label.
+      type: string
+      maxLength: 261
+      pattern: ^https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$

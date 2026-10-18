@@ -33,6 +33,7 @@ import { CloudNetworkError, CloudResponseError, type HeaderPair } from "../cloud
 import {
   bodyText,
   bodyValue,
+  CLOUD_SECRET_PATHS,
   type Finding,
   findIdentity,
   formatPath,
@@ -365,7 +366,13 @@ export function describe(finding: Finding): string {
 /** Why a request may not be logged and sent as it is (step 1 above); empty when it may. */
 function refusalsOf(destination: Destination, request: OutboundRequest, json: unknown, redacted: readonly Redaction[]): string[] {
   if (destination === INTENT_CLOUD) {
-    return redacted.map((r) => `a credential at ${r.at}: requests to Intent Cloud are logged byte for byte and never carry one`);
+    // The one credential the contract makes the gateway send to Intent Cloud: a hand-off page's URL (its checkout
+    // `key`), at exactly CLOUD_SECRET_PATHS of exactly its operation. Logged as its sha256 like any credential; every
+    // other credential in a request to Intent Cloud is still refused.
+    const allowed = CLOUD_SECRET_PATHS[request.operation] ?? [];
+    return redacted
+      .filter((r) => !allowed.some((p) => formatPath("body", [...p]) === r.at))
+      .map((r) => `a credential at ${r.at}: requests to Intent Cloud are logged byte for byte and never carry one`);
   }
   const reasons: string[] = [];
   const form = isFormBody(request.headers);

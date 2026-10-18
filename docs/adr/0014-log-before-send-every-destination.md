@@ -1,6 +1,6 @@
 # ADR-0014: Log before send to every outside destination
 
-Status: accepted · 2026-10-16 · amended by [ADR-0017](0017-wallet-adapters-in-the-gateway.md) (compound token names, form bodies)
+Status: accepted · 2026-10-16 · amended by [ADR-0017](0017-wallet-adapters-in-the-gateway.md) (compound token names, form bodies) · amended by [ADR-0024](0024-submit-shop-checkout.md) (one credential to Intent Cloud)
 
 ## Context
 
@@ -47,3 +47,7 @@ The core does not look inside string values. A token in JSON text carried as a s
 The credential and identity scans walk at most 64 levels of nesting (`SCAN_DEPTH`). A request body nested deeper is blocked before the log and the send (`too_deep`), and the views show a deeper logged value as "nested too deep, not shown", so a hand-edited chain cannot crash `intent log`; `intent verify` fails such a disclosure, since it cannot check it for a credential.
 
 An opaque-id pattern (ADR-0019) with the `g` or `y` flag is refused when the wallet is built: such a pattern keeps state between tests, so the same id could pass one send and be blocked on the next.
+
+## Amendment: one credential to Intent Cloud (ADR-0024)
+
+In contract 1.7.0, one credential is what Intent Cloud receives from the gateway: a hand-off checkout's `continue_url`, which holds the checkout's key. It is the only exception to "requests to Intent Cloud never carry a credential": it is redacted in the log as its sha256 at exactly `body.checkout.continue_url` of `createCheckout` (privacy's `CLOUD_SECRET_PATHS`), every other credential to Intent Cloud is still refused, and `content_digest` keeps naming the sent bytes, which the receipt covers. `intent verify` accepts such a redacted body only at that path.

@@ -4,7 +4,7 @@
 // completer keys, account key and encrypted checkout vault. Attack cases: a store, variant or total swap between the
 // submit and the completion is refused with no complete_checkout; a hand-off page on another host is never submitted;
 // only the coarse postcode reaches Intent Cloud; every refusal code is a clear line.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,9 @@ import { openCheckoutVault, WalletKey } from "../wallet/index.ts";
 import { FAKE_BUYER, FAKE_OTHER_VARIANT, FAKE_STORE, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
 import { RefusalCode } from "../contract/index.ts";
 import { pauseLocally } from "../pause/index.ts";
+import { buildEvidence, packText } from "../evidence/index.ts";
+import { buildModel } from "../panel/index.ts";
+import { runVerify } from "../verify/index.ts";
 import { type ApprovalStatusResult, type CreateCartResult, createGateway, type Gateway } from "./index.ts";
 import { REFUSAL_CODE_WORDS } from "./gateway.ts";
 
@@ -195,6 +198,41 @@ describe("create_cart with a linked Shop wallet: the 1.7.0 submit", () => {
     expect(new URL(request.checkout.continue_url ?? "").host).toBe(FAKE_STORE);
   });
 
+  it("attack: the hand-off page's checkout key is a credential: sent to Intent Cloud, found nowhere in the data dir or any output", async () => {
+    const h = await setup({ faults: { ineligible: true } });
+    const outputs: unknown[] = [];
+    const result = await submitted(h);
+    outputs.push(result);
+    // What Intent Cloud received holds the URL with its key, as the contract requires.
+    const sentUrl = (h.fake.checkouts.received.at(-1) as { checkout: { continue_url: string } }).checkout.continue_url;
+    const key = new URL(sentUrl).searchParams.get("key") ?? "";
+    expect(key.length).toBeGreaterThan(8);
+    // The disclosure logs it as its sha256, which is the snapshot's continue_url_hash; the receipt still verified.
+    const logged = disclosures(h).findLast((d) => d.endpoint === "createCheckout") as Record<string, unknown>;
+    expect(logged.redacted).toEqual([{ at: "body.checkout.continue_url", sha256: createHash("sha256").update(sentUrl, "utf8").digest("hex") }]);
+    const loggedSeq = h.store.entries().findLast((e) => e.kind === "disclosure" && body(e).endpoint === "createCheckout")?.seq;
+    expect(h.store.entries().some((e) => e.kind === "receipt" && body(e).disclosure_seq === loggedSeq && body(e).verified === true)).toBe(true);
+    const pending = body(h.store.entries().findLast((e) => e.kind === "approval_pending") as Entry);
+    expect((pending.sent as { continue_url_hash?: string }).continue_url_hash).toBe(`sha256:${createHash("sha256").update(sentUrl, "utf8").digest("hex")}`);
+    // Approve, read the status, verify the chain, build the evidence pack and the panel model: every output.
+    expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey).status).toBe(200);
+    outputs.push(await status(h, result.approval_handle));
+    const report = await runVerify({ dataDir: h.dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(T0), skipSupplyChain: true });
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    outputs.push(report);
+    const pack = buildEvidence(h.store.entries(), result.approval_handle, [h.fake.keys.rootPin]);
+    outputs.push(packText(pack));
+    outputs.push(buildModel({ items: h.store.entries(), now: T0, mode: "real", intent: "intent", policy: null, verify: null, timeZone: "UTC" }));
+    for (const out of outputs) expect(JSON.stringify(out)).not.toContain(key);
+    expect(JSON.stringify(outputs)).not.toContain(sentUrl);
+    // Every file under the data dir, the checkout vault included (it is encrypted).
+    for (const file of await fsp.readdir(h.dir, { recursive: true, withFileTypes: true })) {
+      if (!file.isFile()) continue;
+      const bytes = await fsp.readFile(join(file.parentPath, file.name));
+      expect(bytes.includes(Buffer.from(key)), join(file.parentPath, file.name)).toBe(false);
+    }
+  });
+
   it("attack: a hand-off page on another host is never submitted", async () => {
     const h = await setup({ faults: { ineligible: true, continueUrlHost: "shop.app.evil.example" } });
     const result = await cart(h);
@@ -250,6 +288,32 @@ describe("create_cart with a linked Shop wallet: the 1.7.0 submit", () => {
     expect(result.status).toBe("refused");
     expect(result.message).toMatch(/^Refused: ceiling_order\. .*per-order ceiling/);
     expect(g.store.entries().filter((e) => e.kind === "approval_pending")).toHaveLength(0);
+  });
+
+  it("one tap turned off after the passkey: the completing redemption is refused 409 one_tap_off, nothing paid", async () => {
+    const h = await setup();
+    const result = await submitted(h);
+    expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey).status).toBe(200);
+    h.fake.checkouts.setOneTap(false);
+    const done = await status(h, result.approval_handle);
+    if (done.status !== "approved") throw new Error(done.message);
+    expect(done.completion).toMatchObject({ state: "failed", reason: "redeem_refused:one_tap_off" });
+    expect(done.message).toContain("one tap is off");
+    expect(completes(h)).toBe(0);
+  });
+
+  it("the per-IP checkout quota: 429 checkouts is one clear line, and the gateway does not resubmit", async () => {
+    const h = await setup();
+    const found = await h.gateway.findOffers(STICKERS);
+    if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
+    const results: CreateCartResult[] = [];
+    for (let i = 0; i < 11; i++) results.push(await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle }));
+    const last = results.at(-1) as CreateCartResult;
+    expect(last.status).toBe("refused");
+    expect(last.message).toContain("too many checkouts this hour");
+    expect(last.message).toContain("does not resubmit");
+    // One POST per create_cart: 11, the refused one included, and none sent again.
+    expect(disclosures(h).filter((d) => d.endpoint === "createCheckout")).toHaveLength(11);
   });
 
   it("has one clear line for every refusal code the contract names", () => {

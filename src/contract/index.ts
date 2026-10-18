@@ -15,6 +15,7 @@ export {
   snapshotTotal,
   snapshotV4Problem,
   totalsAddUp,
+  TWO_DECIMAL_CURRENCIES,
   V4_FIELDS,
   type V4Field,
 } from "./checkout-v4.ts";

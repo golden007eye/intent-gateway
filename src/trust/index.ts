@@ -34,6 +34,7 @@ export {
   SENT_WORDS,
   SentCheckout,
   type SentCheckoutReason,
+  sentCheckoutOf,
   sentCheckoutProblems,
   SentPurchase,
   type SentReason,

@@ -43,6 +43,8 @@ import {
   currencyTableVersion,
   snapshotV4Problem,
   totalsAddUp,
+  StoreSite,
+  TWO_DECIMAL_CURRENCIES,
   type CartRequest as CloudCartRequest,
   type CompletionMode as CloudCompletionMode,
   CONTRACT_VERSION,
@@ -94,7 +96,9 @@ import {
   SENT_WORDS,
   readSent,
   readSentCheckout,
+  type SentCheckout,
   SENT_CHECKOUT_WORDS,
+  sentCheckoutOf,
   sentCheckoutProblems,
   stagingSourceAllowed,
   type SentPurchase,
@@ -520,8 +524,12 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (code !== undefined && (result.status === 403 || result.status === 409)) {
       return refuse("refused", `Refused: ${code}. ${REFUSAL_CODE_WORDS[code]}`);
     }
-    const said = result.body === null ? "" : `: ${result.body.message}`;
     const retry = result.retryAfter === null ? "" : ` Try again in ${String(result.retryAfter)} s.`;
+    // 1.7.0: the per-IP checkout quota. Said once; the gateway never resubmits on its own.
+    if (result.status === 429 && result.body !== null && "limit" in result.body && result.body.limit === "checkouts") {
+      return refuse("refused", `Refused: Intent Cloud answered that this network has submitted too many checkouts this hour. Nothing was bought, and the gateway does not resubmit by itself.${retry}`);
+    }
+    const said = result.body === null ? "" : `: ${result.body.message}`;
     return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}`);
   }
 
@@ -579,7 +587,9 @@ export function createGateway(options: GatewayOptions): Gateway {
     // The currency table (1.7.0): which currencies a submitted checkout may be in. Its version must be the hash of its
     // own currencies, or the table is not used (a submit then refuses, naming why).
     const table = meta.body.currency_table;
-    currencyTable = table !== undefined && currencyTableVersion(table.currencies) === table.version ? table : null;
+    // Only two-decimal currencies may be listed (1.7.0): a table with any other is not used.
+    const twoDecimal = table !== undefined && Object.keys(table.currencies).every((c) => (TWO_DECIMAL_CURRENCIES as readonly string[]).includes(c));
+    currencyTable = table !== undefined && twoDecimal && currencyTableVersion(table.currencies) === table.version ? table : null;
 
     const statement = await cloud.keyStatement();
     if (!statement.ok) throw new GatewayStartError(`Intent Cloud key statement failed with status ${String(statement.status)}`);
@@ -1126,7 +1136,13 @@ export function createGateway(options: GatewayOptions): Gateway {
       budgetCovers = false;
     }
     const oneTapReady = allowed.includes("one_tap") && checkout.status === "open" && checkout.budgetOffered && budgetCovers;
+    // A real DNS name only (1.7.0 StoreSite): a storefront origin that is an IP literal, one label or ends in a number
+    // is refused here, before anything reaches Intent Cloud, as Intent Cloud would refuse it (400).
     const storeSite = offer.storefrontOrigin ?? `https://${offer.storeDomain}`;
+    if (!StoreSite.safeParse(storeSite).success) {
+      await forget(checkout);
+      return refuse("store_site", "Not sent: the store's site is not a DNS name the contract allows (an IP address, a single label or a numeric ending).");
+    }
     let mode: CloudCompletionMode;
     let continueUrl: string | undefined;
     if (oneTapReady) {
@@ -1178,7 +1194,8 @@ export function createGateway(options: GatewayOptions): Gateway {
       completer_keyid: completer.keyid,
       account_key: { kty: "OKP", crv: "Ed25519", x: account.publicJwk.x },
     };
-    const sent = { contract_version: CONTRACT_VERSION, checkout_request: request, currency_table: table.version };
+    // What step 7 checks, chained: the request without its continue_url (a credential, never chained), and its hash.
+    const sent = sentCheckoutOf(request, table.version);
     let keep = false;
     try {
       const outcome = await submitAndCheck(request, sent, checkout, fresh.keys.confirmOrigin, fromSeq);
@@ -1195,7 +1212,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   /** The submit, the checks of the approval it returns (Appendix E step 7 before the passkey), and the pending entry. */
   async function submitAndCheck(
     request: CheckoutRequest,
-    sent: { contract_version: string; checkout_request: CheckoutRequest; currency_table: string },
+    sent: SentCheckout,
     checkout: WalletCheckout,
     confirmOrigin: string,
     fromSeq: number,
@@ -1759,6 +1776,7 @@ export const REFUSAL_CODE_WORDS: Readonly<Record<RefusalCode, string>> = {
   category_excluded: "Intent Cloud answered that this item is in a category it excludes (health and medical, age-restricted, financial or digital goods). Nothing was bought.",
   ceiling_order: "Intent Cloud answered that this order is above its per-order ceiling for the currency. Nothing was bought.",
   ceiling_week: "Intent Cloud answered that this order would pass the buyer's weekly ceiling for the currency. Nothing was bought.",
+  account_key_other_buyer: "Intent Cloud answered that this gateway's account key belongs to another Intent Cloud account (the first buyer who approved with it), so another buyer's passkey cannot approve its checkouts. Nothing was bought.",
   paused: "Intent Cloud answered that the buyer paused purchases for this account key; the buyer resumes with their passkey on the confirm page. Nothing was bought.",
 };
 

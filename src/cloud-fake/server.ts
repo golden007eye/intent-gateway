@@ -871,6 +871,11 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (ceiling === undefined || ceiling.order === 0 || checkout.totals.total > ceiling.order) {
       return refused(403, "ceiling_order", "the total is above the order ceiling");
     }
+    // 1.7.0: checkouts per IP key have the carts' quota (higher after a recent passkey approval): 429 `checkouts`.
+    const approvedAt = passkeyApprovedAt.get(ipKey);
+    const passkeyTier = approvedAt !== undefined && at - approvedAt < PASSKEY_TIER_WINDOW;
+    const checkoutRetry = take(`checkouts:${ipKey}`, passkeyTier ? quotas.carts_per_hour_passkey : quotas.carts_per_hour, 3600, at);
+    if (checkoutRetry !== null) return limited("checkouts", checkoutRetry);
     const retry = take(`approvals:${ipKey}`, quotas.approvals_per_day, 86_400, at);
     if (retry !== null) return limited("approvals", retry);
     // A new request for the same checkout and mode supersedes this session's pending approval of it.
@@ -1046,6 +1051,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       // 1.7.0: the pause and both ceilings again at the completing redemption; the approval stays approved.
       if (snapshot.v === 4) {
         if (paused || accountPaused) return refused(409, "paused", "purchases are paused for this account key");
+        // One tap turned off since the approval: a shop_agent redemption is refused, so nothing is paid.
+        if (snapshot.completion_mode === "shop_agent" && !oneTap) return refused(409, "one_tap_off", "one tap is off");
         const broken = ceilingBroken(snapshot, a.claimedBy, a.handle, at);
         if (broken !== null) return refused(409, broken, `the ${broken === "ceiling_order" ? "order" : "week"} ceiling is exceeded`);
       }

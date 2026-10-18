@@ -9,7 +9,7 @@ import { ApprovalHandle, BindableApprovalProof, bindingRuleFor, metaUrl, Receipt
 import { canonicalize, parseIntegerJson, sha256Hex } from "../jcs/index.ts";
 import { observationProblem } from "../observation/index.ts";
 import { bindingV1, bindingV2, type CloudOutcomeEntry, COMPLETE_CHECKOUT, type LocalOutcomeEntry, mayHaveSent, OutcomeEntry, readCloudOutcome } from "../outcome/index.ts";
-import { bodyValue, findIdentity, isCredentialHeader, ORDER_REF_AT, markerDigest, nestedSecrets, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
+import { bodyValue, cloudRedactionsAllowed, findIdentity, isCredentialHeader, ORDER_REF_AT, markerDigest, nestedSecrets, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
@@ -213,7 +213,7 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
         const session = sessionMark(body.session);
         const destination = typeof body.destination === "string" ? body.destination : INTENT_CLOUD;
         disclosures.set(entry.seq, { entry, destination, followUps: [], session: session === "malformed" ? null : session });
-        const problem = bodyProblem(body);
+        const problem = bodyProblem(body, destination);
         if (problem !== null) disclosureFailures.push(`${at}: the disclosure ${problem}`);
         for (const where of credentialProblems(body)) disclosureFailures.push(`${at}: the disclosure holds a credential: ${where} is not redacted`);
         // A credential inside JSON text is logged as sent (ADR-0014): a warning naming its path, never its value.
@@ -685,11 +685,18 @@ function doubleChargeProblems(entries: readonly Entry[]): string[] {
 }
 
 /** Why a disclosure's logged body bytes are not the bytes its content_digest names, or null when they are. */
-function bodyProblem(body: Record<string, unknown>): string | null {
+function bodyProblem(body: Record<string, unknown>, destination: string): string | null {
   const { body_b64, content_digest } = body;
   if (typeof body_b64 !== "string" || typeof content_digest !== "string") return "holds no body_b64 and content_digest";
   const bytes = Buffer.from(body_b64, "base64");
   if (bytes.toString("base64") !== body_b64) return "body_b64 is not base64";
+  // A request to Intent Cloud with a credential the contract requires (ADR-0024: a hand-off's continue_url) is logged
+  // with that value as its sha256, so its logged bytes are not the sent ones its content_digest (and receipt) name.
+  // Only at the operation's CLOUD_SECRET_PATHS: any other redaction to Intent Cloud fails.
+  if (destination === INTENT_CLOUD && Array.isArray(body.redacted) && body.redacted.length > 0) {
+    const at = (body.redacted as unknown[]).map((r) => (typeof r === "object" && r !== null ? String((r as { at?: unknown }).at) : ""));
+    return cloudRedactionsAllowed(String(body.endpoint), at) ? null : "redacts a value in a request to Intent Cloud outside the contract's credential paths";
+  }
   return contentDigest(bytes) === content_digest ? null : "body does not match its content_digest";
 }
 
