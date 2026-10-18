@@ -13,7 +13,7 @@
 //    confirms it or pauses again (noteSubmitAnswer).
 // The account key is src/account's (ADR-0022): `intent init` makes it; this module only reads its thumbprint and signs.
 import {
-  answerError,
+  isPausedRefusal,
   type PauseAccepted,
   PauseError,
   type PauseRequest,
@@ -230,14 +230,13 @@ function named(error: unknown, ...names: string[]): boolean {
 /** Whether a thrown cloud error, or an answer, is Intent Cloud's `paused` refusal. */
 export function isPausedAnswer(answer: unknown): boolean {
   if (named(answer, "CloudResponseError")) {
-    const bytes = (answer as { raw?: { responseBytes?: unknown } }).raw?.responseBytes;
-    return bytes instanceof Uint8Array && answerError(bytes) === "paused";
+    const { status, raw } = answer as { status?: unknown; raw?: { responseBytes?: unknown } };
+    return typeof status === "number" && isPausedRefusal(status, null, raw?.responseBytes instanceof Uint8Array ? raw.responseBytes : null);
   }
   if (typeof answer === "object" && answer !== null && (answer as { ok?: unknown }).ok === false) {
-    const { body, raw } = answer as { body?: unknown; raw?: { responseBytes?: unknown } };
-    if (typeof body === "object" && body !== null && (body as { error?: unknown }).error === "paused") return true;
-    // A status the 1.6.1 contract does not list for the call: its body was not parsed, so it is read here.
-    return raw?.responseBytes instanceof Uint8Array && answerError(raw.responseBytes) === "paused";
+    const { status, body, raw } = answer as { status?: unknown; body?: unknown; raw?: { responseBytes?: unknown } };
+    // A status the 1.6.1 contract does not list for the call has no parsed body: the raw bytes are read then.
+    return typeof status === "number" && isPausedRefusal(status, body, raw?.responseBytes instanceof Uint8Array ? raw.responseBytes : null);
   }
   return false;
 }

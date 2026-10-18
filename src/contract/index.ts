@@ -16,7 +16,7 @@ export {
 } from "./store-pair.ts";
 export {
   AccountKeyThumbprint,
-  answerError,
+  isPausedRefusal,
   PAUSE_CONTRACT_VERSION,
   PAUSE_ENDPOINT,
   PAUSE_SIGNING_PREFIX,

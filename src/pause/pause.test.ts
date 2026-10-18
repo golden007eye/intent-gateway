@@ -5,7 +5,7 @@ import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { pauseSigningBytes } from "../contract/index.ts";
+import { isPausedRefusal, pauseSigningBytes } from "../contract/index.ts";
 import { CloudNetworkError, type DisclosedResult } from "../disclosure/index.ts";
 import type { PauseAccepted, PauseRequest } from "../contract/index.ts";
 import { type Entry, openStore, type Store } from "../store/index.ts";
@@ -261,5 +261,17 @@ describe("verify's pause rules", () => {
         e(2, "pause_sent", { pause_seq: 0, counter: 1, disclosure_seq: 1, result: "acknowledged", reason: "acknowledged" }),
       ]),
     ).toEqual(["seq 2: the pause_sent is acknowledged without a 200 receipt for its disclosure"]);
+  });
+});
+
+describe("Intent Cloud's paused refusal", () => {
+  const bytes = (value: unknown): Uint8Array => Buffer.from(JSON.stringify(value));
+  it("is a 409 read by `code`, never by `error`", () => {
+    expect(isPausedRefusal(409, null, bytes({ error: "conflict", message: "paused", code: "paused" }))).toBe(true);
+    expect(isPausedRefusal(409, { error: "conflict", message: "paused", code: "paused" }, null)).toBe(true);
+    expect(isPausedRefusal(409, null, bytes({ error: "paused", message: "paused" }))).toBe(false);
+    expect(isPausedRefusal(409, null, bytes({ error: "conflict", message: "replayed" }))).toBe(false);
+    expect(isPausedRefusal(400, null, bytes({ error: "conflict", message: "paused", code: "paused" }))).toBe(false);
+    expect(isPausedRefusal(409, null, Buffer.from("<html>"))).toBe(false);
   });
 });

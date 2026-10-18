@@ -541,7 +541,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   }
 
   function createCart(body: Buffer, keyid: string, ipKey: string, version: ServedVersion, at: number): Reply {
-    if (accountPaused) return fail(409, "paused", "purchases are paused for this account");
+    if (accountPaused) return { status: 409, body: { error: "conflict", message: "purchases are paused for this account", code: "paused" } };
     const json = parseJson(body);
     const v16 = isV16(version);
     // 1.6.x requires the completer key; 1.5.0 has neither 1.6.x field, and its strict schema refuses them.

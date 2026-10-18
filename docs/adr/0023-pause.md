@@ -6,7 +6,7 @@ Status: accepted · 2026-10-18 · Relates to ADR-0014 (log before send to every 
 
 A developer who sees their agent misbehave needs one command that stops spending through intent at once, without waiting for a network round trip and without a passkey. Resuming must stay a human act, because a stopped agent that could resume itself would make the pause worthless.
 
-The contract 1.7.0 draft adds `POST /v1/pause`. It is signed by the gateway session (Appendix C) like every other call, and its body is signed by an **account key**, an Ed25519 key that `intent init` makes on the developer's machine. The draft also says that while an account is paused, the submit, the `completing` outcome report and the confirm page's approval are answered `paused`. There is no resume route and no status route: resume is by passkey only, on the confirm page's `/account`. The 1.7.0 tree is not vendored yet.
+The contract 1.7.0 draft adds `POST /v1/pause`. It is signed by the gateway session (Appendix C) like every other call, and its body is signed by an **account key**, an Ed25519 key that `intent init` makes on the developer's machine. The draft also says that while an account is paused, the submit, the `completing` outcome report and the confirm page's approval are answered HTTP 409 `{error: "conflict", message, code: "paused"}`; the gateway reads the `code`, never the `error`. There is no resume route and no status route: resume is by passkey only, on the confirm page's `/account`. The 1.7.0 tree is not vendored yet.
 
 ## Decision
 
