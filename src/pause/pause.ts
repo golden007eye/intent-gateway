@@ -125,8 +125,10 @@ interface Attempt {
 /**
  * Connects, then signs the next counter and sends it. The counter is read after connecting (a gateway start can take a
  * while), and the `disclosure` is compare-and-appended under the store lease: it is written only while the chain is
- * still paused and holds no pause request with this counter or a higher one, so two processes (serve's retry and
- * `intent pause`) never send the same counter. "conflict": nothing was logged or sent.
+ * still paused, the pause is not acknowledged yet, and the chain holds no pause request with this counter or a higher
+ * one. So two processes (serve's retry and `intent pause`) never send the same counter, and one that connects after the
+ * other's pause was acknowledged sends nothing. Two sends both in flight carry different counters. "conflict": nothing
+ * was logged or sent.
  */
 async function attemptOnce(deps: SendDeps, key: AccountKey): Promise<Attempt | "conflict"> {
   let transport: PauseTransport;
@@ -138,7 +140,12 @@ async function attemptOnce(deps: SendDeps, key: AccountKey): Promise<Attempt | "
   }
   const counter = nextCounter(deps.store.entries());
   const request = signPause(key, counter, issuedAt(deps.now()));
-  const unless = (chain: readonly Entry[]): boolean => !pausedIn(chain) || nextCounter(chain) > counter;
+  const unless = (chain: readonly Entry[]): boolean => {
+    const state = pauseState(chain);
+    // Resumed, already acknowledged (another process's send got there while this one connected), or a counter this
+    // high is already logged: nothing to send.
+    return state.paused === null || state.cloud?.result === "acknowledged" || nextCounter(chain) > counter;
+  };
   const attempt = (rest: Omit<Attempt, "counter">): Attempt => ({ counter, ...rest });
   let answer: DisclosedResult<PauseAccepted>;
   try {
