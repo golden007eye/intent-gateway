@@ -33,16 +33,24 @@ export interface ShopConnection {
   readonly newKey?: () => string;
   /** Where Shop's raw checkout ids are kept between processes (the encrypted checkout vault, ADR-0019); memory by default. */
   readonly checkoutIds?: CheckoutIdStore;
+  /**
+   * Keeps refreshed tokens: called with the new vault text after each refresh (the wallet vault in production). Without
+   * it the new tokens live in this process only, and the next process refreshes again.
+   */
+  readonly saveVaultText?: (text: string) => Promise<void>;
+  /** Milliseconds since the epoch, for the access token's expiry; Date.now by default. */
+  readonly now?: () => number;
 }
 
 /** The Shop wallet adapter, every send of it logged first by the disclosure core of `owner`. */
 export function connectShop(owner: DisclosedCloud | WalletSession, connection: ShopConnection): WalletAdapter {
-  const credentials = parseShopCredentials(connection.vaultText);
+  let credentials = parseShopCredentials(connection.vaultText);
   const timing = connection.timeoutMs === undefined ? {} : { timeoutMs: connection.timeoutMs };
   const mcp = createDisclosedWallet(
     createShopMcpTransport({
       url: connection.mcpUrl ?? DEFAULT_SHOP_MCP_URL,
-      accessToken: credentials?.accessToken ?? "",
+      // Read at each request: a refresh replaces it.
+      accessToken: () => credentials?.accessToken ?? "",
       clientVersion: BUILD.version,
       ...timing,
     }),
@@ -53,7 +61,12 @@ export function connectShop(owner: DisclosedCloud | WalletSession, connection: S
     mcp,
     accounts: accountsOf(owner, connection),
     credentials,
+    onCredentials: async (renewed) => {
+      credentials = renewed;
+      await connection.saveVaultText?.(shopCredentialsText(renewed));
+    },
     ...(connection.newKey === undefined ? {} : { newKey: connection.newKey }),
+    ...(connection.now === undefined ? {} : { now: connection.now }),
     ...(connection.checkoutIds === undefined ? {} : { checkoutIds: connection.checkoutIds }),
   });
 }

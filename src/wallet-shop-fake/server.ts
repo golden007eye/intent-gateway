@@ -1,18 +1,29 @@
-// The fake Shop: Shop's MCP server and its account server (the OAuth device flow and revocation), on 127.0.0.1
-// (plans G7a, G8). It plays Shop as
-// its public tool schemas and the S1 kit describe it, including what makes Shop hard to hold safely:
+// The fake Shop: Shop's MCP server and its account server (the OAuth device flow, token refresh and revocation), on
+// 127.0.0.1 (plans G7a, G8). Its answers have the shapes the S1 spike captured from the real Shop (2026-10-18; UCP
+// 2026-08-25), filled with made-up data only, including what makes Shop hard to hold safely:
 // - MCP 2026-07-28, stateless: `initialize` is refused; each request must carry `Mcp-Method` (equal to the body's
 //   method), `Mcp-Protocol-Version` and `params._meta` naming the protocol version, and `Mcp-Name` for a tool call.
 //   A request that breaks this is answered 400 and recorded in `protocolErrors`.
-// - get_account answers with the buyer's name, email, phone, saved addresses and order history, always.
-// - A checkout echoes its delivery address fields; idempotency keys must be UUIDs (`format: uuid`).
-// Fault switches (FakeShopFaults) cover the attack and failure cases of plans G7a and G7b. Nothing here reaches a
-// real Shop server.
-import { randomBytes } from "node:crypto";
+// - get_account answers with the buyer's email, picture URL, full saved addresses with names and phone, a card with
+//   its last digits and holder name, and a payment `credential {type, token}`, whatever the scope.
+// - create_checkout takes the lines alone and fills delivery with the preferred saved address itself (a new
+//   destination id), echoing the buyer's email, phone and the full address. It offers two instruments: the Shop Pay
+//   card (`selected: false`) and the agent budget (`delegated_budget`, `selected: true`).
+// - create_checkout replayed with the same idempotency key makes a NEW checkout (S1 step 6 --replay).
+// - complete_checkout answers synchronously with the order; a completed checkout offers no instrument any more.
+// - A tool error is HTTP 200 with `isError: true`, `ucp.status: "error"` and `messages[{code, severity}]`; a schema
+//   error or an unknown tool is HTTP 400 with JSON-RPC -32602; a bad token is HTTP 401.
+// - The token answer has `access_token`, `expires_in: 3600`, a `refresh_token`, `scope` and `access_type`, no id
+//   token. Revoking the refresh token leaves the access token working (S1 step 12); removing the connection in the
+//   app (`connectionRemoved`) leaves the token answering with warnings and no account data (S1 step 12b).
+// Fault switches (FakeShopFaults) cover the attack and failure cases of plans G7a, G7b and G8. Nothing here reaches
+// a real Shop server.
+import { randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
 export const FAKE_PROTOCOL = "2026-07-28";
+const UCP_VERSION = "2026-08-25";
 /** The buyer the fake answers with: every one of these strings must stay out of the chain and every tool result. */
 export const FAKE_BUYER = {
   first_name: "Jane",
@@ -23,15 +34,23 @@ export const FAKE_BUYER = {
   city: "Springfield",
   zip: "94107",
 } as const;
+/** The buyer's picture URL in get_account: personal, never kept. */
+export const FAKE_PICTURE_URL = "https://cdn.shop.example/b/user-content/jane-doe-fakename.jpg";
+/** The last digits of the buyer's Shop Pay card, as get_account and checkouts show them. */
+export const FAKE_CARD_LAST4 = "4242";
 /** A card number the fake puts in get_account when `spendRequestTool` is on. */
 export const FAKE_PAN = "4111 1111 1111 1111";
-export const FAKE_ADDRESS_ID = "gid://shopify/MailingAddress/7001";
+/** The preferred saved address's id: a UUID, as S1 saw (never sent by the gateway). */
+export const FAKE_ADDRESS_ID = "6f9c1e2a-0b7d-4c3e-9a51-2d8e4f7a1b30";
 export const FAKE_STORE = "sticker-store.myshopify.com";
 export const FAKE_STOREFRONT = "https://stickers.example";
 export const FAKE_VARIANT = "gid://shopify/ProductVariant/4401";
 export const FAKE_OTHER_VARIANT = "gid://shopify/ProductVariant/9999";
 export const UNIT_PRICE_MINOR = 500;
 export const SHIPPING_MINOR = 399;
+/** The budget the fake's account has left by default (minor units, USD). */
+export const FAKE_BUDGET_MINOR = 5000;
+const CARD_ID = "0b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a40";
 
 export interface FakeShopFaults {
   /** complete_checkout completes, then the connection is cut before any answer. */
@@ -42,22 +61,37 @@ export interface FakeShopFaults {
   otherVariant?: boolean;
   /** complete_checkout leaves the checkout asking the buyer (requires_escalation). */
   buyerReview?: boolean;
-  /** create_checkout is refused: the merchant does not take Shop agent checkouts. */
+  /**
+   * create_checkout answers as S1 step 11 saw a store that agents cannot complete at: status requires_escalation, no
+   * instrument, an error message checkout_completion_ineligible (severity requires_buyer_review), `isError: false`.
+   */
   ineligible?: boolean;
+  /** complete_checkout answers a tool error checkout_completion_ineligible, and the checkout asks the buyer. */
+  completeIneligible?: boolean;
+  /** create_checkout is refused with a tool error (isError true). */
+  createRefused?: boolean;
   /** The buyer's identity in every answer, error messages included. */
   identityEverywhere?: boolean;
   /** tools/list advertises a spend-request tool, and get_account carries a card number. */
   spendRequestTool?: boolean;
-  /** Saved addresses have no id, and an id-only destination is refused: Shop would need the address fields (K4). */
+  /** create_checkout with no destination is refused as needing address fields (plan K4). */
   requiresAddressFields?: boolean;
-  /** The offered payment instrument carries a billing address. */
+  /** The offered payment instruments carry a billing address. */
   billingAddressOnInstrument?: boolean;
+  /** Checkouts offer only the Shop Pay card: no agent budget (the buyer did not turn on "Allow agent to pay"). */
+  noBudgetInstrument?: boolean;
+  /** Checkouts offer two budget instruments (which one cannot be told). */
+  twoBudgetInstruments?: boolean;
+  /** get_account's budget left (minor units); null: no budget instrument (S1 step 3). FAKE_BUDGET_MINOR by default. */
+  budgetMinor?: number | null;
+  /** get_account's top-level currency ("USD" by default). */
+  accountCurrency?: string;
+  /** The buyer removed the connection in the Shop app: get_account answers warnings and no account data (S1 12b). */
+  connectionRemoved?: boolean;
   /** The revocation endpoint's status (200 by default). */
   revokeStatus?: number;
-  /** Whether a repeated idempotency key returns the first result (true by default). */
+  /** Whether a repeated complete_checkout idempotency key returns the first result (true by default). */
   idempotency?: boolean;
-  /** The saved address's id, in place of FAKE_ADDRESS_ID (a hostile id: a query with a token, address text). */
-  addressId?: string;
   /** The `?key=` credential in every checkout id (random by default). */
   checkoutKey?: string;
   /** The token before `?` in every checkout id (16 random hex digits by default). */
@@ -70,39 +104,50 @@ export interface FakeShopFaults {
   /** The device authorization's `interval` (seconds; 5 by default) and `expires_in` (600 by default). */
   deviceInterval?: number;
   deviceExpiresIn?: number;
-  /** The token answer carries no refresh token (Shop documents none for a public client). */
+  /** The token answer carries no refresh token. */
   noRefreshToken?: boolean;
+  /** The token endpoint refuses refresh grants (`invalid_grant`). */
+  refuseRefresh?: boolean;
+  /** A refresh grant issues a new refresh token too (rotation); by default the refresh token stays. */
+  rotateRefresh?: boolean;
   /** search_orders says another page of orders exists. */
   moreOrders?: boolean;
   /** complete_checkout waits this long before it completes and answers (plan G7b test 4a). */
   completeDelayMs?: number;
   /** complete_checkout cuts the connection before it completes anything: the checkout stays open. */
   dropCompleteUnapplied?: boolean;
+  /** create_checkout creates the checkout, then the connection is cut before any answer. */
+  dropCreateAnswer?: boolean;
   /** These tools are answered with the given HTTP status and no result (`{get_checkout: 500}`). */
   toolHttpStatus?: Readonly<Record<string, number>>;
-  /** Every checkout read reports this storefront URL, ZIP or variant instead of its own (a checkout changed after its quote). */
+  /** Every checkout read reports this storefront URL as its merchant, ZIP or variant instead of its own. */
   merchantUrl?: string;
   shipToZip?: string;
   viewVariant?: string;
-  /** get_checkout answers not_found for every checkout. */
+  /** The completed order's permalink is on this host instead of the checkout's store. */
+  permalinkHost?: string;
+  /** get_checkout answers invalid_checkout_id for every checkout. */
   forgetCheckouts?: boolean;
 }
 
 /**
- * An order search_orders returns. Each one is answered with the buyer's name, email, phone, shipping address and line
- * text besides these fields, as Shop's order history holds them.
+ * An order search_orders returns. Each one is answered with the seller's name, line text, the delivery city and an
+ * order-status URL with a credential besides these fields, as S1 saw; `identityEverywhere` adds the buyer.
  */
 export interface FakeOrder {
+  /** The merchant's order gid (`gid://shopify/Order/<digits>`): search_orders answers its digits as shopify_order_id. */
   readonly id: string;
   readonly totalMinor: number;
   readonly currency?: string;
   /** ISO 8601. */
   readonly createdAt: string;
+  /** `email`: an order Shop read from an email, with no shopify_order_id and no seller domain. */
+  readonly source?: "shopify" | "email";
 }
 
 export type DeviceAnswer = "ok" | "authorization_pending" | "slow_down" | "expired_token" | "access_denied";
 
-/** One request to the account server's device flow, as received. */
+/** One request to the account server's token endpoints, as received. */
 export interface FakeOAuthRequest {
   readonly path: "/oauth/device" | "/oauth/token";
   readonly form: Readonly<Record<string, string>>;
@@ -128,11 +173,12 @@ export interface FakeShop {
   readonly mcpUrl: string;
   /** Shop's account server URL (INTENT_SHOP_AUTH_URL). */
   readonly authUrl: string;
-  /** The latest grant's tokens: one pair at start, and a new pair for each device-flow grant. */
+  /** The latest grant's tokens: one pair at start, and a new pair for each device-flow grant or refresh. */
   readonly accessToken: string;
   readonly refreshToken: string;
-  /** The Shop Pay token inside the offered payment instrument. */
+  /** The payment token inside each offered instrument's credential, and the one in get_account's card. */
   readonly instrumentToken: string;
+  readonly accountCardToken: string;
   readonly clientId: string;
   /** The device code and user code of the device flow (fixed per fake). */
   readonly deviceCode: string;
@@ -144,8 +190,14 @@ export interface FakeShop {
   readonly protocolErrors: string[];
   /** How many complete_checkout calls reached the fake (whatever their answer). */
   readonly completeCount: number;
+  /** How many create_checkout calls reached the fake (whatever their answer). */
+  readonly createCount: number;
+  /** The instrument type each complete_checkout paid with (`delegated_budget`, `shop_pay`). */
+  readonly paidWith: string[];
   /** The account's order history, as search_orders answers it; a completed checkout adds its order. Tests may replace it. */
   orders: FakeOrder[];
+  /** Every access token issued so far now answers 401, as an expired one does. */
+  expireAccessTokens(): void;
   close(): Promise<void>;
 }
 
@@ -157,6 +209,8 @@ interface Checkout {
   destinationId: string;
   status: string;
   orderId: string | null;
+  budgetId: string;
+  messages: Record<string, unknown>[];
 }
 
 const TOOLS = [
@@ -172,30 +226,36 @@ const TOOLS = [
   "get_order",
 ];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CONNECTION_GONE = ["claims_unavailable", "addresses_unavailable", "budget_unavailable", "payment_instruments_unavailable"];
 
 export async function startFakeShop(options: { faults?: FakeShopFaults; clientId?: string } = {}): Promise<FakeShop> {
   const token = (prefix: string) => `${prefix}_${randomBytes(18).toString("base64url")}`;
-  // Each grant is a token pair; revoking either token ends its grant only (Shop's connection removal).
+  // Each grant is a token pair; each token is revoked on its own (S1: revoking the refresh token leaves the access
+  // token working).
   const grants: { access: string; refresh: string }[] = [];
-  const grant = () => {
-    const pair = { access: token("shpat_fake_access"), refresh: token("shprt_fake_refresh") };
+  const grant = (refresh?: string) => {
+    const pair = { access: token("shpat_fake_access"), refresh: refresh ?? token("shprt_fake_refresh") };
     grants.push(pair);
     return pair;
   };
   grant();
   const current = () => grants[grants.length - 1] as { access: string; refresh: string };
   const instrumentToken = token("spt_fake_instrument");
+  const accountCardToken = token("spt_fake_account_card");
   const deviceCode = token("fake_device_code");
   const userCode = "WDJB-MJHT";
   const oauthRequests: FakeOAuthRequest[] = [];
   let polls = 0;
   const revoked = new Set<string>();
+  const expired = new Set<string>();
   const checkouts = new Map<string, Checkout>();
   const byKey = new Map<string, unknown>();
   const calls: FakeShopCall[] = [];
   const revocations: FakeRevocation[] = [];
   const protocolErrors: string[] = [];
+  const paidWith: string[] = [];
   let completeCount = 0;
+  let createCount = 0;
   let orders = 5000;
 
   const shop: FakeShop = {
@@ -208,6 +268,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       return current().refresh;
     },
     instrumentToken,
+    accountCardToken,
     clientId: options.clientId ?? "fake-shop-client",
     deviceCode,
     userCode,
@@ -219,92 +280,184 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
     get completeCount() {
       return completeCount;
     },
+    get createCount() {
+      return createCount;
+    },
+    paidWith,
     orders: [{ id: "gid://shopify/Order/4001", totalMinor: 899, createdAt: new Date(Date.now() - 86_400_000).toISOString() }],
+    expireAccessTokens: () => {
+      for (const g of grants) expired.add(g.access);
+    },
     close: () => Promise.resolve(),
   };
 
-  const identity = (): Record<string, unknown> => (shop.faults.identityEverywhere === true ? { buyer: { ...FAKE_BUYER } } : {});
+  const identity = (): Record<string, unknown> => (shop.faults.identityEverywhere === true ? { customer: { ...FAKE_BUYER } } : {});
   const errorText = (text: string): string =>
     shop.faults.identityEverywhere === true ? `${text} for ${FAKE_BUYER.first_name} ${FAKE_BUYER.last_name} <${FAKE_BUYER.email}>` : text;
 
-  const addressId = (): string => shop.faults.addressId ?? FAKE_ADDRESS_ID;
-
+  /** A saved address as S1 saw one: names, street, locality, region, ZIP, country and phone. */
   function address(): Record<string, unknown> {
     return {
       first_name: FAKE_BUYER.first_name,
       last_name: FAKE_BUYER.last_name,
-      address1: FAKE_BUYER.address1,
-      city: FAKE_BUYER.city,
-      province_code: "CA",
+      street_address: FAKE_BUYER.address1,
+      extended_address: "Apt 4",
+      address_locality: FAKE_BUYER.city,
+      address_region: "CA",
+      address_country: "US",
       postal_code: FAKE_BUYER.zip,
-      country_code: "US",
-      phone: FAKE_BUYER.phone,
+      phone_number: FAKE_BUYER.phone,
     };
   }
 
+  const links = [
+    { type: "account", url: "https://shop.example/account", title: "Your Shop account" },
+    { type: "manage_connection", url: "https://shop.example/account/connections", title: "Manage connected apps" },
+  ];
+
   function account(): Record<string, unknown> {
-    const addresses = [shop.faults.requiresAddressFields === true ? address() : { id: addressId(), ...address() }];
+    if (shop.faults.connectionRemoved === true) {
+      return {
+        ucp: { version: UCP_VERSION },
+        signed_in: true,
+        buyer: { email: FAKE_BUYER.email },
+        links,
+        messages: CONNECTION_GONE.map((code) => ({ type: "warning", code, content: errorText(`Could not read ${code} for this connection.`) })),
+      };
+    }
+    const budget = shop.faults.budgetMinor === undefined ? FAKE_BUDGET_MINOR : shop.faults.budgetMinor;
     return {
-      account: {
-        name: `${FAKE_BUYER.first_name} ${FAKE_BUYER.last_name}`,
-        email: FAKE_BUYER.email,
-        phone: FAKE_BUYER.phone,
-        budget: { remaining: { amount: 5000, currency: "USD" }, period: "total" },
-        ...(shop.faults.requiresAddressFields === true ? {} : { preferred_address_id: addressId() }),
-        addresses,
-        orders: [{ id: "gid://shopify/Order/4001", shipping_address: address(), email: FAKE_BUYER.email }],
-        payment: {
-          instruments: [{ type: "shop_pay", display: { brand: "visa", last_digits: "4242" } }],
-          ...(shop.faults.spendRequestTool === true ? { card_number: FAKE_PAN } : {}),
-        },
+      ucp: { version: UCP_VERSION },
+      signed_in: true,
+      buyer: { email: FAKE_BUYER.email },
+      picture: { type: "image", url: FAKE_PICTURE_URL },
+      addresses: [{ type: "shipping_address", id: FAKE_ADDRESS_ID, ...address() }],
+      preferred_address_id: FAKE_ADDRESS_ID,
+      currency: shop.faults.accountCurrency ?? "USD",
+      payment: {
+        instruments:
+          budget === null
+            ? []
+            : [{ handler_id: "shop_pay", type: "shop_pay", display: { limit: 15000, remaining_amount: budget, renewal_type: "monthly", renews_at: "2026-11-01T00:00:00Z" } }],
+        ...(shop.faults.spendRequestTool === true ? { card_number: FAKE_PAN } : {}),
       },
+      selectable_instruments: [
+        {
+          id: CARD_ID,
+          handler_id: "shop_pay",
+          type: "shop_pay",
+          display: {
+            funding_instrument: {
+              type: "card",
+              brand: "visa",
+              last_digits: FAKE_CARD_LAST4,
+              name: `${FAKE_BUYER.first_name} ${FAKE_BUYER.last_name}`,
+              description: `Visa •••• ${FAKE_CARD_LAST4}`,
+            },
+          },
+          credential: { type: "shop_token", token: accountCardToken },
+        },
+      ],
+      preferred_instrument_id: CARD_ID,
+      links,
+      messages: [],
+      next: ["Show only returned budget amounts in the returned currency's minor units and any renewal details."],
     };
+  }
+
+  function instruments(c: Checkout): Record<string, unknown>[] {
+    // A completed checkout offers none (S1 step 9); a store agents cannot complete at offers none (S1 step 11).
+    if (c.status === "completed" || shop.faults.ineligible === true) return [];
+    const billing = shop.faults.billingAddressOnInstrument === true ? { billing_address: address() } : {};
+    const card = {
+      id: CARD_ID,
+      handler_id: "shop_pay",
+      type: "shop_pay",
+      selected: false,
+      credential: { type: "shop_token", token: instrumentToken },
+      display: { brand: "visa", last_digits: FAKE_CARD_LAST4, expiry_month: 12, expiry_year: 2030 },
+      ...billing,
+    };
+    const budget = (id: string) => ({
+      id,
+      handler_id: "shop_pay",
+      type: "delegated_budget",
+      selected: true,
+      // S1 saw only `type` in a checkout instrument's credential; the fake adds a token, so the tests prove that a
+      // credential Shop may put there is digested in the log when the instrument is sent back.
+      credential: { type: "shop_token", token: instrumentToken },
+      display: { remaining_amount: FAKE_BUDGET_MINOR, limit: 15000, renewal_type: "monthly", renews_at: "2026-11-01T00:00:00Z" },
+      ...billing,
+    });
+    if (shop.faults.noBudgetInstrument === true) return [{ ...card, selected: true }];
+    return shop.faults.twoBudgetInstruments === true ? [card, budget(c.budgetId), budget(`${c.budgetId}x`)] : [card, budget(c.budgetId)];
   }
 
   function view(c: Checkout): Record<string, unknown> {
     const amount = UNIT_PRICE_MINOR * c.quantity;
-    const instrument: Record<string, unknown> = {
-      id: "pi_1",
-      handler_id: "shop_pay",
-      type: "shop_pay",
-      credential: { type: "shop_token", token: instrumentToken },
-      display: { brand: "visa", last_digits: "4242" },
-      ...(shop.faults.billingAddressOnInstrument === true ? { billing_address: address() } : {}),
-    };
+    const token = c.id.replace(/^gid:\/\/shopify\/Checkout\//, "").replace(/\?.*$/, "");
     return {
-      checkout: {
-        id: c.id,
-        status: c.status,
-        currency: "USD",
-        line_items: [{ id: "li_1", item: { id: shop.faults.viewVariant ?? c.variant, title: "Holographic sticker" }, quantity: c.quantity }],
-        totals: [
-          { type: "subtotal", amount },
-          { type: "fulfillment", amount: SHIPPING_MINOR },
-          { type: "total", amount: amount + SHIPPING_MINOR + (shop.faults.totalAboveMinor ?? 0) },
-        ],
-        merchant: { domain: c.shop, url: shop.faults.merchantUrl ?? FAKE_STOREFRONT },
-        // Shop echoes the chosen destination's address fields.
-        fulfillment: {
-          methods: [
-            {
-              id: "m1",
-              type: "shipping",
-              destinations: [{ id: c.destinationId, type: "shipping_address", ...address(), ...(shop.faults.shipToZip === undefined ? {} : { postal_code: shop.faults.shipToZip }) }],
-              selected_destination_id: c.destinationId,
-            },
-          ],
-        },
-        payment: { instruments: [instrument] },
-        ...(c.orderId === null ? {} : { order: { id: c.orderId, permalink_url: `${FAKE_STOREFRONT}/orders/1` } }),
-        ...identity(),
+      ucp: { version: UCP_VERSION },
+      id: c.id,
+      currency: "USD",
+      // Shop echoes the buyer, though the gateway sent no buyer.
+      buyer: {
+        email: FAKE_BUYER.email,
+        phone_number: FAKE_BUYER.phone,
+        consent: { "dev.ucp.consent.analytics": { granted: true, source: "business", description: "Analytics and performance measurement" } },
       },
+      line_items: [
+        {
+          id: `gid://shopify/CartLine/${randomUUID()}?cart=${token}`,
+          item: { id: shop.faults.viewVariant ?? c.variant, title: "Holographic sticker", price: UNIT_PRICE_MINOR },
+          quantity: c.quantity,
+          totals: [{ type: "subtotal", amount, display_text: "Subtotal" }],
+        },
+      ],
+      totals: [
+        { type: "subtotal", amount, display_text: "Subtotal" },
+        { type: "fulfillment", amount: SHIPPING_MINOR, display_text: "Shipping" },
+        { type: "total", amount: amount + SHIPPING_MINOR + (shop.faults.totalAboveMinor ?? 0), display_text: "Total" },
+      ],
+      // Shop fills the preferred saved address under a new destination id, all fields echoed.
+      fulfillment: {
+        methods: [
+          {
+            id: "c2hpcHBpbmc=",
+            type: "shipping",
+            selected_destination_id: c.destinationId,
+            destinations: [{ ...address(), ...(shop.faults.shipToZip === undefined ? {} : { postal_code: shop.faults.shipToZip }), id: c.destinationId }],
+          },
+        ],
+      },
+      // S1 saw no merchant field on a checkout; a test may add one.
+      ...(shop.faults.merchantUrl === undefined ? {} : { merchant: { url: shop.faults.merchantUrl } }),
+      expires_at: new Date(Date.now() + 30 * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      payment: { instruments: instruments(c) },
+      ...(c.orderId === null
+        ? {}
+        : { order: { id: c.orderId, label: "FAKE1ORDER", permalink_url: `https://${shop.faults.permalinkHost ?? c.shop}/checkouts/cn/${token}/thank_you?key=${randomBytes(8).toString("hex")}` } }),
+      messages: c.messages,
+      status: c.status,
+      ...(c.status === "completed" ? {} : { continue_url: `https://shop.example/checkouts/finalizer/r/${token}?key=${randomBytes(8).toString("hex")}` }),
+      next: ["Several instruments: ask which unless already chosen, not by position."],
+      ...identity(),
     };
   }
 
   /** An MCP tool result: structured content plus a text copy, as Shop sends it. */
   const result = (content: Record<string, unknown>, isError = false) => ({ structuredContent: content, content: [{ type: "text", text: JSON.stringify(content) }], isError });
-  const toolError = (code: string, path: string | null, text: string) =>
-    result({ messages: [{ type: "error", code, ...(path === null ? {} : { path }), content: errorText(text) }], ...identity() }, true);
+  const message = (code: string, severity: string, text: string, path: string | null = null) => ({
+    type: "error",
+    content_type: "plain",
+    code,
+    ...(path === null ? {} : { path }),
+    content: errorText(text),
+    severity,
+  });
+  /** A tool error as S1 step 8 saw it: HTTP 200, isError, ucp.status error, messages with a code and a severity. */
+  const toolError = (code: string, path: string | null, text: string, severity = "unrecoverable") =>
+    result({ ucp: { version: UCP_VERSION, status: "error" }, messages: [message(code, severity, text, path)], ...identity() }, true);
 
   function remember(key: unknown, answer: () => unknown): unknown {
     if (shop.faults.idempotency !== false && typeof key === "string" && byKey.has(key)) return byKey.get(key);
@@ -313,6 +466,35 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
     return value;
   }
 
+  function order(o: FakeOrder): Record<string, unknown> {
+    const digits = o.id.split("/").at(-1) ?? "";
+    const email = o.source === "email";
+    return {
+      id: randomUUID(),
+      label: email ? "Items ordered on Thursday" : `Engraved for ${FAKE_BUYER.first_name} ${FAKE_BUYER.last_name}`,
+      placed_at: o.createdAt,
+      status: "paid",
+      source: email ? "email" : "shopify",
+      seller: email ? { name: "Some Store" } : { name: "Sticker Store", domain: new URL(FAKE_STOREFRONT).host, myshopify_domain: FAKE_STORE, shopify_shop_id: "10000000001" },
+      line_items: [{ id: randomUUID(), item: { id: FAKE_VARIANT, title: `Engraved for ${FAKE_BUYER.first_name} ${FAKE_BUYER.last_name}`, price: 500 }, quantity: { total: 1, fulfilled: 0 } }],
+      fulfillment: { expectations: [{ method_type: "shipping", destination: { address_locality: FAKE_BUYER.city, address_country: "US" } }] },
+      // An order-status URL with a credential, not the checkout gid (S1 step 10).
+      ...(email
+        ? {}
+        : {
+            checkout_id: `${FAKE_STOREFRONT}/10000000001/orders/${randomBytes(16).toString("hex")}/authenticate?key=${randomBytes(8).toString("hex")}`,
+            permalink_url: `${FAKE_STOREFRONT}/10000000001/orders/${randomBytes(16).toString("hex")}/authenticate?key=${randomBytes(8).toString("hex")}`,
+            shopify_order_id: digits,
+          }),
+      payment_status: "paid",
+      totals: [{ type: "total", amount: o.totalMinor }],
+      currency: o.currency ?? "USD",
+      note: `Leave at ${FAKE_BUYER.address1}, call ${FAKE_BUYER.phone}`,
+      ...identity(),
+    };
+  }
+
+  /** A tool call's answer; null for a tool the fake does not have (HTTP 400, -32602). */
   function callTool(name: string, args: Record<string, unknown>): unknown {
     const meta = (args.meta ?? {}) as Record<string, unknown>;
     const key = meta["idempotency-key"];
@@ -322,60 +504,55 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       case "create_spend_request":
         return result({ card: { number: FAKE_PAN } });
       case "search_orders":
-        return result({
-          orders: shop.orders.map((o) => ({
-            id: o.id,
-            name: `#${o.id.split("/").at(-1) ?? ""}`,
-            created_at: o.createdAt,
-            currency: o.currency ?? "USD",
-            totals: [{ type: "total", amount: o.totalMinor }],
-            merchant: { domain: FAKE_STORE, url: `${FAKE_STOREFRONT}/orders?customer=${encodeURIComponent(FAKE_BUYER.email)}` },
-            customer: { first_name: FAKE_BUYER.first_name, last_name: FAKE_BUYER.last_name, email: FAKE_BUYER.email, phone: FAKE_BUYER.phone },
-            email: FAKE_BUYER.email,
-            shipping_address: address(),
-            billing_address: address(),
-            line_items: [{ item: { id: FAKE_VARIANT, title: `Engraved for ${FAKE_BUYER.first_name} ${FAKE_BUYER.last_name}` }, quantity: 1 }],
-            note: `Leave at ${FAKE_BUYER.address1}, call ${FAKE_BUYER.phone}`,
-          })),
-          pagination: { has_next_page: shop.faults.moreOrders === true },
-          ...identity(),
-        });
+        return result({ ucp: { version: UCP_VERSION }, orders: shop.orders.map(order), pagination: { has_next_page: shop.faults.moreOrders === true, cursor: "eyJmYWtlIjp0cnVlfQ" }, ...identity() });
       case "create_checkout": {
+        createCount++;
         if (typeof key !== "string" || !UUID.test(key)) return toolError("invalid", "$.meta.idempotency-key", "idempotency-key must be a uuid");
         if (typeof args.shop !== "string" || !/\.myshopify\.com$/.test(args.shop)) return toolError("invalid", "$.shop", "unknown shop");
-        if (shop.faults.ineligible === true) return toolError("merchant_ineligible", null, "this store does not accept agent checkouts");
+        if (shop.faults.createRefused === true) return toolError("merchant_unavailable", null, "this store does not accept agent checkouts");
         const checkout = (args.checkout ?? {}) as Record<string, unknown>;
-        const line = ((checkout.line_items ?? []) as Record<string, unknown>[])[0] ?? {};
-        const method = (((checkout.fulfillment ?? {}) as Record<string, unknown>).methods as Record<string, unknown>[] | undefined)?.[0];
-        const destination = (method?.destinations as Record<string, unknown>[] | undefined)?.[0];
-        if (shop.faults.requiresAddressFields === true || typeof destination?.id !== "string" || destination.id !== addressId()) {
-          return toolError("missing", "$.checkout.fulfillment.methods[0].destinations[0].address1", "a shipping address is required");
+        if (shop.faults.requiresAddressFields === true && checkout.fulfillment === undefined) {
+          return toolError("missing", "$.checkout.fulfillment.methods[0].destinations[0].street_address", "a shipping address is required");
         }
-        return remember(key, () => {
-          const c: Checkout = {
-            // A UCP checkout id carries a credential in its query, as Shopify's do.
-            id: `gid://shopify/Checkout/${shop.faults.checkoutToken ?? randomBytes(8).toString("hex")}?key=${shop.faults.checkoutKey ?? randomBytes(16).toString("hex")}`,
-            shop: args.shop as string,
-            variant: shop.faults.otherVariant === true ? FAKE_OTHER_VARIANT : String((line.item as Record<string, unknown> | undefined)?.id),
-            quantity: typeof line.quantity === "number" ? line.quantity : 1,
-            destinationId: destination.id as string,
-            status: "ready_for_complete",
-            orderId: null,
-          };
-          checkouts.set(c.id, c);
-          return result(view(c));
-        });
+        const line = ((checkout.line_items ?? []) as Record<string, unknown>[])[0] ?? {};
+        // Never deduplicated by key: a replay makes a new checkout (S1 step 6 --replay).
+        const c: Checkout = {
+          // A UCP checkout id carries a credential in its query, as Shopify's do.
+          id: `gid://shopify/Checkout/${shop.faults.checkoutToken ?? randomBytes(8).toString("hex")}?key=${shop.faults.checkoutKey ?? randomBytes(16).toString("hex")}`,
+          shop: args.shop,
+          variant: shop.faults.otherVariant === true ? FAKE_OTHER_VARIANT : String((line.item as Record<string, unknown> | undefined)?.id),
+          quantity: typeof line.quantity === "number" ? line.quantity : 1,
+          destinationId: randomUUID(),
+          status: shop.faults.ineligible === true ? "requires_escalation" : "ready_for_complete",
+          orderId: null,
+          budgetId: `shop_${randomBytes(12).toString("base64url").replace(/[-_]/g, "a")}`,
+          messages:
+            shop.faults.ineligible === true
+              ? [message("checkout_completion_ineligible", "requires_buyer_review", "This checkout is ineligible for completion via API. Use the continue_url to complete checkout.")]
+              : [],
+        };
+        checkouts.set(c.id, c);
+        return result(view(c));
       }
       case "get_checkout": {
         const c = shop.faults.forgetCheckouts === true ? undefined : checkouts.get(String(args.id));
-        return c === undefined ? toolError("not_found", "$.id", "checkout not found") : result(view(c));
+        return c === undefined ? toolError("invalid_checkout_id", null, "Invalid id format. Expected a Shopify Checkout GID.") : result(view(c));
       }
       case "complete_checkout": {
         completeCount++;
         if (typeof key !== "string" || !UUID.test(key)) return toolError("invalid", "$.meta.idempotency-key", "idempotency-key must be a uuid");
         const c = checkouts.get(String(args.id));
-        if (c === undefined) return toolError("not_found", "$.id", "checkout not found");
+        if (c === undefined) return toolError("invalid_checkout_id", null, "Invalid id format. Expected a Shopify Checkout GID.");
         return remember(key, () => {
+          const sent = ((((args.checkout ?? {}) as Record<string, unknown>).payment ?? {}) as Record<string, unknown>).instruments as Record<string, unknown>[] | undefined;
+          const chosen = sent?.[0];
+          const offered = instruments(c).find((i) => i.id === chosen?.id);
+          if (sent?.length !== 1 || offered === undefined || chosen?.selected !== true) return toolError("invalid_instrument", "$.checkout.payment.instruments", "send one offered instrument with selected:true");
+          paidWith.push(String(offered.type));
+          if (shop.faults.completeIneligible === true) {
+            c.status = "requires_escalation";
+            return toolError("checkout_completion_ineligible", null, "This checkout is ineligible for completion via API.", "requires_buyer_review");
+          }
           if (shop.faults.buyerReview === true) c.status = "requires_escalation";
           else {
             c.status = "completed";
@@ -406,17 +583,16 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
 
     if (req.method === "POST" && req.url === "/oauth/revoke") {
       const form = new URLSearchParams(text);
-      revocations.push({ token: form.get("token") ?? "", tokenTypeHint: form.get("token_type_hint"), clientId: form.get("client_id"), contentType: headers["content-type"] ?? "" });
+      const revoking = form.get("token") ?? "";
+      revocations.push({ token: revoking, tokenTypeHint: form.get("token_type_hint"), clientId: form.get("client_id"), contentType: headers["content-type"] ?? "" });
       const status = shop.faults.revokeStatus ?? 200;
+      // Each token on its own: the access token keeps working after its refresh token is revoked (S1 step 12).
       if (status === 200) {
-        // Revoking either token ends its grant, as Shop's connection removal does.
-        const ended = grants.find((g) => g.access === form.get("token") || g.refresh === form.get("token"));
-        if (ended !== undefined) {
-          revoked.add(ended.access);
-          revoked.add(ended.refresh);
-        }
-      }
-      send(status, status === 200 ? {} : { error: "server_error", error_description: errorText("revocation failed") });
+        revoked.add(revoking);
+        // An empty body, as S1 saw.
+        res.writeHead(200);
+        res.end();
+      } else send(status, { error: "server_error", error_description: errorText("revocation failed") });
       return;
     }
     if (req.method === "POST" && (req.url === "/oauth/device" || req.url === "/oauth/token")) {
@@ -438,6 +614,23 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         });
         return;
       }
+      const tokens = (issued: { access: string; refresh: string }) => ({
+        access_token: issued.access,
+        token_type: "Bearer",
+        expires_in: 3600,
+        ...(shop.faults.noRefreshToken === true ? {} : { refresh_token: issued.refresh }),
+        scope: "openid personal_agent",
+        access_type: "offline",
+      });
+      if (form.grant_type === "refresh_token") {
+        const owner = grants.find((g) => g.refresh === form.refresh_token);
+        if (shop.faults.refuseRefresh === true || owner === undefined || revoked.has(owner.refresh)) {
+          send(400, { error: "invalid_grant", error_description: errorText("refresh token invalid") });
+          return;
+        }
+        send(200, tokens(grant(shop.faults.rotateRefresh === true ? undefined : owner.refresh)));
+        return;
+      }
       if (form.grant_type !== "urn:ietf:params:oauth:grant-type:device_code" || form.device_code !== deviceCode) {
         send(400, { error: "invalid_grant" });
         return;
@@ -448,16 +641,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         send(400, { error: answer, error_description: errorText(answer) });
         return;
       }
-      const issued = grant();
-      send(200, {
-        access_token: issued.access,
-        token_type: "Bearer",
-        expires_in: 3600,
-        scope: form.scope ?? "openid personal_agent",
-        ...(shop.faults.noRefreshToken === true ? {} : { refresh_token: issued.refresh }),
-        // An id token names the buyer; the gateway must drop it.
-        id_token: `fake.${Buffer.from(JSON.stringify({ email: FAKE_BUYER.email })).toString("base64url")}.sig`,
-      });
+      send(200, tokens(grant()));
       return;
     }
     if (req.method !== "POST" || req.url !== "/mcp") {
@@ -499,13 +683,19 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       return;
     }
     const bearer = /^Bearer (.+)$/.exec(headers.authorization ?? "")?.[1];
-    if (bearer === undefined || !grants.some((g) => g.access === bearer) || revoked.has(bearer)) {
+    if (bearer === undefined || !grants.some((g) => g.access === bearer) || revoked.has(bearer) || expired.has(bearer)) {
       send(401, rpcError(body.id, -32001, "invalid token"), { "www-authenticate": 'Bearer error="invalid_token"' });
       return;
     }
     const forced = shop.faults.toolHttpStatus?.[tool];
     if (forced !== undefined) {
       send(forced, { error: "server_error" });
+      return;
+    }
+    const args = (params.arguments ?? {}) as Record<string, unknown>;
+    // A schema error: HTTP 400, JSON-RPC -32602 (S1 step 8).
+    if ((tool === "get_checkout" || tool === "complete_checkout") && typeof args.id !== "string") {
+      send(400, rpcError(body.id, -32602, "$.id: required property missing"));
       return;
     }
     if (tool === "complete_checkout") {
@@ -517,12 +707,13 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       const delay = shop.faults.completeDelayMs ?? 0;
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     }
-    const answer = callTool(tool, (params.arguments ?? {}) as Record<string, unknown>);
+    const answer = callTool(tool, args);
     if (answer === null) {
-      send(200, rpcError(body.id, -32602, `unknown tool ${tool}`));
+      // An unknown tool: HTTP 400, JSON-RPC -32602 (S1 step 8).
+      send(400, rpcError(body.id, -32602, "Unknown tool: tool is not available in the hosted profile"));
       return;
     }
-    if (tool === "complete_checkout" && shop.faults.dropCompleteAnswer === true) {
+    if ((tool === "complete_checkout" && shop.faults.dropCompleteAnswer === true) || (tool === "create_checkout" && shop.faults.dropCreateAnswer === true)) {
       res.socket?.destroy();
       return;
     }

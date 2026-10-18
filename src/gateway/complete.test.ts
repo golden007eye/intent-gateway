@@ -394,6 +394,31 @@ describe("races between processes", () => {
     expect((await p2.gateway.findOffers(SEARCH)).status).toBe("offers");
   });
 
+  it("race at step 4: a second process polls after the winner's create was answered, before its completion entry → it waits; the winner orders", async () => {
+    const base = await setup();
+    let other: Proc | null = null;
+    let handle = "";
+    let seenMidRace: string | null = null;
+    // Holds the winner's completion append until the other process has polled once (the CI interleaving, made fixed).
+    const gate = (real: Store): Store => ({
+      append: (k, b) => real.append(k, b),
+      appendUnless: async (k, b, c) => {
+        if (k === "completion" && seenMidRace === null && other !== null) seenMidRace = completionOf(await status(other, handle)).state;
+        return real.appendUnless(k, b, c);
+      },
+      entries: () => real.entries(),
+      close: () => real.close(),
+    });
+    const winner = await proc(base, { wrap: gate });
+    other = await proc(base);
+    handle = await chainedApproval(base, winner);
+    expect(completionOf(await status(winner, handle)).state).toBe("ordered");
+    expect(seenMidRace).toBe("completing");
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(1);
+    expect(localOutcomes(await chainOf(base)).map((o) => o.state)).not.toContain("failed");
+  });
+
   it("attack 4a (race at step 6, Shop idempotency off): B only reads the checkout while A's send is in flight; one attempt, one send", async () => {
     const base = await setup({ faults: { idempotency: false } });
     const a = await proc(base);
@@ -630,6 +655,173 @@ describe("refusals before any complete_checkout", () => {
   });
 });
 
+describe("Shop as the S1 spike saw it (2026-10-18)", () => {
+  it("no budget shown for the connection, or not in USD → failed (budget_unknown) before any checkout; never assumed", async () => {
+    for (const faults of [{ budgetMinor: null }, { accountCurrency: "CAD" }] as FakeShopFaults[]) {
+      const base = await setup({ faults });
+      const p = await proc(base);
+      const handle = await approvedCart(base, p);
+      const result = await status(p, handle);
+      expect(completionOf(result)).toMatchObject({ state: "failed", source: "gateway_precheck", reason: "budget_unknown" });
+      expect(result.message).toContain('turn on "Allow agent to pay" with a budget in the Shop app');
+      expect(base.shop.createCount).toBe(0);
+      expect(counted(base, await chainOf(base))).toBe(0);
+    }
+  });
+
+  it("the connection removed in the Shop app (warnings, token still answers) → failed (wallet_disconnected), no checkout", async () => {
+    const base = await setup({ faults: { connectionRemoved: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    const result = await status(p, handle);
+    expect(completionOf(result)).toMatchObject({ state: "failed", reason: "wallet_disconnected" });
+    expect(result.message).toContain("intent wallet unlink shop, then intent wallet link shop");
+    expect(base.shop.createCount).toBe(0);
+  });
+
+  it("attack (card fallback): a checkout that offers only the Shop Pay card → failed (no_budget_instrument), never paid with the card", async () => {
+    const base = await setup({ faults: { noBudgetInstrument: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    const result = await status(p, handle);
+    expect(completionOf(result)).toMatchObject({ state: "failed", source: "gateway_precheck", reason: "no_budget_instrument" });
+    expect(result.message).toContain("never pays with the card");
+    expect(base.shop.completeCount).toBe(0);
+    expect(base.shop.paidWith).toEqual([]);
+    // Nothing was redeemed: no completion entry, no report, the cap room is free.
+    const chain = await chainOf(base);
+    expect(ofKind(chain, "completion")).toHaveLength(0);
+    expect(reportsAt(base, handle)).toEqual([]);
+    expect(counted(base, chain)).toBe(0);
+  });
+
+  it("the happy path pays with the delegated budget; the merchant check binds the store the checkout lives at (Shop names no merchant)", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "ordered" });
+    expect(base.shop.paidWith).toEqual(["delegated_budget"]);
+    const ordered = localOutcomes(await chainOf(base)).at(-1);
+    expect(ordered?.binding_inputs).toMatchObject({ observed: { merchant_origin: FAKE_STOREFRONT } });
+    expect(ordered?.local_binding).toMatchObject({ result: "ok", checks: { merchant_origin: "match" } });
+  });
+
+  it("attack (store swap): the completed order's permalink is on another myshopify store → mismatch, never ordered", async () => {
+    const base = await setup({ faults: { permalinkHost: "other-store.myshopify.com" } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "mismatch" });
+    expect(localOutcomes(await chainOf(base)).at(-1)?.local_binding).toMatchObject({ checks: { merchant_origin: "differs" } });
+  });
+
+  it("attack (idempotency, S1 --replay): create_checkout's answer is lost → failed (create_unconfirmed); later calls never create again", async () => {
+    const base = await setup({ faults: { dropCreateAnswer: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "failed", reason: "create_unconfirmed" });
+    delete base.shop.faults.dropCreateAnswer;
+    for (let i = 0; i < 3; i++) await status(p, handle);
+    // A fresh process (a restart) does not create again either.
+    const p2 = await proc(base);
+    await status(p2, handle);
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(0);
+    // No complete_checkout could follow, so the reservation is freed on local evidence.
+    expect(counted(base, await chainOf(base))).toBe(0);
+  });
+
+  it("attack (crash after create_checkout left): the restarted gateway waits out the window, then fails it (create_unconfirmed), never creating again", async () => {
+    const base = await setup({ faults: { dropCreateAnswer: true } });
+    // The process dies right after the create_checkout disclosure is on disk: no follow-up, no outcome.
+    let dead = false;
+    const killer = (real: Store): Store => ({
+      append: (kind, b) => {
+        if (dead) return Promise.reject(new Error("killed"));
+        const done = real.append(kind, b);
+        if (kind === "disclosure" && (b as { endpoint?: unknown }).endpoint === "create_checkout") dead = true;
+        return done;
+      },
+      appendUnless: (kind, b, conflict) => {
+        if (dead) return Promise.reject(new Error("killed"));
+        const done = real.appendUnless(kind, b, conflict);
+        if (kind === "disclosure" && (b as { endpoint?: unknown }).endpoint === "create_checkout") dead = true;
+        return done;
+      },
+      entries: () => real.entries(),
+      close: () => real.close(),
+    });
+    const p1 = await proc(base, { wrap: killer });
+    const handle = await approvedCart(base, p1);
+    await status(p1, handle).catch(() => undefined);
+    await p1.store.close();
+    expect(base.shop.createCount).toBe(1);
+    delete base.shop.faults.dropCreateAnswer;
+    const p2 = await proc(base);
+    // Within the attempt window the first process may still be waiting for Shop's answer: a wait, no send.
+    expect(completionOf(await status(p2, handle)).state).toBe("completing");
+    base.clock.at += ATTEMPT_WINDOW_MS;
+    expect(completionOf(await status(p2, handle))).toMatchObject({ state: "failed", source: "gateway_precheck", reason: "create_unconfirmed" });
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(0);
+    expect(counted(base, await chainOf(base))).toBe(0);
+  });
+
+  it("a create_checkout Shop refused for the token (401) made no checkout: the next call creates", async () => {
+    const base = await setup({ faults: { toolHttpStatus: { create_checkout: 401 } } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("completing");
+    expect(base.shop.createCount).toBe(0);
+    delete base.shop.faults.toolHttpStatus;
+    const p2 = await proc(base);
+    expect(completionOf(await status(p2, handle)).state).toBe("ordered");
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(1);
+  });
+
+  it("attack (store swap, merchant reported): the order is on another store while Shop reports the approved origin → mismatch", async () => {
+    const base = await setup({ faults: { merchantUrl: FAKE_STOREFRONT, permalinkHost: "other-store.myshopify.com" } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "mismatch" });
+    expect(localOutcomes(await chainOf(base)).at(-1)?.local_binding).toMatchObject({ checks: { merchant_origin: "differs" } });
+  });
+
+  it("a store agents cannot complete at (S1 step 11: requires_escalation, checkout_completion_ineligible) → failed (ineligible), no complete", async () => {
+    const base = await setup({ faults: { ineligible: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "failed", source: "shop_api", reason: "ineligible" });
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(0);
+  });
+
+  it("complete_checkout answered with a tool error (checkout_completion_ineligible) → indeterminate under Shop's code, never ordered, never re-sent", async () => {
+    const base = await setup({ faults: { completeIneligible: true } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    const result = await status(p, handle);
+    expect(completionOf(result)).toMatchObject({ state: "indeterminate", reason: "checkout_completion_ineligible" });
+    expect(result.message).toContain("Shop answered with the error checkout_completion_ineligible");
+    for (let i = 0; i < 2; i++) expect(completionOf(await status(p, handle)).state).not.toBe("ordered");
+    expect(base.shop.completeCount).toBe(1);
+    // A send happened: the reservation is held.
+    expect(counted(base, await chainOf(base))).toBe(1);
+  });
+
+  it("an expired access token mid-purchase: refreshed through the log, and the purchase is ordered with one complete", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    base.shop.expireAccessTokens();
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    expect(base.shop.oauthRequests.filter((r) => r.form.grant_type === "refresh_token")).toHaveLength(1);
+    expect(base.shop.completeCount).toBe(1);
+    const verdict = await verify(base);
+    expect(verdict.checks.filter((c) => !c.ok)).toEqual([]);
+  });
+});
+
 describe("terminal report retry across a restart (G3 acceptance test 14)", () => {
   it("the ordered report fails with 500, the restarted gateway resends it byte for byte, gets 201, and then deletes the key", async () => {
     const base = await setup();
@@ -834,7 +1026,8 @@ describe("evidence pack of a one-tap purchase (G9)", () => {
     expect(kinds).toContain("completion");
     expect(kinds).toContain("complete_attempt");
     const wallet = chain.filter((e) => e.kind === "disclosure" && body(e).purchase === handle).map((e) => e.seq);
-    expect(wallet.length).toBeGreaterThanOrEqual(4); // get_account, create_checkout, get_checkout, complete_checkout
+    // create_checkout, get_checkout, complete_checkout (the budget's get_account names no purchase).
+    expect(wallet.length).toBeGreaterThanOrEqual(3);
     expect(wallet.every((seq) => packed.some((e) => e.seq === seq))).toBe(true);
     const report = runVerifyEvidence({ text: packText(pack), pinnedRootKeys: [base.fake.keys.rootPin] });
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);

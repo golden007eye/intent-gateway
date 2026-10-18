@@ -183,7 +183,7 @@ describe("intent wallet check shop", () => {
     await saveSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"), vault);
     const r = await s.run(["wallet", "check", "shop"]);
     expect(r.code).toBe(1);
-    expect(r.err).toContain("Shop refused the token (expired or revoked): link the wallet again");
+    expect(r.err).toContain("Shop refused the token and it could not be refreshed: link the wallet again");
     for (const value of buyerStrings) expect(r.out + r.err + s.audit()).not.toContain(value);
     expect(s.entries().map((e) => e.kind)).toEqual(["session", "disclosure", "response"]);
   });

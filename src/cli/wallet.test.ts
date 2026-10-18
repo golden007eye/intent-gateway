@@ -87,6 +87,50 @@ describe("intent wallet status", () => {
     expect(r.out + r.err).not.toContain(TOKEN);
   });
 
+  describe("with a Shop client set: one get_account through the log (S1 shapes)", () => {
+    let shop: FakeShop | undefined;
+    afterEach(async () => {
+      await shop?.close();
+    });
+    const statusOf = async (faults: Parameters<typeof startFakeShop>[0]) => {
+      shop = await startFakeShop(faults);
+      const s = setup();
+      const vault = JSON.stringify({ v: 1, client_id: shop.clientId, access_token: shop.accessToken, refresh_token: shop.refreshToken });
+      await saveSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"), vault);
+      const r = await s.run(["wallet", "status"], {
+        INTENT_WALLET_KEY_FILE: join(s.dir, "..", "wallet.key"),
+        INTENT_SHOP_CLIENT_ID: shop.clientId,
+        INTENT_SHOP_AUTH_URL: shop.authUrl,
+        INTENT_SHOP_MCP_URL: shop.mcpUrl,
+      });
+      return { r, s };
+    };
+
+    it("prints the budget left, logged before it was sent; no identity printed", async () => {
+      const { r, s } = await statusOf({});
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("Shop budget left for the gateway: 50.00 USD");
+      expect((readChain(s.dir) as { kind: string; body: Record<string, unknown> }[]).map((e) => [e.kind, e.body.endpoint])).toEqual([
+        ["session", undefined],
+        ["disclosure", "get_account"],
+        ["response", undefined],
+      ]);
+      expect(r.out + r.err).not.toMatch(/jane|Springfield|4242/i);
+    });
+
+    it("no budget for the connection: one-tap unavailable, with what to turn on in the Shop app", async () => {
+      const { r } = await statusOf({ faults: { budgetMinor: null } });
+      expect(r.out).toContain('Shop shows none for this connection, so one-tap is unavailable; turn on "Allow agent to pay" with a budget in the Shop app');
+    });
+
+    it("the connection removed in the Shop app (S1 step 12b): not linked at Shop, one-tap unavailable, how to link again", async () => {
+      const { r } = await statusOf({ faults: { connectionRemoved: true } });
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("Shop connection: not linked at Shop: Shop answered that this connection can no longer read the account");
+      expect(r.out).toContain("Shop one-tap: unavailable; run intent wallet unlink shop, then intent wallet link shop");
+    });
+  });
+
   it("refuses an INTENT_WALLET_KEY that is not a key, without echoing it", async () => {
     const s = setup();
     const r = await s.run(["wallet", "status"], { INTENT_WALLET_KEY: "hunter2-not-a-key" });
@@ -104,7 +148,8 @@ describe("intent wallet unlink shop", () => {
     expect(r.code).toBe(0);
     expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
     expect(r.out).toContain("Shop wallet unlinked: deleted");
-    expect(r.err).toContain("revoke the gateway's access in your Shop account settings");
+    expect(r.err).toContain("the Shop tokens were not both revoked by this gateway");
+    expect(r.out).toContain("To finish, remove the connection in the Shop app: Account › Connections");
 
     const chain = readChain(s.dir) as { kind: string; body: unknown }[];
     expect(chain.map((e) => [e.kind, e.body])).toEqual([["wallet", { rail: "shop", action: "unlinked", revoked: false }]]);
@@ -158,15 +203,23 @@ describe("intent wallet unlink shop", () => {
       await linked(s, shop);
       const r = await s.run(["wallet", "unlink", "shop"], env(s, shop));
       expect(r.code, r.err).toBe(0);
-      expect(shop.revocations).toEqual([{ token: shop.refreshToken, tokenTypeHint: "refresh_token", clientId: shop.clientId, contentType: "application/x-www-form-urlencoded" }]);
+      // Both tokens (S1 step 12: the access token outlives its refresh token's revocation).
+      const form = "application/x-www-form-urlencoded";
+      expect(shop.revocations).toEqual([
+        { token: shop.refreshToken, tokenTypeHint: "refresh_token", clientId: shop.clientId, contentType: form },
+        { token: shop.accessToken, tokenTypeHint: "access_token", clientId: shop.clientId, contentType: form },
+      ]);
       expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
-      expect(r.out).toContain("Shop acknowledged the revocation of the gateway's token (HTTP 200)");
+      expect(r.out).toContain("Shop acknowledged the revocation of the gateway's refresh and access tokens (HTTP 200)");
+      // Revocation does not remove the connection in the Shop app: the developer is told to.
+      expect(r.out).toContain("To finish, remove the connection in the Shop app: Account › Connections");
       expect(r.err).toBe("");
 
       const chain = readChain(s.dir) as { kind: string; body: Record<string, unknown> }[];
-      expect(chain.map((e) => e.kind)).toEqual(["session", "disclosure", "response", "wallet"]);
+      expect(chain.map((e) => e.kind)).toEqual(["session", "disclosure", "response", "disclosure", "response", "wallet"]);
       expect(chain[1]?.body).toMatchObject({ endpoint: "revoke", destination: "shop_accounts", fields: ["client_id", "token", "token_type_hint"] });
-      expect(chain[3]?.body).toEqual({ rail: "shop", action: "unlinked", revoked: true });
+      expect(chain[3]?.body).toMatchObject({ endpoint: "revoke", destination: "shop_accounts" });
+      expect(chain[5]?.body).toEqual({ rail: "shop", action: "unlinked", revoked: true });
       const audit = readFileSync(join(s.dir, "audit.jsonl"), "utf8");
       for (const secret of [shop.refreshToken, shop.accessToken, s.keyText]) {
         expect(audit).not.toContain(secret);
@@ -184,13 +237,13 @@ describe("intent wallet unlink shop", () => {
       await linked(s, shop);
       const r = await s.run(["wallet", "unlink", "shop"], env(s, shop));
       expect(r.code).toBe(0);
-      expect(shop.revocations).toHaveLength(1);
+      expect(shop.revocations).toHaveLength(2);
       expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
       expect(r.err).toContain("Shop answered the revocation with an error");
-      expect(r.err).toContain("Account › Connections");
+      expect(r.out).toContain("Account › Connections");
       const chain = readChain(s.dir) as { kind: string; body: unknown }[];
       expect(chain.at(-1)?.body).toEqual({ rail: "shop", action: "unlinked", revoked: false });
-      expect(chain.map((e) => e.kind)).toEqual(["session", "disclosure", "response", "wallet"]);
+      expect(chain.map((e) => e.kind)).toEqual(["session", "disclosure", "response", "disclosure", "response", "wallet"]);
       expect(readFileSync(join(s.dir, "audit.jsonl"), "utf8")).not.toContain(shop.refreshToken);
     });
 
@@ -205,7 +258,7 @@ describe("intent wallet unlink shop", () => {
       expect(r.err).toContain("could not revoke the Shop token");
       expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
       const chain = readChain(s.dir) as { kind: string; body: Record<string, unknown> }[];
-      expect(chain.map((e) => e.kind)).toEqual(["session", "disclosure", "unacknowledged", "wallet"]);
+      expect(chain.map((e) => e.kind)).toEqual(["session", "disclosure", "unacknowledged", "disclosure", "unacknowledged", "wallet"]);
       expect(String(chain[2]?.body.reason)).toMatch(/^CloudNetworkError: not sent \(no connection/);
       expect(chain.at(-1)?.body).toEqual({ rail: "shop", action: "unlinked", revoked: false });
     });

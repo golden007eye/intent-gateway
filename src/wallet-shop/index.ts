@@ -12,7 +12,7 @@ export {
   type ShopCredentials,
   shopCredentialsText,
 } from "./adapter.ts";
-export { SAVED_ADDRESS_ID, STORE_DOMAIN } from "./project.ts";
+export { STORE_DOMAIN } from "./project.ts";
 export { type DeviceGrantPrompt, DEVICE_GRANT, type LinkedShop, MAX_WAIT_MS, runDeviceFlow, SHOP_SCOPE, ShopLinkError, type ShopLinkFailure } from "./oauth.ts";
 export {
   CLIENT_NAME,

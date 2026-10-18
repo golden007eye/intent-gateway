@@ -102,7 +102,14 @@ describe("intent wallet link shop", () => {
     expect(r.out).not.toContain("refresh token");
 
     const vault = await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"));
-    expect(JSON.parse(vault ?? "{}")).toEqual({ v: 1, client_id: s.shop.clientId, access_token: s.shop.accessToken, refresh_token: s.shop.refreshToken });
+    // S1: Shop issues a refresh token and an access token for 3600 s; the vault keeps when it expires, for the refresh.
+    expect(JSON.parse(vault ?? "{}")).toEqual({
+      v: 1,
+      client_id: s.shop.clientId,
+      access_token: s.shop.accessToken,
+      refresh_token: s.shop.refreshToken,
+      expires_at: expect.any(Number) as unknown,
+    });
     expect(kinds(s.dir)).toEqual(["session", "disclosure", "response", "disclosure", "response", "wallet", "disclosure", "response"]);
     expect(bodies(s.dir)[5]).toEqual({ rail: "shop", action: "linked", revoked: false });
     expect(bodies(s.dir)[6]).toMatchObject({ endpoint: "get_account", destination: "shop" });
@@ -127,15 +134,33 @@ describe("intent wallet link shop", () => {
     expect(r.code, r.err).toBe(0);
     expect(r.err).toBe("");
     expect(r.out).toContain("Shop wallet already linked: it stays as it is unless this new link succeeds");
-    expect(r.out).toContain("Shop acknowledged the revocation of the earlier token (HTTP 200)");
-    expect(s.shop.revocations).toEqual([{ token: old.refresh, tokenTypeHint: "refresh_token", clientId: s.shop.clientId, contentType: "application/x-www-form-urlencoded" }]);
+    expect(r.out).toContain("Shop acknowledged the revocation of the earlier tokens (HTTP 200)");
+    const form = "application/x-www-form-urlencoded";
+    expect(s.shop.revocations).toEqual([
+      { token: old.refresh, tokenTypeHint: "refresh_token", clientId: s.shop.clientId, contentType: form },
+      { token: old.access, tokenTypeHint: "access_token", clientId: s.shop.clientId, contentType: form },
+    ]);
     expect(s.shop.refreshToken).not.toBe(old.refresh);
     const chain = readChain(s.dir) as { kind: string; body: Record<string, unknown> }[];
     const second = chain.slice(8);
-    expect(second.map((e) => e.kind)).toEqual(["session", "disclosure", "response", "disclosure", "response", "disclosure", "response", "wallet", "wallet", "disclosure", "response"]);
-    expect(second.filter((e) => e.kind === "disclosure").map((e) => e.body.endpoint)).toEqual(["device_authorization", "token", "revoke", "get_account"]);
-    expect(second[7]?.body).toEqual({ rail: "shop", action: "unlinked", revoked: true });
-    expect(second[8]?.body).toEqual({ rail: "shop", action: "linked", revoked: false });
+    expect(second.map((e) => e.kind)).toEqual([
+      "session",
+      "disclosure",
+      "response",
+      "disclosure",
+      "response",
+      "disclosure",
+      "response",
+      "disclosure",
+      "response",
+      "wallet",
+      "wallet",
+      "disclosure",
+      "response",
+    ]);
+    expect(second.filter((e) => e.kind === "disclosure").map((e) => e.body.endpoint)).toEqual(["device_authorization", "token", "revoke", "revoke", "get_account"]);
+    expect(second[9]?.body).toEqual({ rail: "shop", action: "unlinked", revoked: true });
+    expect(second[10]?.body).toEqual({ rail: "shop", action: "linked", revoked: false });
     // The new grant survives the revocation of the old one.
     expect(r.out).toContain("Shop budget left for the gateway");
     const vault = await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"));
@@ -153,7 +178,7 @@ describe("intent wallet link shop", () => {
     const r = await s.run(["wallet", "link", "shop"]);
     expect(r.code, r.err).toBe(0);
     expect(r.err).toContain("Shop answered the revocation with an error");
-    expect(r.err).toContain("intent: warning: the earlier Shop token was not revoked; revoke it in your Shop account settings (the Shop app: Account › Connections)");
+    expect(r.err).toContain("intent: warning: the earlier Shop tokens were not both revoked; remove the earlier connection in the Shop app: Account › Connections");
     const bodies = (readChain(s.dir) as { kind: string; body: unknown }[]).filter((e) => e.kind === "wallet").map((e) => e.body);
     expect(bodies).toEqual([
       { rail: "shop", action: "linked", revoked: false },
