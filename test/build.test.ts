@@ -51,7 +51,8 @@ describe("pnpm build", () => {
     await demoFirstRun(join(repo, "dist/main.js"));
   });
 
-  // The tarball is what npx runs and what the image copies (ADR-0005): the build, policies and contract, no tests.
+  // The tarball is what npx runs and what the image copies (ADR-0005): the build, policies, contract and the onboarding
+  // prompt with its policy-advisor skill (which the prompt copies from the package), no tests.
   it("packs a tarball with no test file, no test/support and no test-only server (npm pack --dry-run)", { timeout: 60_000 }, () => {
     const packed = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })) as {
       files: { path: string }[];
@@ -63,7 +64,9 @@ describe("pnpm build", () => {
     expect(files).toContain("dist/THIRD_PARTY_LICENSES");
     expect(files).toContain("dist/sbom.cdx.json");
     expect(files.filter((f) => /(^|\/)(test|tests|__snapshots__)\/|\.test\.|fake-cloud-server|^src\/|^scripts\//.test(f))).toEqual([]);
-    expect(files.every((f) => /^(dist|policies|contract)\/|^(package\.json|LICENSE|NOTICE|README\.md)$/.test(f))).toBe(true);
+    expect(files).toContain("onboarding/claude-code.md");
+    expect(files).toContain("onboarding/skills/policy-advisor/SKILL.md");
+    expect(files.every((f) => /^(dist|policies|contract|onboarding)\/|^(package\.json|LICENSE|NOTICE|README\.md)$/.test(f))).toBe(true);
   });
 
   // npx installs a package's dependencies, and npm warns EBADENGINE for each one on an unsupported Node; the bundle
