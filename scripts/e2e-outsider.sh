@@ -61,6 +61,31 @@ while [ $# -gt 0 ]; do
 done
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The Node on PATH runs the stranger's gateway: it must satisfy package.json engines.node (read there, never copied
+# here) and be a 24+ even release. Checked before anything is created, so a wrong Node costs one line and exit 2.
+command -v node >/dev/null 2>&1 || { echo "e2e: needs node on PATH" >&2; exit 2; }
+# Prints engines.node, then exits 0 when this Node fits (clauses ^x.y.z or >=x.y.z joined by ||), 1 when it does
+# not, 3 when a clause has another form.
+NODE_FITS='
+const range = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).engines.node;
+process.stdout.write(range);
+const v = process.versions.node.split(".").map(Number);
+const fits = range.split("||").map((clause) => {
+  const m = /^\s*(\^|>=)(\d+)\.(\d+)\.(\d+)\s*$/.exec(clause);
+  if (m === null) process.exit(3);
+  const b = m.slice(2).map(Number);
+  const atLeast = (v[0] - b[0] || v[1] - b[1] || v[2] - b[2]) >= 0;
+  return atLeast && (m[1] === ">=" || v[0] === b[0]);
+});
+process.exit(fits.includes(true) && v[0] >= 24 && v[0] % 2 === 0 ? 0 : 1);
+'
+node_fits=0
+NODE_RANGE="$(node -e "$NODE_FITS" "$REPO/package.json")" || node_fits=$?
+case "$node_fits" in
+  0) ;;
+  1) echo "e2e: found Node $(node --version), needs a 24+ even release within $NODE_RANGE (package.json engines.node)" >&2; exit 2 ;;
+  *) echo "e2e: cannot check Node $(node --version) against engines.node \"$NODE_RANGE\" in $REPO/package.json (only ^x.y.z and >=x.y.z clauses)" >&2; exit 2 ;;
+esac
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 OUT="${OUT:-${TMPDIR:-/tmp}/intent-e2e-$RUN_ID}"
 mkdir -p "$OUT"
@@ -146,13 +171,10 @@ must_not_match() { # must_not_match <file> <ERE> <what>
 
 # ------------------------------------------------------------------------------------------- the outsider's world
 need() { command -v "$1" >/dev/null 2>&1 || die "needs $1 on PATH"; }
-need node
 need curl
 need timeout
 need setsid
 need ss
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-[ "$NODE_MAJOR" -ge 24 ] && [ $((NODE_MAJOR % 2)) -eq 0 ] || die "needs Node 24 LTS or later even release on PATH, found $(node --version)"
 for tool in node npm npx; do ln -sf "$(command -v "$tool")" "$OBIN/$tool"; done
 if command -v docker >/dev/null 2>&1; then ln -sf "$(command -v docker)" "$OBIN/docker"; fi
 if command -v "$CLAUDE_BIN" >/dev/null 2>&1; then ln -sf "$(command -v "$CLAUDE_BIN")" "$OBIN/claude"; fi

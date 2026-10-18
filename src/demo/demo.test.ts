@@ -21,6 +21,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { freePort } from "../cloud-fake/index.ts";
 import { PINNED_HOSTS } from "../config/index.ts";
 import { connectCloud } from "../disclosure/index.ts";
 import { createGateway, DEMO_SESSION, type Gateway, GatewayStartError } from "../gateway/index.ts";
@@ -556,8 +557,8 @@ describe("the confirm page's port (F-n)", () => {
   }
 
   it("listens on the port asked for, on 127.0.0.1", async () => {
-    const port = await takenPort();
-    await cleanup.pop()?.(); // released: free again
+    // A port outside the ephemeral range: one listen(0) picked and released could be taken before the demo binds it.
+    const port = await freePort();
     const demo = await startDemo({ dataDir: await tmpData(), port, portFallback: true });
     cleanup.push(() => demo.close());
     expect(demo.confirmBaseUrl).toBe(`http://127.0.0.1:${String(port)}/confirm`);
