@@ -337,7 +337,8 @@ describe("invariant 3: identity in an outbound body", () => {
     });
     const log = readFileSync(logPath(), "utf8");
     expect(log).not.toContain("jane@example.com");
-    expect(log).not.toContain("4111");
+    // The card in any spacing; a bare "4111" can occur by chance in a random nonce or digest.
+    expect(log).not.toMatch(/4111[ -]?1111[ -]?1111[ -]?1111/);
   });
 
   it("does not scan inbound bodies: an offer title with a 16-digit SKU is returned unmodified", async () => {
