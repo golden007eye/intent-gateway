@@ -4,8 +4,10 @@
 // contract leaves room (error codes and messages, 404/405, quotas per address key, idempotency, proof issue time),
 // so the fake, demo mode and staging answer alike. The confirm page is driven through `approveWithPasskey` and `reject`.
 //
-// Versions (contract 1.6.0 §V1): a request with `Intent-Contract-Version: 1.6.0` is answered as 1.6.0 (v2 snapshots,
-// the completer key, outcomes, outcome reports); one without the header as 1.5.0, byte for byte, with the 1.5.0 sums.
+// Versions (contract 1.6.1): a request with `Intent-Contract-Version: 1.6.1` is answered as 1.6.1 (v3 snapshots, and
+// a Shopify merchant's `myshopify_domain` on offers, carts and snapshots), one with `1.6.0` as the frozen 1.6.0 (v2
+// snapshots, the completer key, outcomes, outcome reports, with the 1.6.0 sums), and one without the header as 1.5.0,
+// byte for byte, with the 1.5.0 sums. An approval is read and reported on only in the version that created it (R8).
 // `versions: ["1.5.0"]` makes a host that predates 1.6.0 and ignores the header.
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -40,6 +42,7 @@ import {
   type ShipTo,
   type SnapshotV1,
   type SnapshotV2,
+  type SnapshotV3,
   type WebAuthnAssertion,
 } from "../contract/index.ts";
 import { canonicalize, nonIntegerToken, sha256Hex } from "../jcs/index.ts";
@@ -69,19 +72,29 @@ const RULE_VERSION = "recheck-v1";
 /** Completer-signed reads end this long after the later of `expires_at` and a terminal outcome (Appendix G R7). */
 const COMPLETER_WINDOW = 48 * 3600;
 
-/** The versions a host can serve; the vendored copy is CONTRACT_VERSION (1.6.0). */
-export type ServedVersion = "1.5.0" | "1.6.0";
+/** The versions a host can serve; the vendored copy is CONTRACT_VERSION (1.6.1). */
+export type ServedVersion = "1.5.0" | "1.6.0" | "1.6.1";
+const SERVED: readonly ServedVersion[] = ["1.5.0", "1.6.0", "1.6.1"];
 /** The released 1.5.0 `SHA256SUMS` sha256 (contract/SOURCE.md), which a header-less request is answered with. */
 export const SUMS_1_5_0 = "c6fc6ffea8b7cb9053a74e0a3aa340d73d1c2800fcc4c47669707400d06410d2";
+/** The frozen 1.6.0 `SHA256SUMS` sha256 (contract/SOURCE.md), which a 1.6.0 request is answered with. */
+export const SUMS_1_6_0 = "b75b771e3ae299d74a53f450574af6fab8e63d6bcca2b42aa957046afbf4657d";
+/** A 1.6.x version: snapshot v2 (1.6.0) or v3 (1.6.1), the completer key, outcomes. */
+const isV16 = (version: ServedVersion): boolean => version !== "1.5.0";
 const TERMINAL: ReadonlySet<OutcomeState> = new Set(["ordered", "mismatch", "failed", "checkout_expired"]);
 /** What an `ordered` or `mismatch` report must carry (Appendix G), and what R5 keeps of it under `reported`. */
 const ORDER_KEYS = ["order_ref", "final_total", "binding"] as const;
 const REPORTED_KEYS = ["state", "source", ...ORDER_KEYS] as const;
+/** The outcome member named like `process.binding`, which src/ lint keeps out of property reads. */
+const BINDING_KEY = "binding";
 
-/** `ApprovalStatus.state` for an outcome (Appendix G, vector o3): 1.6.0 and the 1.5.0 downgrade (null: not served). */
-export function statusState(outcome: OutcomeState, mode: CompletionMode): { "1.6.0": ApprovalState; "1.5.0": ApprovalState | null } {
-  if (outcome === "ordered") return { "1.6.0": "ordered", "1.5.0": mode === "handoff" ? "ordered" : null };
-  return mode === "handoff" ? { "1.6.0": "handed_off", "1.5.0": "handed_off" } : { "1.6.0": "approved", "1.5.0": null };
+/** Rule 25 in integers (`recheck-v1`): `ceil(0.8·A) ≤ R ≤ A`. */
+const totalMatchesApproved = (approvedMinor: number, finalMinor: number): boolean => 5 * finalMinor >= 4 * approvedMinor && finalMinor <= approvedMinor;
+
+/** `ApprovalStatus.state` for an outcome (Appendix G, vector o3): 1.6.x and the 1.5.0 downgrade (null: not served). */
+export function statusState(outcome: OutcomeState, mode: CompletionMode): { "1.6.1": ApprovalState; "1.6.0": ApprovalState; "1.5.0": ApprovalState | null } {
+  if (outcome === "ordered") return { "1.6.1": "ordered", "1.6.0": "ordered", "1.5.0": mode === "handoff" ? "ordered" : null };
+  return mode === "handoff" ? { "1.6.1": "handed_off", "1.6.0": "handed_off", "1.5.0": "handed_off" } : { "1.6.1": "approved", "1.6.0": "approved", "1.5.0": null };
 }
 
 export interface Quotas {
@@ -114,7 +127,7 @@ export interface FakeCloudOptions {
    */
   excludedCategories?: readonly string[];
   quotas?: Partial<Quotas>;
-  /** The contract versions served. Default both; `["1.5.0"]` is a host from before 1.6.0 that ignores the header. */
+  /** The contract versions served. Default all three; `["1.5.0"]` is a host from before 1.6.0 that ignores the header. */
   versions?: readonly ServedVersion[];
   /** Whether `shop_agent` carts are enabled (Intent Cloud's ONE_TAP_GATEWAY_ENABLED). Default false. */
   oneTap?: boolean;
@@ -164,12 +177,17 @@ export interface Tamper {
   statementExpired(): void;
   /** Approves the approval with a fresh passkey (a second credential) and returns it. */
   secondCredential(handle: string, sub?: string): { outcome: Outcome; passkey: SoftPasskey };
-  /** 1.6.0 carts carry these values instead of their own (completion_mode, variant_ref, merchant_origin, …). */
+  /** 1.6.x carts carry these values instead of their own (completion_mode, variant_ref, merchant_origin, …). */
   cart(patch: Partial<Cart>): void;
-  /** 1.6.0 snapshots carry these values instead of their own, with snapshot_hash and check_code computed over them. */
-  snapshot(patch: Partial<SnapshotV2>): void;
-  /** 1.6.0 proofs carry a snapshot with these values, correctly hashed and cloud-signed. */
-  proofSnapshot(patch: Partial<SnapshotV2>): void;
+  /** 1.6.x offers carry these values instead of their own (myshopify_domain, variant_ref, …). */
+  offer(patch: Partial<Offer>): void;
+  /**
+   * 1.6.x snapshots carry these values instead of their own, with snapshot_hash and check_code computed over them
+   * (`v: 2` on a 1.6.1 approval serves a v2 snapshot; a key set to undefined is dropped).
+   */
+  snapshot(patch: Partial<SnapshotV3> | Partial<SnapshotV2>): void;
+  /** 1.6.x proofs carry a snapshot with these values, correctly hashed and cloud-signed. */
+  proofSnapshot(patch: Partial<SnapshotV3> | Partial<SnapshotV2>): void;
   /** Outcome reports get this status (and no outcome) instead of being handled; null turns it off. */
   reportStatus(status: number | null): void;
   reset(): void;
@@ -246,7 +264,7 @@ interface ApprovalRecord {
   linkPath: string;
   expiresAt: number;
   state: ApprovalState;
-  // The 201 body as served: a v1 snapshot for a 1.5.0 cart, v2 for a 1.6.0 one.
+  // The 201 body as served: a v1 snapshot for a 1.5.0 cart, v2 for a 1.6.0 one, v3 for a 1.6.1 one.
   created: Omit<ApprovalCreated, "snapshot"> & { snapshot: AnySnapshot };
   claimedBy?: string;
   ledger?: { seq: number; entry_hash: string };
@@ -322,7 +340,7 @@ export function variantRef(item: CatalogItem): string {
   return `gid://shopify/ProductVariant/${String(digest.readUInt32BE(0))}`;
 }
 
-function toOffer(offerHandle: string, item: CatalogItem, version: ServedVersion): Offer {
+function toOffer(offerHandle: string, item: CatalogItem, version: ServedVersion, patch: Partial<Offer> | null): Offer {
   const offer: Offer = {
     offer_handle: offerHandle,
     merchant: item.merchant,
@@ -337,8 +355,15 @@ function toOffer(offerHandle: string, item: CatalogItem, version: ServedVersion)
   if (item.delivery !== undefined) offer.delivery = item.delivery;
   if (item.rating !== undefined) offer.rating = item.rating;
   if (item.returns !== undefined) offer.returns = item.returns;
-  if (version === "1.6.0") offer.variant_ref = variantRef(item);
-  return offer;
+  if (isV16(version)) offer.variant_ref = variantRef(item);
+  // R8 and Appendix A v3: only a 1.6.1 caller ever receives myshopify_domain.
+  if (version === "1.6.1" && item.myshopify_domain !== undefined) offer.myshopify_domain = item.myshopify_domain;
+  return isV16(version) && patch !== null ? dropUndefined({ ...offer, ...patch }) : offer;
+}
+
+/** The value without its keys set to undefined (a tamper patch removes a field that way). */
+function dropUndefined<T extends object>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
 
 /** Starts the fake on 127.0.0.1. */
@@ -347,12 +372,13 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   const now = (): number => Math.floor(clockMs() / 1000);
   const quotas: Quotas = { ...DEFAULT_QUOTAS, ...options.quotas };
   const keys = loadKeys();
-  const versions: ReadonlySet<ServedVersion> = new Set(options.versions ?? ["1.5.0", "1.6.0"]);
+  const versions: ReadonlySet<ServedVersion> = new Set(options.versions ?? SERVED);
   const oneTap = options.oneTap ?? false;
-  // The vendored copy is 1.6.0 (CONTRACT_VERSION); 1.5.0 is answered with its released sums.
+  // The vendored copy is 1.6.1 (CONTRACT_VERSION); 1.5.0 and 1.6.0 are answered with their released sums.
   const sums: Record<ServedVersion, string> = {
     "1.5.0": SUMS_1_5_0,
-    "1.6.0": sha256Hex(readFileSync(new URL("../../contract/SHA256SUMS", import.meta.url))),
+    "1.6.0": SUMS_1_6_0,
+    "1.6.1": sha256Hex(readFileSync(new URL("../../contract/SHA256SUMS", import.meta.url))),
   };
   const statement = makeStatement(keys, now());
   const seenNonce = createNonceCache();
@@ -368,8 +394,9 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   let orders = 0;
   let cloudflareStatus: number | null = null;
   let cartPatch: Partial<Cart> | null = null;
-  let snapshotPatch: Partial<SnapshotV2> | null = null;
-  let proofSnapshotPatch: Partial<SnapshotV2> | null = null;
+  let offerPatch: Partial<Offer> | null = null;
+  let snapshotPatch: Partial<SnapshotV3> | Partial<SnapshotV2> | null = null;
+  let proofSnapshotPatch: Partial<SnapshotV3> | Partial<SnapshotV2> | null = null;
   let reportFault: number | null = null;
 
   const catalog = options.catalog ?? DEFAULT_CATALOG;
@@ -412,7 +439,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   function servedProof(a: ApprovalRecord, approvedBy: NonNullable<ApprovalRecord["approvedBy"]>, at: number): AnyApprovalProof {
     const ref = a.ledger;
     if (ref === undefined) throw new Error("an approved approval without a ledger entry");
-    // A 1.5.0 approval's proof names its v1 snapshot, a 1.6.0 one its v2 snapshot.
+    // A 1.5.0 approval's proof names its v1 snapshot, a 1.6.0 one its v2 snapshot, a 1.6.1 one its v3 snapshot.
     const unsigned: Omit<ApprovalProofV1, "cloud_signature" | "snapshot"> & { snapshot: AnySnapshot } = {
       v: 1,
       approval_handle: a.handle,
@@ -432,10 +459,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       const changed = { ...unsigned, kid: "cloud-approval-209912" };
       return { ...changed, cloud_signature: randomKey(changed.kid).sign(APPROVAL_PREFIX + canonicalize(changed)) } as AnyApprovalProof;
     }
-    if (proofSnapshotPatch !== null && a.snapshot.v === 2) {
-      const snapshot = { ...a.snapshot, ...proofSnapshotPatch };
+    if (proofSnapshotPatch !== null && a.snapshot.v !== 1) {
+      const snapshot = dropUndefined({ ...a.snapshot, ...proofSnapshotPatch });
       const changed = { ...unsigned, snapshot, snapshot_hash: sha256Hex(canonicalize(snapshot)) };
-      return { ...changed, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(changed)) };
+      return { ...changed, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(changed)) } as AnyApprovalProof;
     }
     return { ...unsigned, cloud_signature: keys.approval.sign(APPROVAL_PREFIX + canonicalize(unsigned)) } as AnyApprovalProof;
   }
@@ -469,7 +496,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         offers: found.map((item) => {
           const offerHandle = item.offer_handle ?? handle("of");
           if (item.offer_handle === undefined) offers.set(offerHandle, { item, expiresAt: at + OFFER_TTL });
-          return toOffer(offerHandle, item, version);
+          return toOffer(offerHandle, item, version, offerPatch);
         }),
       },
     };
@@ -485,8 +512,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
 
   function createCart(body: Buffer, keyid: string, ipKey: string, version: ServedVersion, at: number): Reply {
     const json = parseJson(body);
-    const v16 = version === "1.6.0";
-    // 1.6.0 requires the completer key; 1.5.0 has neither 1.6.0 field, and its strict schema refuses them.
+    const v16 = isV16(version);
+    // 1.6.x requires the completer key; 1.5.0 has neither 1.6.x field, and its strict schema refuses them.
     const parsed = v16 ? CartRequest.safeParse(json) : CartRequestV1.safeParse(json);
     if (!parsed.success) return fail(400, "bad_request", "body does not match CartRequest");
     const request: Partial<CartRequest> & CartRequestV1 = parsed.data;
@@ -506,7 +533,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       if (same && live && (cart.latest === undefined || cart.latest.state === "pending")) return { status: 201, body: cart.body };
     }
     // Amendment M5: a completer key names one approval; an earlier approval's key is refused (a replay returned above).
-    if (v16 && [...approvals.values()].some((a) => a.snapshot.v === 2 && a.snapshot.completer_keyid === request.completer_keyid)) {
+    if (v16 && [...approvals.values()].some((a) => a.snapshot.v !== 1 && a.snapshot.completer_keyid === request.completer_keyid)) {
       return fail(400, "bad_request", "completer_keyid belongs to an earlier approval");
     }
     if (request.quantity > offer.item.stock) return fail(409, "conflict", "not enough stock");
@@ -538,6 +565,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         variant_ref: variantRef(item),
         total_estimated: false,
       });
+      if (version === "1.6.1" && item.myshopify_domain !== undefined) cart.myshopify_domain = item.myshopify_domain;
       if (cartPatch !== null) Object.assign(cart, cartPatch);
     }
     carts.set(cartHandle, {
@@ -591,12 +619,12 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       expires_at: timestamp(expiresAt),
     };
     let snapshot: AnySnapshot = v1;
-    if (cart.version === "1.6.0") {
+    if (isV16(cart.version)) {
       const { body } = cart;
       // The checkout URL's query (`?key=…`) is not part of the hash (amendment L1).
       const checkoutHash = checkoutRefHash(`gid://shopify/Checkout/${cart.handle}?key=${randomBytes(8).toString("hex")}`);
       if (body.completion_mode === undefined || body.merchant_origin === undefined || body.variant_ref === undefined || cart.completer === undefined || checkoutHash === null) {
-        throw new Error("a 1.6.0 cart without its 1.6.0 fields");
+        throw new Error("a 1.6.x cart without its 1.6.x fields");
       }
       const v2: SnapshotV2 = {
         ...v1,
@@ -609,7 +637,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         completer_keyid: cart.completer,
         total_estimated: body.total_estimated ?? false,
       };
-      snapshot = snapshotPatch === null ? v2 : { ...v2, ...snapshotPatch };
+      // 1.6.1: v3, with the Shopify merchant's myshopify domain from Intent Cloud's own merchant config (not the cart).
+      const own: SnapshotV2 | SnapshotV3 =
+        cart.version === "1.6.1" ? { ...v2, v: 3, ...(cart.item.myshopify_domain === undefined ? {} : { myshopify_domain: cart.item.myshopify_domain }) } : v2;
+      snapshot = snapshotPatch === null ? own : dropUndefined({ ...own, ...snapshotPatch });
     }
     const snapshotHash = sha256Hex(canonicalize(snapshot));
     const linkPath = `/c/${randomBytes(16).toString("base64url")}`;
@@ -642,23 +673,26 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   }
 
   /**
-   * Who may read or report an approval (Appendix G R1/R7): the session that created its cart, or, in 1.6.0, the
+   * Who may read or report an approval (Appendix G R1/R7): the session that created its cart, or, in 1.6.x, the
    * snapshot's completer key until 48 h after the later of `expires_at` and a terminal outcome.
    */
   function mayUse(a: ApprovalRecord, keyid: string, version: ServedVersion, at: number): boolean {
     if (a.owner === keyid) return true;
-    if (version !== "1.6.0" || a.snapshot.v !== 2 || a.snapshot.completer_keyid !== keyid) return false;
+    if (!isV16(version) || a.snapshot.v === 1 || a.snapshot.completer_keyid !== keyid) return false;
     return at < Math.max(a.expiresAt, a.terminalAt ?? 0) + COMPLETER_WINDOW;
   }
 
-  const modeOf = (a: ApprovalRecord): CompletionMode => (a.snapshot.v === 2 ? a.snapshot.completion_mode : "handoff");
+  /** R8 by exact version (1.6.1): a 1.6.x approval is read and reported on only in the version that created it. */
+  const otherVersion = (a: ApprovalRecord, version: ServedVersion): boolean => isV16(a.cart.version) && version !== a.cart.version;
+
+  const modeOf = (a: ApprovalRecord): CompletionMode => (a.snapshot.v !== 1 ? a.snapshot.completion_mode : "handoff");
 
   function getApproval(param: string, keyid: string, version: ServedVersion, at: number): Reply {
     if (!ApprovalHandle.safeParse(param).success) return fail(400, "bad_request", "malformed approval handle");
     const a = approvals.get(param);
     if (a === undefined || !mayUse(a, keyid, version, at)) return UNKNOWN_HANDLE();
-    // R8: an approval created by a 1.6.0 request is read only with the 1.6.0 header.
-    if (version !== "1.6.0" && a.snapshot.v === 2) return UNKNOWN_HANDLE();
+    // R8: an approval created by a 1.6.x request is read only with that version's header.
+    if (otherVersion(a, version)) return UNKNOWN_HANDLE();
     refresh(a, at);
     let state = a.state;
     if (a.outcome !== undefined) {
@@ -675,7 +709,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (a.orderNumber !== undefined) status.order_number = a.orderNumber;
     const withProof = state === "approved" || state === "handed_off" || state === "ordered";
     if (withProof && a.approvedBy !== undefined) status.proof = servedProof(a, a.approvedBy, at);
-    if (version === "1.6.0" && a.outcome !== undefined) {
+    if (isV16(version) && a.outcome !== undefined) {
       status.outcome = a.outcome;
       status.outcome_statement = servedOutcomeStatement(a, a.outcome, at);
     }
@@ -685,12 +719,21 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   /**
    * How Intent Cloud stores a gateway's report (Appendix G R5): source gateway_report, reported assurance, and what the
    * gateway said under `reported`; an ordered or mismatch report is stored as `reported`, the others in their state.
+   * Beside an ordered or mismatch report, Intent Cloud's own binding-v1 re-run of the reported values: in 1.6.1 (a v3
+   * snapshot, option (a)) every check it cannot observe is `unknown` and only check 5 compares, so a legitimate order
+   * is `incomplete`, never `mismatch`; a 1.6.0 approval keeps 1.6.0's re-run, whose check 3 is `differs`.
    */
-  function storedOutcome(report: OutcomeReport): CloudOutcome {
+  function storedOutcome(report: OutcomeReport, snapshot: SnapshotV2 | SnapshotV3): CloudOutcome {
     // Copied by key name: src/ lint forbids reading a property named like `process.binding`.
     const reported = Object.fromEntries(REPORTED_KEYS.filter((k) => report[k] !== undefined).map((k) => [k, report[k]])) as NonNullable<CloudOutcome["reported"]>;
-    const state = report.state === "ordered" || report.state === "mismatch" ? "reported" : report.state;
-    return { state, source: "gateway_report", assurance: "reported", observed_at: report.observed_at, reported };
+    const ordered = report.state === "ordered" || report.state === "mismatch";
+    const state = ordered ? "reported" : report.state;
+    const stored: CloudOutcome = { state, source: "gateway_report", assurance: "reported", observed_at: report.observed_at, reported };
+    if (!ordered || report.final_total === undefined) return stored;
+    const total = totalMatchesApproved(snapshot.total.amount_minor, report.final_total.amount_minor) ? "match" : "differs";
+    const checks = { merchant_origin: "unknown", checkout_ref: "unknown", line: snapshot.v === 3 ? "unknown" : "differs", ship_to: "unknown", total } as const;
+    const result = Object.values(checks).includes("differs") ? "mismatch" : "incomplete";
+    return { ...stored, [BINDING_KEY]: { rule_version: "binding-v1", result, checks } };
   }
 
   /** R4's transitions of the reported state; `approved` is before any report. Terminal states allow nothing. */
@@ -702,10 +745,11 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
 
   /** `POST /v1/approvals/{h}/outcome-reports` (Appendix G R1–R7). */
   function reportOutcome(param: string, body: Buffer, keyid: string, version: ServedVersion, at: number): Reply {
-    if (version !== "1.6.0") return fail(404, "not_found", "not found");
+    if (!isV16(version)) return fail(404, "not_found", "not found");
     if (!ApprovalHandle.safeParse(param).success) return fail(400, "bad_request", "malformed approval handle");
     const a = approvals.get(param);
-    if (a === undefined || a.snapshot.v !== 2) return UNKNOWN_HANDLE();
+    if (a === undefined || a.snapshot.v === 1 || otherVersion(a, version)) return UNKNOWN_HANDLE();
+    const snapshot = a.snapshot;
     // R1 first: any key but the cart's session or the completer gets 404, like an unknown handle; then R0.
     if (!mayUse(a, keyid, version, at)) return UNKNOWN_HANDLE();
     if (modeOf(a) !== "shop_agent") return fail(409, "conflict", "not a shop_agent approval");
@@ -727,7 +771,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       return fail(409, "conflict", "completing_report_id is not the accepted completing report");
     }
     if (!(NEXT[current] ?? []).includes(report.state)) return fail(409, "conflict", `no ${report.state} report after ${current}`);
-    const outcome = storedOutcome(report);
+    const outcome = storedOutcome(report, snapshot);
     a.outcome = outcome;
     a.reportedState = report.state;
     if (report.state === "completing") a.completingReportId = report.report_id;
@@ -753,14 +797,14 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   ];
 
   /**
-   * The version a request is answered in (1.6.0 §V1): the header's when this host serves 1.6.0, 1.5.0 without it;
-   * null for a value this host does not serve. A host from before 1.6.0 ignores the header.
+   * The version a request is answered in: the header's when this host serves it, 1.5.0 without it; null for a value
+   * this host does not serve. A host from before 1.6.0 ignores the header.
    */
   function negotiate(req: IncomingMessage): ServedVersion | null {
-    if (!versions.has("1.6.0")) return "1.5.0";
+    if (!versions.has("1.6.0") && !versions.has("1.6.1")) return "1.5.0";
     const raw = req.headers["intent-contract-version"];
     if (raw === undefined) return versions.has("1.5.0") ? "1.5.0" : null;
-    return raw === "1.6.0" || (raw === "1.5.0" && versions.has("1.5.0")) ? raw : null;
+    return SERVED.find((v) => v === raw && versions.has(v)) ?? null;
   }
 
   function route(method: string, path: string, body: Buffer, req: IncomingMessage, ipKey: string, version: ServedVersion | null, at: number): Reply {
@@ -933,7 +977,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       }
       a.state = "handed_off";
       // The confirm page's redirect is Intent Cloud's own unsigned event: `reported` at most (Appendix G sources).
-      if (a.snapshot.v === 2) a.outcome = { state: "handed_off", source: "checkout_page", assurance: "reported", observed_at: timestamp(now()) };
+      if (a.snapshot.v !== 1) a.outcome = { state: "handed_off", source: "checkout_page", assurance: "reported", observed_at: timestamp(now()) };
       return { status: 200, state: a.state, continueUrl: a.continueUrl };
     },
     order(h) {
@@ -943,7 +987,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       orders += 1;
       a.orderNumber = `ORD-${String(100000 + orders)}`;
       a.state = "ordered";
-      if (a.snapshot.v === 2) {
+      if (a.snapshot.v !== 1) {
         const at = now();
         a.outcome = {
           state: "ordered",
@@ -965,14 +1009,14 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     setOutcome(h, outcome) {
       const a = approvals.get(h);
       if (a === undefined) return { status: 404, reason: "unknown approval" };
-      if (a.snapshot.v !== 2) return { status: 409, state: a.state, reason: "a 1.5.0 approval has no outcome" };
+      if (a.snapshot.v === 1) return { status: 409, state: a.state, reason: "a 1.5.0 approval has no outcome" };
       if (a.state !== "approved" && a.state !== "handed_off") return { status: 409, state: a.state, reason: `no outcome when ${a.state}` };
       if (a.terminalAt !== undefined) return { status: 409, state: a.state, reason: "the outcome is final" };
       const at = now();
       // Parsed, so a test cannot make the fake serve an outcome the 1.6.0 schema refuses (fields, O1, assurance caps).
       a.outcome = CloudOutcomeSchema.parse({ ...outcome, observed_at: timestamp(at) });
       if (TERMINAL.has(outcome.state)) a.terminalAt = at;
-      return { status: 200, state: statusState(outcome.state, modeOf(a))["1.6.0"] };
+      return { status: 200, state: statusState(outcome.state, modeOf(a))["1.6.1"] };
     },
     inspect(h) {
       const a = approvals.get(h);
@@ -1020,6 +1064,9 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       cart(patch) {
         cartPatch = patch;
       },
+      offer(patch) {
+        offerPatch = patch;
+      },
       snapshot(patch) {
         snapshotPatch = patch;
       },
@@ -1032,6 +1079,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       reset() {
         faults.clear();
         cartPatch = null;
+        offerPatch = null;
         snapshotPatch = null;
         proofSnapshotPatch = null;
         reportFault = null;

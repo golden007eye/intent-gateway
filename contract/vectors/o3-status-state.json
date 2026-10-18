@@ -1,7 +1,7 @@
 {
   "id": "O3",
   "appendix": "G",
-  "description": "ApprovalStatus.state for every outcome. 1.5.0 null: not served (1.5.0 carts are handoff).",
+  "description": "ApprovalStatus.state for every outcome. 1.6.1 states it as 1.6.0 does. 1.5.0 null: not served (1.5.0 carts are handoff).",
   "cases": [
     {
       "input": {
@@ -9,6 +9,7 @@
         "mode": "handoff"
       },
       "expected": {
+        "1.6.1": "handed_off",
         "1.6.0": "handed_off",
         "1.5.0": "handed_off"
       }
@@ -19,6 +20,7 @@
         "mode": "handoff"
       },
       "expected": {
+        "1.6.1": "handed_off",
         "1.6.0": "handed_off",
         "1.5.0": "handed_off"
       }
@@ -29,6 +31,7 @@
         "mode": "handoff"
       },
       "expected": {
+        "1.6.1": "handed_off",
         "1.6.0": "handed_off",
         "1.5.0": "handed_off"
       }
@@ -39,6 +42,7 @@
         "mode": "handoff"
       },
       "expected": {
+        "1.6.1": "handed_off",
         "1.6.0": "handed_off",
         "1.5.0": "handed_off"
       }
@@ -49,6 +53,7 @@
         "mode": "handoff"
       },
       "expected": {
+        "1.6.1": "ordered",
         "1.6.0": "ordered",
         "1.5.0": "ordered"
       }
@@ -59,6 +64,7 @@
         "mode": "shop_agent"
       },
       "expected": {
+        "1.6.1": "approved",
         "1.6.0": "approved",
         "1.5.0": null
       }
@@ -69,6 +75,7 @@
         "mode": "shop_agent"
       },
       "expected": {
+        "1.6.1": "approved",
         "1.6.0": "approved",
         "1.5.0": null
       }
@@ -79,6 +86,7 @@
         "mode": "shop_agent"
       },
       "expected": {
+        "1.6.1": "approved",
         "1.6.0": "approved",
         "1.5.0": null
       }
@@ -89,6 +97,7 @@
         "mode": "shop_agent"
       },
       "expected": {
+        "1.6.1": "approved",
         "1.6.0": "approved",
         "1.5.0": null
       }
@@ -99,6 +108,7 @@
         "mode": "shop_agent"
       },
       "expected": {
+        "1.6.1": "approved",
         "1.6.0": "approved",
         "1.5.0": null
       }
@@ -109,6 +119,7 @@
         "mode": "shop_agent"
       },
       "expected": {
+        "1.6.1": "ordered",
         "1.6.0": "ordered",
         "1.5.0": null
       }

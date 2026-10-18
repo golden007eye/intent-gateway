@@ -1,4 +1,4 @@
-// One-tap completion (plan G7b; contract 1.6.0 Appendix G; ADR-0019): the step machine that redeems a verified
+// One-tap completion (plan G7b; contract 1.6.1 Appendix G; ADR-0019, ADR-0020): the step machine that redeems a verified
 // `shop_agent` approval with the developer's linked wallet. It runs inside get_approval_status, never in the
 // background, and resumes from the chain on every later call, in this process or a restarted one.
 //
@@ -7,20 +7,25 @@
 // 2. Account: effective per-order cap = min(policy per_order_usd, the wallet's budget left, in USD); A above it is
 //    refused. A budget the wallet does not show (or not in USD), or a connection the buyer removed in the wallet's
 //    app, is refused too: never assumed (S1).
-// 3. Quote and precheck: create the wallet checkout, once: a create with no usable answer is never sent again
-//    (failed, create_unconfirmed), since Shop makes a new checkout for a replayed key. A quote that is not open, or
-//    offers no agent-budget payment, is refused. binding-v1 checks 1, 3, 4 and 5 against it (check 2 is the
-//    checkout's own hash); Shop names no merchant on a checkout, so check 1 reads the store the checkout lives at,
-//    which stands for the approved origin only when it is the store that origin pairs with (storeFor). A title is
+// 3. Store pair and quote: the store is the myshopify domain the v3 snapshot signed (none: refused, store_unknown).
+//    The store pair check (Appendix G, 1.6.1) runs first: `GET <merchant_origin>/meta.json` must name that domain, or
+//    the purchase fails here, locally (nothing is reported, and the buyer can still hand off). A pass is kept in the
+//    chain (`store_pair`) for 24 h at most, keyed by (origin, domain), so every process reuses it; a failure never is.
+//    Then create the wallet checkout, once: a create with no usable answer is never sent again (failed,
+//    create_unconfirmed), since Shop does not deduplicate create_checkout on its idempotency key (contract 1.6.1
+//    "Retries"). A quote that is not open, or offers no agent-budget payment, is refused. binding-v1 checks 1, 3, 4
+//    and 5 against it (check 2 is the checkout's own hash); Shop names no merchant on a checkout, so check 1 reads the
+//    store the checkout lives at, which binding-v1 accepts only as the signed myshopify domain (D7). A title is
 //    advisory only.
 // 4. Redeem: compare-and-append `completion` {handle, checkout_ref, report_id, idempotency_key, …} unless one exists
 //    for the handle (another process owns the purchase: stop) or the caps no longer fit (failed, cap).
 // 5. Report `completing` (its body is fixed by the completion entry, so every retry is byte-identical). A 409/410
 //    before acceptance is a local outcome only, and frees the reservation (no complete_attempt exists).
 // 6. Complete, only before S.expires_at: 6a compare-and-append `complete_attempt` {handle, owner} with an owner token
-//    held in memory only; 6b the completer precheck on a fresh get_checkout (Appendix G), then complete_checkout,
-//    whose disclosure is itself compare-and-appended: only the attempt's owner, within the attempt window, only once,
-//    only with no outcome yet.
+//    held in memory only; 6b the store pair check again (a pass kept under 24 h, or a new GET: if it does not pass,
+//    nothing is sent and the outcome is failed/gateway_precheck), the completer precheck on a fresh get_checkout
+//    (Appendix G), then complete_checkout, whose disclosure is itself compare-and-appended: only the attempt's owner,
+//    within the attempt window, only once, only with no outcome yet.
 // 7. Reconcile: past the attempt window, an attempt for which outcome's mayHaveSent is false was never sent (log
 //    before send) → failed (gateway_precheck, not_sent); within it, a wait. One that may have been sent: get_checkout
 //    only, never a second complete_checkout; open, not found or an error → indeterminate, reservation held.
@@ -30,8 +35,17 @@
 // Buyer identity never enters the chain: the wallet port returns projections only, and the binding inputs keep the
 // checkout ref hash, never the raw id.
 import { randomBytes, randomUUID } from "node:crypto";
-import type { ApprovalProof, Binding, OutcomeReport, SnapshotV2 } from "../contract/index.ts";
-import { type DisclosedCloud, DisclosureConflictError } from "../disclosure/index.ts";
+import {
+  type BindableApprovalProof,
+  type BindableSnapshot,
+  type Binding,
+  type OutcomeReport,
+  STORE_PAIR_LIMITS,
+  storePairPrecondition,
+  storePairProblem,
+  type StorePairReason,
+} from "../contract/index.ts";
+import { type DisclosedCloud, DisclosureConflictError, type StorefrontPort } from "../disclosure/index.ts";
 import { bindingV1, type LocalOutcomeEntry, mayHaveSent, outcomesFor, shipToOptional } from "../outcome/index.ts";
 import type { Session } from "../signing/index.ts";
 import { type Entry, neverLeft, type Store, StoreConflictError } from "../store/index.ts";
@@ -51,8 +65,8 @@ export interface CompletionContext {
   readonly cloud: DisclosedCloud;
   /** The usable wallet, or null when none is linked or it cannot be opened. */
   readonly wallet: WalletAdapter | null;
-  /** The rail's name for the merchant at this storefront origin (Shop: its myshopify domain), or null when unknown. */
-  readonly storeFor: (merchantOrigin: string) => string | null;
+  /** The merchant storefront, for the store pair check (src/disclosure's connectStorefront); null when none was built. */
+  readonly storefront: StorefrontPort | null;
   /**
    * The policy's spend caps over `chain` for this purchase, counted once (atomic reservation): true when it no longer
    * fits, as when another cart took the room meanwhile. Evaluated under the store lease with the completion entry.
@@ -80,8 +94,8 @@ export interface CompletionInput {
   readonly handle: string;
   /** The chained `approval_pending` entry (step 7's `sent` is re-checked from it). */
   readonly pending: Entry;
-  /** The chained, verified approval proof. */
-  readonly proof: ApprovalProof;
+  /** The chained, verified approval proof (v3; v2 only in a chain a 1.6.0 gateway wrote). */
+  readonly proof: BindableApprovalProof;
 }
 
 /** Where the completion stands, for the tool result: never more than the gateway's own evidence. */
@@ -166,6 +180,23 @@ function createState(entries: readonly { readonly kind: string; readonly body: u
 }
 
 /**
+ * The seq of a passing store pair check for (origin, domain) that this chain fetched (it names its disclosure) less
+ * than 24 h before `nowMs`, and not after it (a clock that went back trusts nothing); null when there is none.
+ * Failures are chained too, but never count, and a reuse is never reused in turn: the 24 h run from the GET.
+ */
+export function passedRecently(entries: readonly ChainEntry[], origin: string, domain: string, nowMs: number): number | null {
+  const found = entries.findLast((e) => {
+    if (e.kind !== "store_pair") return false;
+    const b = asBody(e.body);
+    if (b.result !== "pass" || typeof b.disclosure_seq !== "number" || b.merchant_origin !== origin || b.myshopify_domain !== domain) return false;
+    const ts = (e as { ts?: unknown }).ts;
+    const at = typeof ts === "string" ? Date.parse(ts) : Number.NaN;
+    return Number.isFinite(at) && at <= nowMs && nowMs - at < STORE_PAIR_LIMITS.cacheTtlMs;
+  });
+  return found === undefined ? null : ((found as { seq?: unknown }).seq as number);
+}
+
+/**
  * The purchase's local outcomes, up to and including its first terminal one: a terminal outcome is final, so anything
  * chained after it (a chain written before local() refused to) never changes where the purchase stands.
  */
@@ -237,18 +268,18 @@ function observedOf(checkout: WalletCheckout, zip: string, merchantOrigin: strin
 
 /**
  * The merchant origin binding check 1 reads from a wallet checkout. Shop reports no merchant on a checkout (S1 step
- * 6), only the store it lives at (the store the gateway named; the order permalink's host once completed). That store
- * stands for the approved origin when it is the store the origin pairs with (`pairedStore`, from storeFor); any other
- * store reads as its own `https://` origin, so check 1 differs, whatever merchant the rail reports. At the paired
- * store, a merchant origin the rail does report wins (it must then be the approved origin itself).
+ * 6), only the store it lives at (the store the gateway named; the order permalink's host once completed), as
+ * `https://<store>`. binding-v1 accepts that only when it is the myshopify domain the v3 snapshot signed (D7); any
+ * other store differs, whatever merchant the rail reports. At the signed store, a merchant origin the rail does report
+ * wins (it must then be one of the two signed names itself).
  */
-function checkoutMerchantOrigin(checkout: WalletCheckout, approvedOrigin: string, pairedStore: string | null): string {
+function checkoutMerchantOrigin(checkout: WalletCheckout, pairedStore: string | null): string {
   if (pairedStore === null || checkout.storeDomain !== pairedStore) return `https://${checkout.storeDomain}`;
-  return checkout.merchantOrigin ?? approvedOrigin;
+  return checkout.merchantOrigin ?? `https://${checkout.storeDomain}`;
 }
 
-function bind(snapshot: SnapshotV2, checkout: WalletCheckout, recordedRef: string, pairedStore: string | null): { observed: Body; context: Body; verdict: Binding } {
-  const observed = observedOf(checkout, snapshot.ship_to.postal_code, checkoutMerchantOrigin(checkout, snapshot.merchant_origin, pairedStore));
+function bind(snapshot: BindableSnapshot, checkout: WalletCheckout, recordedRef: string, pairedStore: string | null): { observed: Body; context: Body; verdict: Binding } {
+  const observed = observedOf(checkout, snapshot.ship_to.postal_code, checkoutMerchantOrigin(checkout, pairedStore));
   const context = { mode: "shop_agent", recorded_checkout_ref_hash: recordedRef, ship_to_optional: shipToOptional("shop_api") };
   return { observed, context, verdict: bindingV1(snapshot, observed, { ...context, mode: "shop_agent" }) };
 }
@@ -263,7 +294,7 @@ function precheckProblem(binding: Binding): string | null {
 }
 
 /** Case- and space-folded containment either way: a title that fails it is advisory only. */
-function titleDiffers(snapshot: SnapshotV2, checkout: WalletCheckout): boolean {
+function titleDiffers(snapshot: BindableSnapshot, checkout: WalletCheckout): boolean {
   const fold = (t: string): string => t.toLowerCase().replace(/\s+/g, " ").trim();
   const want = fold(snapshot.item.title);
   return checkout.lines.some((l) => {
@@ -279,13 +310,50 @@ function titleDiffers(snapshot: SnapshotV2, checkout: WalletCheckout): boolean {
 export async function advanceCompletion(ctx: CompletionContext, input: CompletionInput): Promise<CompletionView> {
   const { store, now } = ctx;
   const { handle, proof } = input;
-  const snapshot: SnapshotV2 = proof.snapshot;
+  const snapshot: BindableSnapshot = proof.snapshot;
   const expiresAt = Date.parse(snapshot.expires_at);
   const totalMinor = snapshot.total.amount_minor;
   const zip = snapshot.ship_to.postal_code;
   const deadline = now() + COMPLETION_BUDGET_MS;
-  /** The wallet's store for the approved merchant origin (Shop: its myshopify domain), or null when none is known. */
-  const pairedStore = ctx.storeFor(snapshot.merchant_origin);
+  /** The store the passkey signed beside the storefront (v3 `myshopify_domain`, D7), or null when none was signed. */
+  const pairedStore = snapshot.v === 3 ? (snapshot.myshopify_domain ?? null) : null;
+
+  /**
+   * The store pair check (Appendix G, 1.6.1) for the signed pair: null when it passes, else the failing rule. A pass
+   * fetched less than 24 h ago for the same (origin, domain) is reused, from any process (a `store_pair` entry for this
+   * purchase names it, `cached_from`); otherwise one logged GET. Every verdict is chained as `store_pair`; only a
+   * fetched pass is ever reused.
+   */
+  async function storePair(domain: string): Promise<StorePairReason | null> {
+    const origin = snapshot.merchant_origin;
+    const target = storePairPrecondition(origin, domain);
+    if ("reason" in target) return target.reason;
+    const cached = passedRecently(store.entries(), origin, domain, now());
+    if (cached !== null) {
+      await store.append("store_pair", { handle, merchant_origin: origin, myshopify_domain: domain, result: "pass", cached_from: cached });
+      return null;
+    }
+    if (ctx.storefront === null) return "fetch_failed";
+    let reason: StorePairReason | null;
+    let disclosureSeq: number | null = null;
+    try {
+      const answer = await ctx.storefront.fetchMeta(target.url, handle);
+      disclosureSeq = answer.disclosureSeq;
+      reason = storePairProblem(origin, domain, answer);
+    } catch {
+      // No answer (a network error, a timeout, a name resolving to a non-public address), or the log refused it.
+      reason = "fetch_failed";
+    }
+    await store.append("store_pair", {
+      handle,
+      merchant_origin: origin,
+      myshopify_domain: domain,
+      result: reason === null ? "pass" : "fail",
+      ...(reason === null ? {} : { reason }),
+      ...(disclosureSeq === null ? {} : { disclosure_seq: disclosureSeq }),
+    });
+    return reason;
+  }
 
   /**
    * Chains a local outcome (once per state in a row), never once the purchase is settled (a terminal outcome, maybe
@@ -435,6 +503,9 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     if (totalMinor > Math.min(budget.amountMinor, ctx.perOrderCapMinor ?? Number.POSITIVE_INFINITY)) return refuse("budget");
     const storeDomain = pairedStore;
     if (storeDomain === null) return refuse("store_unknown");
+    // Before any checkout is made, and before the completing report: a failure here is local only.
+    const pair = await storePair(storeDomain);
+    if (pair !== null) return refuse(`store_pair:${pair}`);
     let quote: WalletCheckout;
     try {
       quote = await wallet.createCheckout({
@@ -591,6 +662,12 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
   async function completeOnce(owner: string, done: Body, at: { storeDomain: string; checkoutRef: string }): Promise<"settled" | "reconcile"> {
     const wallet = ctx.wallet;
     if (wallet === null) return "reconcile";
+    // The safety net: the pair must still pass now (a pass kept under 24 h, or a new GET); if not, nothing is sent.
+    const pair = pairedStore === null ? "bad_domain" : await storePair(pairedStore);
+    if (pair !== null) {
+      const chained = await local({ state: "failed", source: "gateway_precheck", reason: `store_pair:${pair}` }, (chain) => maybeSent(chain, handle));
+      return chained ? "settled" : "reconcile";
+    }
     const recheck = (fresh: WalletCheckout): string | null => {
       if (fresh.checkoutRef !== done.checkout_ref) return "checkout_ref";
       const problem = precheckProblem(bind(snapshot, fresh, fresh.checkoutRef, pairedStore).verdict);

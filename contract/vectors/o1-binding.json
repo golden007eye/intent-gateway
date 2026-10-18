@@ -1,7 +1,7 @@
 {
   "id": "O1",
   "appendix": "G",
-  "description": "binding-v1: snapshot v2 S, observed order O and context M give the binding object. The 21 cases of the contract table, plus 11 cases (origin grammar:) that pin the Appendix G origin grammar and 7 that pin types, the checkout ref hash (the id up to its first ?) and the one-order rule (context bound_elsewhere). observed.checkout_ref is the raw id, which stays with the checking service; context.recorded_checkout_ref_hash is its hash. Every case that varies merchant_origin is in handoff mode; the shop_agent cases' merchant_origin: match is provisional (the shop_agent origin rule waits on S1).",
+  "description": "binding-v1: snapshot v2 or v3 S, observed order O and context M give the binding object. The 21 cases of the contract table, plus 11 cases (origin grammar:) that pin the Appendix G origin grammar, 7 that pin types, the checkout ref hash (the id up to its first ?) and the one-order rule (context bound_elsewhere), and 7 that pin check 1 for shop_agent (1.6.1): a v3 snapshot's myshopify_domain is the merchant's other name, never another store's, and never in handoff mode or for a v2 snapshot. observed.checkout_ref is the raw id, which stays with the checking service; context.recorded_checkout_ref_hash is its hash.",
   "cases": [
     {
       "name": "exact match",
@@ -1282,7 +1282,6 @@
     },
     {
       "name": "shop_agent, Shop id differs from the recorded id",
-      "note": "merchant_origin: match is provisional pending S1 (the myshopify alias rule)",
       "input": {
         "snapshot": {
           "v": 2,
@@ -2709,7 +2708,6 @@
     },
     {
       "name": "checkout ref hash: shop_agent, same checkout without its query",
-      "note": "merchant_origin: match is provisional pending S1 (the myshopify alias rule)",
       "input": {
         "snapshot": {
           "v": 2,
@@ -2929,6 +2927,542 @@
         "checks": {
           "merchant_origin": "match",
           "checkout_ref": "differs",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "shop_agent v3: Shop reports the store's myshopify domain",
+      "input": {
+        "snapshot": {
+          "v": 3,
+          "approval": "ap_TEST0004",
+          "nonce": "EBESExQVFhcYGRobHB0eHw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "total_kind": "max",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+          "completion_mode": "shop_agent",
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "total_estimated": true,
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/SHOP0001?key=SHOPKEY0001",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_postal_code": "94110",
+          "final_total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false,
+          "recorded_checkout_ref_hash": "sha256:4744deabcfbb33cbe427c78aae29d256067e994c2bf8bfc0208f32d8b158f22a"
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v1",
+        "result": "ok",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "shop_agent v3: the storefront origin",
+      "input": {
+        "snapshot": {
+          "v": 3,
+          "approval": "ap_TEST0004",
+          "nonce": "EBESExQVFhcYGRobHB0eHw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "total_kind": "max",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+          "completion_mode": "shop_agent",
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "total_estimated": true,
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "observed": {
+          "merchant_origin": "https://shop.example",
+          "checkout_ref": "gid://shopify/Checkout/SHOP0001?key=SHOPKEY0001",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_postal_code": "94110",
+          "final_total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false,
+          "recorded_checkout_ref_hash": "sha256:4744deabcfbb33cbe427c78aae29d256067e994c2bf8bfc0208f32d8b158f22a"
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v1",
+        "result": "ok",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "shop_agent v3: the myshopify domain, uppercase with a trailing dot",
+      "input": {
+        "snapshot": {
+          "v": 3,
+          "approval": "ap_TEST0004",
+          "nonce": "EBESExQVFhcYGRobHB0eHw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "total_kind": "max",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+          "completion_mode": "shop_agent",
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "total_estimated": true,
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "observed": {
+          "merchant_origin": "HTTPS://TEST-SHOP.MYSHOPIFY.COM.",
+          "checkout_ref": "gid://shopify/Checkout/SHOP0001?key=SHOPKEY0001",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_postal_code": "94110",
+          "final_total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false,
+          "recorded_checkout_ref_hash": "sha256:4744deabcfbb33cbe427c78aae29d256067e994c2bf8bfc0208f32d8b158f22a"
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v1",
+        "result": "ok",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "shop_agent v3: another store's myshopify domain",
+      "input": {
+        "snapshot": {
+          "v": 3,
+          "approval": "ap_TEST0004",
+          "nonce": "EBESExQVFhcYGRobHB0eHw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "total_kind": "max",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+          "completion_mode": "shop_agent",
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "total_estimated": true,
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "observed": {
+          "merchant_origin": "https://other-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/SHOP0001?key=SHOPKEY0001",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_postal_code": "94110",
+          "final_total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false,
+          "recorded_checkout_ref_hash": "sha256:4744deabcfbb33cbe427c78aae29d256067e994c2bf8bfc0208f32d8b158f22a"
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v1",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "differs",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "shop_agent v3, not a Shopify store: a myshopify domain",
+      "input": {
+        "snapshot": {
+          "v": 3,
+          "approval": "ap_TEST0004",
+          "nonce": "EBESExQVFhcYGRobHB0eHw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "total_kind": "max",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+          "completion_mode": "shop_agent",
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "total_estimated": true
+        },
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/SHOP0001?key=SHOPKEY0001",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_postal_code": "94110",
+          "final_total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false,
+          "recorded_checkout_ref_hash": "sha256:4744deabcfbb33cbe427c78aae29d256067e994c2bf8bfc0208f32d8b158f22a"
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v1",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "differs",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "shop_agent v2: no myshopify domain is signed",
+      "input": {
+        "snapshot": {
+          "v": 2,
+          "approval": "ap_TEST0004",
+          "nonce": "EBESExQVFhcYGRobHB0eHw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "total_kind": "max",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+          "completion_mode": "shop_agent",
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "total_estimated": true
+        },
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/SHOP0001?key=SHOPKEY0001",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_postal_code": "94110",
+          "final_total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false,
+          "recorded_checkout_ref_hash": "sha256:4744deabcfbb33cbe427c78aae29d256067e994c2bf8bfc0208f32d8b158f22a"
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v1",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "differs",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "handoff v3: the myshopify domain is not the storefront origin",
+      "input": {
+        "snapshot": {
+          "v": 3,
+          "approval": "ap_TEST0003",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "item": {
+            "title": "Trail Runner 3",
+            "variant": "US 10 / Blue"
+          },
+          "quantity": 1,
+          "unit_price": {
+            "amount_minor": 12000,
+            "currency": "USD"
+          },
+          "shipping": {
+            "amount_minor": 500,
+            "currency": "USD"
+          },
+          "total": {
+            "amount_minor": 12500,
+            "currency": "USD"
+          },
+          "total_kind": "exact",
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "continue_url_hash": "sha256:45ed87d3b03a94e1d226e0a3c3cccdea408ff08bf68454c7a393162f34dd3727",
+          "rule_version": "recheck-v1",
+          "expires_at": "2026-10-16T12:15:00Z",
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "checkout_ref_hash": "sha256:ec0dd227ace40a3562f73439d5bfb4cf504025ad0baa4ba89cedfc48c1063e36",
+          "completion_mode": "handoff",
+          "completer_keyid": "gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw",
+          "total_estimated": false,
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0001?key=TESTKEY0001",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_postal_code": "94110",
+          "final_total": {
+            "amount_minor": 12500,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "handoff",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v1",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "differs",
+          "checkout_ref": "match",
           "line": "match",
           "ship_to": "match",
           "total": "match"

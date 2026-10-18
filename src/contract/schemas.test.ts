@@ -148,9 +148,9 @@ describe("operations", () => {
     expect(ops).toHaveLength(8);
   });
 
-  it("every operation takes the optional Intent-Contract-Version request header, 1.5.0 or 1.6.0", () => {
+  it("every operation takes the optional Intent-Contract-Version request header, 1.5.0, 1.6.0 or 1.6.1", () => {
     const param = (components["parameters"] as Record<string, Obj>)["ContractVersion"] as Obj;
-    expect(param).toMatchObject({ name: "Intent-Contract-Version", in: "header", required: false, schema: { enum: ["1.5.0", "1.6.0"] } });
+    expect(param).toMatchObject({ name: "Intent-Contract-Version", in: "header", required: false, schema: { enum: ["1.5.0", "1.6.0", "1.6.1"] } });
     for (const { op } of ops) {
       const params = ((op as unknown as Obj)["parameters"] ?? []) as Obj[];
       expect(params.map((p) => p["$ref"]), op.operationId).toContain("#/components/parameters/ContractVersion");
@@ -224,12 +224,8 @@ describe("spec examples", () => {
    * Examples the published spec gets wrong, each with the one field that makes it valid and why. A defect is reported
    * to Intent Cloud; the entry goes when a corrected contract is vendored (the test then fails until it is removed).
    */
-  const KNOWN_DEFECTS: Readonly<Record<string, { add: Obj; why: string }>> = {
-    "createCart CartRequest": {
-      add: { completer_keyid: "gw-Kay64UG8yvCyLhqU000LxzYeUm0L_hLIl5S8kyKWbdc" },
-      why: "1.6.0 makes completer_keyid required, and the request example omits it",
-    },
-  };
+  // 1.6.1 fixed the createCart example (it now carries completer_keyid), so none is known today.
+  const KNOWN_DEFECTS: Readonly<Record<string, { add: Obj; why: string }>> = {};
 
   it.each(examples)("%s parses", (label, name, example) => {
     const schema = SCHEMAS[name] as z.ZodType;
@@ -250,17 +246,18 @@ describe("vectors", () => {
   const VECTORS: Record<string, string> = {
     "a1-snapshot.json": "SnapshotV1 (the released 1.5.0 form, for 1.5.0 chains)",
     "a2-snapshot-unicode.json": "SnapshotV1 (the released 1.5.0 form, for 1.5.0 chains)",
-    "a3-snapshot-v2.json": "SnapshotV2 (replayed in snapshot-v2.test.ts)",
+    "a3-snapshot-v2.json": "SnapshotV2 and SnapshotV3, and MyshopifyDomain values (replayed in snapshot-v2.test.ts)",
     "b1-ledger.json": "LedgerRef (the entry's seq and hash, as a proof names them)",
     "b2-ledger-outcome.json": "none: Intent Cloud's ledger, which the gateway does not keep",
-    "o1-binding.json": "SnapshotV2 and Binding (binding-v1 itself is G4's)",
+    "o1-binding.json": "SnapshotV2, SnapshotV3 and Binding (binding-v1 itself is src/outcome's)",
     "o2-outcome-statement.json": "OutcomeStatement (its signature is G4's)",
     "o3-status-state.json": "OutcomeState and ApprovalState (replayed in src/gateway/status-state.test.ts)",
     "c2-http-signature.json": "CartRequestV1 body (a signature vector from 1.5.0) and GatewayKeyId",
     "d1-receipt.json": "Receipt",
     "e1-approval-proof.json": "ApprovalProofV1 (a v1 snapshot: 1.5.0 chains)",
     "e1-rs256-approval-proof.json": "ApprovalProofV1 (a v1 snapshot: 1.5.0 chains)",
-    "e2-snapshot-v2-request.json": "SnapshotV2 and CartRequest (step 7, replayed in src/trust/sent.test.ts)",
+    "e2-snapshot-v2-request.json": "SnapshotV2, SnapshotV3 and CartRequest (step 7, replayed in src/trust/sent.test.ts)",
+    "o5-store-pair.json": "none: storefront answers, replayed in src/contract/store-pair.test.ts",
     "o4-report-transitions.json": "none: Intent Cloud's report transitions and precedence (G4 and G7b)",
     "j1-jcs.json": "none: JCS edge cases, not contract objects",
     "s1-key-statement.json": "KeyStatement",
@@ -278,35 +275,49 @@ describe("vectors", () => {
     expect(contract.SnapshotV2.safeParse(snapshot).success).toBe(false);
   });
 
-  it("a3: each v2 snapshot parses unchanged, as SnapshotV2 and as an ApprovalCreated snapshot, and not as v1", () => {
+  it("a3: each snapshot parses unchanged as its version (v2 or v3), only as that one, and v3 as an ApprovalCreated snapshot", () => {
+    const versions: number[] = [];
     for (const c of vector("a3-snapshot-v2.json")["cases"] as Obj[]) {
-      const snapshot = (c["input"] as Obj)["snapshot"] as Json;
-      expect(contract.SnapshotV2.parse(snapshot)).toEqual(snapshot);
+      const snapshot = (c["input"] as Obj)["snapshot"] as Obj;
+      const [own, other] = snapshot["v"] === 3 ? [contract.SnapshotV3, contract.SnapshotV2] : [contract.SnapshotV2, contract.SnapshotV3];
+      versions.push(snapshot["v"] as number);
+      expect(own.parse(snapshot)).toEqual(snapshot);
+      expect(other.safeParse(snapshot).success).toBe(false);
       expect(contract.AnySnapshot.parse(snapshot)).toEqual(snapshot);
       expect(contract.SnapshotV1.safeParse(snapshot).success).toBe(false);
     }
+    expect(versions).toEqual([2, 2, 3, 3]);
   });
 
-  it("o1: every snapshot is a SnapshotV2 and every expected binding a Binding", () => {
+  it.each((vector("a3-snapshot-v2.json")["myshopify_domain"] as Obj[]).map((c) => [c["name"] as string, c] as const))(
+    "a3 myshopify_domain %s: MyshopifyDomain and the store pair check agree with the vector",
+    (_, c) => {
+      expect(contract.MyshopifyDomain.safeParse(c["myshopify_domain"]).success).toBe(c["valid"]);
+      expect(contract.isMyshopifyDomain(c["myshopify_domain"] as string)).toBe(c["valid"]);
+    },
+  );
+
+  it("o1: every snapshot is a SnapshotV2 or SnapshotV3 and every expected binding a Binding", () => {
     const cases = vector("o1-binding.json")["cases"] as Obj[];
     expect(cases.length).toBeGreaterThanOrEqual(21);
     for (const c of cases) {
-      expect(contract.SnapshotV2.safeParse((c["input"] as Obj)["snapshot"]).success, c["name"] as string).toBe(true);
+      expect(contract.BindableSnapshot.safeParse((c["input"] as Obj)["snapshot"]).success, c["name"] as string).toBe(true);
       expect(contract.Binding.parse(c["expected"]), c["name"] as string).toEqual(c["expected"]);
     }
   });
 
   // The refusals the schema itself makes (its field rules, the OrderRef pattern, a source's assurance cap); every
   // other refusal is a signature, hash or snapshot check (G4), so its statement still parses.
-  const SCHEMA_REFUSALS = new Set(["required_fields", "order_ref", "assurance"]);
+  const SCHEMA_REFUSALS = new Set(["required_fields", "order_ref", "assurance", "source"]);
   it.each((vector("o2-outcome-statement.json")["cases"] as Obj[]).map((c) => [c["name"] as string, c] as const))("o2 %s: schema verdict", (_, c) => {
     const refusedBySchema = SCHEMA_REFUSALS.has(c["refused_by"] as string);
     expect(contract.OutcomeStatement.safeParse(c["statement"]).success).toBe(!refusedBySchema);
   });
 
-  it("e2: its snapshot is a SnapshotV2 and every case's cart_request a CartRequest", () => {
+  it("e2: its snapshots are a SnapshotV2 and a SnapshotV3, and every case's cart_request a CartRequest", () => {
     const e2 = vector("e2-snapshot-v2-request.json");
     expect(contract.SnapshotV2.safeParse(e2["snapshot"]).success).toBe(true);
+    expect(contract.SnapshotV3.safeParse(e2["snapshot_v3"]).success).toBe(true);
     for (const c of e2["cases"] as Obj[]) expect(contract.CartRequest.safeParse((c["input"] as Obj)["cart_request"]).success, c["name"] as string).toBe(true);
   });
 
@@ -317,6 +328,7 @@ describe("vectors", () => {
       expect(contract.OutcomeState.safeParse(input["outcome_state"]).success).toBe(true);
       expect(contract.CompletionMode.safeParse(input["mode"]).success).toBe(true);
       expect(contract.ApprovalState.safeParse(expected["1.6.0"]).success).toBe(true);
+      expect(contract.ApprovalState.safeParse(expected["1.6.1"]).success).toBe(true);
       expect(expected["1.5.0"] === null || contract.ApprovalState.safeParse(expected["1.5.0"]).success).toBe(true);
     }
   });
@@ -352,7 +364,7 @@ describe("vectors", () => {
     it.each([
       ["ES256", e1],
       ["RS256", rs],
-    ])("%s: the 1.5.0 proof parses unchanged as ApprovalProofV1, and not in a 1.6.0 status (v2 only)", (_, v) => {
+    ])("%s: the 1.5.0 proof parses unchanged as ApprovalProofV1, and not in a 1.6.1 status (v3 only)", (_, v) => {
       const p = (v["expected"] as Obj)["proof"] as Obj;
       expect(contract.ApprovalProofV1.parse(p)).toEqual(p);
       const status = { state: "approved", display: { merchant: "Trail Supply Co (mock)", title: "Trail Runner 3", total: { amount_minor: 9499, currency: "USD" } }, proof: p };
@@ -461,6 +473,8 @@ describe("strictness and refinements", () => {
       ["gateway_report source without reported", drop(reported, "reported")],
       ["reported on another source", { ...ordered, reported: { state: "ordered", source: "shop_api" } }],
       ["checkout_page claiming verified", { ...ordered, source: "checkout_page" }],
+      ["Intent Cloud naming the gateway's source shop_api (1.6.1)", { ...ordered, source: "shop_api" }],
+      ["Intent Cloud naming the gateway's source gateway_precheck (1.6.1)", { ...ordered, state: "failed", source: "gateway_precheck" }],
     ])("refuses an outcome: %s", (_, value) => {
       expect(contract.Outcome.safeParse(value).success).toBe(false);
     });
@@ -483,6 +497,16 @@ describe("strictness and refinements", () => {
     ])("refuses a report: %s", (_, value) => {
       expect(contract.OutcomeReport.safeParse(value).success).toBe(false);
     });
+  });
+
+  it("ApprovalStatus (1.6.1): outcome and outcome_statement are present together (dependentRequired)", () => {
+    const outcome = { state: "handed_off", source: "checkout_page", assurance: "reported", observed_at: "2026-10-16T12:05:00Z" };
+    const statement = (vector("o2-outcome-statement.json")["cases"] as Obj[])[0]?.["statement"] as Obj;
+    const status = { state: "handed_off", display: { merchant: "Test Shop", title: "Trail Runner 3", total: { amount_minor: 100, currency: "USD" } } };
+    expect(contract.ApprovalStatus.safeParse(status).success).toBe(true);
+    expect(contract.ApprovalStatus.safeParse({ ...status, outcome }).success).toBe(false);
+    expect(contract.ApprovalStatus.safeParse({ ...status, outcome_statement: statement }).success).toBe(false);
+    expect(contract.ApprovalStatus.safeParse({ ...status, outcome: statement["outcome"], outcome_statement: statement }).success).toBe(true);
   });
 
   it("error bodies parse by status", () => {

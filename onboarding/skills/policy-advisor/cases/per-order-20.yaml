@@ -1,0 +1,7 @@
+# Run after `intent policy add per-order-20`.
+- name: a $20 cart is sent
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 20, quantity: 1}}
+  expect: {send: true}
+- name: a $21 cart is refused by the per-order limit
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 21, quantity: 1}}
+  expect: {send: false, blocked: [spend.per_order_usd]}

@@ -1,12 +1,12 @@
 // Contract suite, flows (G23, AC-R1, AC-A1): search → cart → approval with the adapter and a session key, each
 // response parsed with the src/contract schemas and carrying a receipt that verifies. On the fake the buyer then
 // approves with a software passkey and the proof verifies with src/trust; staging has no phone, so that step is
-// fake-only. Every request carries `Intent-Contract-Version: 1.6.0` (the adapter sends it), so the flow is 1.6.0:
+// fake-only. Every request carries `Intent-Contract-Version: 1.6.1` (the adapter sends it), so the flow is 1.6.1:
 // a completer key in the cart request, snapshot v2, and the completer key reading the approval. Runs against TARGET
 // (see target.ts).
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SoftPasskey } from "../../src/cloud-fake/index.ts";
-import { ApprovalCreated, ApprovalStatus, Cart, type CartRequest, SearchResponse, SnapshotV2 } from "../../src/contract/index.ts";
+import { ApprovalCreated, ApprovalStatus, Cart, type CartRequest, SearchResponse, SnapshotV3 } from "../../src/contract/index.ts";
 import { canonicalize, sha256Hex } from "../../src/jcs/index.ts";
 import { createSession } from "../../src/signing/index.ts";
 import { approverFingerprint, type KeySet, verifyApprovalProof } from "../../src/trust/index.ts";
@@ -39,7 +39,7 @@ async function pendingApproval() {
   const offer = offers[0];
   if (offer === undefined) throw new Error("no offer");
 
-  // Contract 1.6.0: a per-approval completer key, and the completion modes this caller can use.
+  // Contract 1.6.x: a per-approval completer key, and the completion modes this caller can use.
   const completer = createSession();
   const request: CartRequest = { offer_handle: offer.offer_handle, quantity: 1, ship_to: SHIP, completer_keyid: completer.keyid, completion_accepts: ["handoff"] };
   const cart = await cloud.createCart(request);
@@ -60,8 +60,8 @@ async function pendingApproval() {
   expect(approval.check_code).toBe(approval.snapshot_hash.slice(0, 8));
   expect(approval.snapshot.approval).toBe(approval.approval_handle);
   expect(approval.state).toBe("pending");
-  // A 1.6.0 caller gets snapshot v2: offer = cart = snapshot, the 5-digit ZIP and the completer key it sent.
-  const snapshot = SnapshotV2.parse(approval.snapshot);
+  // A 1.6.1 caller gets snapshot v3: offer = cart = snapshot, the 5-digit ZIP and the completer key it sent.
+  const snapshot = SnapshotV3.parse(approval.snapshot);
   expect(snapshot).toMatchObject({
     ship_to: SHIP,
     variant_ref: offer.variant_ref,

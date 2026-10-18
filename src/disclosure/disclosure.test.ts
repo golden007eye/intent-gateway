@@ -78,7 +78,7 @@ const BODIES: Readonly<Record<string, Json>> = {
     approval_handle: "ap_TEST0001",
     approval_link_path: "/c/abcdefghijklmnop",
     snapshot: {
-      v: 2,
+      v: 3,
       approval: "ap_TEST0001",
       nonce: "AAAAAAAAAAAAAAAAAAAAAA",
       merchant: MERCHANT,
@@ -214,7 +214,7 @@ describe("invariant 2: log before send", () => {
     expect(headers.map(([k]) => k)).toEqual([
       "host", "content-type", "accept", "intent-contract-version", "content-digest", "signature-input", "signature", "content-length", "connection",
     ]);
-    expect(headers).toContainEqual(["intent-contract-version", "1.6.0"]);
+    expect(headers).toContainEqual(["intent-contract-version", "1.6.1"]);
 
     const signatureInput = (headers.find(([k]) => k === "signature-input") ?? [])[1] ?? "";
     const nonce = /;nonce="([^"]+)"/.exec(signatureInput)?.[1];

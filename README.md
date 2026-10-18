@@ -121,7 +121,7 @@ merchants:
   block: [dropship.example]
 ```
 
-The policy library holds ten reviewed policies, bundled with the gateway. `intent policy add <name>` narrows your policy with one and shows the change as a diff first; `intent policy test <cases.yaml>` runs test cases against it. See [Gateway policy](https://github.com/golden007eye/intent-gateway/blob/main/docs/policy.md) and [Policy library](https://github.com/golden007eye/intent-gateway/blob/main/docs/policy-library.md).
+The policy library holds thirteen reviewed policies, bundled with the gateway. `intent policy add <name>` narrows your policy with one and shows the change as a diff first; `intent policy test <cases.yaml>` runs test cases against it. See [Gateway policy](https://github.com/golden007eye/intent-gateway/blob/main/docs/policy.md) and [Policy library](https://github.com/golden007eye/intent-gateway/blob/main/docs/policy-library.md).
 
 ## Security and threat model
 

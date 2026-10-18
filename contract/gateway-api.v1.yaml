@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Intent Cloud Gateway API
-  version: 1.6.0
+  version: 1.6.1
   summary: The API the intent gateway uses to reach Intent Cloud for offers, carts and approvals.
   description: |
     Normative. The public subset of the Intent Cloud contract, for the intent gateway.
@@ -18,10 +18,13 @@ info:
       status then carries an approval proof (Appendix E) that the gateway verifies itself.
     - **Key statement.** Receipt and approval keys are listed in a statement signed by the host's
       offline root key (Appendix F), served at `GET /v1/key-statement`.
-    - **Versions (1.6.0).** A caller picks its version with the `Intent-Contract-Version` request
+    - **Versions (1.6.1).** A caller picks its version with the `Intent-Contract-Version` request
       header on every request, `GET /v1/meta` included. Without it a request is answered as 1.5.0,
-      byte for byte (the 1.5.0 files, their sums and v1 snapshots). 1.6.0 adds snapshot v2, the
-      completer key, outcomes, outcome statements and outcome reports (Appendix G).
+      byte for byte (the 1.5.0 files, their sums and v1 snapshots). `1.6.0` is answered exactly as
+      the frozen 1.6.0 files say, with their sums. 1.6.0 added snapshot v2, the completer key,
+      outcomes, outcome statements and outcome reports (Appendix G). This document is 1.6.1, served
+      only on an explicit `1.6.1` header: snapshot v3 (a Shopify store's `myshopify_domain`, also on
+      the offer and the cart) and binding check 1 for `shop_agent`.
     - **Formats.** Money is integer minor units. The purchase snapshot is Appendix A, the approval
       ledger entry Appendix B. JSON canonicalisation is RFC 8785 (JCS) with integers only.
     - **Limits.** The edge accepts bodies up to 16 KiB (413 above) and rate-limits per IPv4 address
@@ -227,6 +230,8 @@ paths:
               offer_handle: of_EXAMPLE0001
               quantity: 1
               ship_to: {country: US, postal_code: "94110"}
+              completer_keyid: gw-A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg
+              completion_accepts: [shop_agent, handoff]
       responses:
         "201":
           description: The cart.
@@ -312,7 +317,7 @@ paths:
       description: |
         Only the session that created the approval sees it, and (1.6.0) the approval's own completer
         key within the limits of Appendix G R7; any other key gets 404. An approval created by a
-        1.6.0 request is read only with the 1.6.0 header (R8). Once the
+        1.6.x request is read only with that same version's header (R8). Once the
         approval is `approved`, `handed_off` or `ordered`, the response carries `proof`
         (Appendix E). `ordered` is what Intent Cloud reported, as the merchant told it.
       tags: [approvals]
@@ -355,8 +360,7 @@ paths:
         the same body hash replays the first answer; with another body, 409; a second `completing`,
         409. Every later report carries `completing_report_id` and follows R4's transitions, else
         409. A first `completing` after `expires_at`, or on a rejected or expired approval, gets
-        410. A gateway's report is stored as `reported` (R5). Not yet served: until then the edge answers
-        404.
+        410. A gateway's report is stored as `reported` (R5).
       tags: [approvals]
       parameters:
         - $ref: "#/components/parameters/ContractVersion"
@@ -434,11 +438,12 @@ components:
       in: header
       required: false
       description: |
-        The contract version the caller speaks (1.6.0). Without it the request is answered as
-        1.5.0, byte for byte. An unsupported value gets 400 `unsupported contract version`.
+        The contract version the caller speaks (1.6.1). Without it the request is answered as
+        1.5.0, byte for byte; `1.6.0` is answered as the frozen 1.6.0 files say. An unsupported
+        value gets 400 `unsupported contract version`.
       schema:
         type: string
-        enum: [1.5.0, 1.6.0]
+        enum: [1.5.0, 1.6.0, 1.6.1]
     CartHandle:
       name: cart_handle
       in: path
@@ -802,6 +807,8 @@ components:
           $ref: "#/components/schemas/ReturnsPolicy"
         variant_ref:
           $ref: "#/components/schemas/VariantRef"
+        myshopify_domain:
+          $ref: "#/components/schemas/MyshopifyDomain"
     DeliveryEstimate:
       x-provisional: true
       description: |
@@ -922,6 +929,8 @@ components:
           $ref: "#/components/schemas/VariantRef"
         total_estimated:
           type: boolean
+        myshopify_domain:
+          $ref: "#/components/schemas/MyshopifyDomain"
     ApprovalCreated:
       type: object
       additionalProperties: false
@@ -934,8 +943,8 @@ components:
           type: string
           pattern: ^/c/[A-Za-z0-9_-]{16,64}$
         snapshot:
-          description: Always a v2 snapshot in 1.6.0 (Appendix A); a 1.6.0 caller refuses any other.
-          $ref: "#/components/schemas/SnapshotV2"
+          description: Always a v3 snapshot in 1.6.1 (Appendix A); a 1.6.1 caller refuses any other.
+          $ref: "#/components/schemas/SnapshotV3"
         snapshot_hash:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -984,6 +993,9 @@ components:
           $ref: "#/components/schemas/Outcome"
         outcome_statement:
           $ref: "#/components/schemas/OutcomeStatement"
+      dependentRequired:
+        outcome: [outcome_statement]
+        outcome_statement: [outcome]
     Base64Url:
       description: Base64url without padding.
       type: string
@@ -1070,8 +1082,8 @@ components:
         approval_handle:
           $ref: "#/components/schemas/ApprovalHandle"
         snapshot:
-          description: Always a v2 snapshot in 1.6.0 (Appendix A); a 1.6.0 caller refuses any other.
-          $ref: "#/components/schemas/SnapshotV2"
+          description: Always a v3 snapshot in 1.6.1 (Appendix A); a 1.6.1 caller refuses any other.
+          $ref: "#/components/schemas/SnapshotV3"
         snapshot_hash:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -1162,12 +1174,11 @@ components:
       minLength: 1
       maxLength: 128
       pattern: ^[A-Za-z0-9:/._-]+$
-    SnapshotV2:
+    SnapshotV3:
       description: |
-        The purchase snapshot v2 (1.6.0), exactly as Appendix A "Snapshot v2" defines it: every v1
-        fact, the 5-digit ZIP instead of the 3-digit prefix, and the merchant origin, variant,
-        checkout hash, completion mode, completer key and estimated flag. Callers that send
-        `Intent-Contract-Version: 1.6.0` get v2 snapshots for every cart.
+        The purchase snapshot v3 (1.6.1), exactly as Appendix A "Snapshot v3" defines it: every v2
+        field with `v: 3`, plus `myshopify_domain` exactly when the merchant is a Shopify store.
+        Callers that send `Intent-Contract-Version: 1.6.1` get v3 snapshots for every cart.
       type: object
       additionalProperties: false
       required:
@@ -1175,7 +1186,7 @@ components:
       properties:
         v:
           type: integer
-          const: 2
+          const: 3
         approval:
           type: string
           minLength: 1
@@ -1225,6 +1236,13 @@ components:
         total_estimated:
           description: True when the total came from a quote without the merchant's tax.
           type: boolean
+        myshopify_domain:
+          $ref: "#/components/schemas/MyshopifyDomain"
+    MyshopifyDomain:
+      description: "A Shopify store's own host, <store>.myshopify.com (1.6.1, Appendix A v3)."
+      type: string
+      maxLength: 253
+      pattern: ^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$
     OrderRef:
       description: "An order number (#1001) or a Shopify order id gid://shopify/Order/<n> (1.6.0)."
       type: string
@@ -1343,6 +1361,12 @@ components:
             properties:
               assurance:
                 const: reported
+        - if:
+            properties:
+              source:
+                enum: [shop_api, gateway_precheck]
+          then:
+            not: {}
       properties:
         state:
           $ref: "#/components/schemas/OutcomeState"

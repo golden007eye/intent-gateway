@@ -16,6 +16,7 @@ docs/adr/0009-policy-v1-narrow-only.md | never looser than Intent Cloud's rules 
 docs/adr/0011-approver-pin.md | if Intent Cloud were wrong or compromised | a threat the approver pin defends against, not a claim
 docs/adr/0011-approver-pin.md | The first purchase still trusts Intent Cloud | states a limit of the gateway's own check
 docs/adr/0011-approver-pin.md | Intent Cloud passkeys are now invite-only during preview | names who can hold an approval passkey, not data handling
+docs/adr/0020-signed-store-pair-and-storefront-check.md | Intent Cloud alone asserts that the two names belong together | the contract's trust statement about the store pair (Appendix A v3), not data handling
 
 # CLI strings: status lines about a response the gateway received, or names of configuration.
 src/cli/doctor.ts | Intent Cloud: the demo gateway runs its own | doctor's label for the demo's local stand-in

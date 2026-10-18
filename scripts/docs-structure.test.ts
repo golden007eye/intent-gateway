@@ -40,7 +40,7 @@ const KNOWN_RISK_ITEMS = [
   "**The Shop token at rest.**",
   "**The legal status of the Shop route.**",
   "**Shop's personal-use terms.**",
-  "**The store alias.**",
+  "**The store pair.**",
   "**Evidence-pack completeness.**",
 ];
 

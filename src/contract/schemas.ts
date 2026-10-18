@@ -1,15 +1,16 @@
 // zod schemas for every `components.schemas` entry of contract/gateway-api.v1.yaml (Intent Cloud public contract
-// 1.6.0), one export per spec name, each with its inferred type under the same name.
+// 1.6.1), one export per spec name, each with its inferred type under the same name.
 //
-// Strictness follows the spec exactly: every object in 1.6.0 says `additionalProperties: false`, so every object here
+// Strictness follows the spec exactly: every object in 1.6.1 says `additionalProperties: false`, so every object here
 // is a z.strictObject and rejects unknown keys. That includes the `x-provisional` schemas (RateLimited, GatewayLimits,
 // DeliveryEstimate, Rating, ReturnsPolicy) and the provisional `Meta.enrol_origin`: "provisional" means a later minor
-// version may change them, not that 1.6.0 allows extra keys. A changed provisional item arrives with a new vendored
+// version may change them, not that 1.6.1 allows extra keys. A changed provisional item arrives with a new vendored
 // contract, and the parity test then fails until this file follows it.
 //
-// The 1.6.0 fields of Offer, CartRequest, Cart and ApprovalStatus are optional here because the spec, which describes
-// both served versions, makes them optional. The gateway requires them where it relies on them, and refuses a v1
-// snapshot from a 1.6 host (src/gateway).
+// The 1.6.x fields of Offer, CartRequest, Cart and ApprovalStatus are optional here because the spec, which describes
+// every served version, makes them optional. The gateway requires them where it relies on them, and refuses a v1 or
+// v2 snapshot from a 1.6.1 host (src/gateway, src/trust). SnapshotV1 and SnapshotV2 stay, outside SCHEMAS, to read
+// chains written by 1.5.0 and 1.6.0 gateways.
 //
 // Integers use z.int(), which also caps them at ±(2^53−1): the JCS integer profile (Appendix A) rejects anything wider.
 // Patterns are copied from the spec verbatim; schemas.test.ts compares this file with the spec keyword by keyword.
@@ -76,6 +77,13 @@ export const VariantRef = z
   .max(128)
   .regex(/^[A-Za-z0-9:/._-]+$/);
 export type VariantRef = z.infer<typeof VariantRef>;
+
+/** A Shopify store's own host, `<store>.myshopify.com` (1.6.1, Appendix A v3): one LDH label, lowercase only. */
+export const MyshopifyDomain = z
+  .string()
+  .max(253)
+  .regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/);
+export type MyshopifyDomain = z.infer<typeof MyshopifyDomain>;
 
 export const ApprovalState = z.enum(["pending", "approved", "rejected", "expired", "handed_off", "ordered"]);
 export type ApprovalState = z.infer<typeof ApprovalState>;
@@ -241,6 +249,7 @@ export const Offer = z.strictObject({
   rating: Rating.optional(),
   returns: ReturnsPolicy.optional(),
   variant_ref: VariantRef.optional(),
+  myshopify_domain: MyshopifyDomain.optional(),
 });
 export type Offer = z.infer<typeof Offer>;
 
@@ -286,6 +295,7 @@ export const Cart = z.strictObject({
   merchant_origin: MerchantOrigin.optional(),
   variant_ref: VariantRef.optional(),
   total_estimated: z.boolean().optional(),
+  myshopify_domain: MyshopifyDomain.optional(),
 });
 export type Cart = z.infer<typeof Cart>;
 
@@ -315,6 +325,8 @@ export type SnapshotV1 = z.infer<typeof SnapshotV1>;
 /**
  * The purchase snapshot v2 (Appendix A "Snapshot v2", 1.6.0): every v1 fact with the 5-digit ZIP instead of the
  * 3-digit prefix, plus the merchant origin, variant, checkout hash, completion mode, completer key and estimated flag.
+ * Not in the 1.6.1 spec, so not in SCHEMAS: kept to read chains written by 1.6.0 gateways (`intent verify`, vector
+ * o1's v2 cases). A 1.6.1 gateway refuses it from a live host (Appendix E step 7).
  */
 export const SnapshotV2 = z.strictObject({
   v: z.literal(2),
@@ -340,15 +352,26 @@ export const SnapshotV2 = z.strictObject({
 });
 export type SnapshotV2 = z.infer<typeof SnapshotV2>;
 
-/** Either snapshot version, for reading chains that may hold 1.5.0 approvals; they differ in `v`. Not a spec schema. */
-export const AnySnapshot = z.discriminatedUnion("v", [SnapshotV1, SnapshotV2]);
+/**
+ * The purchase snapshot v3 (Appendix A "Snapshot v3", 1.6.1): every v2 field with `v: 3`, plus `myshopify_domain`
+ * exactly when the merchant is a Shopify store. The passkey signs the pair (merchant_origin, myshopify_domain).
+ */
+export const SnapshotV3 = SnapshotV2.extend({ v: z.literal(3), myshopify_domain: MyshopifyDomain.optional() });
+export type SnapshotV3 = z.infer<typeof SnapshotV3>;
+
+/** A snapshot binding-v1 can read: v2 (1.6.0) or v3 (1.6.1). Not a spec schema. */
+export const BindableSnapshot = z.discriminatedUnion("v", [SnapshotV2, SnapshotV3]);
+export type BindableSnapshot = z.infer<typeof BindableSnapshot>;
+
+/** Any snapshot version, for reading chains that may hold 1.5.0 or 1.6.0 approvals; they differ in `v`. Not a spec schema. */
+export const AnySnapshot = z.discriminatedUnion("v", [SnapshotV1, SnapshotV2, SnapshotV3]);
 export type AnySnapshot = z.infer<typeof AnySnapshot>;
 
 /** `POST /v1/carts/{cart_handle}/approvals` 201. */
 export const ApprovalCreated = z.strictObject({
   approval_handle: ApprovalHandle,
   approval_link_path: z.string().regex(/^\/c\/[A-Za-z0-9_-]{16,64}$/),
-  snapshot: SnapshotV2,
+  snapshot: SnapshotV3,
   snapshot_hash: z.string().regex(/^[0-9a-f]{64}$/),
   check_code: z.string().regex(/^[0-9a-f]{8}$/),
   state: ApprovalState,
@@ -405,7 +428,7 @@ export type LedgerRef = z.infer<typeof LedgerRef>;
 export const ApprovalProof = z.strictObject({
   v: z.literal(1),
   approval_handle: ApprovalHandle,
-  snapshot: SnapshotV2,
+  snapshot: SnapshotV3,
   snapshot_hash: z.string().regex(/^[0-9a-f]{64}$/),
   assertion: WebAuthnAssertion,
   credential_public_key: CredentialPublicKey,
@@ -420,8 +443,19 @@ export type ApprovalProof = z.infer<typeof ApprovalProof>;
 export const ApprovalProofV1 = ApprovalProof.extend({ snapshot: SnapshotV1 });
 export type ApprovalProofV1 = z.infer<typeof ApprovalProofV1>;
 
-/** Either proof form; `intent verify` accepts the v1 form only for an approval chained without step 7's `sent`. */
-export const AnyApprovalProof = z.union([ApprovalProof, ApprovalProofV1]);
+/** The released 1.6.0 proof (a v2 snapshot), for chains written by 1.6.0 gateways only. Not a spec schema. */
+export const ApprovalProofV2 = ApprovalProof.extend({ snapshot: SnapshotV2 });
+export type ApprovalProofV2 = z.infer<typeof ApprovalProofV2>;
+
+/** A proof a step-7 checked approval can carry: v3 (1.6.1), or v2 in chains a 1.6.0 gateway wrote. Not a spec schema. */
+export const BindableApprovalProof = z.union([ApprovalProof, ApprovalProofV2]);
+export type BindableApprovalProof = z.infer<typeof BindableApprovalProof>;
+
+/**
+ * Any proof form. `intent verify` accepts the v1 form only for an approval chained without step 7's `sent`, and the
+ * v2 form only for one whose `sent` names no contract version (a 1.6.0 gateway's).
+ */
+export const AnyApprovalProof = z.union([ApprovalProof, ApprovalProofV2, ApprovalProofV1]);
 export type AnyApprovalProof = z.infer<typeof AnyApprovalProof>;
 
 // ---- Outcomes (1.6.0, Appendix G) ----------------------------------------------------------------------------
@@ -512,6 +546,8 @@ export const Outcome = z
     if (o.state === "reported" && o.assurance !== "reported") fail("reported is reported assurance");
     if ((o.source === "gateway_report") !== has(o, "reported")) fail("reported is present exactly when the source is gateway_report");
     if ((o.source === "checkout_page" || o.source === "gateway_report") && o.assurance !== "reported") fail(`${o.source} is reported assurance at most`);
+    // 1.6.1: Intent Cloud states outcomes only from sources it reads itself, never a gateway's own sources.
+    if (o.source === "shop_api" || o.source === "gateway_precheck") fail(`an Intent Cloud outcome never names ${o.source}`);
   })
   .meta({
     allOf: [
@@ -523,6 +559,7 @@ export const Outcome = z
       { if: { properties: { state: { const: "reported" } } }, then: { properties: { assurance: { const: "reported" } } } },
       { if: { properties: { source: { const: "gateway_report" } } }, then: { required: ["reported"] }, else: { not: { required: ["reported"] } } },
       { if: { properties: { source: { enum: ["checkout_page", "gateway_report"] } } }, then: { properties: { assurance: { const: "reported" } } } },
+      { if: { properties: { source: { enum: ["shop_api", "gateway_precheck"] } } }, then: { not: {} } },
     ],
   });
 export type Outcome = z.infer<typeof Outcome>;
@@ -587,16 +624,21 @@ export type OutcomeReportAccepted = z.infer<typeof OutcomeReportAccepted>;
 /**
  * `GET /v1/approvals/{approval_handle}`. `proof` is optional in the schema, as in the spec; the spec's prose (present
  * once `approved`, `handed_off` or `ordered`) is a rule for the gateway use case to enforce, not a schema constraint.
- * `outcome` and `outcome_statement` are 1.6.0 (Appendix G).
+ * `outcome` and `outcome_statement` are 1.6.x (Appendix G), and in 1.6.1 present together (`dependentRequired`).
  */
-export const ApprovalStatus = z.strictObject({
-  state: ApprovalState,
-  display: ApprovalDisplay,
-  order_number: z.string().min(1).max(40).optional(),
-  proof: ApprovalProof.optional(),
-  outcome: Outcome.optional(),
-  outcome_statement: OutcomeStatement.optional(),
-});
+export const ApprovalStatus = z
+  .strictObject({
+    state: ApprovalState,
+    display: ApprovalDisplay,
+    order_number: z.string().min(1).max(40).optional(),
+    proof: ApprovalProof.optional(),
+    outcome: Outcome.optional(),
+    outcome_statement: OutcomeStatement.optional(),
+  })
+  .superRefine((status, ctx) => {
+    if (has(status, "outcome") !== has(status, "outcome_statement")) ctx.addIssue({ code: "custom", message: "outcome and outcome_statement are present together" });
+  })
+  .meta({ dependentRequired: { outcome: ["outcome_statement"], outcome_statement: ["outcome"] } });
 export type ApprovalStatus = z.infer<typeof ApprovalStatus>;
 
 // ---- Receipts -------------------------------------------------------------------------------------------------
@@ -667,7 +709,8 @@ export const SCHEMAS = {
   SearchResponse,
   CartRequest,
   Cart,
-  SnapshotV2,
+  SnapshotV3,
+  MyshopifyDomain,
   CompletionMode,
   MerchantOrigin,
   VariantRef,

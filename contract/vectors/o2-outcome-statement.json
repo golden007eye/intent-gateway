@@ -1,7 +1,7 @@
 {
   "id": "O2",
   "appendix": "G",
-  "description": "Outcome statements signed by the test approval key cloud-approval-202610 (listed in s1) over \"intent-outcome-v1\\n\" || JCS(statement without cloud_signature), for approved_snapshot. Only the first is valid; refused_by names the rule that fails (Appendix G statement validity): cloud_signature, snapshot_hash, binding_result (step 3, the result rule), required_fields, final_total, mode, order_ref, assurance and source. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "description": "Outcome statements signed by the test approval key cloud-approval-202610 (listed in s1) over \"intent-outcome-v1\\n\" || JCS(statement without cloud_signature), for approved_snapshot. Only the first two are valid (the second names a 14-digit Shopify order id, as Shop returns); refused_by names the rule that fails (Appendix G statement validity): cloud_signature, snapshot_hash, binding_result (step 3, the result rule), required_fields, final_total, mode, order_ref, assurance and source. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
   "input": {
     "statement": "s1-key-statement.json",
     "valid_at": 1792152000,
@@ -85,6 +85,44 @@
         "issued_at": "2026-10-16T12:06:00Z",
         "kid": "cloud-approval-202610",
         "cloud_signature": "088V9IGbunQrcTTszDXDICynnKXkWoF_l5yPQe9GLA5Qrohq7hcEwq_vmT6heF54KfiMbZfPhfoiwl0lBYRFBw"
+      },
+      "verifies": true
+    },
+    {
+      "name": "valid, a 14-digit Shopify order id (S1)",
+      "statement": {
+        "v": 1,
+        "approval_handle": "ap_TEST0003",
+        "snapshot_hash": "4b2db81e360c18267ea114c833835b424dc1c0963b6545ba791af91eef96c8d7",
+        "outcome": {
+          "state": "ordered",
+          "source": "staging_webhook",
+          "assurance": "verified",
+          "order_ref": "gid://shopify/Order/12345678901234",
+          "final_total": {
+            "amount_minor": 12500,
+            "currency": "USD"
+          },
+          "binding": {
+            "rule_version": "binding-v1",
+            "result": "ok",
+            "checks": {
+              "merchant_origin": "match",
+              "checkout_ref": "match",
+              "line": "match",
+              "ship_to": "match",
+              "total": "match"
+            }
+          },
+          "observed_at": "2026-10-16T12:05:00Z"
+        },
+        "ledger": {
+          "seq": 5,
+          "entry_hash": "25eab364ca03a0419d825c251cf9fa04814ebafc49faa8358493711fc5252426"
+        },
+        "issued_at": "2026-10-16T12:06:00Z",
+        "kid": "cloud-approval-202610",
+        "cloud_signature": "tViEttChvkb_NICBbeoXiJq9YESaqE5jkBrSXSB87nPqf9loGUBZHx7k73ndMvA9BoySxUDWqGbIIImMo5B_BA"
       },
       "verifies": true
     },

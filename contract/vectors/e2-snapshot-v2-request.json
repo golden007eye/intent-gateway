@@ -1,7 +1,7 @@
 {
   "id": "E2",
   "appendix": "E",
-  "description": "Appendix E step 7 (1.6.0): the approved v2 snapshot (input.snapshot, the a3 shop_agent snapshot) against the gateway's own CartRequest, the Offer and the Cart it received. refused lists the failing fields in the order quantity, ship_to, completer_keyid, completion_mode, variant_ref, merchant_origin, total, expires_at. A v1 snapshot is always refused.",
+  "description": "Appendix E step 7: the approved snapshot named by input.snapshot (snapshot: the a3 v2 shop_agent snapshot; snapshot_v3: the a3 v3 shop_agent snapshot, a Shopify store's) against the gateway's own CartRequest, the Offer and the Cart it received, for a gateway of input.contract_version. A 1.6.0 gateway takes only v2, a 1.6.1 gateway only v3 (refused: v). refused lists the failing fields in the order quantity, ship_to, completer_keyid, completion_mode, variant_ref, merchant_origin, total, expires_at, myshopify_domain (1.6.1: equal on the snapshot, the offer and the cart, or absent on all three). A v1 snapshot is always refused.",
   "snapshot": {
     "v": 2,
     "approval": "ap_TEST0004",
@@ -42,10 +42,53 @@
     "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
     "total_estimated": true
   },
+  "snapshot_v3": {
+    "v": 3,
+    "approval": "ap_TEST0004",
+    "nonce": "EBESExQVFhcYGRobHB0eHw",
+    "merchant": {
+      "name": "Test Shop",
+      "domain": "shop.example"
+    },
+    "item": {
+      "title": "Trail Runner 3",
+      "variant": "US 10 / Blue"
+    },
+    "quantity": 1,
+    "unit_price": {
+      "amount_minor": 12000,
+      "currency": "USD"
+    },
+    "shipping": {
+      "amount_minor": 500,
+      "currency": "USD"
+    },
+    "total": {
+      "amount_minor": 13600,
+      "currency": "USD"
+    },
+    "total_kind": "max",
+    "ship_to": {
+      "country": "US",
+      "postal_code": "94110"
+    },
+    "continue_url_hash": "sha256:54efc90ed922253bcf314e645fe00be469fbb7565d47c0e96335113dbbdfe019",
+    "rule_version": "recheck-v1",
+    "expires_at": "2026-10-16T12:15:00Z",
+    "merchant_origin": "https://shop.example",
+    "variant_ref": "gid://shopify/ProductVariant/1001",
+    "checkout_ref_hash": "sha256:63c8df25355b32a1df286ece6854f9326b9872bb86bb4878e87c481ce0187344",
+    "completion_mode": "shop_agent",
+    "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+    "total_estimated": true,
+    "myshopify_domain": "test-shop.myshopify.com"
+  },
   "cases": [
     {
       "name": "the gateway's own request",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -84,6 +127,8 @@
     {
       "name": "quantity 2 requested, 1 approved",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 2,
@@ -124,6 +169,8 @@
     {
       "name": "another ZIP requested",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -164,6 +211,8 @@
     {
       "name": "another completer key",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -204,6 +253,8 @@
     {
       "name": "shop_agent approved, only handoff accepted",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -243,6 +294,8 @@
     {
       "name": "shop_agent approved, completion_accepts absent (= [handoff])",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -279,6 +332,8 @@
     {
       "name": "another variant offered",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -319,6 +374,8 @@
     {
       "name": "the offer the agent picked is another merchant",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -359,6 +416,8 @@
     {
       "name": "another total on the cart",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -399,6 +458,8 @@
     {
       "name": "the snapshot outlives the cart",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -439,6 +500,8 @@
     {
       "name": "another merchant origin on the cart",
       "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot",
         "cart_request": {
           "offer_handle": "of_TEST0001",
           "quantity": 1,
@@ -473,6 +536,310 @@
         "valid": false,
         "refused": [
           "merchant_origin"
+        ]
+      }
+    },
+    {
+      "name": "a 1.6.0 gateway, a v3 snapshot",
+      "input": {
+        "contract_version": "1.6.0",
+        "snapshot": "snapshot_v3",
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z",
+          "myshopify_domain": "test-shop.myshopify.com"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "v"
+        ]
+      }
+    },
+    {
+      "name": "1.6.1: the gateway's own request",
+      "input": {
+        "contract_version": "1.6.1",
+        "snapshot": "snapshot_v3",
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z",
+          "myshopify_domain": "test-shop.myshopify.com"
+        }
+      },
+      "expected": {
+        "valid": true,
+        "refused": []
+      }
+    },
+    {
+      "name": "1.6.1: a v2 snapshot",
+      "input": {
+        "contract_version": "1.6.1",
+        "snapshot": "snapshot",
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z",
+          "myshopify_domain": "test-shop.myshopify.com"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "v"
+        ]
+      }
+    },
+    {
+      "name": "1.6.1: the offer names another store's myshopify domain",
+      "input": {
+        "contract_version": "1.6.1",
+        "snapshot": "snapshot_v3",
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "myshopify_domain": "other-shop.myshopify.com"
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z",
+          "myshopify_domain": "test-shop.myshopify.com"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "myshopify_domain"
+        ]
+      }
+    },
+    {
+      "name": "1.6.1: the cart names another store's myshopify domain",
+      "input": {
+        "contract_version": "1.6.1",
+        "snapshot": "snapshot_v3",
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z",
+          "myshopify_domain": "other-shop.myshopify.com"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "myshopify_domain"
+        ]
+      }
+    },
+    {
+      "name": "1.6.1: neither the offer nor the cart names the myshopify domain",
+      "input": {
+        "contract_version": "1.6.1",
+        "snapshot": "snapshot_v3",
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 1,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          }
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "myshopify_domain"
+        ]
+      }
+    },
+    {
+      "name": "1.6.1: quantity 2 requested, 1 approved",
+      "input": {
+        "contract_version": "1.6.1",
+        "snapshot": "snapshot_v3",
+        "cart_request": {
+          "offer_handle": "of_TEST0001",
+          "quantity": 2,
+          "ship_to": {
+            "country": "US",
+            "postal_code": "94110"
+          },
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "completion_accepts": [
+            "shop_agent",
+            "handoff"
+          ]
+        },
+        "offer": {
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "merchant": {
+            "name": "Test Shop",
+            "domain": "shop.example"
+          },
+          "myshopify_domain": "test-shop.myshopify.com"
+        },
+        "cart": {
+          "merchant_origin": "https://shop.example",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "total": {
+            "amount_minor": 13600,
+            "currency": "USD"
+          },
+          "expires_at": "2026-10-16T12:15:00Z",
+          "myshopify_domain": "test-shop.myshopify.com"
+        }
+      },
+      "expected": {
+        "valid": false,
+        "refused": [
+          "quantity"
         ]
       }
     }
