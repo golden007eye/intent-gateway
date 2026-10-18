@@ -102,7 +102,7 @@ for (const [net, prefix] of [
   ["::", 128],
   ["::1", 128],
   ["::", 96], // IPv4-compatible (deprecated)
-  ["64:ff9b::", 96], // NAT64: its IPv4 half is checked below
+  ["64:ff9b::", 96], // NAT64: refused whole (fails closed; an IPv6-only DNS64 network gets no store pair check)
   ["64:ff9b:1::", 48],
   ["100::", 64],
   ["2001::", 23], // IETF protocol assignments (Teredo, ORCHID, benchmarking)
@@ -139,7 +139,13 @@ function hexMapped(address: string): string | null {
 }
 
 const defaultResolve = async (host: string): Promise<readonly string[]> => (await lookup(host, { all: true, verbatim: true })).map((a) => a.address);
-const defaultConnect = (address: string, servername: string): Duplex => tlsConnect({ host: address, port: 443, servername, ALPNProtocols: ["http/1.1"] });
+/**
+ * The production connection: TLS to `address`, the certificate verified against the system CAs for `servername` (sent
+ * as SNI). `port` is 443 in production; only the TLS test passes another, to reach a local server.
+ */
+export const connectTls = (address: string, servername: string, port = 443): Duplex =>
+  tlsConnect({ host: address, port, servername, ALPNProtocols: ["http/1.1"], rejectUnauthorized: true });
+const defaultConnect = (address: string, servername: string): Duplex => connectTls(address, servername);
 
 const META_URL = /^https:\/\/([a-z0-9.-]{1,253})\/meta\.json$/;
 

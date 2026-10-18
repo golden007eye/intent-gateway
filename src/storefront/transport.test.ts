@@ -1,5 +1,5 @@
 // The real storefront transport against a local server: the resolver and the connection are the only seams (the
-// server speaks plain HTTP on 127.0.0.1, so TLS is the one thing not exercised here). Attack cases: names resolving to
+// server speaks plain HTTP on 127.0.0.1; tls.test.ts covers the production TLS connection). Attack cases: names resolving to
 // non-public addresses, DNS rebinding, redirects, oversize bodies, slow answers, and requests other than the one GET.
 import { createServer, connect as netConnect, type Server, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";

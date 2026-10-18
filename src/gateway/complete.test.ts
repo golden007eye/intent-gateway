@@ -22,7 +22,7 @@ import { buildEvidence, packText } from "../evidence/index.ts";
 import { runVerify, runVerifyEvidence } from "../verify/index.ts";
 import { openCheckoutVault, WalletKey } from "../wallet/index.ts";
 import { FAKE_BUYER, FAKE_OTHER_VARIANT, FAKE_STORE, FAKE_STOREFRONT, FAKE_VARIANT, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
-import { ATTEMPT_WINDOW_MS } from "./complete.ts";
+import { ATTEMPT_WINDOW_MS, passedRecently } from "./complete.ts";
 import { type ApprovalStatusResult, type CompletionStep, createGateway, type Gateway } from "./index.ts";
 import { spendHistory } from "./history.ts";
 
@@ -1368,6 +1368,69 @@ describe("contract 1.6.1: the store pair check before the completing report", ()
       e.kind === "approval" ? out.append("store_pair", { handle, merchant_origin: FAKE_STOREFRONT, myshopify_domain: FAKE_STORE, result: "pass", disclosure_seq: 0 }) : null,
     );
     expect(forged.checks.flatMap((c) => c.details).join("\n")).toContain("passes without naming the storefront GET");
+  });
+
+  it("attack (verify): a reuse of a failure, of another pair's pass, of a later entry or of a pass 24 h old fails verify", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    const chain = await chainOf(base);
+    const pass = chain.find((e) => e.kind === "store_pair" && body(e).result === "pass") as Entry;
+    const reuse = { handle, merchant_origin: FAKE_STOREFRONT, myshopify_domain: FAKE_STORE, result: "pass" };
+    /** verify's words for a copy of the chain with `forge` appended after the fetched pass, `lateMs` later. */
+    const forgedAfterPass = async (forge: (out: Store) => Promise<unknown>, lateMs = 0): Promise<string> => {
+      const copy = join(await fsp.mkdtemp(join(tmpdir(), "one-tap-reuse-")), "data");
+      const clock = { late: 0 };
+      const out = await openStore(copy, { clock: () => base.now() + clock.late });
+      for (const e of chain) {
+        await out.append(e.kind, e.body);
+        if (e.seq === pass.seq) {
+          clock.late = lateMs;
+          await forge(out);
+          clock.late = 0;
+        }
+      }
+      await out.close();
+      const report = await runVerify({ dataDir: copy, pinnedRootKeys: [base.fake.keys.rootPin], now: new Date(base.now() + lateMs), skipSupplyChain: true });
+      return report.checks.flatMap((c) => c.details).join("\n");
+    };
+    const failure = (out: Store) => out.append("store_pair", { ...reuse, result: "fail", reason: "differs" });
+    // The forged entries land right after the pass, so its seq + 1 is the failure and + 2 the reuse.
+    expect(await forgedAfterPass(async (out) => {
+      await failure(out);
+      await out.append("store_pair", { ...reuse, cached_from: pass.seq + 1 });
+    })).toContain("reuses something other than an earlier fetched pass");
+    expect(await forgedAfterPass((out) => out.append("store_pair", { ...reuse, myshopify_domain: "other-store.myshopify.com", cached_from: pass.seq }))).toContain(
+      "reuses something other than an earlier fetched pass",
+    );
+    expect(await forgedAfterPass((out) => out.append("store_pair", { ...reuse, cached_from: pass.seq + 1 }))).toContain("reuses something other than an earlier fetched pass");
+    expect(await forgedAfterPass((out) => out.append("store_pair", { ...reuse, cached_from: pass.seq }), STORE_TTL_MS)).toContain("reuses a pass 24 h old or more");
+    expect(await forgedAfterPass((out) => out.append("store_pair", { ...reuse, cached_from: pass.seq }), STORE_TTL_MS - 60_000)).not.toContain("store_pair entry");
+  });
+});
+
+describe("contract 1.6.1: which kept pass the store pair check may reuse (passedRecently)", () => {
+  const O = FAKE_STOREFRONT;
+  const D = FAKE_STORE;
+  const NOW = Date.parse("2026-10-18T12:00:00Z");
+  const H = 3_600_000;
+  const pass = (seq: number, ts: number, extra: Record<string, unknown> = {}) =>
+    ({ seq, kind: "store_pair", ts: new Date(ts).toISOString(), body: { handle: "ap_x", merchant_origin: O, myshopify_domain: D, result: "pass", disclosure_seq: 1, ...extra } }) as unknown as Entry;
+
+  it("a fetched pass for the same pair under 24 h old, and nothing else", () => {
+    expect(passedRecently([pass(5, NOW - H)], O, D, NOW)).toBe(5);
+    expect(passedRecently([pass(5, NOW - 24 * H)], O, D, NOW)).toBeNull();
+    expect(passedRecently([pass(5, NOW - H, { merchant_origin: "https://other.example" })], O, D, NOW)).toBeNull();
+    expect(passedRecently([pass(5, NOW - H, { myshopify_domain: "other-store.myshopify.com" })], O, D, NOW)).toBeNull();
+    expect(passedRecently([pass(5, NOW - H, { result: "fail", reason: "differs" })], O, D, NOW)).toBeNull();
+    expect(passedRecently([pass(5, NOW - H, { disclosure_seq: undefined, cached_from: 2 })], O, D, NOW)).toBeNull();
+    expect(passedRecently([{ ...pass(5, NOW - H), kind: "outcome" }], O, D, NOW)).toBeNull();
+  });
+
+  it("attack (clock skew): a pass chained after the current time is not trusted, and does not hide an older good one", () => {
+    expect(passedRecently([pass(5, NOW + 1_000)], O, D, NOW)).toBeNull();
+    expect(passedRecently([pass(5, NOW - H), pass(6, NOW + H)], O, D, NOW)).toBe(5);
   });
 });
 

@@ -1316,7 +1316,7 @@ const REFUSAL_WORDS: Readonly<Record<string, string>> = {
 
 function refusalWords(reason: string | undefined): string {
   if (reason?.startsWith("store_pair:") === true) {
-    return " The merchant's storefront (its /meta.json) did not name the Shopify store in the approved snapshot, so the gateway paid nothing.";
+    return " The merchant's storefront (its /meta.json) did not confirm the Shopify store in the approved snapshot, so the gateway paid nothing.";
   }
   const words = reason === undefined ? undefined : REFUSAL_WORDS[reason];
   return words === undefined ? "" : ` ${words}`;
