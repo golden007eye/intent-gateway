@@ -1,6 +1,6 @@
 # Quickstart
 
-This runs the [demo](demo.md) end to end: an agent finds offers, prepares a cart, you approve it, and you check what was sent. It needs no account and no config. Nothing can be bought.
+This runs the [demo](demo.md) end to end: an agent finds offers, prepares a Shop checkout, you approve it, the demo Shop pays it in one tap, and you check what was sent. It needs no invite, no account and no config. Nothing can be bought. Real purchases need an invite; see [One-tap purchases](one-tap.md).
 
 You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+ and an MCP client. Claude Code is the example. Odd-numbered releases such as Node 25 are not supported; [Docker](#with-docker) needs no Node.
 
@@ -12,7 +12,7 @@ The preview release is on npm as `intent-gateway@next`:
 $ claude mcp add intent -- npx -y intent-gateway@next demo
 ```
 
-Claude Code starts the gateway over stdio when it needs it. The gateway starts a demo Intent Cloud and a local confirm page on `127.0.0.1`, and keeps its data in `<data dir>/demo` (on Linux `~/.local/share/intent-gateway/demo`).
+Claude Code starts the gateway over stdio when it needs it. The gateway starts a demo Intent Cloud, a demo Shop with an agent budget and a local confirm page on `127.0.0.1`, and keeps its data in `<data dir>/demo` (on Linux `~/.local/share/intent-gateway/demo`).
 
 ## 2. Ask for something
 
@@ -22,10 +22,10 @@ Start `claude` and ask:
 > Find stickers to ZIP 94107, under $20, and prepare a cart for the cheapest.
 ```
 
-1. The agent calls `find_offers`. Each result ends with what the gateway sent (field names, never values) and what it blocked.
-2. It calls `create_cart` and shows an approval link, `http://127.0.0.1:<port>/confirm/c/…`, with a check code and a QR code.
-3. Open the link. The page shows the item, merchant, total, the ZIP code and the check code. Enter the demo code and click **Approve $<total> with demo passkey**. The code is six digits, new on every start and never shown to the agent. Claude Code does not show the gateway's terminal output, so the page shows the command that reads it: `cat <data dir>/demo/approval-code`.
-4. Ask the agent whether it was approved. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started. The agent calls `get_approval_status` and reports it approved, with the approver passkey's fingerprint. The first passkey that approves becomes the [approver pin](threat-model.md#phone-hand-off-and-self-approval).
+1. The agent calls `find_offers`. The gateway searches the demo Shop itself; nothing is sent to Intent Cloud for the search. Each result ends with what the gateway sent (field names, never values) and what it blocked.
+2. It calls `create_cart`. The gateway creates the Shop checkout, reads it back and submits it to the demo Intent Cloud for approval, then shows an approval link, `http://127.0.0.1:<port>/confirm/c/…`, with a check code and a QR code.
+3. Open the link. The page shows the item, store, total, the ZIP code and the check code. Enter the demo code and click **Approve $<total> with demo passkey**. The code is six digits, new on every start and never shown to the agent. Claude Code does not show the gateway's terminal output, so the page shows the command that reads it: `cat <data dir>/demo/approval-code`.
+4. Ask the agent whether it was approved. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started. The agent calls `get_approval_status` and reports it approved, with the approver passkey's fingerprint, and the gateway pays it from the demo Shop's agent budget: `One-tap: ordered (read from Shop)`. The first passkey that approves becomes the [approver pin](threat-model.md#phone-hand-off-and-self-approval).
 
 ## 3. Check what was sent
 
@@ -36,15 +36,9 @@ $ npx -y intent-gateway@next verify --demo
 
 `log` lists each entry of the local hash chain. `verify` re-checks the chain, each receipt and the approval, and ends with `verify: ok` and the chain's head seq and hash. [Verify](verify.md) says what each check proves.
 
-## 4. Try one tap
+## 4. See what one tap sent
 
-The demo also has a local fake Shop wallet. Ask:
-
-```text
-> Find stickers to ZIP 94107, under $20, and prepare a cart for the holographic sticker.
-```
-
-Approve it as before; the page says the gateway completes payment with demo Shop. Then ask the agent to check the approval status until it says `One-tap: ordered (read from Shop)`. `log --demo` now also shows the calls to Shop, each answered with its status and no receipt (Shop signs none), and `verify --demo` re-checks the outcome. [One-tap purchases](one-tap.md) says what works outside the demo: today, nothing yet: Shop does not accept the gateway's own client yet (a formal registration is pending), so linking needs `INTENT_SHOP_CLIENT_ID` set explicitly to a client Shop accepts, such as Shop's public client for your own agent.
+`log --demo` shows the calls to Shop (the search, the checkout and its reads, the one `complete_checkout`), each answered with its status and no receipt, since Shop signs none, and the submit and outcome reports sent to the demo Intent Cloud, each with its receipt. `verify --demo` re-checks the order against what you approved. [One-tap purchases](one-tap.md) says what a real purchase needs: an invite, your own Shop account linked with `INTENT_SHOP_CLIENT_ID` set explicitly, and an agent budget in the Shop app.
 
 ## Without an MCP client
 
@@ -98,12 +92,12 @@ Later starts reuse the token without printing it: their connect line reads it fr
 
 - Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`: inside the container the gateway listens on every interface, and the token is then the only protection.
 - The gateway runs as uid 1000, which owns the `/data` volume. For a bind mount, run as its owner: `--user "$(id -u):$(id -g)" -v "$PWD/data:/data"`.
-- Without `INTENT_DEMO=1` the container talks to the Intent Cloud staging host, whose root key this build pins. When it cannot reach that host, the container exits with a line saying so and how to re-run it in demo mode.
+- Without `INTENT_DEMO=1` the container talks to the Intent Cloud host this preview uses by default, whose root key this build pins. When it cannot reach that host, the container exits with a line saying so and how to re-run it in demo mode.
 
 ## Next
 
-- `intent init` checks the setup for a real run, makes the gateway's account key once (`<data dir>/account-key.json`, mode 600, never replaced; it prints only its thumbprint), offers to link Shop for one tap at a terminal (it skips the step with `--yes`, in demo mode and without a terminal, and purchases are handed off), and prints the line that connects your agent.
+- `intent init` checks the setup for a real run, makes the gateway's account key once (`<data dir>/account-key.json`, mode 600, never replaced; it prints only its thumbprint), offers to link Shop for one tap at a terminal (it skips the step with `--yes`, in demo mode and without a terminal), and prints the line that connects your agent. There is one account key per developer, and your first approval pins it; to replace it today, move `account-key.json` aside and run `intent init` again.
 - `intent doctor --demo` checks the setup; every problem it finds comes with its fix.
-- `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app. `intent status` shows the pause; `intent resume` needs your passkey.
+- `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app. `intent status` shows the pause; `intent resume` needs your passkey. The Shop budget is the only hard stop, because any program running as you can read the Shop token.
 - [Gateway policy](policy.md): narrow what leaves the gateway.
 - [Panel](panel.md): a local page with the same log, pending approvals, the approver pin and a Pause button.
