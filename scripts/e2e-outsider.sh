@@ -17,6 +17,20 @@
 #                                [--only <a,b,...>] [--out <dir>] [--keep]
 # Settings: CLAUDE_BIN (default claude), E2E_CLAUDE_MODEL (default: Claude Code's own), E2E_CLAUDE_TIMEOUT
 # (seconds per claude call, default 240), E2E_STDIO=0 (skip the stdio variant of b).
+#
+# Intent Cloud staging, in every mode, only when named in --only (none is in the default list):
+#   s   unattended: a fresh data dir against staging; doctor (contract 1.6), init, search, a hand-off cart (v2
+#       snapshot, completer key), still pending, the refusals, no evidence before an approval, verify ok. It creates
+#       a cart that expires unapproved; it buys nothing.
+#   j   MANUAL (AC-J1), runs only with E2E_STAGING=1: as s, with Claude making the cart; then a person approves it
+#       with a staging intent passkey and pays the test order on the merchant checkout; the script polls until
+#       the verified outcome says ordered, then verify, evidence and verify --evidence. Timed against
+#       E2E_J_BUDGET (default 300 s); it waits E2E_J_WAIT (default 1200 s) for the person. CONTRIBUTING.md says
+#       what the person does.
+#   j2  MANUAL (AC-J2) one-tap skeleton, runs only with E2E_ONETAP=1, INTENT_SHOP_CLIENT_ID and
+#       INTENT_WALLET_KEY_FILE set, and a store one tap can reach (the staging store is hand-off only today).
+# The search: E2E_STAGING_PRODUCT (default tee), E2E_STAGING_CATEGORY (t-shirts), E2E_STAGING_BUDGET (20, US
+# dollars), E2E_STAGING_ZIP (07093). The merchant is read from each run's snapshot, never named here.
 set -Eeuo pipefail
 
 usage() {
@@ -253,6 +267,37 @@ function spinKill(file, pid, ms) {
   process.exit(2);
 }
 
+// The last approval_pending entry of a chain (or the one for a handle), as key=value lines: what the buyer approves
+// against. The merchant comes from the snapshot the gateway chained, so the run never names a store itself.
+function pending(file, handle) {
+  let body = null;
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    let e;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (e.kind === "approval_pending" && (handle === undefined || e.body?.handle === handle)) body = e.body;
+  }
+  if (body === null) {
+    console.log("no approval_pending entry");
+    process.exit(1);
+  }
+  const out = {
+    handle: body.handle,
+    approval_url: body.approval_url,
+    check_code: String(body.snapshot_hash ?? "").slice(0, 8),
+    completion_mode: body.completion_mode,
+    completer_keyid: body.completer_keyid,
+    merchant_origin: body.sent?.cart?.merchant_origin,
+    variant_ref: body.sent?.cart?.variant_ref,
+    total_minor: body.total_minor,
+    completion_accepts: (body.sent?.cart_request?.completion_accepts ?? []).join(","),
+  };
+  for (const [k, v] of Object.entries(out)) console.log(`${k}=${v ?? ""}`);
+}
+
 // Change one byte of the chain: a digit of the second entry's timestamp. The line stays canonical JSON; its hash breaks.
 function tamper(file) {
   const lines = readFileSync(file, "utf8").split("\n");
@@ -296,6 +341,9 @@ switch (cmd) {
   case "tamper":
     tamper(...args);
     break;
+  case "pending":
+    pending(...args);
+    break;
   default:
     console.error(`unknown helper command ${cmd}`);
     process.exit(2);
@@ -336,18 +384,22 @@ wait_for() {
   return 1
 }
 
-# start_gateway <log name>: `demo --http` as the stranger, on a free port. Sets GW_PGID, GW_PORT, GW_URL, GW_ERR.
+# start_gateway <log name> [home] [command ...]: the gateway as the stranger, on a free port; by default `demo --http`
+# in the outsider's HOME. GW_ENV holds extra VAR=value settings for it. Sets GW_PGID, GW_PORT, GW_URL, GW_ERR.
 GW_PGID=""
 GW_PORT=""
 GW_URL=""
 GW_ERR=""
+declare -a GW_ENV=()
 start_gateway() {
+  local home="${2:-$OHOME}" cmd=(demo --http)
+  if [ $# -gt 2 ]; then cmd=("${@:3}"); fi
   GW_PORT="$(helper free-port)"
   GW_ERR="$LOGS/$1.err"
-  local extra=()
+  local extra=("${GW_ENV[@]}")
   if [ -n "${INTENT_DEMO_CONFIRM_PORT:-}" ]; then extra+=("INTENT_DEMO_CONFIRM_PORT=$INTENT_DEMO_CONFIRM_PORT"); fi
-  (cd "$WORK" && exec setsid env -i HOME="$OHOME" PATH="$OPATH" LANG=C.UTF-8 TERM=dumb INTENT_HTTP_PORT="$GW_PORT" \
-    "${extra[@]}" npx -y "$SPEC" demo --http) >"$LOGS/$1.out" 2>"$GW_ERR" </dev/null &
+  (cd "$WORK" && exec setsid env -i HOME="$home" PATH="$OPATH" LANG=C.UTF-8 TERM=dumb INTENT_HTTP_PORT="$GW_PORT" \
+    "${extra[@]}" npx -y "$SPEC" "${cmd[@]}") >"$LOGS/$1.out" 2>"$GW_ERR" </dev/null &
   GW_PGID=$!
   PGIDS+=("$GW_PGID")
   wait_for "$GW_ERR" 'MCP over HTTP at http://127\.0\.0\.1:[0-9]+/mcp' 180 "$GW_PGID" || return 1
@@ -731,6 +783,316 @@ scenario_g_demo() {
   WHY="connect line with the token; $B_WHY; without the code: 403, still not approved; restart: token not printed again, verify: ok"
 }
 
+# ------------------------------------------------------------------------------------- Intent Cloud staging
+# s, j and j2 run the gateway as a stranger runs it for real: no demo, a fresh data dir, the pinned staging host. In
+# tarball and npm modes that is `npx … serve --http` with a fresh HOME; in image modes, `docker run` without
+# INTENT_DEMO on a fresh volume.
+STAGING_PRODUCT="${E2E_STAGING_PRODUCT:-tee}"
+STAGING_CATEGORY="${E2E_STAGING_CATEGORY:-t-shirts}"
+STAGING_BUDGET="${E2E_STAGING_BUDGET:-20}"
+STAGING_ZIP="${E2E_STAGING_ZIP:-07093}"
+J_BUDGET="${E2E_J_BUDGET:-300}"
+J_WAIT="${E2E_J_WAIT:-1200}"
+J_POLL="${E2E_J_POLL:-15}"
+SG_HOME=""
+SG_C=""
+SG_URL=""
+SG_TOKEN="-"
+declare -a SG_DOCKER_ARGS=()
+
+# sg_cli <args>: an `intent` command against the staging gateway's data dir.
+sg_cli() {
+  if [ -n "$SG_C" ]; then docker exec "$SG_C" intent "$@"
+  else (cd "$WORK" && env -i HOME="$SG_HOME" PATH="$OPATH" LANG=C.UTF-8 TERM=dumb "${GW_ENV[@]}" npx -y "$SPEC" "$@"); fi
+}
+sg_chain() { # sg_chain <file>: copy the chain out
+  if [ -n "$SG_C" ]; then docker exec "$SG_C" cat /data/audit.jsonl >"$1"; else cp "$SG_HOME/.local/share/intent-gateway/audit.jsonl" "$1"; fi
+}
+sg_completer_keys() {
+  if [ -n "$SG_C" ]; then docker exec "$SG_C" ls /data/completer 2>/dev/null | grep -c '\.key$' || true
+  else find "$SG_HOME/.local/share/intent-gateway/completer" -name '*.key' 2>/dev/null | grep -c . || true; fi
+}
+sg_call() { helper mcp-call "$SG_URL" "$SG_TOKEN" "$@"; }
+# A package or image built from this checkout carries a released version number but not its files, so the install
+# self-check fails by design there; it runs only against what was published (--npm, --image).
+sg_verify() {
+  case "$MODE" in
+    npm | image) sg_cli verify ;;
+    *) sg_cli verify --skip-install-check ;;
+  esac
+}
+sg_disclosures() { local f="$LOGS/$1-chain.jsonl"; sg_chain "$f"; grep -c '"kind":"disclosure"' "$f" || true; }
+
+# start_staging <name>: init (Shop skipped: no client, no terminal) and serve. Sets SG_URL and SG_TOKEN.
+start_staging() {
+  local name="$1" f
+  SG_C=""
+  SG_TOKEN="-"
+  if [ "$TARGET" = docker ]; then
+    local c port logs i
+    c="$(docker_name "$name")"
+    CONTAINERS+=("$c")
+    VOLUMES+=("$c")
+    port="$(helper free-port)"
+    f="$LOGS/$name-run.txt"
+    docker run -d --name "$c" -p "127.0.0.1:$port:8787" "${SG_DOCKER_ARGS[@]}" -v "$c:/data" "$IMAGE" >"$f" 2>&1 || { WHY="docker run failed; see $f"; return 1; }
+    logs="$LOGS/$name-logs.txt"
+    for i in $(seq 1 120); do
+      docker logs "$c" >"$logs" 2>&1 || true
+      grep -q 'claude mcp add' "$logs" && break
+      [ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" = true ] || break
+      sleep 1
+    done
+    must_match "$logs" 'Authorization: Bearer [A-Za-z0-9_-]{32,}' "the connect line with the token" || return 1
+    SG_C="$c"
+    SG_TOKEN="$(grep -Eo 'Bearer [A-Za-z0-9_-]{32,}' "$logs" | head -n 1 | cut -d' ' -f2)"
+    SG_URL="http://127.0.0.1:$port/mcp"
+    f="$LOGS/$name-init.txt"
+    sg_cli init --yes >"$f" 2>&1 || { WHY="intent init --yes in the container exited non-zero; see $f"; return 1; }
+  else
+    SG_HOME="$OUT/home-$name"
+    rm -rf "$SG_HOME"
+    mkdir -p "$SG_HOME"
+    f="$LOGS/$name-init.txt"
+    sg_cli init --yes >"$f" 2>&1 || { WHY="init --yes exited non-zero; see $f"; return 1; }
+    start_gateway "$name-serve" "$SG_HOME" serve --http || return 1
+    SG_URL="$GW_URL"
+  fi
+  must_match "$f" 'purchases are handed off' "init skips Shop and says purchases are handed off" || return 1
+}
+stop_staging() {
+  if [ -n "$SG_C" ]; then docker rm -f "$SG_C" >/dev/null 2>&1 || true; SG_C=""; else stop_gateway; fi
+}
+
+# check_handoff_cart <name> <handle>: the chained approval is a 1.6 hand-off one. Sets PENDING (key=value file).
+PENDING=""
+pending_value() { grep -m1 "^$1=" "$PENDING" | cut -d= -f2-; }
+check_handoff_cart() {
+  local chain="$LOGS/$1-chain.jsonl"
+  PENDING="$LOGS/$1-pending.txt"
+  sg_chain "$chain"
+  helper pending "$chain" "$2" >"$PENDING" || { WHY="no approval_pending entry for $2 in the chain; see $chain"; return 1; }
+  must_match "$PENDING" '^completion_mode=handoff$' "the snapshot's completion mode is handoff" || return 1
+  must_match "$PENDING" '^completion_accepts=handoff$' "the cart offered only handoff (no wallet linked)" || return 1
+  must_match "$PENDING" '^completer_keyid=gw-' "the cart named a completer key" || return 1
+  must_match "$PENDING" '^merchant_origin=https://[^ ]+$' "the snapshot names the merchant's https origin" || return 1
+  must_match "$PENDING" '^variant_ref=.+' "the snapshot names the variant" || return 1
+  must_match "$PENDING" '^approval_url=https://[^ ]+$' "the approval link is Intent Cloud's https confirm page" || return 1
+  [ "$(sg_completer_keys)" -ge 1 ] || { WHY="no completer key file in the data dir"; return 1; }
+}
+
+scenario_s() {
+  local f h n0 n1
+  start_staging s || return 1
+  f="$LOGS/s-doctor.txt"
+  sg_cli doctor >"$f" 2>&1 || { WHY="doctor exited non-zero; see $f"; return 1; }
+  must_match "$f" 'serves 1\.6\.[0-9]+, and its SHA256SUMS matches' "doctor: staging serves contract 1.6 and its SHA256SUMS matches" || return 1
+  must_match "$f" 'key statement: signed by cloud-root-1' "doctor: the key statement verifies against the pinned root" || return 1
+  must_match "$f" '^doctor: ok' "doctor against staging" || return 1
+  f="$LOGS/s-offers.txt"
+  sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget_usd\":$STAGING_BUDGET,\"zip\":\"$STAGING_ZIP\"}" >"$f" 2>&1 ||
+    { WHY="find_offers failed; see $f"; return 1; }
+  must_match "$f" 'offer_handle: of_' "staging returned offers" || return 1
+  must_match "$f" 'searchCatalog .*receipt verified' "the search's receipt verified" || return 1
+  h="$(grep -Eo 'offer_handle: of_[A-Za-z0-9_-]+' "$f" | head -n 1 | cut -d' ' -f2)"
+  f="$LOGS/s-cart.txt"
+  sg_call create_cart "{\"offer_handle\":\"$h\"}" >"$f" 2>&1 || { WHY="create_cart failed; see $f"; return 1; }
+  must_match "$f" '^approval_handle: ap_' "create_cart gave an approval handle" || return 1
+  must_match "$f" 'createCart \(.*completer_keyid.*receipt verified\); createApproval' "the cart sent a completer key id, with receipts" || return 1
+  grep -m1 '^Cart:' "$f" >"$LOGS/s-cart-line.txt" || true
+  must_not_match "$LOGS/s-cart-line.txt" 'at most|estimated' "the cart's total is exact" || return 1
+  local ap
+  ap="$(grep -Eo '^approval_handle: ap_[A-Za-z0-9_-]+' "$f" | cut -d' ' -f2)"
+  check_handoff_cart s "$ap" || return 1
+  f="$LOGS/s-status.txt"
+  sg_call get_approval_status "{\"approval_handle\":\"$ap\"}" >"$f" 2>&1 || { WHY="get_approval_status failed; see $f"; return 1; }
+  must_match "$f" 'Waiting for the buyer to approve with their passkey' "the cart is still pending" || return 1
+  # The refusals: each is refused in the gateway, and nothing more is disclosed.
+  n0="$(sg_disclosures s-before)"
+  sg_call find_offers "{\"category\":\"alcohol\",\"product\":\"red wine\",\"budget_usd\":40,\"zip\":\"$STAGING_ZIP\"}" >"$LOGS/s-alcohol.txt" 2>&1 || true
+  must_match "$LOGS/s-alcohol.txt" 'Sent: nothing / Blocked: categories\.block' "an alcohol search is blocked by the policy" || return 1
+  sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget_usd\":$STAGING_BUDGET,\"zip\":\"$STAGING_ZIP\",\"email\":\"buyer@example.com\"}" >"$LOGS/s-identity.txt" 2>&1 || true
+  must_match "$LOGS/s-identity.txt" 'Sent: nothing / Blocked: .*\$\.email' "a search carrying an email is blocked (invariant 3)" || return 1
+  sg_call create_cart '{"offer_handle":"of_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}' >"$LOGS/s-foreign-offer.txt" 2>&1 || true
+  must_match "$LOGS/s-foreign-offer.txt" 'did not come from a search through this gateway' "a cart for an offer this gateway never saw is refused" || return 1
+  sg_call get_approval_status '{"approval_handle":"ap_AAAAAAAAAAAAAAAAAAAAAA"}' >"$LOGS/s-foreign-approval.txt" 2>&1 || true
+  must_match "$LOGS/s-foreign-approval.txt" 'did not ask for that approval' "a status for an approval this gateway never asked for is refused" || return 1
+  n1="$(sg_disclosures s-after)"
+  [ "$n0" = "$n1" ] || { WHY="the refusals added $((n1 - n0)) disclosure(s) to the chain; see $LOGS/s-after-chain.jsonl"; return 1; }
+  f="$LOGS/s-evidence.txt"
+  local rc=0
+  sg_cli evidence "$ap" --out "$OUT/s-evidence.json" >"$f" 2>&1 || rc=$?
+  [ "$rc" != 0 ] || { WHY="evidence for an unapproved cart exited 0; see $f"; return 1; }
+  must_match "$f" 'no verified approval' "evidence says there is no verified approval yet" || return 1
+  f="$LOGS/s-verify.txt"
+  sg_verify >"$f" 2>&1 || { WHY="verify exited non-zero; see $f"; return 1; }
+  must_match "$f" '^verify: ok' "verify after the staging session" || return 1
+  stop_staging
+  WHY="doctor: contract $(grep -Eo 'serves 1\.6\.[0-9]+' "$LOGS/s-doctor.txt" | cut -d' ' -f2), key statement ok; $(grep -c 'offer_handle:' "$LOGS/s-offers.txt") offers; cart $(cut -c1-80 "$LOGS/s-cart-line.txt") (exact), handoff, completer key, merchant origin from the snapshot $(pending_value merchant_origin); pending; 4 refusals, no new disclosure; no evidence before approval; verify: ok"
+}
+
+# ask the person: printed to the terminal, whatever the output is redirected to.
+tell_person() {
+  {
+    printf '\n================================ ACTION NEEDED ================================\n'
+    printf '%s\n' "$@"
+    printf '===============================================================================\n\n'
+  } >&2
+}
+
+# wait_outcome <name> <handle> <seconds>: poll get_approval_status until the verified outcome says ordered.
+wait_outcome() {
+  local f="$LOGS/$1-status.txt" deadline=$((SECONDS + $3)) approved=0
+  while [ $SECONDS -lt "$deadline" ]; do
+    sg_call get_approval_status "{\"approval_handle\":\"$2\"}" >"$f" 2>&1 || true
+    if grep -Eq 'placed the order.*statement the gateway verified' "$f"; then return 0; fi
+    if grep -Eq 'rejected this purchase|approval expired|could not be verified|does not match|checkout expired|not counted as placed|not acted on' "$f"; then
+      WHY="the status ended without an order: $(head -n 1 "$f" | cut -c1-300)"
+      return 1
+    fi
+    if [ "$approved" = 0 ] && grep -q 'Approver passkey fingerprint' "$f"; then
+      approved=1
+      say "approved and verified by the gateway ($((SECONDS - J_T0))s); now waiting for the order: $(head -n 1 "$f" | cut -c1-200)"
+    fi
+    sleep "$J_POLL"
+  done
+  WHY="no ordered outcome after $3s; the last status: $(head -n 1 "$f" | cut -c1-300)"
+  return 1
+}
+
+# evidence_roundtrip <name> <handle>: write the pack, then check it where there is no chain and no network.
+evidence_roundtrip() {
+  local f="$LOGS/$1-evidence.txt" pack="$LOGS/$1-evidence-$2.json"
+  if [ -n "$SG_C" ]; then
+    sg_cli evidence "$2" --out "/data/evidence-$2.json" >"$f" 2>&1 || { WHY="evidence exited non-zero; see $f"; return 1; }
+    docker cp "$SG_C:/data/evidence-$2.json" "$pack" >/dev/null 2>&1 || { WHY="docker cp of the evidence pack failed"; return 1; }
+  else
+    sg_cli evidence "$2" --out "$pack" >"$f" 2>&1 || { WHY="evidence exited non-zero; see $f"; return 1; }
+  fi
+  must_match "$f" '^evidence: wrote ' "evidence wrote the pack" || return 1
+  chmod 644 "$pack"
+  f="$LOGS/$1-verify-evidence.txt"
+  if [ "$TARGET" = docker ]; then
+    docker run --rm --network none -v "$LOGS:/in:ro" "$IMAGE" verify --evidence "/in/$(basename "$pack")" >"$f" 2>&1 ||
+      { WHY="verify --evidence in a container with no network exited non-zero; see $f"; return 1; }
+  else
+    mkdir -p "$OUT/home-verifier"
+    (cd "$WORK" && env -i HOME="$OUT/home-verifier" PATH="$OPATH" LANG=C.UTF-8 TERM=dumb npx -y "$SPEC" verify --evidence "$pack") >"$f" 2>&1 ||
+      { WHY="verify --evidence from a fresh HOME exited non-zero; see $f"; return 1; }
+  fi
+  must_match "$f" '^evidence pack: ok' "verify --evidence: the pack" || return 1
+  must_match "$f" 'ordered: [1-9]' "verify --evidence re-checks the ordered outcome" || return 1
+  must_match "$f" '^verify: ok' "verify --evidence" || return 1
+}
+
+J_T0=0
+# shellcheck disable=SC2016
+PROMPT_STAGING_CART='Find a '"$STAGING_PRODUCT"' ('"$STAGING_CATEGORY"') to ZIP '"$STAGING_ZIP"', under $'"$STAGING_BUDGET"', and prepare a cart for the cheapest.'
+scenario_j() {
+  if [ "${E2E_STAGING:-0}" != 1 ]; then
+    SKIPPED=1
+    WHY="manual: a person approves with a staging intent passkey and pays a test order; run it with E2E_STAGING=1 (CONTRIBUTING.md, Hand-off on staging)"
+    return 1
+  fi
+  J_T0=$SECONDS
+  start_staging j || return 1
+  MCP_CONFIG="$OUT/mcp-staging.json"
+  helper mcp-http "$SG_URL" "$SG_TOKEN" >"$MCP_CONFIG"
+  ask_claude j-cart "$MCP_CONFIG" new "$PROMPT_STAGING_CART" || return 1
+  must_match "$REPORT" '^called: .*mcp__gw__find_offers' "Claude called find_offers" || return 1
+  must_match "$REPORT" '^called: .*mcp__gw__create_cart' "Claude called create_cart" || return 1
+  local chain="$LOGS/j-chain-cart.jsonl" ap
+  sg_chain "$chain"
+  ap="$(helper pending "$chain" | grep '^handle=' | cut -d= -f2)"
+  [ -n "$ap" ] || { WHY="no approval_pending entry after Claude's create_cart; see $chain and $REPORT"; return 1; }
+  check_handoff_cart j "$ap" || return 1
+  tell_person \
+    "1. Open the approval link: $(pending_value approval_url)" \
+    "   Check that the page shows check code $(pending_value check_code), ZIP $STAGING_ZIP and total \$$(awk -v m="$(pending_value total_minor)" 'BEGIN{printf "%.2f", m/100}')." \
+    "2. Click 'Approve with passkey' and use your intent passkey on staging." \
+    "3. Click 'Continue to <merchant> checkout'. On the merchant's checkout (the store's test gateway):" \
+    "   any email such as you@example.com, any name, a street in ZIP $STAGING_ZIP, card number 1," \
+    "   any future expiry (12/30), any CVV (123), name on card anything. Pay. No real money moves." \
+    "4. Do nothing else; this script polls get_approval_status every ${J_POLL}s for up to ${J_WAIT}s."
+  wait_outcome j "$ap" "$J_WAIT" || return 1
+  cp "$LOGS/j-status.txt" "$LOGS/j-status-ordered.txt"
+  ask_claude j-status "$MCP_CONFIG" continue "$PROMPT_STATUS" || return 1
+  must_match "$REPORT" 'placed the order.*statement the gateway verified' "the agent's get_approval_status reports the verified order" || return 1
+  local f="$LOGS/j-log.txt"
+  sg_cli log -v >"$f" 2>&1 || { WHY="log -v exited non-zero; see $f"; return 1; }
+  must_match "$f" 'outcome as served: ordered \(' "the log shows the ordered outcome as served" || return 1
+  f="$LOGS/j-verify.txt"
+  sg_verify >"$f" 2>&1 || { WHY="verify exited non-zero; see $f"; return 1; }
+  must_match "$f" '^verify: ok' "verify after the hand-off purchase" || return 1
+  must_match "$f" 'verified: 1' "verify counts the approval" || return 1
+  must_match "$f" 'ordered: [1-9]' "verify re-checks the ordered outcome" || return 1
+  local took=$((SECONDS - J_T0))
+  evidence_roundtrip j "$ap" || return 1
+  local source
+  source="$(grep -Eo 'outcome as served: ordered \([a-z_]+' "$LOGS/j-log.txt" | tail -n 1 | sed 's/.*(//')"
+  stop_staging
+  WHY="start to verify ok in ${took}s (budget ${J_BUDGET}s); $(grep -Eo 'placed the order \(order [^)]*\)' "$LOGS/j-status-ordered.txt" | head -n 1), source $source; verify: ok; evidence + verify --evidence (no chain): ok"
+  [ "$took" -le "$J_BUDGET" ] || { WHY="over the ${J_BUDGET}s budget: $WHY"; return 1; }
+}
+
+# j2 (AC-J2): one tap. A skeleton: it needs a registered Shop client, a Shop account to link and a store one tap can
+# reach, none of which staging has today, so it has never run end to end.
+scenario_j2() {
+  if [ "${E2E_ONETAP:-0}" != 1 ] || [ -z "${INTENT_SHOP_CLIENT_ID:-}" ] || [ -z "${INTENT_WALLET_KEY_FILE:-}" ]; then
+    SKIPPED=1
+    WHY="manual skeleton: needs E2E_ONETAP=1, INTENT_SHOP_CLIENT_ID, INTENT_WALLET_KEY_FILE, a Shop account to link and a store one tap can reach (the staging store is hand-off only)"
+    return 1
+  fi
+  [ -r "$INTENT_WALLET_KEY_FILE" ] || { WHY="INTENT_WALLET_KEY_FILE is not readable"; return 1; }
+  if [ "$TARGET" = docker ]; then
+    SG_DOCKER_ARGS=(-e "INTENT_SHOP_CLIENT_ID=$INTENT_SHOP_CLIENT_ID" -e INTENT_WALLET_KEY_FILE=/run/secrets/wallet-key
+      -v "$INTENT_WALLET_KEY_FILE:/run/secrets/wallet-key:ro")
+  else
+    GW_ENV=("INTENT_SHOP_CLIENT_ID=$INTENT_SHOP_CLIENT_ID" "INTENT_WALLET_KEY_FILE=$INTENT_WALLET_KEY_FILE")
+  fi
+  J_T0=$SECONDS
+  start_staging j2 || return 1
+  tell_person "Link Shop: approve the code below on Shop's page in your own browser; the script waits."
+  local f="$LOGS/j2-link.txt"
+  sg_cli wallet link shop 2>&1 | tee "$f" >&2 || { WHY="wallet link shop failed; see $f"; return 1; }
+  f="$LOGS/j2-wallet.txt"
+  sg_cli wallet status >"$f" 2>&1 || { WHY="wallet status exited non-zero; see $f"; return 1; }
+  must_match "$f" 'linked' "a Shop wallet is linked" || return 1
+  # The gateway reads the wallet at start: restart it so the cart offers shop_agent.
+  if [ -n "$SG_C" ]; then docker restart "$SG_C" >/dev/null 2>&1 || { WHY="docker restart failed"; return 1; }; sleep 5
+  else stop_gateway; start_gateway j2-serve-linked "$SG_HOME" serve --http || return 1; SG_URL="$GW_URL"; fi
+  MCP_CONFIG="$OUT/mcp-staging-onetap.json"
+  helper mcp-http "$SG_URL" "$SG_TOKEN" >"$MCP_CONFIG"
+  ask_claude j2-cart "$MCP_CONFIG" new "$PROMPT_STAGING_CART" || return 1
+  local chain="$LOGS/j2-chain-cart.jsonl" ap
+  sg_chain "$chain"
+  PENDING="$LOGS/j2-pending.txt"
+  helper pending "$chain" >"$PENDING" || { WHY="no approval_pending entry; see $chain"; return 1; }
+  must_match "$PENDING" '^completion_mode=shop_agent$' "the snapshot's completion mode is shop_agent" || return 1
+  ap="$(pending_value handle)"
+  tell_person "Open $(pending_value approval_url), check code $(pending_value check_code), and approve with your passkey. Nothing else: the gateway completes the purchase with Shop."
+  local deadline=$((SECONDS + J_WAIT))
+  f="$LOGS/j2-status.txt"
+  while [ $SECONDS -lt $deadline ]; do
+    sg_call get_approval_status "{\"approval_handle\":\"$ap\"}" >"$f" 2>&1 || true
+    grep -Eq 'One-tap: (ordered|failed|mismatch)' "$f" && break
+    sleep "$J_POLL"
+  done
+  must_match "$f" 'One-tap: ordered \(read from Shop\)' "one tap: ordered, read from Shop" || return 1
+  local took=$((SECONDS - J_T0))
+  f="$LOGS/j2-verify.txt"
+  sg_verify >"$f" 2>&1 || { WHY="verify exited non-zero; see $f"; return 1; }
+  must_match "$f" '^verify: ok' "verify after the one-tap purchase" || return 1
+  stop_staging
+  WHY="one tap: ordered (read from Shop) in ${took}s; verify: ok"
+}
+run_staging_scenarios() {
+  if wants s; then run_scenario s "staging, unattended: doctor 1.6, search, hand-off cart (v2 snapshot, completer key), refusals, verify" scenario_s; fi
+  if wants j; then run_scenario j "staging hand-off (AC-J1, MANUAL): cart by Claude, passkey, test payment, verified ordered, verify, evidence" scenario_j; fi
+  if wants j2; then run_scenario j2 "staging one tap (AC-J2, MANUAL skeleton): Shop linked, one approval, ordered read from Shop" scenario_j2; fi
+  return 0
+}
+
 # ------------------------------------------------------------------------------------------------- the run
 say "mode $MODE; output in $OUT"
 command -v "$CLAUDE_BIN" >/dev/null 2>&1 || die "needs Claude Code ($CLAUDE_BIN) on PATH, logged in"
@@ -797,6 +1159,8 @@ case "$MODE" in
         run_scenario b2 "happy path over stdio, as claude mcp add runs it: offers, cart, log, verify" scenario_b_stdio
       fi
     fi
+    TARGET=npx
+    run_staging_scenarios
     ;;
   docker | image)
     [ "$IMAGE_READY" = 1 ] || { say "no image, so no scenario runs"; ONLY=""; }
@@ -809,6 +1173,8 @@ case "$MODE" in
       run_scenario g1c "image without INTENT_DEMO, unpinned INTENT_CLOUD_URL: clean exit, demo re-run line, no token" scenario_g_unpinned
       run_scenario g2 "image with INTENT_DEMO=1: connect line, happy path, no-code 403, restart verifies" scenario_g_demo
     fi
+    TARGET=docker
+    run_staging_scenarios
     ;;
 esac
 
