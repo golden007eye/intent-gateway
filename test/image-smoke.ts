@@ -206,7 +206,8 @@ async function demo(): Promise<void> {
       const result = (await client.callTool({ name, arguments: args })) as CallToolResult;
       return result.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("\n");
     };
-    const offers = await call("find_offers", { category: "running-shoes", budget_usd: 200, zip: "94103" });
+    // The demo searches its demo Shop (stickers) and submits the Shop checkout it makes (contract 1.7.0).
+    const offers = await call("find_offers", { category: "stickers", budget_usd: 20, zip: "94107" });
     const offer = /offer_handle: (\S+)/.exec(offers)?.[1];
     check(offer !== undefined, "find_offers returns offers", offers);
     const cart = await call("create_cart", { offer_handle: offer ?? "" });

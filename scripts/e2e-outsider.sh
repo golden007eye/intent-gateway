@@ -501,7 +501,7 @@ t_code() {
 
 # ------------------------------------------------------------------------------------------------- scenarios
 # shellcheck disable=SC2016 # the dollar signs are the prompt's own
-PROMPT_CART='Find running shoes to ZIP 94103, under $200, and prepare a cart for the cheapest.'
+PROMPT_CART='Find stickers to ZIP 94107, under $20, and prepare a cart for the cheapest.'
 PROMPT_STATUS='Check the approval status.'
 # shellcheck disable=SC2016
 PROMPT_BLOCKED='Find a bottle of alcohol to ZIP 94103, under $40.'
@@ -676,7 +676,7 @@ scenario_f_kill() {
     helper spin-kill "$chain" "$pid" 30000 >"$out" 2>&1 &
     local spinner=$!
     sleep 0.3
-    helper mcp-call "$GW_URL" - find_offers '{"category":"running-shoes","budget_usd":200,"zip":"94103"}' >"$LOGS/f-kill-$attempt-call.txt" 2>&1 || true
+    helper mcp-call "$GW_URL" - find_offers '{"category":"stickers","budget_usd":20,"zip":"94107"}' >"$LOGS/f-kill-$attempt-call.txt" 2>&1 || true
     local rc=0
     wait "$spinner" || rc=$?
     stop_gateway
