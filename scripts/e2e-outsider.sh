@@ -95,6 +95,13 @@ if [ -z "$ONLY" ]; then
   esac
 fi
 wants() { case ",$ONLY," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+# An unknown name would otherwise run nothing and report success.
+for name in ${ONLY//,/ }; do
+  case "$name" in
+    a | b | c | d | e | f | g | s | j | j2) ;;
+    *) printf 'e2e: unknown scenario "%s" in --only; known: a,b,c,d,e,f,g,s,j,j2\n' "$name" >&2; exit 2 ;;
+  esac
+done
 
 say() { printf 'e2e: %s\n' "$*" >&2; }
 die() { say "$*"; exit 2; }
@@ -1186,4 +1193,5 @@ TOTAL=$((SECONDS - START_SECONDS))
   for r in "${RESULTS[@]}"; do echo "  $r"; done
   echo "logs: $OUT"
 } | tee -a "$SUMMARY"
+[ "${#RESULTS[@]}" -gt 0 ] || { say "no scenario ran"; exit 1; }
 [ "$FAILS" = 0 ]
