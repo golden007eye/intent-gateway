@@ -9,7 +9,7 @@ import { ApprovalHandle, ApprovalProof, ReceiptRequest } from "../contract/index
 import { canonicalize, parseIntegerJson, sha256Hex } from "../jcs/index.ts";
 import { observationProblem } from "../observation/index.ts";
 import { bindingV1, type CloudOutcomeEntry, COMPLETE_CHECKOUT, type LocalOutcomeEntry, mayHaveSent, OutcomeEntry, readCloudOutcome } from "../outcome/index.ts";
-import { bodyValue, findIdentity, isCredentialHeader, markerDigest, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
+import { bodyValue, findIdentity, isCredentialHeader, markerDigest, nestedSecrets, redactionHeld, secretQueryKeys, unredactedSecrets } from "../privacy/index.ts";
 import { contentDigest } from "../signing/index.ts";
 import { type Entry, GENESIS, neverLeft, readChain, verifyChain } from "../store/index.ts";
 import { formatSelfCheck, type FailureReason, type SelfCheckOptions, type SelfCheckResult, verifyImage, verifyNpm } from "../supplychain/index.ts";
@@ -156,6 +156,7 @@ interface Disclosure {
 export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedRootKey[], counts: Report["counts"], partial = false): Check[] {
   const keyFailures: string[] = [];
   const disclosureFailures: string[] = [];
+  const disclosureWarnings: string[] = [];
   const approvalFailures: string[] = [];
   const outcomeFailures: string[] = [];
   /** How many re-checked outcome entries showed each state ("not acted on" for none). */
@@ -214,6 +215,10 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
         const problem = bodyProblem(body);
         if (problem !== null) disclosureFailures.push(`${at}: the disclosure ${problem}`);
         for (const where of credentialProblems(body)) disclosureFailures.push(`${at}: the disclosure holds a credential: ${where} is not redacted`);
+        // A credential inside JSON text is logged as sent (ADR-0014): a warning naming its path, never its value.
+        for (const where of nestedSecrets(loggedJson(body))) {
+          disclosureWarnings.push(`warning: ${at}: the disclosure holds a credential inside JSON text at ${where}, logged as sent (its adapter should declare the path secret)`);
+        }
         const redactions = redactionProblems(body);
         counts.redactions += redactions.count;
         for (const problem of redactions.problems) disclosureFailures.push(`${at}: the disclosure's ${problem}`);
@@ -382,6 +387,7 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
         `discarded: ${String(counts.discarded)}`,
         ...(observed.size === 0 ? [] : [`answers summarised locally (observed, never sent): ${String(observed.size)}`]),
         ...(counts.redactions === 0 ? [] : [`credentials digested in the log (sent, kept only as sha256): ${String(counts.redactions)}`]),
+        ...disclosureWarnings,
         ...disclosureFailures,
       ],
     },

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { bodyText, bodyValue, findIdentity, type Finding, type FindingKind, isSecretKey } from "./index.ts";
+import { bodyText, bodyValue, findIdentity, type Finding, type FindingKind, holdsNestedSecret, isSecretKey, nestedSecrets, SCAN_DEPTH } from "./index.ts";
 
 // Invariant 3 (no buyer identity in the gateway): each positive is identity an agent might try to send out.
 const positives: [label: string, body: unknown, expected: Finding][] = [
@@ -207,5 +207,28 @@ describe("a canonical UUID is never a card (an idempotency key)", () => {
       const uuid = randomUUID();
       expect(findIdentity(uuid), uuid).toEqual([]);
     }
+  });
+});
+
+describe("credentials inside JSON text and the scan depth (ADR-0014)", () => {
+  const MARK = `[redacted sha256:${"a".repeat(64)}]`;
+  it("finds a secret key in JSON text, in JSON text inside it and in an array; a marker or no secret key is not one", () => {
+    expect(holdsNestedSecret('{"access_token":"t"}')).toBe(true);
+    expect(holdsNestedSecret(' [{"auth":{"sessionToken":"t"}}]')).toBe(true);
+    expect(holdsNestedSecret(JSON.stringify({ inner: JSON.stringify({ refresh_token: "t" }) }))).toBe(true);
+    expect(holdsNestedSecret(JSON.stringify({ token: MARK }))).toBe(false);
+    expect(holdsNestedSecret('{"note":"Bearer x"}')).toBe(false);
+    expect(holdsNestedSecret("not json {")).toBe(false);
+    expect(nestedSecrets({ a: [{ s: '{"password":"p"}' }], b: "plain" })).toEqual(["body.a[0].s"]);
+  });
+
+  it("stops at SCAN_DEPTH: deeper JSON text counts as holding a credential, and findIdentity reports too_deep without overflowing", () => {
+    const deepText = `${"[".repeat(SCAN_DEPTH + 5)}${"]".repeat(SCAN_DEPTH + 5)}`;
+    expect(holdsNestedSecret(deepText)).toBe(true);
+    let deep: unknown = "x";
+    for (let i = 0; i < 50_000; i += 1) deep = [deep];
+    const findings = findIdentity({ q: deep });
+    expect(findings.map((f) => f.kind)).toEqual(["too_deep"]);
+    expect(findIdentity({ q: [[["lamp"]]] })).toEqual([]);
   });
 });

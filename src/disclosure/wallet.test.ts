@@ -483,3 +483,34 @@ describe("opaque wallet ids (ADR-0019)", () => {
     expect(store.entries().map((e) => [e.kind, bodyOf(e)["blocked"]])).toEqual([["block", ["card at $.params.arguments.id"]]]);
   });
 });
+
+describe("credentials inside JSON text, and values nested too deep (ADR-0014)", () => {
+  it("a token inside a JSON-text value is logged as sent; intent verify warns with its path, never its value, and does not fail", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    await shop.call("x", rpc("x", { state: JSON.stringify({ step: 1, auth: { sessionToken: REFRESH } }), plain: '{"note":"kept"}' }));
+    expect(sent).toHaveLength(1);
+    await store.close();
+    const report = await runVerify({ dataDir: dir, pinnedRootKeys: PINNED, now: new Date(), skipSupplyChain: true });
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(report.exitCode).toBe(0);
+    const details = report.checks.find((c) => c.name === "disclosures")?.details ?? [];
+    const warnings = details.filter((d) => d.startsWith("warning: "));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("a credential inside JSON text at body.params.arguments.state");
+    expect(JSON.stringify(report)).not.toContain(REFRESH);
+  });
+
+  it("attack: a wallet body nested deeper than the scans walk is blocked before the log and the send", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    let deep: unknown = "x";
+    for (let i = 0; i < 200; i += 1) deep = [deep];
+    await expect(shop.call("x", rpc("x", { deep }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    expect(sent).toHaveLength(0);
+    expect(store.entries().map((e) => e.kind)).toEqual(["block"]);
+    expect(String((bodyOf(store.entries()[0])["blocked"] as string[])[0])).toMatch(/^too_deep at \$\.params\.arguments\.deep/);
+  });
+});
