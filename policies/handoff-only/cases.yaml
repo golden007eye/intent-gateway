@@ -1,0 +1,9 @@
+- name: a hand-off cart is sent
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 20, quantity: 1}, completion_mode: handoff}
+  expect: {send: true}
+- name: a cart that names no mode is a hand-off, and is sent
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 20, quantity: 1}}
+  expect: {send: true}
+- name: a one-tap cart is refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 20, quantity: 1}, completion_mode: one_tap}
+  expect: {send: false, blocked: [completion]}

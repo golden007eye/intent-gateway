@@ -87,9 +87,9 @@ function walk(dir: string, keep: (name: string) => boolean): string[] {
     .map((e) => join(e.parentPath, e.name));
 }
 
-/** The files the rule covers: README, every docs page, and every non-test source file the CLI can print from. */
+/** The files the rule covers: README, every docs page, the onboarding prompt and skill, and every non-test source file the CLI can print from. */
 export function coveredFiles(): string[] {
-  const docs = walk(join(ROOT, "docs"), (n) => n.endsWith(".md"));
+  const docs = [...walk(join(ROOT, "docs"), (n) => n.endsWith(".md")), ...walk(join(ROOT, "onboarding"), (n) => n.endsWith(".md"))];
   const src = walk(join(ROOT, "src"), (n) => n.endsWith(".ts") && !n.endsWith(".test.ts"));
   return [join(ROOT, "README.md"), ...docs, ...src].map((f) => relative(ROOT, f)).sort();
 }
@@ -129,7 +129,7 @@ describe("claims rule (invariant 5)", () => {
 
   it("covers the README, the docs and the CLI's source", () => {
     const files = coveredFiles();
-    for (const f of ["README.md", "docs/threat-model.md", "docs/verify.md", "src/cli/help.ts", "src/verify/verify.ts"]) {
+    for (const f of ["README.md", "docs/threat-model.md", "onboarding/claude-code.md", "onboarding/skills/policy-advisor/SKILL.md", "docs/verify.md", "src/cli/help.ts", "src/verify/verify.ts"]) {
       expect(files).toContain(f);
     }
   });

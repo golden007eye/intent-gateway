@@ -2,15 +2,20 @@
 
 The policy library is a public collection of [gateway policies](policy.md), reviewed by pull request in the gateway repository's `policies/` folder and bundled with every build. Because a gateway policy can only narrow the rules Intent Cloud enforces, adding a library policy can make your gateway stricter but never looser.
 
-## The ten seed policies
+## The library policies
+
+The ten seed policies, and three that the [policy advisor](#the-policy-advisor) uses (`per-order-20`, `weekly-40`, `handoff-only`):
 
 | Name | What it does |
 |---|---|
 | `zip-only` | Shares only a 5-digit ZIP as the ship-to location. The default when there is no policy file. |
 | `strict-default` | Shares no ship-to at all; one item; at most $50 per order, $75 per day and $150 per week; blocks `dropship.example`. It sends no ZIP code, so the gateway blocks every search (`find_offers`) before sending and no cart can be made: agents see every search blocked. Use it only to lock a gateway down; `policy add`, `policy show` and `doctor` all say so. To search again, delete `policy.yaml` and add a policy that keeps the ZIP, such as `per-order-60`. |
 | `per-order-60` | Refuses a cart over $60 (price × quantity). |
+| `per-order-20` | Refuses a cart over $20 (price × quantity): the per-order limit the policy advisor suggests. |
 | `daily-40` | Refuses a cart that would take approved purchases in the last 24 hours above $40. |
 | `weekly-150` | Refuses a cart that would take approved purchases in the last 7 days above $150. |
+| `weekly-40` | Refuses a cart that would take approved purchases in the last 7 days above $40: the weekly limit the policy advisor suggests. |
+| `handoff-only` | Allows the hand-off completion mode only, so no purchase is completed in one tap. |
 | `one-item` | One item per cart; the baseline allows 3. |
 | `gifts-under-30` | One item at up to $30. |
 | `no-electronics` | Blocks the `electronics` category and its subcategories. |
@@ -69,6 +74,10 @@ $ intent policy test cases.yaml
 ```
 
 Runs a `cases.yaml` against the active policy, or against another file with `--policy <file>`. The format is in [Gateway policy](policy.md#test-cases).
+
+## The policy advisor
+
+The npm package ships a Claude Code skill, `onboarding/skills/policy-advisor/SKILL.md`, which the [onboarding prompt](https://github.com/golden007eye/intent-gateway/blob/main/onboarding/claude-code.md) copies into your project's `.claude/skills/`. It helps you set the budget in the Shop app first, then asks about limits and completion modes one question at a time and applies your answers with `intent policy add` only, then runs `intent policy test`.
 
 ## Proposing a policy
 
