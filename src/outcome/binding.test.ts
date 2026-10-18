@@ -1,11 +1,11 @@
-// binding-v1 (Appendix G) replayed from vector o1 of the amended contract 1.6.0. Expected values come from Intent
+// binding-v1 (Appendix G) replayed from vector o1 of contract 1.6.1. Expected values come from Intent
 // Cloud's vector, never from this implementation. The checkout ref hash covers the id up to its first "?", the context
 // carries recorded_checkout_ref_hash and bound_elsewhere, and three cases pin integer-only inputs, so the vector is
 // read with parseIntegerJson.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type Binding, checkoutRefHash, SnapshotV2 } from "../contract/index.ts";
+import { BindableSnapshot, type Binding, checkoutRefHash } from "../contract/index.ts";
 import { parseIntegerJson } from "../jcs/index.ts";
 import { BindingError, bindingResult, bindingV1, type BindingContext, normaliseOrigin, type ObservedOrder, totalMatches } from "./index.ts";
 
@@ -19,18 +19,19 @@ const load = (path: string): { cases: O1Case[] } => parseIntegerJson(readFileSyn
 const O1 = load("contract/vectors/o1-binding.json");
 
 describe("vector o1: every case", () => {
-  it("holds the 21 contract cases, the origin grammar, the integer-only types and the one-order rule", () => {
-    expect(O1.cases.length).toBe(39);
+  it("holds the 21 contract cases, the origin grammar, the integer-only types, the one-order rule and check 1 for shop_agent v3", () => {
+    expect(O1.cases.length).toBe(46);
+    expect(O1.cases.filter((c) => /^(shop_agent|handoff) v[23]/.test(c.name))).toHaveLength(7);
     expect(O1.cases.filter((c) => c.name.startsWith("type:")).map((c) => c.name)).toEqual(['type: quantity 1.0', 'type: quantity "1"', "type: quantity true"]);
   });
   it.each(O1.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
-    expect(bindingV1(SnapshotV2.parse(c.input.snapshot), c.input.observed, c.input.context)).toEqual(c.expected);
+    expect(bindingV1(BindableSnapshot.parse(c.input.snapshot), c.input.observed, c.input.context)).toEqual(c.expected);
   });
 });
 
 describe("binding-v1: rules no vector case pins yet", () => {
   const base = O1.cases[0] as O1Case;
-  const s = SnapshotV2.parse(base.input.snapshot);
+  const s = BindableSnapshot.parse(base.input.snapshot);
   const run = (observed: Partial<ObservedOrder>, context: Partial<BindingContext> = {}) =>
     bindingV1(s, { ...base.input.observed, ...observed }, { ...base.input.context, ...context });
 

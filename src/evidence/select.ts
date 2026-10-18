@@ -29,6 +29,8 @@ export type Role =
   | "status read"
   | "outcome report"
   | "wallet request"
+  | "store pair"
+  | "storefront check"
   | "answer"
   | "observed"
   | "session"
@@ -59,6 +61,12 @@ export function purchaseEntries(entries: readonly Entry[], handle: string): Memb
   for (const e of of("outcome")) roles.set(e.seq, "outcome");
   for (const e of of("completion")) roles.set(e.seq, "completion");
   for (const e of of("complete_attempt")) roles.set(e.seq, "complete attempt");
+  // The store pair check (1.6.1): this purchase's verdicts, the fetched pass a verdict reuses, and each one's GET.
+  const pairs = of("store_pair");
+  const reused = new Set(pairs.map((e) => body(e).cached_from));
+  const pairEntries = entries.filter((e) => e.kind === "store_pair" && (body(e).handle === handle || reused.has(e.seq)));
+  for (const e of pairEntries) roles.set(e.seq, "store pair");
+  const pairGets = new Set(pairEntries.map((e) => body(e).disclosure_seq));
 
   const observedBy = new Map<number, Record<string, unknown>>();
   for (const e of entries) if (e.kind === "observed" && typeof body(e).disclosure_seq === "number") observedBy.set(body(e).disclosure_seq as number, body(e));
@@ -67,7 +75,7 @@ export function purchaseEntries(entries: readonly Entry[], handle: string): Memb
 
   const disclosures = entries.filter((e) => e.kind === "disclosure");
   for (const d of disclosures) {
-    const role = disclosureRole(body(d), observedBy.get(d.seq), handle, cartText);
+    const role = pairGets.has(d.seq) || (body(d).destination === "storefront" && body(d).purchase === handle) ? "storefront check" : disclosureRole(body(d), observedBy.get(d.seq), handle, cartText);
     if (role !== null) roles.set(d.seq, role);
   }
   // The search the offer came from: the latest one before the cart whose observation lists the offer.

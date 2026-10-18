@@ -23,6 +23,8 @@ export const ENTRY_KINDS = [
   "complete_attempt",
   "outcome",
   "wallet",
+  // The store pair check's verdict (contract 1.6.1, ADR-0020): a pass is reused for 24 h at most, a failure never.
+  "store_pair",
 ] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
 

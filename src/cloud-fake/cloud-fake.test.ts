@@ -5,7 +5,7 @@ import { createHash, createPublicKey, type KeyObject, verify } from "node:crypto
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { z } from "zod";
+import { z } from "zod";
 import {
   ApprovalCreated as ApprovalCreatedV2,
   type ApprovalProofV1 as ApprovalProof,
@@ -24,9 +24,9 @@ import {
 
 // The requests in this file send no Intent-Contract-Version, so the fake answers as 1.5.0 (v1 snapshots and proofs),
 // byte for byte as published gateways expect: these are the released 1.5.0 response forms. contract-1.6.test.ts
-// covers the 1.6.0 answers.
+// covers the 1.6.x answers.
 const ApprovalCreated = ApprovalCreatedV2.extend({ snapshot: SnapshotV1 });
-const ApprovalStatus = ApprovalStatusV2.extend({ proof: ApprovalProofV1.optional() });
+const ApprovalStatus = z.strictObject({ ...ApprovalStatusV2.shape, proof: ApprovalProofV1.optional() });
 type ApprovalCreated = z.infer<typeof ApprovalCreated>;
 type ApprovalStatus = z.infer<typeof ApprovalStatus>;
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
@@ -279,14 +279,14 @@ describe("GET /v1/meta", () => {
     expect(json).not.toHaveProperty("enrol_origin");
   });
 
-  it("with Intent-Contract-Version: 1.6.0 reports 1.6.0 and the vendored SHA256SUMS hash", async () => {
+  it("with Intent-Contract-Version: 1.6.1 reports 1.6.1 and the vendored SHA256SUMS hash", async () => {
     const cloud = await start();
-    const { res, json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.6.0" } });
+    const { res, json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.6.1" } });
     expect(res.status).toBe(200);
-    expect(res.headers.get("intent-contract-version")).toBe("1.6.0");
+    expect(res.headers.get("intent-contract-version")).toBe("1.6.1");
     const meta = Meta.parse(json);
     const source = /sha256 of `SHA256SUMS`: `([0-9a-f]{64})`/.exec(readFileSync(join(repo, "contract", "SOURCE.md"), "utf8"));
-    expect(meta).toMatchObject({ contract_version: "1.6.0", contract_sums_sha256: source?.[1] });
+    expect(meta).toMatchObject({ contract_version: "1.6.1", contract_sums_sha256: source?.[1] });
   });
 
   it("is signed: an unsigned read gets 401 authentication failed", async () => {

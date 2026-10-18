@@ -10,7 +10,7 @@ With one tap, the buyer approves a purchase with their passkey and the gateway c
 | The code path in `intent serve` | Built and tested against a fake Shop that answers with the shapes the S1 spike captured from Shop (one real order, 2026-10-18): when a Shop client is set and a Shop wallet is linked, `get_approval_status` completes a verified one-tap approval. |
 | One tap for you | Planned: it needs a registered Shop client, and none exists yet (below). |
 | One tap on Intent Cloud staging | Not possible: the staging store's test payment gateway makes Shop refuse to pay (`checkout_completion_ineligible`). Staging covers hand-off only; one tap is proven by hand with a small real order at a real store with the developer's own Shop account. |
-| Stores one tap can reach | Only a store whose storefront is its own `*.myshopify.com` domain. Merchants will pair their storefront origin with their `*.myshopify.com` domain (decided); until the public contract carries that pairing, every other merchant's cart is handed off from the start. |
+| Stores one tap can reach | A Shopify store whose `*.myshopify.com` domain Intent Cloud returns with the offer (contract 1.6.1): the offer, the cart and the snapshot the buyer approves name the pair, and before paying the gateway checks it against the storefront itself ([the store pair check](#the-store-pair-check)). Any other merchant's cart is handed off from the start. |
 | Real purchases of any kind | Wait for the [launch gate](adr/0004-public-pre-alpha.md): the preview talks to the Intent Cloud staging host. |
 
 <!-- feature: one-tap -->
@@ -37,12 +37,22 @@ Your policy decides whether one tap may be used: `completion` lists `handoff`, `
 
 ## What happens in one purchase
 
-1. The agent calls `create_cart`. With a linked wallet and a store Shop can reach, the cart request offers `shop_agent` beside `handoff`, and the snapshot the buyer approves names the mode Intent Cloud returns.
+1. The agent calls `create_cart`. With a linked wallet and an offer that names the merchant's `*.myshopify.com` domain, the cart request offers `shop_agent` beside `handoff`, and the snapshot the buyer approves names the mode Intent Cloud returns and the store pair.
 2. The buyer approves with their Intent Cloud passkey (invite-only during preview) on intent's confirm page, as for any purchase.
-3. The agent calls `get_approval_status`. The gateway checks the Approval, then completes the purchase inside that call: it reads the account's budget, asks Shop for a checkout with the item and quantity only, checks it against the approved snapshot (store, item, ZIP, total) and that it offers the agent budget as payment, reports `completing` to Intent Cloud, reads the checkout again, and sends one `complete_checkout` paying with the agent budget.
+3. The agent calls `get_approval_status`. The gateway checks the Approval, then completes the purchase inside that call: it reads the account's budget, checks the store pair against the merchant's storefront, asks Shop for a checkout with the item and quantity only, checks it against the approved snapshot (store, item, ZIP, total) and that it offers the agent budget as payment, reports `completing` to Intent Cloud, reads the checkout again, and sends one `complete_checkout` paying with the agent budget.
 4. The agent calls again until the status says `ordered`, `failed` or `mismatch`. `ordered (read from Shop)` means Shop returned the order on a checkout read and the binding check passed.
 
 The per-order limit is the smaller of your policy's `per_order_usd` and the agent budget left that Shop returns for the account. A purchase whose total is above it, or made while Shop shows no budget, is refused before anything is sent to Shop. A `create_checkout` that got no usable answer is never sent again for that purchase (Shop makes a new checkout for a repeated request), so the purchase ends `failed` and a new cart hands it off. A `complete_checkout` that may have left is never sent again: after a crash or a restart the gateway only reads the checkout, and an answer it cannot settle stays `indeterminate` ("Sent to Shop, result unknown: check Shop orders") with its spend held ([ADR-0019](adr/0019-one-tap-completion.md)).
+
+## The store pair check
+
+Shop names a store by its `*.myshopify.com` domain; the buyer sees the storefront. Intent Cloud pairs the two, and the passkey signs the pair, but the buyer cannot judge it. So before it pays, the gateway asks the storefront itself ([ADR-0020](adr/0020-signed-store-pair-and-storefront-check.md)):
+
+- One `GET https://<storefront>/meta.json`, before the gateway reports `completing` and before any Shop checkout is made. The request carries a fixed set of headers and nothing else: no cookie, no credential, no `Authorization`, nothing about the buyer. It is logged before it leaves, as destination `storefront`, and its answer is kept as a status, a sha256 and a size.
+- It passes only when the answer is a 200 `application/json` object, at most 64 KiB, with no duplicate member names, whose `myshopify_domain` is, lowercased, exactly the signed one (ASCII only). A redirect is never followed. The storefront has 5 seconds. The gateway refuses a storefront name that is an IP address or `localhost`, or that resolves to a private or other non-public address, and it connects only to the address it checked.
+- A failure ends the purchase `failed` before anything is paid or reported (`store_pair:<rule>` in the log); the approval stays approved at Intent Cloud, and a new cart hands the purchase off. A pass is reused for 24 hours at most, by any gateway process on the data dir, and a failure is never reused. If the pair no longer passes right before `complete_checkout`, nothing is sent.
+
+What it proves: at that moment, the storefront at the origin the buyer approved names the same Shopify store the passkey signed. What it does not prove: who runs the storefront. Whoever controls that origin controls the answer, as they control the checkout. What it costs: the merchant's storefront sees your IP address once per store and day, before a one-tap purchase. A hand-off purchase never makes this request.
 
 ## What Shop holds, and what the gateway sends
 
@@ -57,7 +67,7 @@ What the S1 spike saw on one real order (2026-10-18), which the gateway is built
 - Shop's answers carry the buyer's email, phone, names, full saved addresses and a payment credential per card, under the scope `openid personal_agent` too. The gateway drops them when it reads the answer.
 - With the lines alone, `create_checkout` came back with the preferred saved address filled in and ready to complete. A checkout offered two payment instruments, the Shop Pay card and the agent budget; paid from the budget, Shop showed no prompt of its own.
 - `complete_checkout` answered in about 4 seconds with the order. The gateway's wallet timeout is 30 seconds; an answer that does not come is reconciled by reading the checkout, never by sending again.
-- A checkout names no merchant; it lives at the store's `*.myshopify.com` domain. The binding check therefore reads the store the checkout is at, which stands for the approved merchant only when it is the store that merchant's origin pairs with.
+- A checkout names no merchant; it lives at the store's `*.myshopify.com` domain. The binding check therefore reads the store the checkout is at, and accepts it only as the myshopify domain the buyer's passkey signed beside the storefront.
 - A store that agents cannot complete at answered `checkout_completion_ineligible`; the gateway reports that as failed and never as ordered.
 
 A dispute about a charge, a delivery or a refund is between the buyer, Shop and the merchant. What the gateway gives you is the record: `intent evidence <approval handle>` writes the purchase's [evidence pack](evidence.md), which anyone can check offline.
@@ -77,8 +87,8 @@ Against malware running as your user, these files are obfuscation, not protectio
 
 ## What you can check
 
-- `intent log` shows each Shop call as a `call` line, `✓ answered 200 (no receipt: unsigned)`, and each outcome report sent to Intent Cloud ([a one-tap purchase in the log](log.md#a-one-tap-purchase)); `intent log -v` shows every entry, with the token as `redacted`.
-- `intent verify` re-checks the outcomes and that each purchase has at most one `complete_checkout`, sent after it was claimed.
+- `intent log` shows each Shop call, and the store pair check's GET to the storefront, as a `call` line, `✓ answered 200 (no receipt: unsigned)`, and each outcome report sent to Intent Cloud ([a one-tap purchase in the log](log.md#a-one-tap-purchase)); `intent log -v` shows every entry, with the token as `redacted`.
+- `intent verify` re-checks the outcomes, that each purchase has at most one `complete_checkout`, sent after it was claimed, and that a purchase whose snapshot signs a store pair was redeemed only after the store pair check passed.
 - Once a Shop client exists, `intent wallet check shop` compares the orders Shop returns for the account with the purchases in the log ([orders the log does not name](log.md#orders-the-log-does-not-name)).
 
 What these show is what the gateway sent, what Intent Cloud acknowledged and what Shop returned. They make no claim about what Shop or the merchant does afterwards.

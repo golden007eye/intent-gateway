@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type CatalogItem, type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
 import { buildActivity } from "../activity/index.ts";
-import { connectCloud, connectShop, type DisclosedCloud, DisclosureBlockedError } from "../disclosure/index.ts";
+import { connectCloud, connectShop, connectStorefront, type DisclosedCloud, DisclosureBlockedError } from "../disclosure/index.ts";
+import { createFakeStorefront, type FakeStorefront } from "../storefront-fake/index.ts";
 import { buildModel } from "../panel/index.ts";
 import { loadPolicy } from "../policy/index.ts";
 import { findIdentity } from "../privacy/index.ts";
@@ -31,7 +32,8 @@ const T0 = Date.parse("2026-10-15T12:00:00Z");
 const BASE_POLICY = "version: 1\napproval: passkey\n";
 const SEARCH = { category: "stickers", budget_usd: 100, zip: FAKE_BUYER.zip };
 const usd = (amount_minor: number) => ({ amount_minor, currency: "USD" as const });
-const sticker = (priceMinor = 500): CatalogItem => ({
+const STOREFRONT_HOST = new URL(FAKE_STOREFRONT).host;
+const sticker = (priceMinor = 500, myshopify: string | null = FAKE_STORE): CatalogItem => ({
   category: "stickers",
   stock: 10,
   merchant: { name: "Sticker Store", domain: new URL(FAKE_STOREFRONT).host },
@@ -43,12 +45,15 @@ const sticker = (priceMinor = 500): CatalogItem => ({
   availability: "in_stock",
   variant_ref: FAKE_VARIANT,
   completion: ["shop_agent", "handoff"],
+  ...(myshopify === null ? {} : { myshopify_domain: myshopify }),
 });
 const REPORT_ID = /^or_[A-Za-z0-9_-]{22,32}$/;
 
 interface Base {
   fake: FakeCloud;
   shop: FakeShop;
+  /** The merchant storefront the store pair check reaches: stickers.example names FAKE_STORE. */
+  storefront: FakeStorefront;
   dir: string;
   clock: { at: number };
   now: () => number;
@@ -69,8 +74,6 @@ interface ProcOptions {
   policy?: string;
   /** Wraps the disclosed cloud the gateway calls (the wallet still logs through the real one's core). */
   wrapCloud?: (real: DisclosedCloud) => DisclosedCloud;
-  /** The wallet's store for a storefront origin (default: the fake storefront's store). */
-  storeFor?: (origin: string) => string | null;
   /** Wraps the store the gateway writes through (a crash or a failing disk). */
   wrap?: (store: Store) => Store;
 }
@@ -81,14 +84,14 @@ afterEach(async () => {
   cleanup = [];
 });
 
-async function setup(options: { faults?: FakeShopFaults; policy?: string; priceMinor?: number } = {}): Promise<Base> {
+async function setup(options: { faults?: FakeShopFaults; policy?: string; priceMinor?: number; myshopify?: string | null } = {}): Promise<Base> {
   const clock = { at: T0 };
   const now = (): number => clock.at;
-  const fake = await startFakeCloud({ now, oneTap: true, catalog: [sticker(options.priceMinor)] });
+  const fake = await startFakeCloud({ now, oneTap: true, catalog: [sticker(options.priceMinor, options.myshopify === undefined ? FAKE_STORE : options.myshopify)] });
   const shop = await startFakeShop({ ...(options.faults === undefined ? {} : { faults: options.faults }) });
   cleanup.push(() => fake.close(), () => shop.close());
   const dir = join(await fsp.mkdtemp(join(tmpdir(), "one-tap-")), "data");
-  return { fake, shop, dir, clock, now, walletKey: new WalletKey(randomBytes(32), "test"), passkey: new SoftPasskey(), policy: options.policy ?? BASE_POLICY };
+  return { fake, shop, storefront: createFakeStorefront({ [STOREFRONT_HOST]: FAKE_STORE }), dir, clock, now, walletKey: new WalletKey(randomBytes(32), "test"), passkey: new SoftPasskey(), policy: options.policy ?? BASE_POLICY };
 }
 
 /** One gateway process on the base's data dir, started. */
@@ -109,7 +112,7 @@ async function proc(base: Base, options: ProcOptions = {}): Promise<Proc> {
     completerKeys: openCompleterKeys(base.dir, { now: base.now }),
     oneTap: {
       connect: (cloud) => connectShop(holder.real ?? cloud, { mcpUrl: base.shop.mcpUrl, authUrl: base.shop.authUrl, vaultText, checkoutIds }),
-      storeFor: options.storeFor ?? ((origin) => (origin === FAKE_STOREFRONT ? FAKE_STORE : null)),
+      storefront: (cloud) => connectStorefront(holder.real ?? cloud, base.storefront.transport),
       ...(options.hook === undefined ? {} : { hook: options.hook }),
     },
     policy: loadPolicy(options.policy ?? base.policy),
@@ -738,7 +741,8 @@ describe("Shop as the S1 spike saw it (2026-10-18)", () => {
     expect(completionOf(await status(p, handle))).toMatchObject({ state: "ordered" });
     expect(base.shop.paidWith).toEqual(["delegated_budget"]);
     const ordered = localOutcomes(await chainOf(base)).at(-1);
-    expect(ordered?.binding_inputs).toMatchObject({ observed: { merchant_origin: FAKE_STOREFRONT } });
+    // Shop reports the store, not the storefront: binding-v1 matches it only as the myshopify domain the passkey signed (D7).
+    expect(ordered?.binding_inputs).toMatchObject({ observed: { merchant_origin: `https://${FAKE_STORE}` } });
     expect(ordered?.local_binding).toMatchObject({ result: "ok", checks: { merchant_origin: "match" } });
   });
 
@@ -1025,9 +1029,9 @@ describe("security review fixes", () => {
     expect(base.shop.completeCount).toBe(1);
   });
 
-  it("L4: a merchant whose Shop store cannot be named is offered hand-off only, so the cart is handed off", async () => {
-    const base = await setup();
-    const p = await proc(base, { storeFor: () => null });
+  it("L4: a merchant Intent Cloud names no myshopify domain for is offered hand-off only, so the cart is handed off", async () => {
+    const base = await setup({ myshopify: null });
+    const p = await proc(base);
     const found = await p.gateway.findOffers(SEARCH);
     if (found.status !== "offers" || found.offers[0] === undefined) throw new Error("no offers");
     const cart = await p.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
@@ -1183,3 +1187,234 @@ describe("a Shopify order number that passes Luhn (ADR-0019: the order gid exemp
     expect(reportsAt(base, handle)).toHaveLength(sentBefore);
   });
 });
+
+// ---- contract 1.6.1: the signed store pair and the store pair check (ADR-0020) --------------------------------------
+
+describe("contract 1.6.1: the store pair check before the completing report", () => {
+  const STORE_TTL_MS = 24 * 3_600_000;
+  const pairEntries = (chain: Entry[]) => ofKind(chain, "store_pair");
+
+  /** A purchase whose store pair check fails: refused locally, before any Shop checkout, with nothing reported. */
+  async function refusedLocally(base: Base, reason: string): Promise<string> {
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    const done = completionOf(await status(p, handle));
+    expect(done).toMatchObject({ state: "failed", source: "gateway_precheck", reason: `store_pair:${reason}` });
+    // Local only (Appendix G): no Shop checkout was made, nothing was paid, and Intent Cloud got no report, so the
+    // approval stays approved there and the buyer can still hand off.
+    expect([base.shop.createCount, base.shop.completeCount]).toEqual([0, 0]);
+    expect(reportsAt(base, handle)).toEqual([]);
+    expect(base.fake.inspect(handle)?.state).toBe("approved");
+    const chain = await chainOf(base);
+    expect(ofKind(chain, "completion")).toEqual([]);
+    expect(ofKind(chain, "disclosure").filter((d) => d.endpoint === "create_checkout")).toEqual([]);
+    return handle;
+  }
+
+  it("the happy path: one logged GET of the storefront's /meta.json, URL and fixed headers only, answered as status, digest and size", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    const chain = await chainOf(base);
+    const gets = chain.filter((e) => e.kind === "disclosure" && body(e).destination === "storefront");
+    expect(gets).toHaveLength(1);
+    const get = gets[0] as Entry;
+    expect(body(get)).toMatchObject({ endpoint: "meta_json", method: "GET", path: `${FAKE_STOREFRONT}/meta.json`, body_b64: "", purchase: handle });
+    // No cookie, credential, Authorization or buyer data: exactly the fixed header set.
+    expect((body(get).headers as string[][]).map(([name]) => name)).toEqual(["host", "accept", "user-agent", "connection"]);
+    expect(body(get).redacted).toBeUndefined();
+    // Invariant 2: logged before the GET left, and the answer kept as status, sha256 and size only.
+    const answer = chain.find((e) => e.kind === "response" && body(e).disclosure_seq === get.seq) as Entry;
+    expect(Object.keys(body(answer)).sort()).toEqual(["body_sha256", "bytes", "disclosure_seq", "status"]);
+    expect(body(answer).status).toBe(200);
+    expect(base.storefront.requests).toHaveLength(1);
+    // The check ran before any Shop checkout was made, and before the completing report.
+    const pass = chain.find((e) => e.kind === "store_pair" && body(e).disclosure_seq === get.seq) as Entry;
+    expect(body(pass)).toMatchObject({ handle, merchant_origin: FAKE_STOREFRONT, myshopify_domain: FAKE_STORE, result: "pass" });
+    const createSeq = chain.find((e) => e.kind === "disclosure" && body(e).endpoint === "create_checkout")?.seq ?? -1;
+    expect(pass.seq).toBeLessThan(createSeq);
+    expect((await verify(base)).exitCode).toBe(0);
+  });
+
+  it("attack (IC-paired evil store): Intent Cloud pairs the storefront with another store and the passkey signs it; meta.json disagrees → no checkout, no send", async () => {
+    const base = await setup({ myshopify: "evil-store.myshopify.com" });
+    await refusedLocally(base, "differs");
+    expect(pairEntries(await chainOf(base))).toMatchObject([{ myshopify_domain: "evil-store.myshopify.com", result: "fail", reason: "differs" }]);
+    expect((await verify(base)).exitCode).toBe(0);
+  });
+
+  it.each([
+    ["a redirect (never followed)", { status: 301 }, "redirect"],
+    ["an oversize body", { body: `{"myshopify_domain":"${FAKE_STORE}"}${" ".repeat(70_000)}` }, "too_large"],
+    ["a wrong content type", { contentType: "text/html; charset=utf-8" }, "content_type"],
+    ["two content types", { contentType: ["application/json", "text/html"] }, "content_type"],
+    ["duplicate member names", { body: `{"myshopify_domain":"other-store.myshopify.com","myshopify_domain":"${FAKE_STORE}"}` }, "not_json"],
+    ["a non-ASCII value (U+0131)", { body: `{"myshopify_domain":"st\\u0131cker-store.myshopify.com"}` }, "non_ascii"],
+    ["a body that is not an object", { body: `["${FAKE_STORE}"]` }, "not_object"],
+  ] as const)("attack: %s → failed (gateway_precheck), local only", async (_what, answer, reason) => {
+    const base = await setup();
+    base.storefront.answer(new URL(FAKE_STOREFRONT).host, answer);
+    await refusedLocally(base, reason);
+  });
+
+  it("attack: a storefront name that resolves to a private address is never contacted (logged, not sent) → fetch_failed", async () => {
+    const base = await setup();
+    base.storefront.answer(new URL(FAKE_STOREFRONT).host, "refused");
+    await refusedLocally(base, "fetch_failed");
+    expect(base.storefront.requests).toEqual([]);
+    const chain = await chainOf(base);
+    const get = chain.find((e) => e.kind === "disclosure" && body(e).destination === "storefront") as Entry;
+    expect(String(ofKind(chain, "unacknowledged").find((u) => u.disclosure_seq === get.seq)?.reason)).toContain("not sent");
+  });
+
+  it("attack (log before send): the storefront GET's disclosure cannot be appended → no GET leaves, and nothing is paid", async () => {
+    const base = await setup();
+    const failing = (real: Store): Store => ({
+      append: (k, b) => (k === "disclosure" && (b as { destination?: unknown }).destination === "storefront" ? Promise.reject(new Error("disk full")) : real.append(k, b)),
+      appendUnless: (k, b, c) => real.appendUnless(k, b, c),
+      entries: () => real.entries(),
+      close: () => real.close(),
+    });
+    const p = await proc(base, { wrap: failing });
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle))).toMatchObject({ state: "failed", reason: "store_pair:fetch_failed" });
+    expect(base.storefront.requests).toEqual([]);
+    expect([base.shop.createCount, base.shop.completeCount]).toEqual([0, 0]);
+  });
+
+  it("attack (cache poisoning by a failure): a failure is never reused; a pass is, from another process, for 24 h at most", async () => {
+    const base = await setup();
+    const host = new URL(FAKE_STOREFRONT).host;
+    base.storefront.answer(host, { body: `{"myshopify_domain":"other-store.myshopify.com"}` });
+    await refusedLocally(base, "differs");
+    // The storefront now answers right: the next purchase fetches again (the failure was not kept) and passes.
+    base.storefront.answer(host, null);
+    const p2 = await proc(base);
+    const second = await approvedCart(base, p2);
+    expect(completionOf(await status(p2, second))).toMatchObject({ state: "ordered" });
+    expect(base.storefront.requests).toHaveLength(2);
+    // A third purchase in another process within 24 h reuses that pass (named by cached_from), with no new GET, even
+    // though the storefront would now fail.
+    base.storefront.answer(host, { status: 404 });
+    base.clock.at += 60_000;
+    const p3 = await proc(base);
+    const third = await approvedCart(base, p3);
+    expect(completionOf(await status(p3, third)).state).toBe("ordered");
+    expect(base.storefront.requests).toHaveLength(2);
+    const fetched = (await chainOf(base)).filter((e) => e.kind === "store_pair" && body(e).result === "pass" && typeof body(e).disclosure_seq === "number");
+    expect(pairEntries(await chainOf(base)).filter((e) => e.handle === third).every((e) => e.cached_from === fetched.at(-1)?.seq)).toBe(true);
+    expect((await verify(base)).exitCode).toBe(0);
+    const pack = buildEvidence(await chainOf(base), third, [base.fake.keys.rootPin]);
+    expect(runVerifyEvidence({ text: packText(pack), pinnedRootKeys: [base.fake.keys.rootPin] }).exitCode).toBe(0);
+    // 24 h after that GET the pass is spent: the next check fetches again, and fails on the 404.
+    base.clock.at += STORE_TTL_MS - passAge(await chainOf(base), base.now());
+    const p4 = await proc(base);
+    const fourth = await approvedCart(base, p4);
+    expect(completionOf(await status(p4, fourth))).toMatchObject({ state: "failed", reason: "store_pair:status" });
+    expect(base.storefront.requests).toHaveLength(3);
+  });
+
+  it("the safety net: the pair no longer passes at complete_checkout (no pass kept, meta.json now disagrees) → nothing sent, failed reported", async () => {
+    const base = await setup();
+    const hide = { on: false };
+    // The kept pass is hidden from the completion step (as when it outlived its 24 h between the two checks).
+    const hiding = (real: Store): Store => ({
+      append: (k, b) => real.append(k, b),
+      appendUnless: (k, b, c) => real.appendUnless(k, b, c),
+      entries: () => (hide.on ? real.entries().filter((e) => e.kind !== "store_pair") : real.entries()),
+      close: () => real.close(),
+    });
+    const p = await proc(base, {
+      wrap: hiding,
+      hook: (step) => {
+        if (step === "attempt") {
+          hide.on = true;
+          base.storefront.answer(new URL(FAKE_STOREFRONT).host, { body: `{"myshopify_domain":"other-store.myshopify.com"}` });
+        }
+      },
+    });
+    const handle = await approvedCart(base, p);
+    const done = completionOf(await status(p, handle));
+    expect(done).toMatchObject({ state: "failed", source: "gateway_precheck", reason: "store_pair:differs" });
+    expect(base.shop.completeCount).toBe(0);
+    expect(completeSends(await chainOf(base))).toEqual([]);
+    expect(reportsAt(base, handle).map((r) => [r.state, r.source])).toEqual([
+      ["completing", "shop_api"],
+      ["failed", "gateway_precheck"],
+    ]);
+  });
+
+  it("attack (verify): a completion with no passing store pair check before it fails verify", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    const copy = join(await fsp.mkdtemp(join(tmpdir(), "one-tap-nopair-")), "data");
+    const out = await openStore(copy, { clock: base.now });
+    for (const e of await chainOf(base)) if (e.kind !== "store_pair") await out.append(e.kind, e.body);
+    await out.close();
+    const report = await runVerify({ dataDir: copy, pinnedRootKeys: [base.fake.keys.rootPin], now: new Date(base.now()), skipSupplyChain: true });
+    expect(report.exitCode).toBe(1);
+    expect(report.checks.flatMap((c) => c.details).join("\n")).toContain("comes before any passing store pair check");
+  });
+
+  it("attack (verify): a pass that names no storefront GET, or a reuse of a failure, fails verify", async () => {
+    const base = await setup();
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    const forged = await verifyCopy(base, (e, out) =>
+      e.kind === "approval" ? out.append("store_pair", { handle, merchant_origin: FAKE_STOREFRONT, myshopify_domain: FAKE_STORE, result: "pass", disclosure_seq: 0 }) : null,
+    );
+    expect(forged.checks.flatMap((c) => c.details).join("\n")).toContain("passes without naming the storefront GET");
+  });
+});
+
+describe("contract 1.6.1: offer = cart = snapshot for the myshopify domain (Appendix E step 7)", () => {
+  async function refusedCart(base: Base, words: string) {
+    const p = await proc(base);
+    const found = await p.gateway.findOffers(SEARCH);
+    if (found.status !== "offers" || found.offers[0] === undefined) throw new Error("no offers");
+    const cart = await p.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
+    expect(cart.status).toBe("refused");
+    expect(cart.message).toContain(words);
+    expect(ofKind(await chainOf(base), "approval_pending")).toEqual([]);
+  }
+
+  it("attack: the cart names another store's myshopify domain than the offer → refused, no approval requested", async () => {
+    const base = await setup();
+    base.fake.tamper.cart({ myshopify_domain: "other-store.myshopify.com" });
+    await refusedCart(base, "myshopify_domain differs from the offer");
+    expect(ofKind(await chainOf(base), "disclosure").filter((d) => d.endpoint === "createApproval")).toEqual([]);
+  });
+
+  it("attack: a Shopify store's cart without myshopify_domain → refused, no approval requested", async () => {
+    const base = await setup();
+    base.fake.tamper.cart({ myshopify_domain: undefined });
+    await refusedCart(base, "myshopify_domain is missing");
+  });
+
+  it("attack: the snapshot signs another store than the offer and the cart → refused at step 7, nothing pending", async () => {
+    const base = await setup();
+    base.fake.tamper.snapshot({ myshopify_domain: "other-store.myshopify.com" });
+    await refusedCart(base, "myshopify_domain is not the offer's and the cart's");
+  });
+
+  it("attack: a v2 snapshot from the 1.6.1 host → refused by the 1.6.1 schema, nothing pending (step 7 refuses it too: gateway.test)", async () => {
+    const base = await setup();
+    base.fake.tamper.snapshot({ v: 2, myshopify_domain: undefined } as never);
+    const p = await proc(base);
+    const found = await p.gateway.findOffers(SEARCH);
+    if (found.status !== "offers" || found.offers[0] === undefined) throw new Error("no offers");
+    const cart = await p.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
+    expect(cart.status).not.toBe("approval_needed");
+    expect(ofKind(await chainOf(base), "approval_pending")).toEqual([]);
+  });
+});
+
+/** How long ago the latest fetched store pair pass was chained. */
+function passAge(chain: Entry[], nowMs: number): number {
+  const pass = chain.findLast((e) => e.kind === "store_pair" && body(e).result === "pass" && typeof body(e).disclosure_seq === "number");
+  return pass === undefined ? Number.POSITIVE_INFINITY : nowMs - Date.parse(pass.ts);
+}

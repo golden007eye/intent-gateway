@@ -7,11 +7,12 @@ import { createPrivateKey, generateKeyPairSync, randomInt } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, type Stats, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type CatalogItem, catalogCategories, type FakeCloud, SAMPLE_CATALOG, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
-import { connectShop } from "../disclosure/index.ts";
+import { connectShop, connectStorefront } from "../disclosure/index.ts";
 import type { OneTapOptions } from "../gateway/index.ts";
 import { memoryCheckoutIds } from "../wallet/index.ts";
 import { FAKE_STORE, FAKE_STOREFRONT, FAKE_VARIANT, type FakeShop, SHIPPING_MINOR, startFakeShop, UNIT_PRICE_MINOR } from "../wallet-shop-fake/index.ts";
 import { EXCLUDED_CATEGORIES } from "../policy/index.ts";
+import { createFakeStorefront } from "../storefront-fake/index.ts";
 import { type PinnedRootKey, TEST_ROOT_KEY } from "../trust/index.ts";
 import { CONFIRM_PATH, type ConfirmPage, startConfirmPage } from "./confirm.ts";
 
@@ -25,7 +26,8 @@ const PASSKEY_FILE = "demo-passkey.json";
 
 /**
  * The demo's one-tap item (plan G7c): sold by the demo Shop store, so a cart for it is completed by the gateway with
- * the fake Shop wallet instead of being handed off. Its price and variant are the fake Shop's.
+ * the fake Shop wallet instead of being handed off. Its price and variant are the fake Shop's, and its myshopify
+ * domain is the fake Shop's store, which the demo storefront's meta.json confirms (the store pair check, 1.6.1).
  */
 export const DEMO_ONE_TAP_ITEM: CatalogItem = Object.freeze<CatalogItem>({
   category: "stickers",
@@ -40,6 +42,7 @@ export const DEMO_ONE_TAP_ITEM: CatalogItem = Object.freeze<CatalogItem>({
   availability: "in_stock",
   variant_ref: FAKE_VARIANT,
   completion: ["shop_agent", "handoff"],
+  myshopify_domain: FAKE_STORE,
 });
 const DEMO_CATALOG: readonly CatalogItem[] = [...SAMPLE_CATALOG, DEMO_ONE_TAP_ITEM];
 /** The demo code of the running demo (0600), for a person whose gateway was started by an agent, with no terminal. */
@@ -126,7 +129,8 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
     const vaultText = JSON.stringify({ v: 1, client_id: demoShop.clientId, access_token: demoShop.accessToken, refresh_token: demoShop.refreshToken });
     const oneTap: OneTapOptions = {
       connect: (owner) => connectShop(owner, { mcpUrl: demoShop.mcpUrl, authUrl: demoShop.authUrl, vaultText, checkoutIds: memoryCheckoutIds() }),
-      storeFor: (origin) => (origin === FAKE_STOREFRONT ? FAKE_STORE : null),
+      // The demo storefront answers meta.json in memory: the check's GET is logged, and nothing leaves the machine.
+      storefront: (owner) => connectStorefront(owner, createFakeStorefront({ [new URL(FAKE_STOREFRONT).host]: FAKE_STORE }).transport),
     };
     const pageOn = (port: number): Promise<ConfirmPage> =>
       startConfirmPage({

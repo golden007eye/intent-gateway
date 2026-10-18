@@ -1,0 +1,847 @@
+{
+  "id": "O5",
+  "appendix": "G",
+  "description": "The store pair check (1.6.1): input.myshopify_domain is the v3 snapshot's, input.merchant_origin its storefront origin, and input.response what GET expected.url answered (no cookies, credentials, Authorization or buyer data; redirects never followed; expected.url null: no request is made). A response with pad_to_bytes has its body padded with trailing spaces to that many bytes (the bytes read). expected.reason names the failing rule, in the order the checks run: not_https, bad_origin, not_public, bad_domain, redirect, status, content_type, too_large, not_json (invalid, a BOM, empty, or a duplicate member name), not_object, missing, not_string, non_ascii, differs. A network error or a timeout is a failure too. The check runs before the completing report, so a failure is local: nothing is reported and the buyer can still hand off. A failure is never cached.",
+  "limits": {
+    "timeout_seconds": 5,
+    "max_body_bytes": 65536,
+    "cache_ttl_seconds_max": 86400
+  },
+  "cases": [
+    {
+      "name": "match",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": true,
+        "reason": null
+      }
+    },
+    {
+      "name": "match, application/json without parameters",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": true,
+        "reason": null
+      }
+    },
+    {
+      "name": "a case-only difference: uppercase in the answer, lowercased, matches",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"Test-Shop.MyShopify.COM\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": true,
+        "reason": null
+      }
+    },
+    {
+      "name": "mismatch: another store",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"other-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "differs"
+      }
+    },
+    {
+      "name": "missing field",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "missing"
+      }
+    },
+    {
+      "name": "a non-string value",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":1}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "not_string"
+      }
+    },
+    {
+      "name": "a null value",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":null}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "not_string"
+      }
+    },
+    {
+      "name": "a non-ASCII value that lowercases to the domain (U+212A KELVIN SIGN)",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "kelvin-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"\\u212aelvin-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "non_ascii"
+      }
+    },
+    {
+      "name": "an oversize body (64 KiB + 1 bytes read)",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}",
+          "pad_to_bytes": 65537
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "too_large"
+      }
+    },
+    {
+      "name": "a body of exactly 64 KiB",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}",
+          "pad_to_bytes": 65536
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": true,
+        "reason": null
+      }
+    },
+    {
+      "name": "a wrong content type",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "text/html; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "content_type"
+      }
+    },
+    {
+      "name": "no content type",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": null,
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "content_type"
+      }
+    },
+    {
+      "name": "a 301 redirect, never followed",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 301,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "redirect"
+      }
+    },
+    {
+      "name": "a 404",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 404,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "status"
+      }
+    },
+    {
+      "name": "a non-https origin",
+      "input": {
+        "merchant_origin": "http://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "not_https"
+      }
+    },
+    {
+      "name": "a non-object JSON body",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "[\"test-shop.myshopify.com\"]"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "not_object"
+      }
+    },
+    {
+      "name": "a body that is not JSON",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "<html></html>"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "not_json"
+      }
+    },
+    {
+      "name": "an expected domain that is no myshopify domain (uppercase)",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "Test-Shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "bad_domain"
+      }
+    },
+    {
+      "name": "an expected domain of two labels",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "a.b.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"a.b.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "bad_domain"
+      }
+    },
+    {
+      "name": "an IPv4 literal",
+      "input": {
+        "merchant_origin": "https://127.0.0.1",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "not_public"
+      }
+    },
+    {
+      "name": "a private IPv4 literal",
+      "input": {
+        "merchant_origin": "https://10.0.0.1",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "not_public"
+      }
+    },
+    {
+      "name": "a numeric last label",
+      "input": {
+        "merchant_origin": "https://shop.123",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "not_public"
+      }
+    },
+    {
+      "name": "a last label of 0x and hex digits (resolves to 127.0.0.1)",
+      "input": {
+        "merchant_origin": "https://127.0.0.0x1",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "not_public"
+      }
+    },
+    {
+      "name": "a last label of 0x alone",
+      "input": {
+        "merchant_origin": "https://shop.0x",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "not_public"
+      }
+    },
+    {
+      "name": "localhost",
+      "input": {
+        "merchant_origin": "https://localhost",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "not_public"
+      }
+    },
+    {
+      "name": "a localhost subdomain",
+      "input": {
+        "merchant_origin": "https://shop.localhost",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "not_public"
+      }
+    },
+    {
+      "name": "a single-label host",
+      "input": {
+        "merchant_origin": "https://intranet",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "not_public"
+      }
+    },
+    {
+      "name": "an IPv6 literal",
+      "input": {
+        "merchant_origin": "https://[::1]",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "bad_origin"
+      }
+    },
+    {
+      "name": "an origin with a trailing slash",
+      "input": {
+        "merchant_origin": "https://shop.example/",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "bad_origin"
+      }
+    },
+    {
+      "name": "an origin with :443",
+      "input": {
+        "merchant_origin": "https://shop.example:443",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "bad_origin"
+      }
+    },
+    {
+      "name": "an uppercase origin",
+      "input": {
+        "merchant_origin": "https://Shop.Example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "bad_origin"
+      }
+    },
+    {
+      "name": "an uppercase scheme",
+      "input": {
+        "merchant_origin": "HTTPS://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": null,
+        "valid": false,
+        "reason": "bad_origin"
+      }
+    },
+    {
+      "name": "a fullwidth value",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "it-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"\\uff49\\uff54-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "non_ascii"
+      }
+    },
+    {
+      "name": "a dotless i (U+0131)",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "it-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"\\u0131t-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "non_ascii"
+      }
+    },
+    {
+      "name": "a dotted capital I (U+0130)",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "it-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"\\u0130T-SHOP.MYSHOPIFY.COM\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "non_ascii"
+      }
+    },
+    {
+      "name": "leading whitespace",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\" test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "differs"
+      }
+    },
+    {
+      "name": "trailing whitespace",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\\n\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "differs"
+      }
+    },
+    {
+      "name": "a trailing dot",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com.\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "differs"
+      }
+    },
+    {
+      "name": "a nested field only",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"shop\": {\"myshopify_domain\": \"test-shop.myshopify.com\"}}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "missing"
+      }
+    },
+    {
+      "name": "a byte order mark",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "﻿{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "not_json"
+      }
+    },
+    {
+      "name": "an empty body",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": ""
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "not_json"
+      }
+    },
+    {
+      "name": "a duplicate member name (fail closed)",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"myshopify_domain\":\"other-shop.myshopify.com\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "not_json"
+      }
+    },
+    {
+      "name": "an uppercase media type",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "Application/JSON; Charset=UTF-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": true,
+        "reason": null
+      }
+    },
+    {
+      "name": "text/html; application/json",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "text/html; application/json",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "content_type"
+      }
+    },
+    {
+      "name": "application/json-patch+json",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 200,
+          "content_type": "application/json-patch+json",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "content_type"
+      }
+    },
+    {
+      "name": "a 302 redirect",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 302,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "redirect"
+      }
+    },
+    {
+      "name": "a 307 redirect",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 307,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "redirect"
+      }
+    },
+    {
+      "name": "a 308 redirect",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 308,
+          "content_type": "application/json; charset=utf-8",
+          "body": "{\"name\":\"Test Shop\",\"myshopify_domain\":\"test-shop.myshopify.com\"}"
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "redirect"
+      }
+    },
+    {
+      "name": "a 204",
+      "input": {
+        "merchant_origin": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "response": {
+          "status": 204,
+          "content_type": "application/json; charset=utf-8",
+          "body": ""
+        }
+      },
+      "expected": {
+        "url": "https://shop.example/meta.json",
+        "valid": false,
+        "reason": "status"
+      }
+    }
+  ]
+}

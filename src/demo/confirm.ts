@@ -161,8 +161,8 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     const total = money(s.total.amount_minor);
     const check = view.snapshot_hash.slice(0, 8);
     const short = handle.length > 12 ? `${handle.slice(0, 7)}…${handle.slice(-3)}` : handle;
-    // A v2 snapshot (contract 1.6.0) binds the 5-digit ZIP; a v1 snapshot its 3-digit prefix.
-    const zip = s.v === 2 ? s.ship_to.postal_code : `${s.ship_to.postal_prefix}xx`;
+    // A v2 or v3 snapshot (contract 1.6.x) binds the 5-digit ZIP; a v1 snapshot its 3-digit prefix.
+    const zip = s.v === 1 ? `${s.ship_to.postal_prefix}xx` : s.ship_to.postal_code;
 
     const receipt =
       `<div class="total"><span class="k">${s.total_kind === "max" ? "Total, at most" : "Total"}</span>` +
@@ -262,7 +262,7 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     }
     const outcome = action === "approve" ? fake.approveWithPasskey(approval, passkey) : fake.reject(approval, passkey);
     const snapshot = fake.inspect(approval)?.snapshot;
-    const oneTap = snapshot?.v === 2 && snapshot.completion_mode === "shop_agent";
+    const oneTap = snapshot !== undefined && snapshot.v !== 1 && snapshot.completion_mode === "shop_agent";
     return [outcome.status, decided(outcome, action, oneTap)];
   }
 
