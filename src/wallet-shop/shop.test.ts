@@ -146,6 +146,9 @@ describe("a purchase's Shop calls", () => {
       shipTo: "match",
       orderRef: null,
       budgetOffered: true,
+      totals: { subtotal: UNIT_PRICE_MINOR, shipping: SHIPPING_MINOR, tax: 0, total: UNIT_PRICE_MINOR + SHIPPING_MINOR },
+      shipToArea: { country: "US", postalCodeCoarse: expect.stringMatching(/^[0-9]{5}$/) as unknown },
+      continueUrl: expect.stringMatching(/^https:\/\//) as unknown,
     });
     // One send: no get_account first, and no address or address id in it.
     expect(sentTools()).toEqual(["create_checkout"]);

@@ -1,6 +1,6 @@
 # Appendix G: Outcomes (normative)
 
-Contract version 1.6.1. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/o1-binding.json`, `vectors/o2-outcome-statement.json`, `vectors/o3-status-state.json`, `vectors/o4-report-transitions.json`, `vectors/o5-store-pair.json`.
+Contract version 1.7.0. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/o1-binding.json`, `vectors/o2-outcome-statement.json`, `vectors/o3-status-state.json`, `vectors/o4-report-transitions.json`, `vectors/o5-store-pair.json`.
 
 ## Purpose
 What happened after an approval, stated only from evidence the stating service checked itself. Intent Cloud compares every observed order with the snapshot the passkey signed (binding-v1), states the outcome with its source and assurance, and signs that statement with its approval key. Served to callers that send `Intent-Contract-Version: 1.6.0` or `1.6.1`.
@@ -161,3 +161,13 @@ A statement is valid for an approval when all of these hold:
    - `outcome.source` is a source Intent Cloud reads itself, and `outcome.assurance` is within that source's cap (Sources and assurance).
 
 Vector `vectors/o2-outcome-statement.json` has two valid statements (the second names a 14-digit Shopify order id) and invalid ones: a changed outcome, a signature without the prefix, a signature with the `intent-approval-v1` prefix, another snapshot, and correctly signed statements that break each rule of step 3, the assurance cap included. Only the first two are valid.
+
+## Binding check `binding-v2` (1.7.0)
+Every outcome of an approval with a v4 snapshot (Appendix A) is bound with `binding-v2`, by Intent Cloud and by the gateway; reports of such an approval carry `rule_version: "binding-v2"`. The inputs are binding-v1's, with the snapshot a v4 one and the observed order `O = {merchant_origin?, checkout_ref?, lines: [{variant_ref, quantity}], ship_to_country?, ship_to_postal_code?, final_total: Money}`. The type rules and the result rule are binding-v1's. The checks:
+1. **merchant_origin** (both modes). By binding-v1's grammar and comparison, `match` when `O.merchant_origin` equals `S.store_site` or `"https://" + S.myshopify_domain`: the two names of the one store the passkey signed. `unknown` only when absent.
+2. **checkout_ref** (both modes). `checkout_ref_hash(O.checkout_ref) == S.checkout_ref_hash`. The gateway created the checkout before the approval and the passkey signed its hash, so this is a bound check in `shop_agent` mode too: a completer that pays another checkout gets `differs`. `unknown` when absent. The one-order rule is binding-v1's.
+3. **line.** As binding-v1, against `S.variant_ref` and `S.quantity`.
+4. **ship_to.** `O.ship_to_country`, when present, equals `S.ship_to.country` (else `differs`), and `coarse(S.ship_to.country, O.ship_to_postal_code)` (Appendix A "Coarse postcodes") exists and equals `S.ship_to.postal_code_coarse`. `unknown` when the postcode is absent; an empty string, or a code with no coarse form, is `differs`.
+5. **total** (rule 25, unchanged). With `A = S.totals.total` and `R = O.final_total.amount_minor`, `match` iff `O.final_total.currency == S.currency`, `5·R ≥ 4·A` and `R ≤ A`. The same integer in another currency is `differs`: amounts are compared only in one currency's minor units, never converted.
+
+Output `binding = {rule_version: "binding-v2", result, checks}` with binding-v1's five check names. A 1.6.x approval keeps binding-v1. The completer precheck of a v4 `shop_agent` snapshot runs binding-v2, and check 2 is not skipped: the checkout it reads must be the one the passkey signed. Vector: `vectors/o6-binding-v2.json`.

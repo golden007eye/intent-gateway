@@ -5,12 +5,25 @@
 // `myshopify_domain` must equal the offer's and the cart's (or be absent from all three); a `sent` chained by a 1.6.0
 // gateway names no version and takes only v2, so `intent verify` still checks those chains. Pure.
 import { z } from "zod";
-import { type AnySnapshot, CartRequest, Merchant, MerchantOrigin, Money, MyshopifyDomain, Timestamp, VariantRef } from "../contract/index.ts";
+import {
+  type AnySnapshot,
+  CartRequest,
+  CheckoutRequest,
+  checkoutRequestProblems,
+  CurrencyTableVersion,
+  Merchant,
+  MerchantOrigin,
+  Money,
+  MyshopifyDomain,
+  Timestamp,
+  type V4Field,
+  VariantRef,
+} from "../contract/index.ts";
 
 /** e2's input without the snapshot: the version spoken, the gateway's own CartRequest, the Offer and the Cart received. */
 export const SentPurchase = z.strictObject({
   /** The contract version the cart was made in; absent in entries a 1.6.0 gateway chained. */
-  contract_version: z.enum(["1.6.0", "1.6.1"]).optional(),
+  contract_version: z.enum(["1.6.0", "1.6.1", "1.7.0"]).optional(),
   cart_request: CartRequest,
   offer: z.strictObject({ variant_ref: VariantRef, merchant: Merchant, myshopify_domain: MyshopifyDomain.optional() }),
   cart: z.strictObject({
@@ -39,7 +52,7 @@ export const SENT_FIELDS = [
 export type SentReason = (typeof SENT_FIELDS)[number] | "v";
 
 /** The snapshot version each contract version takes (Appendix E step 7). */
-const SNAPSHOT_VERSION = { "1.6.0": 2, "1.6.1": 3 } as const;
+const SNAPSHOT_VERSION = { "1.6.0": 2, "1.6.1": 3, "1.7.0": 3 } as const;
 
 /**
  * The snapshot's fields that are not the purchase in `sent`, in e2's order, or [] when it is (Appendix E step 7): the
@@ -51,7 +64,7 @@ const SNAPSHOT_VERSION = { "1.6.0": 2, "1.6.1": 3 } as const;
  */
 export function sentProblems(snapshot: AnySnapshot, sent: SentPurchase): SentReason[] {
   const version = sent.contract_version ?? "1.6.0";
-  if (snapshot.v === 1 || snapshot.v !== SNAPSHOT_VERSION[version]) return ["v"];
+  if (snapshot.v === 1 || snapshot.v === 4 || snapshot.v !== SNAPSHOT_VERSION[version]) return ["v"];
   const request = sent.cart_request;
   const signedDomain = snapshot.v === 3 ? snapshot.myshopify_domain : undefined;
   const failed: Record<(typeof SENT_FIELDS)[number], boolean> = {
@@ -65,7 +78,7 @@ export function sentProblems(snapshot: AnySnapshot, sent: SentPurchase): SentRea
     // Compared as instants; one that is not a real instant (2026-02-30, 24:00) fails closed.
     expires_at: !(instant(snapshot.expires_at) <= instant(sent.cart.expires_at)),
     // A value on one side only is a failure: a Shopify store's pair must be signed as offered.
-    myshopify_domain: version === "1.6.1" && (signedDomain !== sent.offer.myshopify_domain || signedDomain !== sent.cart.myshopify_domain),
+    myshopify_domain: version !== "1.6.0" && (signedDomain !== sent.offer.myshopify_domain || signedDomain !== sent.cart.myshopify_domain),
   };
   return SENT_FIELDS.filter((field) => failed[field]);
 }
@@ -84,7 +97,7 @@ export function instant(timestamp: string): number {
 
 /** The words for a reason, for refusals the developer and the agent read. */
 export const SENT_WORDS: Readonly<Record<SentReason, string>> = {
-  v: "snapshot is not the version this gateway speaks (contract 1.6.1 takes only snapshot v3)",
+  v: "snapshot is not the version this gateway speaks (a cart takes only snapshot v3)",
   quantity: "quantity is not the quantity requested",
   ship_to: "ship_to differs from the ZIP sent",
   completer_keyid: "completer_keyid is not the key this gateway made for the cart",
@@ -96,8 +109,60 @@ export const SENT_WORDS: Readonly<Record<SentReason, string>> = {
   myshopify_domain: "myshopify_domain is not the offer's and the cart's",
 };
 
-/** Parses a chained `sent`; null when absent or malformed. */
+/** Parses a chained `sent` of a cart; null when absent, malformed or a submitted checkout's. */
 export function readSent(value: unknown): SentPurchase | null {
   const parsed = SentPurchase.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
+
+/**
+ * `sent` of a submitted Shop checkout (contract 1.7.0, `POST /v1/checkouts`): the CheckoutRequest exactly as sent,
+ * which Appendix E step 7 holds the v4 snapshot to (vector e3), and the currency table version Meta served when it
+ * was sent, which the snapshot must name.
+ */
+export const SentCheckout = z.strictObject({
+  contract_version: z.literal("1.7.0"),
+  checkout_request: CheckoutRequest,
+  currency_table: CurrencyTableVersion,
+});
+export type SentCheckout = z.infer<typeof SentCheckout>;
+
+/** Parses a chained `sent` of a submitted checkout; null when absent, malformed or a cart's. */
+export function readSentCheckout(value: unknown): SentCheckout | null {
+  const parsed = SentCheckout.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+/** A refused field of a v4 snapshot (e3's names), `currency_table`, or `v`. */
+export type SentCheckoutReason = V4Field | "v" | "currency_table";
+
+/**
+ * Appendix E step 7 for a submitted checkout: e3's refused fields, then `currency_table` when the snapshot names
+ * another table version than the one this gateway checked the currency against. [] means it is the request.
+ */
+export function sentCheckoutProblems(snapshot: unknown, sent: SentCheckout): SentCheckoutReason[] {
+  const problems: SentCheckoutReason[] = checkoutRequestProblems(snapshot, sent.checkout_request);
+  if (problems.includes("v")) return ["v"];
+  if ((snapshot as { currency_table?: unknown }).currency_table !== sent.currency_table) problems.push("currency_table");
+  return problems;
+}
+
+/** The words for a v4 reason. */
+export const SENT_CHECKOUT_WORDS: Readonly<Record<SentCheckoutReason, string>> = {
+  v: "snapshot is not a v4 snapshot of the submitted checkout",
+  store_name: "store_name is not the submitted store's",
+  store_site: "store_site is not the submitted store site",
+  myshopify_domain: "myshopify_domain is not the submitted store",
+  variant_ref: "variant_ref is not the submitted variant",
+  title: "title is not the submitted title",
+  quantity: "quantity is not the submitted quantity",
+  currency: "currency is not the submitted currency",
+  totals: "totals are not the submitted totals",
+  checkout_ref_hash: "checkout_ref_hash is not the submitted checkout",
+  ship_to: "ship_to is not the submitted country and coarse postcode",
+  completion_mode: "completion_mode is not the submitted mode",
+  completer_keyid: "completer_keyid is not the key this gateway made for the checkout",
+  account_key_thumbprint: "account_key_thumbprint is not this gateway's account key",
+  continue_url_hash: "continue_url_hash is not the submitted hand-off page",
+  currency_table: "currency_table is not the table version this gateway checked",
+};

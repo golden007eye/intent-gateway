@@ -102,7 +102,7 @@ describe("version negotiation (1.6.1)", () => {
     expect(Meta.parse(v16.json).contract_sums_sha256).toBe("b75b771e3ae299d74a53f450574af6fab8e63d6bcca2b42aa957046afbf4657d");
     const v15 = await call(cloud, s, "GET", "/v1/meta", undefined, null);
     expect([v15.version, Meta.parse(v15.json).contract_version]).toEqual(["1.5.0", "1.5.0"]);
-    const bad = await call(cloud, s, "GET", "/v1/meta", undefined, "1.7.0");
+    const bad = await call(cloud, s, "GET", "/v1/meta", undefined, "1.8.0");
     expect(bad.status).toBe(400);
     expect(ErrorBody.parse(bad.json)).toEqual({ error: "bad_request", message: "unsupported contract version" });
   });

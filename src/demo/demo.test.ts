@@ -22,6 +22,8 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { freePort } from "../cloud-fake/index.ts";
+import { ensureAccountKey } from "../account/index.ts";
+import type { SnapshotV3 } from "../contract/index.ts";
 import { PINNED_HOSTS } from "../config/index.ts";
 import { connectCloud } from "../disclosure/index.ts";
 import { createGateway, DEMO_SESSION, type Gateway, GatewayStartError } from "../gateway/index.ts";
@@ -65,7 +67,7 @@ async function gatewayOver(
     cloud: (keySet) => connectCloud({ baseUrl: demo.cloudUrl, session }, store, { keySet }),
     store,
     completerKeys: openCompleterKeys(options.dir ?? demo.dataDir),
-    ...(options.oneTap === true ? { oneTap: demo.oneTap } : {}),
+    ...(options.oneTap === true ? { oneTap: demo.oneTap, accountKey: async () => (await ensureAccountKey(options.dir ?? demo.dataDir)).key } : {}),
     policy: loadPolicy(POLICY),
     pinnedRootKeys: options.pins ?? demo.trustKeys.rootKeys,
     ...(options.demoMode === false
@@ -208,6 +210,9 @@ describe("demo flow", () => {
     expect(status).toContain("One-tap: ordered (read from Shop), order gid://shopify/Order/");
     expect(status).toContain("Shop reported the order");
     expect(demo.shop.completeCount).toBe(1);
+    // Contract 1.7.0: the gateway submitted the Shop checkout it made (POST /v1/checkouts), and no cart.
+    expect(demo.cloud.checkouts.received).toHaveLength(1);
+    expect(cart).toContain("Shop checkout: 1 × ");
     await store.close();
     const report = await runVerify({ dataDir: demo.dataDir, pinnedRootKeys: demoTrustKeys().rootKeys, now: new Date(), skipSupplyChain: true });
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);
@@ -488,10 +493,10 @@ describe("the demo code", () => {
     expect(body.match(/<input id="code"/g)).toHaveLength(1);
     expect(body).toContain(`<div class="boxes" aria-hidden="true">${'<span class="box"></span>'.repeat(6)}</div>`);
     expect(body).toContain('<label for="code">');
-    const total = `$${(view.snapshot.total.amount_minor / 100).toFixed(2)}`;
+    const total = `$${((view.snapshot as SnapshotV3).total.amount_minor / 100).toFixed(2)}`;
     expect(body).toContain(`<span class="v">${total}</span>`);
     expect(body).toContain(`>Approve ${total} with demo passkey</button>`);
-    expect(body).toContain(`${String(view.snapshot.quantity)} × ${view.snapshot.item.title}`);
+    expect(body).toContain(`${String(view.snapshot.quantity)} × ${(view.snapshot as SnapshotV3).item.title}`);
     const check = view.snapshot_hash.slice(0, 8);
     expect(body).toContain(`<span>${check.slice(0, 4)}</span><span>${check.slice(4)}</span>`);
     expect(body).toContain(`title="${handle}"`);

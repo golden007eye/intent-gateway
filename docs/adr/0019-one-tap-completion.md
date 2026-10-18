@@ -1,6 +1,6 @@
 # ADR-0019: One-tap completion: step machine, compare-and-append, restarts
 
-Status: accepted · 2026-10-17 · Relates to ADR-0015 (cap release on local evidence), ADR-0016 (completer key); amends ADR-0017 (checkout ids, checkout ref); amended by ADR-0020 (where the store comes from, the store pair check)
+Status: accepted · 2026-10-17 · Relates to ADR-0015 (cap release on local evidence), ADR-0016 (completer key); amends ADR-0017 (checkout ids, checkout ref); amended by ADR-0020 (where the store comes from, the store pair check) · amended by [ADR-0024](0024-submit-shop-checkout.md) (a Shop offer's checkout is created and submitted before the passkey)
 
 ## Context
 
@@ -52,3 +52,7 @@ The S1 spike placed one real order through Shop. The step machine changes where 
 - **Binding check 1 reads the store.** Shop's checkout has no merchant field; it lives at the store the gateway named, and the completed order's permalink is on that myshopify domain. The observed merchant origin is `https://<store>` whenever the checkout's store is not the store the approved origin pairs with (`storeFor`), whatever merchant Shop reports, so check 1 differs for any other store. At the paired store it is the merchant URL Shop reports, if any, else the approved origin. The observed origin is chained in `binding_inputs` as before.
 - **A tool error to complete_checkout** (HTTP 200, `isError`, e.g. `checkout_completion_ineligible`) is `indeterminate` under Shop's code, with the reservation held; later calls only read the checkout. It is never a success.
 - **Timing.** Shop answered `complete_checkout` synchronously in 4.2 s. The wallet timeout stays 30 s (about seven times that), so the attempt window stays 60 s.
+
+## Amendment: contract 1.7.0 (ADR-0024)
+
+For an offer from Shop search, the Shop checkout is created, read back and submitted (`POST /v1/checkouts`) before the passkey, and the v4 snapshot signs its checkout ref hash. Step 3 then creates nothing: it reads that checkout again (`get_checkout`) and runs binding-v2 with check 2 bound. Every other step, from the `completion` entry on, is unchanged. A 409 at the `completing` report (a ceiling or a pause) is a refusal before payment: `failed` (`redeem_refused:<code>`), no `complete_checkout`. Carts from Intent Cloud's catalog keep the steps above.

@@ -7,6 +7,7 @@ import {
   Cart,
   CartHandle,
   CartRequest,
+  CheckoutRequest,
   Ed25519Signature,
   ErrorBody,
   Jwks,
@@ -14,6 +15,8 @@ import {
   Meta,
   OutcomeReport,
   OutcomeReportAccepted,
+  PauseAccepted,
+  PauseRequest,
   RateLimited,
   SearchRequest,
   SearchResponse,
@@ -23,7 +26,7 @@ import {
  * The contract version this module implements: the spec's `info.version`, sent as `Intent-Contract-Version` on every
  * request (a request without it is answered as 1.5.0), and the version Intent Cloud must report back.
  */
-export const CONTRACT_VERSION = "1.6.1";
+export const CONTRACT_VERSION = "1.7.0";
 
 export interface Endpoint {
   readonly method: "GET" | "POST";
@@ -100,6 +103,24 @@ export const ENDPOINTS = {
     status: 201,
     response: OutcomeReportAccepted,
     errors: [400, 401, 404, 409, 410, 413, 429],
+  },
+  createCheckout: {
+    method: "POST",
+    path: "/v1/checkouts",
+    signed: true,
+    request: CheckoutRequest,
+    status: 201,
+    response: ApprovalCreated,
+    errors: [400, 401, 403, 404, 409, 413, 429],
+  },
+  pauseAccount: {
+    method: "POST",
+    path: "/v1/pause",
+    signed: true,
+    request: PauseRequest,
+    status: 200,
+    response: PauseAccepted,
+    errors: [400, 401, 404, 409, 413, 429],
   },
 } as const satisfies Record<string, Endpoint>;
 export type OperationId = keyof typeof ENDPOINTS;

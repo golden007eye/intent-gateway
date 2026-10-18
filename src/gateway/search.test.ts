@@ -165,12 +165,13 @@ describe("find_offers with a linked Shop wallet", () => {
     for (const value of [FAKE_BUYER.email, FAKE_BUYER.phone, FAKE_BUYER.last_name]) expect(chain).not.toContain(value);
   });
 
-  it("refuses a cart for a Shop offer until the Shop checkout lands, sending nothing", async () => {
+  it("without an account key, refuses a cart for a Shop offer, sending nothing to Shop or Intent Cloud", async () => {
     const h = await setup();
     const result = shopOffers(await h.gateway.findOffers(STICKERS));
     const before = h.store.entries().at(-1)?.seq ?? -1;
     const cart = await h.gateway.createCart({ offer_handle: result.offers[0]?.offer_handle ?? "" });
-    expect(cart.status).toBe("refused");
+    expect(cart.status).toBe("error");
+    expect(cart.message).toContain("account key");
     expect(disclosuresSince(h.store, before)).toEqual({});
     expect(h.shop.createCount).toBe(0);
   });

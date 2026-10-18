@@ -13,7 +13,7 @@
 // stderr or the chain.
 //
 // The field names are the ones Shop returned in the S1 spike (2026-10-18; UCP 2026-08-25).
-import { checkoutRefHash } from "../contract/index.ts";
+import { checkoutRefHash, coarsePostcode } from "../contract/index.ts";
 import { findIdentity, ORDER_REF_AT } from "../privacy/index.ts";
 import {
   type CatalogHit,
@@ -26,6 +26,7 @@ import {
   type WalletMoney,
   type WalletOrder,
   type WalletOrders,
+  type WalletTotals,
   WalletRailError,
 } from "../wallet/index.ts";
 import type { WireResponse } from "./rpc.ts";
@@ -229,7 +230,66 @@ function projected(checkout: Json, checkoutRef: string, requestedStore: string, 
     // A `gid://shopify/Order/<digits>` is not read as a card (ORDER_REF_AT): its order number passes Luhn one time in ten.
     orderRef: typeof orderId === "string" && REF.test(orderId) && findIdentity(orderId, { orderRefAt: ORDER_REF_AT.projection }).length === 0 ? orderId : null,
     budgetOffered: budgetInstrument(checkout) !== null,
+    totals: totalsOf(checkout),
+    shipToArea: shipToArea(checkout),
+    continueUrl: continueUrlOf(checkout.continue_url),
   };
+}
+
+/**
+ * The four totals (contract 1.7.0 CheckoutTotals) from Shop's `totals[]`: `subtotal`, shipping (`fulfillment` or
+ * `shipping`, summed), `tax` (0 when absent) and `total`. Any other line (a discount, a fee) or a sum that is not the
+ * total gives null: the gateway never submits totals it had to guess.
+ */
+function totalsOf(checkout: Json): WalletTotals | null {
+  const lines = Array.isArray(checkout.totals) ? (checkout.totals as unknown[]).map(record) : [];
+  let subtotal: number | null = null;
+  let shipping = 0;
+  let tax = 0;
+  let totalAmount: number | null = null;
+  for (const line of lines) {
+    const amount = line?.amount;
+    if (!Number.isSafeInteger(amount) || (amount as number) < 0) return null;
+    const n = amount as number;
+    if (line?.type === "subtotal") subtotal = n;
+    else if (line?.type === "fulfillment" || line?.type === "shipping") shipping += n;
+    else if (line?.type === "tax") tax += n;
+    else if (line?.type === "total") totalAmount = n;
+    else return null;
+  }
+  if (subtotal === null || totalAmount === null || totalAmount < 1 || subtotal + shipping + tax !== totalAmount) return null;
+  return { subtotal, shipping, tax, total: totalAmount };
+}
+
+/** The selected (else the only) destination's country and coarse postcode, coarsened here; the full code is dropped. */
+function shipToArea(checkout: Json): { country: string; postalCodeCoarse: string } | null {
+  const destinations = selectedDestinations(checkout);
+  if (destinations.length !== 1) return null;
+  const d = destinations[0];
+  const country = typeof d?.address_country === "string" ? d.address_country : null;
+  const code = typeof d?.postal_code === "string" ? d.postal_code : null;
+  if (country === null || code === null || !/^[A-Z]{2}$/.test(country)) return null;
+  const coarse = coarsePostcode(country, code);
+  return coarse === null ? null : { country, postalCodeCoarse: coarse };
+}
+
+/** Shop's continue_url when it is an https URL; its host is checked by the gateway before any submit (continueUrlAllowed). */
+function continueUrlOf(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 2048) return null;
+  try {
+    return new URL(value).protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function selectedDestinations(checkout: Json): (Json | null)[] {
+  const methods = Array.isArray(record(checkout.fulfillment)?.methods) ? (record(checkout.fulfillment)?.methods as unknown[]).map(record) : [];
+  return methods.flatMap((m) => {
+    const all = Array.isArray(m?.destinations) ? (m.destinations as unknown[]).map(record) : [];
+    const selected = all.filter((d) => d !== null && d.id === m?.selected_destination_id);
+    return selected.length > 0 ? selected : all.length === 1 ? all : [];
+  });
 }
 
 function hostOf(url: unknown): string | null {

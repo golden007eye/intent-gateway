@@ -13,6 +13,7 @@ import {
   type ApprovalStatus,
   type Cart,
   type CartRequest,
+  type CheckoutRequest,
   CONTRACT_VERSION,
   ENDPOINTS,
   errorBody,
@@ -96,6 +97,8 @@ export interface IntentCloud {
   search(request: SearchRequest, options?: CallOptions): Promise<CloudResult<SearchResponse>>;
   createCart(request: CartRequest, options?: CallOptions): Promise<CloudResult<Cart>>;
   createApproval(cartHandle: string, options?: CallOptions): Promise<CloudResult<ApprovalCreated>>;
+  /** 1.7.0: submits a Shop checkout the gateway created and read back; the answer is its pending approval. */
+  createCheckout(request: CheckoutRequest, options?: CallOptions): Promise<CloudResult<ApprovalCreated>>;
   getApproval(approvalHandle: string, options?: CallOptions): Promise<CloudResult<ApprovalStatus>>;
   reportOutcome(approvalHandle: string, report: OutcomeReport, options?: CallOptions): Promise<CloudResult<OutcomeReportAccepted>>;
 }
@@ -443,6 +446,7 @@ export function createHttpCloud(options: HttpCloudOptions): IntentCloud {
     keyStatement: (o) => call<KeyStatement>("getKeyStatement", ENDPOINTS.getKeyStatement.path, undefined, o),
     search: (r, o) => call<SearchResponse>("searchCatalog", ENDPOINTS.searchCatalog.path, r, o),
     createCart: (r, o) => call<Cart>("createCart", ENDPOINTS.createCart.path, r, o),
+    createCheckout: (r, o) => call<ApprovalCreated>("createCheckout", ENDPOINTS.createCheckout.path, r, o),
     createApproval: async (h, o) => call<ApprovalCreated>("createApproval", handlePath(approvalsPath, h), undefined, o),
     getApproval: async (h, o) => call<ApprovalStatus>("getApproval", handlePath(approvalPath, h), undefined, o),
     reportOutcome: async (h, r, o) => call<OutcomeReportAccepted>("reportOutcome", handlePath(outcomeReportsPath, h), r, o),

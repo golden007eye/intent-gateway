@@ -8,6 +8,8 @@ export {
   BindingError,
   bindingResult,
   bindingV1,
+  bindingV2,
+  type ObservedOrderV2,
   type BindingChecks,
   type BindingContext,
   type BindingResult,

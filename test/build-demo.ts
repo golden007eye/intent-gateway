@@ -49,7 +49,7 @@ export async function demoFirstRun(main: string): Promise<void> {
       expect(result.content[0]).toEqual({ type: "text", text: DEMO_BANNER });
       return text(result);
     };
-    const offers = await call("find_offers", { category: "running-shoes", budget_usd: 200, zip: "94103" });
+    const offers = await call("find_offers", { category: "stickers", budget_usd: 20, zip: "94107" });
     const offer = /offer_handle: (\S+)/.exec(offers)?.[1] ?? "";
     expect(offer).not.toBe("");
     const cart = await call("create_cart", { offer_handle: offer });

@@ -62,14 +62,14 @@ export const ObservedBody = z.discriminatedUnion("endpoint", [
   }),
   z.strictObject({
     disclosure_seq: Seq,
-    endpoint: z.literal("createApproval"),
+    endpoint: z.enum(["createApproval", "createCheckout"]),
     approval_handle: Text,
     state: State,
     title: Text,
     merchant: Text,
     quantity: z.int().min(1).max(3),
     total_minor: Minor,
-    currency: z.literal("USD"),
+    currency: z.string().regex(/^[A-Z]{3}$/),
     withheld: Withheld,
   }),
   z.strictObject({
@@ -105,7 +105,7 @@ export const ObservedBody = z.discriminatedUnion("endpoint", [
 export type ObservedBody = z.infer<typeof ObservedBody>;
 
 /** The endpoints an observation can answer. */
-export const OBSERVED_ENDPOINTS: ReadonlySet<string> = new Set(["searchCatalog", "createCart", "createApproval", "getApproval"]);
+export const OBSERVED_ENDPOINTS: ReadonlySet<string> = new Set(["searchCatalog", "createCart", "createApproval", "createCheckout", "getApproval"]);
 
 /** A search's observation: the count, the offers (at most OBSERVED_OFFERS_MAX) and how many the policy hid. */
 export function observeSearch(disclosureSeq: number, response: SearchResponse, hidden: number): ObservedBody {
@@ -140,18 +140,19 @@ export function observeCart(disclosureSeq: number, cart: Cart): ObservedBody {
   });
 }
 
+/** The approval a cart's createApproval or a submitted checkout's createCheckout (1.7.0, a v4 snapshot) returned. */
 export function observeApproval(disclosureSeq: number, created: ApprovalCreated): ObservedBody {
   const s = created.snapshot;
   return guarded({
     disclosure_seq: disclosureSeq,
-    endpoint: "createApproval",
+    endpoint: s.v === 4 ? "createCheckout" : "createApproval",
     approval_handle: created.approval_handle,
     state: created.state,
-    title: s.item.title,
-    merchant: s.merchant.name,
+    title: s.v === 4 ? s.title : s.item.title,
+    merchant: s.v === 4 ? s.store_name : s.merchant.name,
     quantity: s.quantity,
-    total_minor: s.total.amount_minor,
-    currency: s.total.currency,
+    total_minor: s.v === 4 ? s.totals.total : s.total.amount_minor,
+    currency: s.v === 4 ? s.currency : s.total.currency,
   });
 }
 

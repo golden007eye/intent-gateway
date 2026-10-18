@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeCloud, type FakeCloudOptions, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
-import type { ApprovalCreated, ApprovalStatus } from "../contract/index.ts";
+import type { ApprovalCreated, ApprovalStatus, SnapshotV3 } from "../contract/index.ts";
 import { INTENT } from "../config/index.ts";
 import { CloudNetworkError, connectCloud, type DisclosedCloud, DisclosureRefusedError, DisclosureStoppedError } from "../disclosure/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
@@ -113,6 +113,7 @@ async function build(
         keyStatement: () => (patch.keyStatement ?? real.keyStatement)(),
         search: (r) => (sends.search++, (patch.search ?? real.search)(r)),
         createCart: (r) => (sends.createCart++, (patch.createCart ?? real.createCart)(r)),
+        createCheckout: (r) => (patch.createCheckout ?? real.createCheckout)(r),
         createApproval: (h) => (sends.createApproval++, (patch.createApproval ?? real.createApproval)(h)),
         getApproval: (h, s) => (
           sends.getApproval++, signers.push({ op: "getApproval", keyid: s?.keyid ?? null }), (patch.getApproval ?? real.getApproval)(h, s)
@@ -215,7 +216,7 @@ describe("start", () => {
     };
     const failure = h.gateway.start();
     await expect(failure).rejects.toThrow(GatewayStartError);
-    await expect(failure).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.6\.1.*contract_sums_sha256 is 0{64}/);
+    await expect(failure).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.7\.0.*contract_sums_sha256 is 0{64}/);
     expect(bodies(h, "keys")).toHaveLength(0);
     await expect(h.gateway.findOffers(SHOES)).rejects.toThrow(GatewayNotStartedError);
     expect(h.totalSends()).toBe(0);
@@ -509,11 +510,11 @@ describe("policy", () => {
 
 describe("createCart snapshot checks", () => {
   /** Rewrites the approval Cloud created, keeping its hash and check code consistent unless told not to. */
-  function rewriteApproval(h: Harness, change: (c: ApprovalCreated) => ApprovalCreated, rehash = true): void {
+  function rewriteApproval(h: Harness, change: (c: ApprovalCreated & { snapshot: SnapshotV3 }) => ApprovalCreated, rehash = true): void {
     h.patch.createApproval = async (cart) => {
       const r = await h.real.createApproval(cart);
       if (!r.ok) return r;
-      const changed = change(r.body);
+      const changed = change(r.body as ApprovalCreated & { snapshot: SnapshotV3 });
       const hash = sha256Hex(canonicalize(changed.snapshot));
       return { ...r, body: rehash ? { ...changed, snapshot_hash: hash, check_code: hash.slice(0, 8) } : changed };
     };
@@ -536,7 +537,7 @@ describe("createCart snapshot checks", () => {
       completion_mode: "handoff",
       completer_keyid: view?.snapshot.v === 3 ? view.snapshot.completer_keyid : "v1",
       sent: {
-        contract_version: "1.6.1",
+        contract_version: "1.7.0",
         cart_request: {
           offer_handle: bodies(h, "observed").find((o) => o.endpoint === "searchCatalog") === undefined ? "" : (JSON.parse(Buffer.from(String(bodies(h, "disclosure").find((d) => d.endpoint === "createCart")?.body_b64), "base64").toString("utf8")) as { offer_handle: string }).offer_handle,
           quantity: 2,
@@ -549,7 +550,7 @@ describe("createCart snapshot checks", () => {
           merchant_origin: "https://shop.example",
           variant_ref: view?.snapshot.v === 3 ? view.snapshot.variant_ref : "v1",
           total: { amount_minor: 2 * 8999 + 500, currency: "USD" },
-          expires_at: result.cart.expires_at,
+          expires_at: result.cart?.expires_at ?? "",
         },
       },
     });
@@ -1148,7 +1149,7 @@ describe("contract 1.6.x: completer key, local checks before any approval reques
     // Requests to Intent Cloud are logged byte for byte (G2b): no redaction, and the version header is kept.
     for (const d of bodies(h, "disclosure")) {
       expect(d).not.toHaveProperty("redacted");
-      expect(d.headers).toContainEqual(["intent-contract-version", "1.6.1"]);
+      expect(d.headers).toContainEqual(["intent-contract-version", "1.7.0"]);
     }
   });
 
@@ -1370,7 +1371,7 @@ describe("contract 1.6.x: completer key, local checks before any approval reques
 
   it("against a host that serves only 1.5.0, start fails with contract mismatch", async () => {
     const h = await setup({ start: false, fake: { versions: ["1.5.0"] } });
-    await expect(h.gateway.start()).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.6\.1 .*Intent-Contract-Version is 1\.5\.0/);
+    await expect(h.gateway.start()).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.7\.0 .*Intent-Contract-Version is 1\.5\.0/);
   });
 
   it("the key is gone after a terminal outcome (the merchant's order), read once", async () => {
@@ -1471,7 +1472,7 @@ describe("contract 1.6.x: completer key, local checks before any approval reques
     h.patch.search = async (r) => ({ ...(await h.real.search(r)), contractVersion: "1.5.0" });
     const result = await h.gateway.findOffers(SHOES);
     expect(result.status).toBe("error");
-    expect(result.message).toContain("answered in contract 1.5.0, not 1.6.1");
+    expect(result.message).toContain("answered in contract 1.5.0, not 1.7.0");
     expect(bodies(h, "observed")).toHaveLength(0);
     // A cart whose answer comes back downgraded asks for no approval and keeps no key.
     delete h.patch.search;

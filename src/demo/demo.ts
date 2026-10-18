@@ -131,6 +131,8 @@ export async function startDemo(options: DemoOptions): Promise<Demo> {
       connect: (owner) => connectShop(owner, { mcpUrl: demoShop.mcpUrl, authUrl: demoShop.authUrl, vaultText, checkoutIds: memoryCheckoutIds() }),
       // The demo storefront answers meta.json in memory: the check's GET is logged, and nothing leaves the machine.
       storefront: (owner) => connectStorefront(owner, createFakeStorefront({ [new URL(FAKE_STOREFRONT).host]: FAKE_STORE }).transport),
+      // The demo searches the demo Shop itself and submits the Shop checkout it makes (contract 1.7.0): one tap.
+      searchInGateway: true,
     };
     const pageOn = (port: number): Promise<ConfirmPage> =>
       startConfirmPage({

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Intent Cloud Gateway API
-  version: 1.6.1
+  version: 1.7.0
   summary: The API the intent gateway uses to reach Intent Cloud for offers, carts and approvals.
   description: |
     Normative. The public subset of the Intent Cloud contract, for the intent gateway.
@@ -18,13 +18,16 @@ info:
       status then carries an approval proof (Appendix E) that the gateway verifies itself.
     - **Key statement.** Receipt and approval keys are listed in a statement signed by the host's
       offline root key (Appendix F), served at `GET /v1/key-statement`.
-    - **Versions (1.6.1).** A caller picks its version with the `Intent-Contract-Version` request
+    - **Versions (1.7.0).** A caller picks its version with the `Intent-Contract-Version` request
       header on every request, `GET /v1/meta` included. Without it a request is answered as 1.5.0,
-      byte for byte (the 1.5.0 files, their sums and v1 snapshots). `1.6.0` is answered exactly as
-      the frozen 1.6.0 files say, with their sums. 1.6.0 added snapshot v2, the completer key,
-      outcomes, outcome statements and outcome reports (Appendix G). This document is 1.6.1, served
-      only on an explicit `1.6.1` header: snapshot v3 (a Shopify store's `myshopify_domain`, also on
-      the offer and the cart) and binding check 1 for `shop_agent`.
+      byte for byte (the 1.5.0 files, their sums and v1 snapshots). `1.6.0` and `1.6.1` are
+      answered exactly as their frozen files say, with their sums. 1.6.0 added snapshot v2, the
+      completer key, outcomes, outcome statements and outcome reports (Appendix G); 1.6.1 snapshot
+      v3 (a Shopify store's `myshopify_domain`). This document is 1.7.0, served only on an explicit
+      `1.7.0` header: `POST /v1/checkouts` (a Shop checkout the gateway submits, snapshot v4, one
+      completion mode per approval, the ceiling and the refusals), binding-v2, the currency table on
+      `GET /v1/meta`, and `POST /v1/pause` with the account key (Appendix H). Carts made with
+      1.7.0 keep snapshot v3.
     - **Formats.** Money is integer minor units. The purchase snapshot is Appendix A, the approval
       ledger entry Appendix B. JSON canonicalisation is RFC 8785 (JCS) with integers only.
     - **Limits.** The edge accepts bodies up to 16 KiB (413 above) and rate-limits per IPv4 address
@@ -399,6 +402,122 @@ paths:
           $ref: "#/components/responses/PayloadTooLarge"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  /v1/checkouts:
+    post:
+      operationId: createCheckout
+      summary: Submit a Shop checkout for approval
+      description: |
+        1.7.0 only (any other version gets 404). The gateway submits a Shop checkout it created and
+        read back; Intent Cloud creates a `pending` approval for it with a v4 snapshot (Appendix A)
+        and exactly one completion mode. A hand-off after a one-tap approval is a new request with
+        `completion_mode: handoff`, so a new approval (one mode per approval). The approval belongs
+        to the signing session. **Replay window (10 minutes):** the same session sending the same body
+        gets the same approval again while it is `pending`. A new request for the same checkout and
+        mode supersedes the session's pending one, which becomes `expired`. A refusal is 403
+        with a refusal `code` (Appendix A "Refusals"): `one_tap_off`, `currency_unsupported`,
+        `store_blocked`, `category_excluded`, `ceiling_order`; a paused account key gets 409 `conflict` with
+        `code: paused`.
+      tags: [carts]
+      parameters:
+        - $ref: "#/components/parameters/ContractVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckoutRequest"
+            example:
+              checkout:
+                checkout_ref_hash: sha256:9b0f9e4d1b7f3c0e5a2d8c6b4a29180716253443526170819a8b7c6d5e4f3a2b
+                myshopify_domain: test-shop.myshopify.com
+                store_site: https://shop.example
+                store_name: Test Shop
+                variant_ref: gid://shopify/ProductVariant/1001
+                title: Trail Runner 3
+                quantity: 1
+                currency: USD
+                totals: {subtotal: 1200, shipping: 500, tax: 100, total: 1800}
+                ship_to: {country: US, postal_code: "94110"}
+              completion_mode: shop_agent
+              completer_keyid: gw-A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg
+              account_key: {kty: OKP, crv: Ed25519, x: A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg}
+      responses:
+        "201":
+          description: The pending approval.
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Refused"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/pause:
+    post:
+      operationId: pauseAccount
+      summary: Pause every purchase of the buyers pinned to an account key
+      description: |
+        1.7.0 only (Appendix H): any other version gets 404. Signed with a gateway session key like
+        every call, and in the body by the account key. Checks, in order: the schema (400), 10
+        requests a minute per IP key (429 `requests`), the key (404 `unknown account key`: a key is
+        pinned only at a buyer's first passkey approval), 10 pauses an hour per key (429 `pause`;
+        only verified pauses count), the account key signature (401), `issued_at` within ±300 s (400
+        `clock_skew`), the counter above the last accepted one for the key, never reset (409
+        `counter_replayed`, with `last_counter`). The pause takes effect at once for every buyer
+        pinned to the key; a repeat with a new counter is 200 and keeps the first `paused_at`.
+        Resume is by passkey only, on the confirm page; there is no gateway route.
+      tags: [approvals]
+      parameters:
+        - $ref: "#/components/parameters/ContractVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PauseRequest"
+      responses:
+        "200":
+          description: Paused.
+          headers:
+            Intent-Contract-Version:
+              $ref: "#/components/headers/IntentContractVersion"
+            Intent-Receipt:
+              $ref: "#/components/headers/IntentReceipt"
+            Intent-Receipt-Signature:
+              $ref: "#/components/headers/IntentReceiptSignature"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PauseAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 components:
   securitySchemes:
     gatewaySignature:
@@ -438,12 +557,12 @@ components:
       in: header
       required: false
       description: |
-        The contract version the caller speaks (1.6.1). Without it the request is answered as
-        1.5.0, byte for byte; `1.6.0` is answered as the frozen 1.6.0 files say. An unsupported
+        The contract version the caller speaks (1.7.0). Without it the request is answered as
+        1.5.0, byte for byte; `1.6.0` and `1.6.1` are answered as their frozen files say. An unsupported
         value gets 400 `unsupported contract version`.
       schema:
         type: string
-        enum: [1.5.0, 1.6.0, 1.6.1]
+        enum: [1.5.0, 1.6.0, 1.6.1, 1.7.0]
     CartHandle:
       name: cart_handle
       in: path
@@ -457,6 +576,19 @@ components:
       schema:
         $ref: "#/components/schemas/ApprovalHandle"
   responses:
+    Refused:
+      description: A checkout Intent Cloud refuses (1.7.0); `code` names the refusal (Appendix A "Refusals").
+      headers:
+        Intent-Contract-Version:
+          $ref: "#/components/headers/IntentContractVersion"
+        Intent-Receipt:
+          $ref: "#/components/headers/IntentReceipt"
+        Intent-Receipt-Signature:
+          $ref: "#/components/headers/IntentReceiptSignature"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     BadRequest:
       description: Malformed request, schema violation or body digest mismatch.
       headers:
@@ -558,11 +690,17 @@ components:
       required: [error, message]
       properties:
         error:
-          type: string
-          enum: [bad_request, digest_mismatch, unauthorized, forbidden, not_found, conflict, gone, too_large]
+          $ref: "#/components/schemas/ErrorName"
         message:
           type: string
           maxLength: 200
+        code:
+          $ref: "#/components/schemas/RefusalCode"
+        last_counter:
+          description: With `counter_replayed` (1.7.0, Appendix H), the last counter accepted for the key.
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
     RateLimited:
       description: The body of a 429.
       x-provisional: true
@@ -579,7 +717,7 @@ components:
         limit:
           description: Which limit was reached.
           type: string
-          enum: [requests, carts, approvals, enrolments]
+          enum: [requests, carts, approvals, enrolments, pause]
         retry_after_seconds:
           type: integer
           minimum: 1
@@ -682,6 +820,8 @@ components:
             minLength: 1
         limits:
           $ref: "#/components/schemas/GatewayLimits"
+        currency_table:
+          $ref: "#/components/schemas/CurrencyTable"
         enrol_origin:
           description: Origin of the passkey enrolment page for buyers who use the gateway.
           x-provisional: true
@@ -943,8 +1083,10 @@ components:
           type: string
           pattern: ^/c/[A-Za-z0-9_-]{16,64}$
         snapshot:
-          description: Always a v3 snapshot in 1.6.1 (Appendix A); a 1.6.1 caller refuses any other.
-          $ref: "#/components/schemas/SnapshotV3"
+          description: A v3 snapshot for a cart, a v4 snapshot for a submitted checkout (1.7.0, Appendix A).
+          oneOf:
+            - $ref: "#/components/schemas/SnapshotV3"
+            - $ref: "#/components/schemas/SnapshotV4"
         snapshot_hash:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -1082,8 +1224,10 @@ components:
         approval_handle:
           $ref: "#/components/schemas/ApprovalHandle"
         snapshot:
-          description: Always a v3 snapshot in 1.6.1 (Appendix A); a 1.6.1 caller refuses any other.
-          $ref: "#/components/schemas/SnapshotV3"
+          description: A v3 snapshot for a cart, a v4 snapshot for a submitted checkout (1.7.0, Appendix A).
+          oneOf:
+            - $ref: "#/components/schemas/SnapshotV3"
+            - $ref: "#/components/schemas/SnapshotV4"
         snapshot_hash:
           type: string
           pattern: ^[0-9a-f]{64}$
@@ -1269,7 +1413,7 @@ components:
       properties:
         rule_version:
           type: string
-          const: binding-v1
+          enum: [binding-v1, binding-v2]
         result:
           type: string
           enum: [ok, mismatch, incomplete]
@@ -1549,3 +1693,277 @@ components:
           description: Raw public key, base64url without padding.
           type: string
           pattern: ^[A-Za-z0-9_-]{43}$
+    CurrencyCode:
+      description: An ISO 4217 code (1.7.0). Only the currencies of the currency table are supported.
+      type: string
+      pattern: ^[A-Z]{3}$
+    CurrencyTable:
+      description: |
+        Intent Cloud's ceiling per currency (1.7.0, Appendix A "Snapshot v4"): for each supported
+        currency, the most one order may total and the most one buyer's approved, unreleased orders
+        may total over a rolling 7 days, in that currency's minor units. There is no conversion: each
+        currency is summed on its own. `version` is `"ct-"` + the first 16 hex characters of
+        `SHA-256(JCS(currencies))`, so it changes whenever a value does. A ceiling of 0 refuses every
+        checkout in that currency.
+      type: object
+      additionalProperties: false
+      required: [version, currencies]
+      properties:
+        version:
+          $ref: "#/components/schemas/CurrencyTableVersion"
+        currencies:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            $ref: "#/components/schemas/CurrencyCeiling"
+    CurrencyTableVersion:
+      type: string
+      pattern: ^ct-[0-9a-f]{16}$
+    CurrencyCeiling:
+      type: object
+      additionalProperties: false
+      required: [order, week]
+      properties:
+        order:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        week:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+    CheckoutTotals:
+      description: Integer minor units of the checkout's currency; `total == subtotal + shipping + tax`.
+      type: object
+      additionalProperties: false
+      required: [subtotal, shipping, tax, total]
+      properties:
+        subtotal:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        shipping:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        tax:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        total:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+    CoarseShipTo:
+      description: |
+        The destination as country and coarse postcode only (1.7.0, Appendix A "Coarse postcodes"):
+        US the 5-digit ZIP, CA the first 3 characters, AU the 4-digit postcode. A finer code is refused.
+      type: object
+      additionalProperties: false
+      required: [country, postal_code]
+      properties:
+        country:
+          type: string
+          enum: [US, CA, AU]
+        postal_code:
+          type: string
+          pattern: ^(?:[0-9]{5}|[A-Z][0-9][A-Z]|[0-9]{4})$
+    SnapshotShipTo:
+      description: The snapshot's ship-to (v4), the country and the coarse postcode of the checkout request.
+      type: object
+      additionalProperties: false
+      required: [country, postal_code_coarse]
+      properties:
+        country:
+          type: string
+          enum: [US, CA, AU]
+        postal_code_coarse:
+          type: string
+          pattern: ^(?:[0-9]{5}|[A-Z][0-9][A-Z]|[0-9]{4})$
+    ShopContinueUrl:
+      description: |
+        The hand-off page (1.7.0): https on exactly shop.app, the checkout's myshopify_domain or the host
+        of its store_site (Appendix A), then a path. No port, no userinfo, a lowercase host.
+      type: string
+      maxLength: 2048
+      pattern: ^https://[a-z0-9.-]+/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*$
+    SubmittedCheckout:
+      description: A Shop checkout the gateway created and read back (1.7.0), as the passkey will sign it.
+      type: object
+      additionalProperties: false
+      required: [checkout_ref_hash, myshopify_domain, store_site, store_name, variant_ref, title, quantity, currency, totals, ship_to]
+      properties:
+        checkout_ref_hash:
+          description: Checkout ref hash of the Shop checkout (Appendix G), the id up to its first ?.
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+        myshopify_domain:
+          $ref: "#/components/schemas/MyshopifyDomain"
+        store_site:
+          $ref: "#/components/schemas/MerchantOrigin"
+        store_name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        variant_ref:
+          $ref: "#/components/schemas/VariantRef"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 3
+        currency:
+          $ref: "#/components/schemas/CurrencyCode"
+        totals:
+          $ref: "#/components/schemas/CheckoutTotals"
+        ship_to:
+          $ref: "#/components/schemas/CoarseShipTo"
+        continue_url:
+          description: Required exactly when `completion_mode` is `handoff`.
+          $ref: "#/components/schemas/ShopContinueUrl"
+    AccountKey:
+      description: The public half of the gateway's Ed25519 account key, as an RFC 8037 JWK (1.7.0).
+      type: object
+      additionalProperties: false
+      required: [kty, crv, x]
+      properties:
+        kty:
+          type: string
+          const: OKP
+        crv:
+          type: string
+          const: Ed25519
+        x:
+          description: The raw 32-byte public key, base64url without padding.
+          type: string
+          pattern: ^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$
+    AccountKeyThumbprint:
+      description: The RFC 7638 SHA-256 thumbprint of the account key, base64url (Appendix H).
+      type: string
+      pattern: ^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$
+    CheckoutRequest:
+      description: |
+        A Shop checkout submitted for approval (1.7.0, `POST /v1/checkouts`). Exactly one completion
+        mode per approval: a hand-off after a one-tap approval is a new request with `handoff`.
+      type: object
+      additionalProperties: false
+      required: [checkout, completion_mode, completer_keyid, account_key]
+      properties:
+        checkout:
+          $ref: "#/components/schemas/SubmittedCheckout"
+        completion_mode:
+          $ref: "#/components/schemas/CompletionMode"
+        completer_keyid:
+          description: The per-approval completer key (1.6.0, Appendix C), new for every request.
+          $ref: "#/components/schemas/GatewayKeyId"
+        account_key:
+          $ref: "#/components/schemas/AccountKey"
+    SnapshotV4:
+      description: |
+        The purchase snapshot v4 (1.7.0), exactly as Appendix A "Snapshot v4" defines it: the
+        submitted Shop checkout, its single completion mode, the currency table version and the
+        account key thumbprint. `continue_url_hash` is present exactly when `completion_mode` is
+        `handoff`.
+      type: object
+      additionalProperties: false
+      required:
+        [v, approval, nonce, expires_at, rule_version, store_name, store_site, myshopify_domain, variant_ref, title, quantity, currency, totals, ship_to, checkout_ref_hash, completion_mode, completer_keyid, currency_table, account_key_thumbprint]
+      properties:
+        v:
+          type: integer
+          const: 4
+        approval:
+          type: string
+          minLength: 1
+        nonce:
+          description: Snapshot salt, 16 bytes base64url without padding.
+          type: string
+          pattern: ^[A-Za-z0-9_-]{21}[AQgw]$
+        expires_at:
+          $ref: "#/components/schemas/Timestamp"
+        rule_version:
+          type: string
+          minLength: 1
+        store_name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        store_site:
+          $ref: "#/components/schemas/MerchantOrigin"
+        myshopify_domain:
+          $ref: "#/components/schemas/MyshopifyDomain"
+        variant_ref:
+          $ref: "#/components/schemas/VariantRef"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 3
+        currency:
+          $ref: "#/components/schemas/CurrencyCode"
+        totals:
+          $ref: "#/components/schemas/CheckoutTotals"
+        ship_to:
+          $ref: "#/components/schemas/SnapshotShipTo"
+        checkout_ref_hash:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+        completion_mode:
+          $ref: "#/components/schemas/CompletionMode"
+        completer_keyid:
+          $ref: "#/components/schemas/GatewayKeyId"
+        currency_table:
+          $ref: "#/components/schemas/CurrencyTableVersion"
+        account_key_thumbprint:
+          $ref: "#/components/schemas/AccountKeyThumbprint"
+        continue_url_hash:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+    PauseRequest:
+      description: |
+        A pause signed by the account key (1.7.0, Appendix H). `signature` is Ed25519 over
+        `"intent-pause-v1\n" || JCS({account_key_thumbprint, counter, issued_at, action: "pause"})`,
+        base64url without padding; `action` is never sent.
+      type: object
+      additionalProperties: false
+      required: [account_key_thumbprint, counter, issued_at, signature]
+      properties:
+        account_key_thumbprint:
+          $ref: "#/components/schemas/AccountKeyThumbprint"
+        counter:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        issued_at:
+          $ref: "#/components/schemas/Timestamp"
+        signature:
+          $ref: "#/components/schemas/Ed25519Signature"
+    PauseAccepted:
+      type: object
+      additionalProperties: false
+      required: [state, account_key_thumbprint, counter, paused_at]
+      properties:
+        state:
+          type: string
+          const: paused
+        account_key_thumbprint:
+          $ref: "#/components/schemas/AccountKeyThumbprint"
+        counter:
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        paused_at:
+          $ref: "#/components/schemas/Timestamp"
+    ErrorName:
+      type: string
+      enum: [bad_request, digest_mismatch, unauthorized, forbidden, not_found, conflict, gone, too_large, clock_skew, counter_replayed]
+    RefusalCode:
+      description: A 403 refusal of POST /v1/checkouts, or `paused` on a 409 (1.7.0, Appendix A).
+      type: string
+      enum: [ceiling_order, ceiling_week, currency_unsupported, store_blocked, category_excluded, paused, one_tap_off]

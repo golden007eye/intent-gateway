@@ -1,6 +1,6 @@
 # Appendix E: Approval proof (normative)
 
-Contract version 1.6.1. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/e1-approval-proof.json` (ES256), `vectors/e1-rs256-approval-proof.json` (RS256), `vectors/e2-snapshot-v2-request.json` (step 7, snapshots v2 and v3).
+Contract version 1.7.0. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/e1-approval-proof.json` (ES256), `vectors/e1-rs256-approval-proof.json` (RS256), `vectors/e2-snapshot-v2-request.json` (step 7, snapshots v2 and v3), `vectors/e3-snapshot-v4-request.json` (step 7, snapshot v4).
 
 The buyer approves a purchase with a passkey on the confirm page. The proof carries that passkey assertion, the passkey's public key and Intent Cloud's signature, so the gateway can check the approval itself. `GET /v1/approvals/{approval_handle}` returns it as `proof` once the approval is `approved`, `handed_off` or `ordered`; it is absent while `pending` and after a rejection or expiry.
 
@@ -38,6 +38,8 @@ A proof is valid for an approval the gateway created when all of these hold:
    - `snapshot.merchant_origin` is `"https://" + offer.merchant.domain` of the offer the agent picked, and equals the `Cart`'s;
    - `snapshot.total` equals `cart.total`, and `snapshot.expires_at` is not later than `cart.expires_at`;
    - (1.6.1) `snapshot.myshopify_domain` equals the `myshopify_domain` of the `Offer` and of the `Cart`, or is absent from all three (a merchant that is not a Shopify store). A value on one side only is a failure.
+
+   - (1.7.0) For an approval from `POST /v1/checkouts`, `snapshot.v == 4` and the snapshot is exactly the `CheckoutRequest` the gateway sent: `store_name`, `store_site`, `myshopify_domain`, `variant_ref`, `title`, `quantity`, `currency`, `totals`, `checkout_ref_hash` and `ship_to` (`postal_code_coarse` = the request's `postal_code`) equal the request's `checkout`; `completion_mode` and `completer_keyid` equal the request's; `account_key_thumbprint` is `thumbprint(account_key)` (Appendix H); `continue_url_hash` is `continue_url_hash(checkout.continue_url)` for `handoff` and absent for `shop_agent`; `currency_table` is a version string. A 1.7.0 gateway's carts keep the 1.6.1 rules above (`v == 3`).
 
    So a compromised Intent Cloud cannot have the buyer approve more, another item or another mode than the agent requested, or change the myshopify domain between the offer and the approval; the proof would still verify at steps 1-6. Step 7 does not show that the myshopify domain belongs to the storefront: Intent Cloud asserts the pair, and a completer verifies it against the storefront before paying (Appendix G "Store pair check").
 

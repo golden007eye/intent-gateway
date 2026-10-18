@@ -4,11 +4,13 @@
 // contract leaves room (error codes and messages, 404/405, quotas per address key, idempotency, proof issue time),
 // so the fake, demo mode and staging answer alike. The confirm page is driven through `approveWithPasskey` and `reject`.
 //
-// Versions (contract 1.6.1): a request with `Intent-Contract-Version: 1.6.1` is answered as 1.6.1 (v3 snapshots, and
-// a Shopify merchant's `myshopify_domain` on offers, carts and snapshots), one with `1.6.0` as the frozen 1.6.0 (v2
-// snapshots, the completer key, outcomes, outcome reports, with the 1.6.0 sums), and one without the header as 1.5.0,
-// byte for byte, with the 1.5.0 sums. An approval is read and reported on only in the version that created it (R8).
-// `versions: ["1.5.0"]` makes a host that predates 1.6.0 and ignores the header.
+// Versions (contract 1.7.0): a request with `Intent-Contract-Version: 1.7.0` is answered as 1.7.0 (the vendored copy:
+// `POST /v1/checkouts` with v4 snapshots, the currency table on Meta, ceilings and refusals; carts keep v3), one with
+// `1.6.1` as the frozen 1.6.1 (v3 snapshots, a Shopify merchant's `myshopify_domain` on offers, carts and snapshots,
+// with the 1.6.1 sums), one with `1.6.0` as the frozen 1.6.0 (v2 snapshots, the completer key, outcomes, outcome
+// reports, with the 1.6.0 sums), and one without the header as 1.5.0, byte for byte, with the 1.5.0 sums. An approval
+// is read and reported on only in the version that created it (R8). `versions: ["1.5.0"]` makes a host that predates
+// 1.6.0 and ignores the header.
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -27,8 +29,19 @@ import {
   ApprovalHandle,
   CartRequest,
   CartRequestV1,
+  CheckoutRequest,
   checkoutRefHash,
+  coarsePostcode,
+  continueUrlAllowed,
+  continueUrlHash,
   CONTRACT_VERSION,
+  type CurrencyCeiling,
+  currencyTableVersion,
+  type Money,
+  type RefusalCode,
+  type SnapshotV4,
+  totalsAddUp,
+  accountKeyThumbprint,
   type KeyStatement,
   type Offer,
   type Outcome as CloudOutcome,
@@ -46,6 +59,7 @@ import {
   type WebAuthnAssertion,
 } from "../contract/index.ts";
 import { canonicalize, nonIntegerToken, sha256Hex } from "../jcs/index.ts";
+import { bindingResult, bindingV2 } from "../outcome/index.ts";
 import { contentDigest, createNonceCache, verifyRequest } from "../signing/index.ts";
 import { type CatalogItem, DEFAULT_CATALOG, searchCatalog } from "./catalog.ts";
 import {
@@ -72,15 +86,27 @@ const RULE_VERSION = "recheck-v1";
 /** Completer-signed reads end this long after the later of `expires_at` and a terminal outcome (Appendix G R7). */
 const COMPLETER_WINDOW = 48 * 3600;
 
-/** The versions a host can serve; the vendored copy is CONTRACT_VERSION (1.6.1). */
-export type ServedVersion = "1.5.0" | "1.6.0" | "1.6.1";
-const SERVED: readonly ServedVersion[] = ["1.5.0", "1.6.0", "1.6.1"];
+/** The versions a host can serve; the vendored copy is CONTRACT_VERSION (1.7.0). */
+export type ServedVersion = "1.5.0" | "1.6.0" | "1.6.1" | "1.7.0";
+const SERVED: readonly ServedVersion[] = ["1.5.0", "1.6.0", "1.6.1", "1.7.0"];
 /** The released 1.5.0 `SHA256SUMS` sha256 (contract/SOURCE.md), which a header-less request is answered with. */
 export const SUMS_1_5_0 = "c6fc6ffea8b7cb9053a74e0a3aa340d73d1c2800fcc4c47669707400d06410d2";
 /** The frozen 1.6.0 `SHA256SUMS` sha256 (contract/SOURCE.md), which a 1.6.0 request is answered with. */
 export const SUMS_1_6_0 = "b75b771e3ae299d74a53f450574af6fab8e63d6bcca2b42aa957046afbf4657d";
-/** A 1.6.x version: snapshot v2 (1.6.0) or v3 (1.6.1), the completer key, outcomes. */
+/** The frozen 1.6.1 `SHA256SUMS` sha256 (contract/SOURCE.md), which a 1.6.1 request is answered with. */
+export const SUMS_1_6_1 = "bc035ee36b0a8fe54e1b87919c8de215c508ab5369d8254fdcdecf18c23710d8";
+/** A 1.6.x-or-later version: the completer key, outcomes (everything but 1.5.0). */
 const isV16 = (version: ServedVersion): boolean => version !== "1.5.0";
+/** A version whose carts get v3 snapshots and the myshopify pair: 1.6.1, and 1.7.0, whose carts keep 1.6.1's rules. */
+const isV3 = (version: ServedVersion): boolean => version === "1.6.1" || version === "1.7.0";
+/** Intent Cloud's default currency table (1.7.0): USD only, $500 an order, $1,000 a buyer's rolling week. */
+export const DEFAULT_CURRENCIES: Readonly<Record<string, CurrencyCeiling>> = Object.freeze({ USD: { order: 50_000, week: 100_000 } });
+const WEEK = 7 * 86_400;
+/**
+ * The fake's category keywords for `category_excluded` (1.7.0: best effort, on the title's words), one or two per
+ * excluded group: health and medical, age-restricted, financial or digital goods.
+ */
+const EXCLUDED_TITLE_WORDS: readonly RegExp[] = [/\bvape\b/i, /\bcbd\b/i, /\bwine\b/i, /\bwhisk(?:e)?y\b/i, /\balcohol\b/i, /\bgift ?card\b/i, /\bprescription\b/i, /\bcigar(?:ette)?s?\b/i];
 const TERMINAL: ReadonlySet<OutcomeState> = new Set(["ordered", "mismatch", "failed", "checkout_expired"]);
 /** What an `ordered` or `mismatch` report must carry (Appendix G), and what R5 keeps of it under `reported`. */
 const ORDER_KEYS = ["order_ref", "final_total", "binding"] as const;
@@ -91,10 +117,20 @@ const BINDING_KEY = "binding";
 /** Rule 25 in integers (`recheck-v1`): `ceil(0.8·A) ≤ R ≤ A`. */
 const totalMatchesApproved = (approvedMinor: number, finalMinor: number): boolean => 5 * finalMinor >= 4 * approvedMinor && finalMinor <= approvedMinor;
 
-/** `ApprovalStatus.state` for an outcome (Appendix G, vector o3): 1.6.x and the 1.5.0 downgrade (null: not served). */
-export function statusState(outcome: OutcomeState, mode: CompletionMode): { "1.6.1": ApprovalState; "1.6.0": ApprovalState; "1.5.0": ApprovalState | null } {
-  if (outcome === "ordered") return { "1.6.1": "ordered", "1.6.0": "ordered", "1.5.0": mode === "handoff" ? "ordered" : null };
-  return mode === "handoff" ? { "1.6.1": "handed_off", "1.6.0": "handed_off", "1.5.0": "handed_off" } : { "1.6.1": "approved", "1.6.0": "approved", "1.5.0": null };
+/** `ApprovalStatus.state` for an outcome (Appendix G, vector o3): 1.6.x, 1.7.0 and the 1.5.0 downgrade (null: not served). */
+export function statusState(
+  outcome: OutcomeState,
+  mode: CompletionMode,
+): { "1.7.0": ApprovalState; "1.6.1": ApprovalState; "1.6.0": ApprovalState; "1.5.0": ApprovalState | null } {
+  if (outcome === "ordered") return { "1.7.0": "ordered", "1.6.1": "ordered", "1.6.0": "ordered", "1.5.0": mode === "handoff" ? "ordered" : null };
+  return mode === "handoff"
+    ? { "1.7.0": "handed_off", "1.6.1": "handed_off", "1.6.0": "handed_off", "1.5.0": "handed_off" }
+    : { "1.7.0": "approved", "1.6.1": "approved", "1.6.0": "approved", "1.5.0": null };
+}
+
+/** What the passkey approved, as Money: a v1 to v3 snapshot's total, a v4 snapshot's `totals.total` in its currency. */
+function approvedTotal(s: AnySnapshot): Money {
+  return s.v === 4 ? ({ amount_minor: s.totals.total, currency: s.currency } as Money) : s.total;
 }
 
 export interface Quotas {
@@ -127,10 +163,38 @@ export interface FakeCloudOptions {
    */
   excludedCategories?: readonly string[];
   quotas?: Partial<Quotas>;
-  /** The contract versions served. Default all three; `["1.5.0"]` is a host from before 1.6.0 that ignores the header. */
+  /** The contract versions served. Default all four; `["1.5.0"]` is a host from before 1.6.0 that ignores the header. */
   versions?: readonly ServedVersion[];
-  /** Whether `shop_agent` carts are enabled (Intent Cloud's ONE_TAP_GATEWAY_ENABLED). Default false. */
+  /**
+   * Whether `shop_agent` carts and checkouts are enabled (Intent Cloud's ONE_TAP_GATEWAY_ENABLED). Default false: a
+   * `shop_agent` checkout is then refused `one_tap_off`. `checkouts.setOneTap` changes it later.
+   */
   oneTap?: boolean;
+  /** 1.7.0: the currency table's ceilings per currency. Default DEFAULT_CURRENCIES (USD only). */
+  currencies?: Readonly<Record<string, CurrencyCeiling>>;
+}
+
+/**
+ * Controls and records for 1.7.0's submitted checkouts (`POST /v1/checkouts`). Each control stays until changed.
+ * The snapshot seams of `tamper` (snapshot, proofSnapshot) apply to checkout approvals too.
+ */
+export interface CheckoutControls {
+  /** Every body `POST /v1/checkouts` received that parsed as JSON, in order (refused ones included). */
+  readonly received: readonly unknown[];
+  /**
+   * Pauses (true) or resumes (false) every account key: a submit gets 409 `paused`, the confirm page refuses the
+   * approval, and a `completing` report gets 409 `paused`. (The real platform pauses the buyers pinned to a key; the
+   * fake pauses all, so a test can pause before any key is pinned.)
+   */
+  setPaused(paused: boolean): void;
+  /** One tap on or off (Intent Cloud's ONE_TAP_GATEWAY_ENABLED): off refuses a `shop_agent` checkout `one_tap_off`. */
+  setOneTap(on: boolean): void;
+  /** myshopify domains on Intent Cloud's block list (`store_blocked`); replaces the list. */
+  blockStores(domains: readonly string[]): void;
+  /** Replaces the currency table (its version follows, so Meta and new snapshots name the new one). */
+  setCurrencies(currencies: Readonly<Record<string, CurrencyCeiling>>): void;
+  /** The account key thumbprints pinned so far (at each first passkey approval of a v4 snapshot). */
+  pinned(): readonly string[];
 }
 
 /** What a confirm-page or merchant action did. `status` is what the confirm page or merchant would answer. */
@@ -159,6 +223,9 @@ export interface ApprovalRecordView {
   reports: OutcomeReport[];
 }
 
+/** A patch over a served snapshot: v2/v3 fields for a cart's approval, v4 fields for a submitted checkout's. */
+export type SnapshotPatch = Partial<SnapshotV3> | Partial<SnapshotV2> | Partial<SnapshotV4>;
+
 /** Faults for attack tests. Each stays on until `reset`; an optional path limits a receipt fault to that path. */
 export interface Tamper {
   /** Receipts carry a well-formed signature over other bytes. */
@@ -185,9 +252,9 @@ export interface Tamper {
    * 1.6.x snapshots carry these values instead of their own, with snapshot_hash and check_code computed over them
    * (`v: 2` on a 1.6.1 approval serves a v2 snapshot; a key set to undefined is dropped).
    */
-  snapshot(patch: Partial<SnapshotV3> | Partial<SnapshotV2>): void;
-  /** 1.6.x proofs carry a snapshot with these values, correctly hashed and cloud-signed. */
-  proofSnapshot(patch: Partial<SnapshotV3> | Partial<SnapshotV2>): void;
+  snapshot(patch: SnapshotPatch): void;
+  /** 1.6.x proofs (and 1.7.0 checkout proofs) carry a snapshot with these values, correctly hashed and cloud-signed. */
+  proofSnapshot(patch: SnapshotPatch): void;
   /** Outcome reports get this status (and no outcome) instead of being handled; null turns it off. */
   reportStatus(status: number | null): void;
   reset(): void;
@@ -227,6 +294,8 @@ export interface FakeCloud {
    * edge would; null turns it off. */
   simulateCloudflareError(status: number | null): void;
   tamper: Tamper;
+  /** 1.7.0 submitted checkouts: controls and the bodies received. */
+  checkouts: CheckoutControls;
   close(): Promise<void>;
 }
 
@@ -254,10 +323,27 @@ interface CartRecord {
   lastNewApprovalAt?: number;
 }
 
+/** 1.7.0: what a submitted checkout's approval keeps of its request. */
+interface CheckoutRecord {
+  bodyHash: string;
+  createdAt: number;
+  checkoutRefHash: string;
+  mode: CompletionMode;
+  thumbprint: string;
+}
+
 interface ApprovalRecord {
   handle: string;
   owner: string;
-  cart: CartRecord;
+  /** The version that created it (R8), and the address key it came from (the passkey tier). */
+  version: ServedVersion;
+  addressKey: string;
+  imageUrl?: string;
+  /** The cart for a cart's approval; null for a submitted checkout's (1.7.0), which has `checkout` instead. */
+  cart: CartRecord | null;
+  checkout?: CheckoutRecord;
+  /** When the passkey approved it (seconds): the week ceiling counts approvals of the rolling 7 days. */
+  approvedAt?: number;
   snapshot: AnySnapshot;
   snapshotHash: string;
   continueUrl: string;
@@ -356,8 +442,8 @@ function toOffer(offerHandle: string, item: CatalogItem, version: ServedVersion,
   if (item.rating !== undefined) offer.rating = item.rating;
   if (item.returns !== undefined) offer.returns = item.returns;
   if (isV16(version)) offer.variant_ref = variantRef(item);
-  // R8 and Appendix A v3: only a 1.6.1 caller ever receives myshopify_domain.
-  if (version === "1.6.1" && item.myshopify_domain !== undefined) offer.myshopify_domain = item.myshopify_domain;
+  // R8 and Appendix A v3: only a 1.6.1 caller (or 1.7.0, whose carts keep 1.6.1's rules) receives myshopify_domain.
+  if (isV3(version) && item.myshopify_domain !== undefined) offer.myshopify_domain = item.myshopify_domain;
   return isV16(version) && patch !== null ? dropUndefined({ ...offer, ...patch }) : offer;
 }
 
@@ -373,13 +459,19 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   const quotas: Quotas = { ...DEFAULT_QUOTAS, ...options.quotas };
   const keys = loadKeys();
   const versions: ReadonlySet<ServedVersion> = new Set(options.versions ?? SERVED);
-  const oneTap = options.oneTap ?? false;
-  // The vendored copy is 1.6.1 (CONTRACT_VERSION); 1.5.0 and 1.6.0 are answered with their released sums.
+  let oneTap = options.oneTap ?? false;
+  // The vendored copy is 1.7.0 (CONTRACT_VERSION); 1.5.0, 1.6.0 and 1.6.1 are answered with their frozen sums.
   const sums: Record<ServedVersion, string> = {
     "1.5.0": SUMS_1_5_0,
     "1.6.0": SUMS_1_6_0,
-    "1.6.1": sha256Hex(readFileSync(new URL("../../contract/SHA256SUMS", import.meta.url))),
+    "1.6.1": SUMS_1_6_1,
+    "1.7.0": sha256Hex(readFileSync(new URL("../../contract/SHA256SUMS", import.meta.url))),
   };
+  let currencies: Readonly<Record<string, CurrencyCeiling>> = options.currencies ?? DEFAULT_CURRENCIES;
+  let paused = false;
+  let blockedStores: ReadonlySet<string> = new Set();
+  const pinnedKeys = new Set<string>();
+  const receivedCheckouts: unknown[] = [];
   const statement = makeStatement(keys, now());
   const seenNonce = createNonceCache();
 
@@ -395,8 +487,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   let cloudflareStatus: number | null = null;
   let cartPatch: Partial<Cart> | null = null;
   let offerPatch: Partial<Offer> | null = null;
-  let snapshotPatch: Partial<SnapshotV3> | Partial<SnapshotV2> | null = null;
-  let proofSnapshotPatch: Partial<SnapshotV3> | Partial<SnapshotV2> | null = null;
+  let snapshotPatch: SnapshotPatch | null = null;
+  let proofSnapshotPatch: SnapshotPatch | null = null;
   let reportFault: number | null = null;
 
   const catalog = options.catalog ?? DEFAULT_CATALOG;
@@ -565,7 +657,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         variant_ref: variantRef(item),
         total_estimated: false,
       });
-      if (version === "1.6.1" && item.myshopify_domain !== undefined) cart.myshopify_domain = item.myshopify_domain;
+      if (isV3(version) && item.myshopify_domain !== undefined) cart.myshopify_domain = item.myshopify_domain;
       if (cartPatch !== null) Object.assign(cart, cartPatch);
     }
     carts.set(cartHandle, {
@@ -639,8 +731,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       };
       // 1.6.1: v3, with the Shopify merchant's myshopify domain from Intent Cloud's own merchant config (not the cart).
       const own: SnapshotV2 | SnapshotV3 =
-        cart.version === "1.6.1" ? { ...v2, v: 3, ...(cart.item.myshopify_domain === undefined ? {} : { myshopify_domain: cart.item.myshopify_domain }) } : v2;
-      snapshot = snapshotPatch === null ? own : dropUndefined({ ...own, ...snapshotPatch });
+        isV3(cart.version) ? { ...v2, v: 3, ...(cart.item.myshopify_domain === undefined ? {} : { myshopify_domain: cart.item.myshopify_domain }) } : v2;
+      snapshot = snapshotPatch === null ? own : (dropUndefined({ ...own, ...snapshotPatch }) as AnySnapshot);
     }
     const snapshotHash = sha256Hex(canonicalize(snapshot));
     const linkPath = `/c/${randomBytes(16).toString("base64url")}`;
@@ -656,6 +748,9 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     const record: ApprovalRecord = {
       handle: approvalHandle,
       owner: keyid,
+      version: cart.version,
+      addressKey: cart.addressKey,
+      ...(cart.body.image_url === undefined ? {} : { imageUrl: cart.body.image_url }),
       cart,
       snapshot,
       snapshotHash,
@@ -672,6 +767,143 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return { status: 201, body: created };
   }
 
+  // ---- Submitted checkouts (1.7.0) ------------------------------------------------------------------------------
+
+  const tableVersion = (): string => currencyTableVersion(currencies);
+  const refused = (status: 403 | 409, code: RefusalCode, message: string): Reply => ({
+    status,
+    body: { error: status === 403 ? "forbidden" : "conflict", message, code },
+  });
+
+  /** An approval that counts against a buyer's week: approved, a v4 snapshot, not released (no order paid). */
+  function countsForWeek(a: ApprovalRecord, buyer: string, currency: string, at: number): boolean {
+    if (a.snapshot.v !== 4 || a.snapshot.currency !== currency || a.claimedBy !== buyer || a.approvedAt === undefined) return false;
+    if (a.state !== "approved" && a.state !== "handed_off" && a.state !== "ordered") return false;
+    if (a.outcome?.state === "failed" || a.outcome?.state === "checkout_expired") return false;
+    return at - a.approvedAt < WEEK;
+  }
+
+  /**
+   * The ceiling a v4 approval breaks now (Appendix A "Currency table and ceiling"), or null: `order` against its own
+   * total, `week` against the buyer's other approved, unreleased orders in the same currency plus this one. With no
+   * buyer yet (before the passkey) only `order` is checked.
+   */
+  function ceilingBroken(s: SnapshotV4, buyer: string | undefined, self: string, at: number): "ceiling_order" | "ceiling_week" | null {
+    const ceiling = currencies[s.currency];
+    if (ceiling === undefined || ceiling.order === 0 || s.totals.total > ceiling.order) return "ceiling_order";
+    if (buyer === undefined) return null;
+    let week = s.totals.total;
+    for (const a of approvals.values()) if (a.handle !== self && countsForWeek(a, buyer, s.currency, at)) week += approvedTotal(a.snapshot).amount_minor;
+    return week > ceiling.week ? "ceiling_week" : null;
+  }
+
+  /** `POST /v1/checkouts` (1.7.0): a Shop checkout the gateway submits, answered with its pending v4 approval. */
+  function createCheckout(body: Buffer, keyid: string, ipKey: string, version: ServedVersion, at: number): Reply {
+    if (version !== "1.7.0") return fail(404, "not_found", "not found");
+    const json = parseJson(body);
+    if (json !== undefined) receivedCheckouts.push(json);
+    const parsed = CheckoutRequest.safeParse(json);
+    if (!parsed.success) return fail(400, "bad_request", "body does not match CheckoutRequest");
+    const request = parsed.data;
+    const { checkout } = request;
+    const bodyHash = sha256Hex(canonicalize(request));
+    if (request.completer_keyid === keyid) return fail(400, "bad_request", "completer_keyid must not be the session key");
+    // Replay window: the same session sending the same body gets the same approval again while it is pending.
+    for (const a of approvals.values()) {
+      refresh(a, at);
+      if (a.checkout?.bodyHash === bodyHash && a.owner === keyid && a.state === "pending" && at - a.checkout.createdAt < REPLAY_WINDOW) {
+        return { status: 201, body: a.created };
+      }
+    }
+    // Amendment M5 (Appendix C, 1.7.0): a new completer key per request, never an earlier approval's.
+    if ([...approvals.values()].some((a) => a.snapshot.v !== 1 && a.snapshot.completer_keyid === request.completer_keyid)) {
+      return fail(400, "bad_request", "completer_keyid belongs to an earlier approval");
+    }
+    if ((request.completion_mode === "handoff") !== (checkout.continue_url !== undefined)) {
+      return fail(400, "bad_request", "continue_url is required for handoff and forbidden for shop_agent");
+    }
+    if (checkout.continue_url !== undefined && !continueUrlAllowed(checkout.continue_url, checkout)) {
+      return fail(400, "bad_request", "continue_url is not on shop.app, the myshopify domain or the store site");
+    }
+    if (coarsePostcode(checkout.ship_to.country, checkout.ship_to.postal_code) !== checkout.ship_to.postal_code) {
+      return fail(400, "bad_request", "ship_to.postal_code is not the coarse postcode");
+    }
+    if (!totalsAddUp(checkout.totals)) return fail(400, "bad_request", "totals do not add up");
+    const thumbprint = accountKeyThumbprint(request.account_key);
+    if (paused) return refused(409, "paused", "purchases are paused for this account key");
+    // The refusals, in Appendix A's order.
+    if (request.completion_mode === "shop_agent" && !oneTap) return refused(403, "one_tap_off", "one tap is off");
+    if (currencies[checkout.currency] === undefined) return refused(403, "currency_unsupported", "the currency is not supported");
+    if (blockedStores.has(checkout.myshopify_domain)) return refused(403, "store_blocked", "the store is blocked");
+    if (EXCLUDED_TITLE_WORDS.some((w) => w.test(checkout.title))) return refused(403, "category_excluded", "the item is in an excluded category");
+    const ceiling = currencies[checkout.currency];
+    if (ceiling === undefined || ceiling.order === 0 || checkout.totals.total > ceiling.order) {
+      return refused(403, "ceiling_order", "the total is above the order ceiling");
+    }
+    const retry = take(`approvals:${ipKey}`, quotas.approvals_per_day, 86_400, at);
+    if (retry !== null) return limited("approvals", retry);
+    // A new request for the same checkout and mode supersedes this session's pending approval of it.
+    for (const a of approvals.values()) {
+      if (a.owner === keyid && a.state === "pending" && a.checkout?.checkoutRefHash === checkout.checkout_ref_hash && a.checkout.mode === request.completion_mode) {
+        a.state = "expired";
+      }
+    }
+
+    const approvalHandle = handle("ap");
+    const expiresAt = at + APPROVAL_TTL;
+    const own: SnapshotV4 = {
+      v: 4,
+      approval: approvalHandle,
+      nonce: randomBytes(16).toString("base64url"),
+      expires_at: timestamp(expiresAt),
+      rule_version: RULE_VERSION,
+      store_name: checkout.store_name,
+      store_site: checkout.store_site,
+      myshopify_domain: checkout.myshopify_domain,
+      variant_ref: checkout.variant_ref,
+      title: checkout.title,
+      quantity: checkout.quantity,
+      currency: checkout.currency,
+      totals: checkout.totals,
+      ship_to: { country: checkout.ship_to.country, postal_code_coarse: checkout.ship_to.postal_code },
+      checkout_ref_hash: checkout.checkout_ref_hash,
+      completion_mode: request.completion_mode,
+      completer_keyid: request.completer_keyid,
+      currency_table: tableVersion(),
+      account_key_thumbprint: thumbprint,
+      ...(checkout.continue_url === undefined ? {} : { continue_url_hash: continueUrlHash(checkout.continue_url) }),
+    };
+    const snapshot = snapshotPatch === null ? own : (dropUndefined({ ...own, ...snapshotPatch }) as AnySnapshot);
+    const snapshotHash = sha256Hex(canonicalize(snapshot));
+    const linkPath = `/c/${randomBytes(16).toString("base64url")}`;
+    const created: ApprovalRecord["created"] = {
+      approval_handle: approvalHandle,
+      approval_link_path: linkPath,
+      snapshot,
+      snapshot_hash: snapshotHash,
+      check_code: snapshotHash.slice(0, 8),
+      state: "pending",
+      expires_at: timestamp(expiresAt),
+    };
+    approvals.set(approvalHandle, {
+      handle: approvalHandle,
+      owner: keyid,
+      version,
+      addressKey: ipKey,
+      cart: null,
+      checkout: { bodyHash, createdAt: at, checkoutRefHash: checkout.checkout_ref_hash, mode: request.completion_mode, thumbprint },
+      snapshot,
+      snapshotHash,
+      continueUrl: checkout.continue_url ?? "",
+      linkPath,
+      expiresAt,
+      state: "pending",
+      created,
+      reports: new Map(),
+    });
+    return { status: 201, body: created };
+  }
+
   /**
    * Who may read or report an approval (Appendix G R1/R7): the session that created its cart, or, in 1.6.x, the
    * snapshot's completer key until 48 h after the later of `expires_at` and a terminal outcome.
@@ -682,8 +914,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     return at < Math.max(a.expiresAt, a.terminalAt ?? 0) + COMPLETER_WINDOW;
   }
 
-  /** R8 by exact version (1.6.1): a 1.6.x approval is read and reported on only in the version that created it. */
-  const otherVersion = (a: ApprovalRecord, version: ServedVersion): boolean => isV16(a.cart.version) && version !== a.cart.version;
+  /** R8 by exact version: a 1.6.x or 1.7.0 approval is read and reported on only in the version that created it. */
+  const otherVersion = (a: ApprovalRecord, version: ServedVersion): boolean => isV16(a.version) && version !== a.version;
 
   const modeOf = (a: ApprovalRecord): CompletionMode => (a.snapshot.v !== 1 ? a.snapshot.completion_mode : "handoff");
 
@@ -701,11 +933,12 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       state = mapped;
     }
     // A 1.5.0 approval's proof carries its v1 snapshot, which the 1.6.0 ApprovalStatus schema does not allow.
+    const s = a.snapshot;
     const status: Omit<ApprovalStatus, "proof"> & { proof?: AnyApprovalProof } = {
       state,
-      display: { merchant: a.snapshot.merchant.name, title: a.snapshot.item.title, total: a.snapshot.total },
+      display: s.v === 4 ? { merchant: s.store_name, title: s.title, total: approvedTotal(s) } : { merchant: s.merchant.name, title: s.item.title, total: s.total },
     };
-    if (a.cart.body.image_url !== undefined) status.display.image_url = a.cart.body.image_url;
+    if (a.imageUrl !== undefined) status.display.image_url = a.imageUrl;
     if (a.orderNumber !== undefined) status.order_number = a.orderNumber;
     const withProof = state === "approved" || state === "handed_off" || state === "ordered";
     if (withProof && a.approvedBy !== undefined) status.proof = servedProof(a, a.approvedBy, at);
@@ -723,13 +956,20 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
    * snapshot, option (a)) every check it cannot observe is `unknown` and only check 5 compares, so a legitimate order
    * is `incomplete`, never `mismatch`; a 1.6.0 approval keeps 1.6.0's re-run, whose check 3 is `differs`.
    */
-  function storedOutcome(report: OutcomeReport, snapshot: SnapshotV2 | SnapshotV3): CloudOutcome {
+  function storedOutcome(report: OutcomeReport, snapshot: SnapshotV2 | SnapshotV3 | SnapshotV4): CloudOutcome {
     // Copied by key name: src/ lint forbids reading a property named like `process.binding`.
     const reported = Object.fromEntries(REPORTED_KEYS.filter((k) => report[k] !== undefined).map((k) => [k, report[k]])) as NonNullable<CloudOutcome["reported"]>;
     const ordered = report.state === "ordered" || report.state === "mismatch";
     const state = ordered ? "reported" : report.state;
     const stored: CloudOutcome = { state, source: "gateway_report", assurance: "reported", observed_at: report.observed_at, reported };
     if (!ordered || report.final_total === undefined) return stored;
+    if (snapshot.v === 4) {
+      // binding-v2 (1.7.0) over what the report gives: only check 5 can compare; every check Intent Cloud cannot
+      // observe itself is `unknown`, so a legitimate order is `incomplete`, never `mismatch` (as option (a) for v3).
+      const total = bindingV2(snapshot, { final_total: report.final_total }, { mode: snapshot.completion_mode, ship_to_optional: false }).checks.total;
+      const checks = { merchant_origin: "unknown", checkout_ref: "unknown", line: "unknown", ship_to: "unknown", total } as const;
+      return { ...stored, [BINDING_KEY]: { rule_version: "binding-v2", result: bindingResult(checks, false), checks } };
+    }
     const total = totalMatchesApproved(snapshot.total.amount_minor, report.final_total.amount_minor) ? "match" : "differs";
     const checks = { merchant_origin: "unknown", checkout_ref: "unknown", line: snapshot.v === 3 ? "unknown" : "differs", ship_to: "unknown", total } as const;
     const result = Object.values(checks).includes("differs") ? "mismatch" : "incomplete";
@@ -762,11 +1002,22 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     const hash = sha256Hex(canonicalize(report));
     const prior = a.reports.get(report.report_id);
     if (prior !== undefined) return prior.hash === hash ? prior.reply : fail(409, "conflict", "report_id reused with another body");
+    // A v4 approval's reports are bound with binding-v2 (Appendix G, 1.7.0), a v2 or v3 one's with binding-v1.
+    const reportedRule = report[BINDING_KEY]?.rule_version;
+    if (reportedRule !== undefined && reportedRule !== (snapshot.v === 4 ? "binding-v2" : "binding-v1")) {
+      return fail(400, "bad_request", `binding.rule_version must be ${snapshot.v === 4 ? "binding-v2" : "binding-v1"}`);
+    }
     refresh(a, at);
     const current = a.reportedState ?? "approved";
     if (report.state === "completing") {
       if (current !== "approved") return fail(409, "conflict", "the approval is already completing");
       if (a.state !== "approved" || at >= a.expiresAt) return fail(410, "gone", "the approval is not approved, or has expired");
+      // 1.7.0: the pause and both ceilings again at the completing redemption; the approval stays approved.
+      if (snapshot.v === 4) {
+        if (paused) return refused(409, "paused", "purchases are paused for this account key");
+        const broken = ceilingBroken(snapshot, a.claimedBy, a.handle, at);
+        if (broken !== null) return refused(409, broken, `the ${broken === "ceiling_order" ? "order" : "week"} ceiling is exceeded`);
+      }
     } else if (report.completing_report_id !== a.completingReportId) {
       return fail(409, "conflict", "completing_report_id is not the accepted completing report");
     }
@@ -794,6 +1045,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     [/^\/v1\/carts\/[^/]+\/approvals$/, "POST"],
     [/^\/v1\/approvals\/[^/]+$/, "GET"],
     [/^\/v1\/approvals\/[^/]+\/outcome-reports$/, "POST"],
+    [/^\/v1\/checkouts$/, "POST"],
   ];
 
   /**
@@ -801,7 +1053,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
    * this host does not serve. A host from before 1.6.0 ignores the header.
    */
   function negotiate(req: IncomingMessage): ServedVersion | null {
-    if (!versions.has("1.6.0") && !versions.has("1.6.1")) return "1.5.0";
+    if (!versions.has("1.6.0") && !versions.has("1.6.1") && !versions.has("1.7.0")) return "1.5.0";
     const raw = req.headers["intent-contract-version"];
     if (raw === undefined) return versions.has("1.5.0") ? "1.5.0" : null;
     return SERVED.find((v) => v === raw && versions.has(v)) ?? null;
@@ -834,10 +1086,13 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         carts_per_hour_passkey: Math.max(1, quotas.carts_per_hour_passkey),
         approvals_per_day: Math.max(1, quotas.approvals_per_day),
       };
-      return { status: 200, body: { contract_version: version, contract_sums_sha256: sums[version], rule_versions: [RULE_VERSION], limits } };
+      // 1.7.0 adds the currency table; the frozen versions answer exactly as their files say.
+      const table = version === "1.7.0" ? { currency_table: { version: tableVersion(), currencies } } : {};
+      return { status: 200, body: { contract_version: version, contract_sums_sha256: sums[version], rule_versions: [RULE_VERSION], limits, ...table } };
     }
     if (path === "/v1/catalog/search") return search(body, version, at);
     if (path === "/v1/carts") return createCart(body, keyid, ipKey, version, at);
+    if (path === "/v1/checkouts") return createCheckout(body, keyid, ipKey, version, at);
     const cartApprovals = /^\/v1\/carts\/([^/]+)\/approvals$/.exec(path);
     if (cartApprovals !== null) return createApproval(cartApprovals[1] ?? "", keyid, ipKey, at);
     const reports = /^\/v1\/approvals\/([^/]+)\/outcome-reports$/.exec(path);
@@ -910,6 +1165,12 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     const assertion = passkey.assert({ ...expected, ...override });
     const problem = assertionProblem(assertion, passkey.publicJwk, expected);
     if (problem !== null) return { status: 400, state: a.state, reason: problem };
+    // 1.7.0: the confirm page refuses an approval over either ceiling, or while paused; the decline still works.
+    if (action === "approve" && a.snapshot.v === 4) {
+      if (paused) return { status: 409, state: a.state, reason: "paused" };
+      const broken = ceilingBroken(a.snapshot, passkey.sub, a.handle, at);
+      if (broken !== null) return { status: 409, state: a.state, reason: broken };
+    }
 
     a.claimedBy = passkey.sub;
     const prev = ledger.at(-1);
@@ -932,7 +1193,10 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     }
     a.approvedBy = { assertion, credentialPublicKey: passkey.publicJwk };
     a.state = "approved";
-    passkeyApprovedAt.set(a.cart.addressKey, at);
+    a.approvedAt = at;
+    // Appendix H: the account key is pinned to the buyer at the first passkey approval of a v4 snapshot.
+    if (a.snapshot.v === 4) pinnedKeys.add(a.snapshot.account_key_thumbprint);
+    passkeyApprovedAt.set(a.addressKey, at);
     return { status: 200, state: a.state };
   }
 
@@ -994,9 +1258,9 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
           source: "signed_webhook",
           assurance: "verified",
           order_ref: a.orderNumber,
-          final_total: a.snapshot.total,
+          final_total: approvedTotal(a.snapshot),
           binding: {
-            rule_version: "binding-v1",
+            rule_version: a.snapshot.v === 4 ? "binding-v2" : "binding-v1",
             result: "ok",
             checks: { merchant_origin: "match", checkout_ref: "match", line: "match", ship_to: "match", total: "match" },
           },
@@ -1040,6 +1304,22 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     },
     simulateCloudflareError(status) {
       cloudflareStatus = status;
+    },
+    checkouts: {
+      received: receivedCheckouts,
+      setPaused(on) {
+        paused = on;
+      },
+      setOneTap(on) {
+        oneTap = on;
+      },
+      blockStores(domains) {
+        blockedStores = new Set(domains);
+      },
+      setCurrencies(table) {
+        currencies = { ...table };
+      },
+      pinned: () => [...pinnedKeys],
     },
     tamper: {
       receiptSignature: setFault("receiptSignature"),

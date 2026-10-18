@@ -279,14 +279,23 @@ describe("GET /v1/meta", () => {
     expect(json).not.toHaveProperty("enrol_origin");
   });
 
-  it("with Intent-Contract-Version: 1.6.1 reports 1.6.1 and the vendored SHA256SUMS hash", async () => {
+  it("with Intent-Contract-Version: 1.7.0 reports 1.7.0, the vendored SHA256SUMS hash and the currency table", async () => {
     const cloud = await start();
-    const { res, json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.6.1" } });
+    const { res, json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.7.0" } });
     expect(res.status).toBe(200);
-    expect(res.headers.get("intent-contract-version")).toBe("1.6.1");
+    expect(res.headers.get("intent-contract-version")).toBe("1.7.0");
     const meta = Meta.parse(json);
     const source = /sha256 of `SHA256SUMS`: `([0-9a-f]{64})`/.exec(readFileSync(join(repo, "contract", "SOURCE.md"), "utf8"));
-    expect(meta).toMatchObject({ contract_version: "1.6.1", contract_sums_sha256: source?.[1] });
+    expect(meta).toMatchObject({ contract_version: "1.7.0", contract_sums_sha256: source?.[1] });
+    expect(meta.currency_table?.currencies).toEqual({ USD: { order: 50_000, week: 100_000 } });
+  });
+
+  it("with Intent-Contract-Version: 1.6.1 reports the frozen 1.6.1 sums and no currency table", async () => {
+    const cloud = await start();
+    const { json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.6.1" } });
+    const meta = Meta.parse(json);
+    expect(meta).toMatchObject({ contract_version: "1.6.1", contract_sums_sha256: "bc035ee36b0a8fe54e1b87919c8de215c508ab5369d8254fdcdecf18c23710d8" });
+    expect(meta).not.toHaveProperty("currency_table");
   });
 
   it("is signed: an unsigned read gets 401 authentication failed", async () => {

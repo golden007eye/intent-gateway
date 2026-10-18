@@ -176,9 +176,14 @@ describe("projectCheckout (S1 step 6 shape)", () => {
       shipTo: "match",
       orderRef: null,
       budgetOffered: true,
+      // 1000 + nothing is not 1399: totals that do not add up are never guessed (contract 1.7.0 CheckoutTotals).
+      totals: null,
+      // Only the coarse postcode crosses the port (contract 1.7.0): 94107, never 94107-1234.
+      shipToArea: { country: "US", postalCodeCoarse: "94107" },
+      continueUrl: null,
     });
     const text = JSON.stringify(projected);
-    for (const value of [...Object.values(PII), "Jane", "94107", "Checkout/abc", "4242"]) expect(text).not.toContain(value);
+    for (const value of [...Object.values(PII), "Jane", "94107-1234", "1234", "Checkout/abc", "4242"]) expect(text).not.toContain(value);
     expect(projectCheckout(base, "asked.myshopify.com", "10001").checkout.shipTo).toBe("differs");
   });
 

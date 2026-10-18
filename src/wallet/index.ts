@@ -27,6 +27,7 @@ export {
   type WalletMoney,
   type WalletOrder,
   type WalletOrders,
+  type WalletTotals,
   type WalletRail,
   WALLET_ACTIONS,
   WALLET_RAILS,

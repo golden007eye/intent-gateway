@@ -13,7 +13,9 @@
 //    chain (`store_pair`) for 24 h at most, keyed by (origin, domain), so every process reuses it; a failure never is.
 //    Then create the wallet checkout, once: a create with no usable answer is never sent again (failed,
 //    create_unconfirmed), since Shop does not deduplicate create_checkout on its idempotency key (contract 1.6.1
-//    "Retries"). A quote that is not open, or offers no agent-budget payment, is refused. binding-v1 checks 1, 3, 4
+//    "Retries"). A v4 snapshot (contract 1.7.0, ADR-0024) creates nothing: its checkout was created and submitted before
+//    the passkey, which signed its hash, so this step reads that checkout again and binding-v2 checks it, check 2
+//    included. A quote that is not open, or offers no agent-budget payment, is refused. binding-v1 checks 1, 3, 4
 //    and 5 against it (check 2 is the checkout's own hash); Shop names no merchant on a checkout, so check 1 reads the
 //    store the checkout lives at, which binding-v1 accepts only as the signed myshopify domain (D7). A title is
 //    advisory only.
@@ -38,6 +40,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import {
   type BindableApprovalProof,
   type BindableSnapshot,
+  type SnapshotV4,
+  snapshotTotal,
   type Binding,
   type OutcomeReport,
   STORE_PAIR_LIMITS,
@@ -46,7 +50,7 @@ import {
   type StorePairReason,
 } from "../contract/index.ts";
 import { type DisclosedCloud, DisclosureConflictError, type StorefrontPort } from "../disclosure/index.ts";
-import { bindingV1, type LocalOutcomeEntry, mayHaveSent, outcomesFor, shipToOptional } from "../outcome/index.ts";
+import { bindingV1, bindingV2, type LocalOutcomeEntry, mayHaveSent, outcomesFor, shipToOptional } from "../outcome/index.ts";
 import type { Session } from "../signing/index.ts";
 import { type Entry, neverLeft, type Store, StoreConflictError } from "../store/index.ts";
 import { type ChainEntry, type KeySet, verifyApprovalProof } from "../trust/index.ts";
@@ -110,6 +114,8 @@ export interface CompletionView {
 }
 
 type Body = Record<string, unknown>;
+/** A snapshot one tap can redeem: v3 (a 1.6.1 cart), v2 in chains a 1.6.0 gateway wrote, v4 (a 1.7.0 submitted checkout). */
+type CompletableSnapshot = BindableSnapshot | SnapshotV4;
 const asBody = (value: unknown): Body => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Body) : {});
 const TERMINAL = new Set(["ordered", "mismatch", "failed"]);
 const REPORT_PATH = (handle: string): string => `/v1/approvals/${handle}/outcome-reports`;
@@ -267,6 +273,22 @@ function observedOf(checkout: WalletCheckout, zip: string, merchantOrigin: strin
 }
 
 /**
+ * The observed order binding-v2 reads from a wallet checkout (contract 1.7.0): the store the checkout lives at, its
+ * hash, lines, the destination's country and coarse postcode (coarsened inside the adapter: the full code never
+ * reaches the gateway, so binding-v2 coarsens an already coarse code, which is itself), and the total.
+ */
+function observedV4(checkout: WalletCheckout, merchantOrigin: string): Body {
+  const area = checkout.shipToArea ?? null;
+  return {
+    merchant_origin: merchantOrigin,
+    checkout_ref_hash: checkout.checkoutRef,
+    lines: checkout.lines.map((l) => ({ variant_ref: l.variantRef, quantity: l.quantity })),
+    ...(area === null ? {} : { ship_to_country: area.country, ship_to_postal_code: area.postalCodeCoarse }),
+    ...(checkout.total === null ? {} : { final_total: { amount_minor: checkout.total.amountMinor, currency: checkout.total.currency } }),
+  };
+}
+
+/**
  * The merchant origin binding check 1 reads from a wallet checkout. Shop reports no merchant on a checkout (S1 step
  * 6), only the store it lives at (the store the gateway named; the order permalink's host once completed), as
  * `https://<store>`. binding-v1 accepts that only when it is the myshopify domain the v3 snapshot signed (D7); any
@@ -278,25 +300,36 @@ function checkoutMerchantOrigin(checkout: WalletCheckout, pairedStore: string | 
   return checkout.merchantOrigin ?? `https://${checkout.storeDomain}`;
 }
 
-function bind(snapshot: BindableSnapshot, checkout: WalletCheckout, recordedRef: string, pairedStore: string | null): { observed: Body; context: Body; verdict: Binding } {
+function bind(snapshot: CompletableSnapshot, checkout: WalletCheckout, recordedRef: string, pairedStore: string | null): { observed: Body; context: Body; verdict: Binding } {
+  if (snapshot.v === 4) {
+    // binding-v2: check 2 is bound to the checkout the passkey signed, so no recorded ref is needed.
+    const observed = observedV4(checkout, checkoutMerchantOrigin(checkout, pairedStore));
+    const context = { mode: "shop_agent", ship_to_optional: shipToOptional("shop_api") };
+    return { observed, context, verdict: bindingV2(snapshot, observed, { ...context, mode: "shop_agent" }) };
+  }
   const observed = observedOf(checkout, snapshot.ship_to.postal_code, checkoutMerchantOrigin(checkout, pairedStore));
   const context = { mode: "shop_agent", recorded_checkout_ref_hash: recordedRef, ship_to_optional: shipToOptional("shop_api") };
   return { observed, context, verdict: bindingV1(snapshot, observed, { ...context, mode: "shop_agent" }) };
 }
 
-/** The completer precheck's verdict on checks 1, 3, 4 and 5: the first that is not `match`, or null. */
+/**
+ * The completer precheck's verdict: the first check that is not `match`, or null. binding-v1 skips check 2 (the
+ * checkout is the one this purchase created); binding-v2 never does (Appendix G: the checkout read must be the one
+ * the passkey signed).
+ */
 function precheckProblem(binding: Binding): string | null {
   const checks = binding.checks;
-  for (const name of ["total", "line", "merchant_origin", "ship_to"] as const) {
+  const names = binding.rule_version === "binding-v2" ? (["total", "line", "merchant_origin", "checkout_ref", "ship_to"] as const) : (["total", "line", "merchant_origin", "ship_to"] as const);
+  for (const name of names) {
     if (checks[name] !== "match" && !(name === "ship_to" && checks.ship_to === "unknown" && shipToOptional("shop_api"))) return `precheck:${name}`;
   }
   return null;
 }
 
 /** Case- and space-folded containment either way: a title that fails it is advisory only. */
-function titleDiffers(snapshot: BindableSnapshot, checkout: WalletCheckout): boolean {
+function titleDiffers(snapshot: CompletableSnapshot, checkout: WalletCheckout): boolean {
   const fold = (t: string): string => t.toLowerCase().replace(/\s+/g, " ").trim();
-  const want = fold(snapshot.item.title);
+  const want = fold(snapshot.v === 4 ? snapshot.title : snapshot.item.title);
   return checkout.lines.some((l) => {
     const got = fold(l.title);
     return got !== "" && !got.includes(want) && !want.includes(got);
@@ -310,13 +343,20 @@ function titleDiffers(snapshot: BindableSnapshot, checkout: WalletCheckout): boo
 export async function advanceCompletion(ctx: CompletionContext, input: CompletionInput): Promise<CompletionView> {
   const { store, now } = ctx;
   const { handle, proof } = input;
-  const snapshot: BindableSnapshot = proof.snapshot;
+  const snapshot: CompletableSnapshot = proof.snapshot;
   const expiresAt = Date.parse(snapshot.expires_at);
-  const totalMinor = snapshot.total.amount_minor;
-  const zip = snapshot.ship_to.postal_code;
+  const approvedTotal = snapshotTotal(snapshot);
+  const totalMinor = approvedTotal.amount_minor;
+  /**
+   * The ZIP the adapter compares a v1 binding's ship-to with; a v4 purchase has none (the adapter coarsens the
+   * destination itself, shipToArea, and binding-v2 compares that).
+   */
+  const zip = snapshot.v === 4 ? undefined : snapshot.ship_to.postal_code;
   const deadline = now() + COMPLETION_BUDGET_MS;
-  /** The store the passkey signed beside the storefront (v3 `myshopify_domain`, D7), or null when none was signed. */
-  const pairedStore = snapshot.v === 3 ? (snapshot.myshopify_domain ?? null) : null;
+  /** The store the passkey signed beside the storefront (v3 and v4 `myshopify_domain`, D7), or null when none was signed. */
+  const pairedStore = snapshot.v === 4 ? snapshot.myshopify_domain : snapshot.v === 3 ? (snapshot.myshopify_domain ?? null) : null;
+  /** The storefront origin the passkey signed: v4 `store_site`, else `merchant_origin`. */
+  const signedOrigin = snapshot.v === 4 ? snapshot.store_site : snapshot.merchant_origin;
 
   /**
    * The store pair check (Appendix G, 1.6.1) for the signed pair: null when it passes, else the failing rule. A pass
@@ -325,7 +365,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
    * fetched pass is ever reused.
    */
   async function storePair(domain: string): Promise<StorePairReason | null> {
-    const origin = snapshot.merchant_origin;
+    const origin = signedOrigin;
     const target = storePairPrecondition(origin, domain);
     if ("reason" in target) return target.reason;
     const cached = passedRecently(store.entries(), origin, domain, now());
@@ -386,9 +426,13 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
   });
 
   /** Sends one report; the answer is in the chain (receipt) for later calls to read. False when it was not accepted. */
+  /** The refusal code (contract 1.7.0 Error.code) of the last report Intent Cloud refused with 409, if any. */
+  const refused: { code: string | null } = { code: null };
+
   async function send(report: Body): Promise<boolean> {
     try {
       const result = await ctx.cloud.reportOutcome(handle, report as OutcomeReport, ctx.signer);
+      if (!result.ok && result.status === 409 && result.body !== null && "code" in result.body && typeof result.body.code === "string") refused.code = result.body.code;
       return result.ok && result.status === 201 && asBody(result.body).accepted === true;
     } catch {
       // A refusal before the send, no answer, or a discarded answer: retried on a later call.
@@ -423,7 +467,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
       ...(latest.state === "ordered" || latest.state === "mismatch"
         ? {
             ...(latest.order_ref === undefined ? {} : { order_ref: latest.order_ref }),
-            ...(latest.final_total_minor === undefined ? {} : { final_total: { amount_minor: latest.final_total_minor, currency: "USD" } }),
+            ...(latest.final_total_minor === undefined ? {} : { final_total: { amount_minor: latest.final_total_minor, currency: approvedTotal.currency } }),
             ...(latest.local_binding === undefined ? {} : { binding: latest.local_binding }),
           }
         : {}),
@@ -485,7 +529,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     if (!(now() < expiresAt)) return refuse("expired");
     // An earlier create_checkout that may have reached Shop (this process before a crash, or another process) and was
     // never redeemed: never created again for this purchase.
-    const created = createState(entries, handle, now());
+    const created = snapshot.v === 4 ? "none" : createState(entries, handle, now());
     if (created === "in_flight") return finish(null, advisory);
     if (created === "reached") return refuse("create_unconfirmed");
     const wallet = ctx.wallet;
@@ -498,21 +542,33 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     // The buyer removed the connection in the Shop app: the token answers, the account does not (S1 step 12b).
     if (!account.connected) return refuse("wallet_disconnected");
     const budget = account.budgetRemaining;
-    // No budget shown, or not in USD: one tap never assumes one (the purchase is handed off).
-    if (budget === null || budget.currency !== "USD") return refuse("budget_unknown");
-    if (totalMinor > Math.min(budget.amountMinor, ctx.perOrderCapMinor ?? Number.POSITIVE_INFINITY)) return refuse("budget");
+    // No budget shown, or not in the approved currency: one tap never assumes one, and never converts.
+    if (budget === null || budget.currency !== approvedTotal.currency) return refuse("budget_unknown");
+    // The policy's per-order cap is in USD: it caps a USD purchase only, and a v4 purchase in another currency was
+    // refused before it was submitted.
+    const cap = approvedTotal.currency === "USD" ? (ctx.perOrderCapMinor ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
+    if (totalMinor > Math.min(budget.amountMinor, cap)) return refuse("budget");
     const storeDomain = pairedStore;
     if (storeDomain === null) return refuse("store_unknown");
     // Before any checkout is made, and before the completing report: a failure here is local only.
     const pair = await storePair(storeDomain);
     if (pair !== null) return refuse(`store_pair:${pair}`);
     let quote: WalletCheckout;
-    try {
+    if (snapshot.v === 4) {
+      // Contract 1.7.0: the checkout was created and submitted before the approval, and the passkey signed its hash.
+      // Nothing is created now: a fresh read of that very checkout is what binding-v2 and the redemption check.
+      try {
+        quote = await wallet.getCheckout({ storeDomain, checkoutRef: snapshot.checkout_ref_hash }, handle);
+      } catch {
+        return finish(null); // nothing chained: the next call reads again
+      }
+      if (quote.status === "not_found") return refuse("checkout_not_found", "shop_api");
+    } else try {
       quote = await wallet.createCheckout({
         purchase: handle,
         storeDomain,
         lines: [{ variantRef: snapshot.variant_ref, quantity: snapshot.quantity }],
-        shipToPostalCode: zip,
+        shipToPostalCode: zip ?? "",
         // Compare-and-append: a second process, or a create logged before a crash, stops this one before it is sent.
         sendUnless: (chain) =>
           createState(chain, handle, now()) !== "none" || completionOf(chain as readonly Entry[], handle) !== null || localOutcomes(chain, handle).length > 0,
@@ -597,7 +653,9 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     const attempted = attemptsOf(store.entries(), handle).length > 0;
     // Refused before acceptance: a local outcome only (Appendix G precheck step 3), and nothing was sent to the wallet.
     if (fate === "refused" && !attempted) {
-      await local({ state: "failed", source: "gateway_precheck", reason: "redeem_refused" });
+      // A 409 at the completing report (1.7.0: a ceiling or a pause) refuses before anything is paid: no
+      // complete_checkout is ever sent for it. Its code names why, for the developer.
+      await local({ state: "failed", source: "gateway_precheck", reason: refused.code === null ? "redeem_refused" : `redeem_refused:${refused.code}` });
       return finish(completion);
     }
     if (!attempted && !(now() < expiresAt)) {
@@ -686,7 +744,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     };
     let answer: WalletCheckout;
     try {
-      answer = await wallet.completeCheckout(at, handle, String(done.idempotency_key), { shipToPostalCode: zip, precheck: recheck, sendUnless });
+      answer = await wallet.completeCheckout(at, handle, String(done.idempotency_key), { ...(zip === undefined ? {} : { shipToPostalCode: zip }), precheck: recheck, sendUnless });
     } catch (error) {
       if (error instanceof CompletionRefusedError || error instanceof AddressFieldsRequiredError) {
         const reason = error instanceof CompletionRefusedError ? error.reason : "address_fields";
