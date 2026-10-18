@@ -1,0 +1,150 @@
+{
+  "id": "H2",
+  "appendix": "H",
+  "description": "Pause requests (Appendix H) for the account key of h1's first case, pinned, checked at now on Intent Cloud's clock with last_counter the last counter it accepted for the key. signing_input is utf8(\"intent-pause-v1\\n\") || JCS({account_key_thumbprint, counter, issued_at, action: \"pause\"}); answer is the status (and error) Appendix H's order gives once the key is found and no rate limit applies. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "now": "2026-10-18T20:00:00Z",
+  "account_key": {
+    "kty": "OKP",
+    "crv": "Ed25519",
+    "x": "3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g"
+  },
+  "skew_seconds": 300,
+  "cases": [
+    {
+      "name": "a valid pause",
+      "input": {
+        "body": {
+          "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
+          "counter": 7,
+          "issued_at": "2026-10-18T20:00:00Z",
+          "signature": "XVqj1O-Ac-CjiyYmIGHRljNWQMl7T2oafJtDfr3hY4AodL_n6qzBAPiakVhM6hoCNAVDp-A57ET-R1YXkWivDg"
+        },
+        "last_counter": 6,
+        "signing_input": "intent-pause-v1\n{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"action\":\"pause\",\"counter\":7,\"issued_at\":\"2026-10-18T20:00:00Z\"}"
+      },
+      "expected": {
+        "signature_valid": true,
+        "answer": "200"
+      }
+    },
+    {
+      "name": "a bad signature: signed by another key",
+      "input": {
+        "body": {
+          "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
+          "counter": 7,
+          "issued_at": "2026-10-18T20:00:00Z",
+          "signature": "buxKcMV6K_q7ZNQKl6TRz0kHV2YZDV9pO97GuDb5hs75eCZ4gLlhPUpwLE_Qgt-dyEGLBCrLSBjq1nYbCn8aBw"
+        },
+        "last_counter": 6,
+        "signing_input": "intent-pause-v1\n{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"action\":\"pause\",\"counter\":7,\"issued_at\":\"2026-10-18T20:00:00Z\"}"
+      },
+      "expected": {
+        "signature_valid": false,
+        "answer": "401"
+      }
+    },
+    {
+      "name": "a bad signature: the counter changed after signing",
+      "input": {
+        "body": {
+          "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
+          "counter": 8,
+          "issued_at": "2026-10-18T20:00:00Z",
+          "signature": "XVqj1O-Ac-CjiyYmIGHRljNWQMl7T2oafJtDfr3hY4AodL_n6qzBAPiakVhM6hoCNAVDp-A57ET-R1YXkWivDg"
+        },
+        "last_counter": 6,
+        "signing_input": "intent-pause-v1\n{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"action\":\"pause\",\"counter\":8,\"issued_at\":\"2026-10-18T20:00:00Z\"}"
+      },
+      "expected": {
+        "signature_valid": false,
+        "answer": "401"
+      }
+    },
+    {
+      "name": "a replayed counter: equal to the last accepted",
+      "input": {
+        "body": {
+          "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
+          "counter": 7,
+          "issued_at": "2026-10-18T20:00:00Z",
+          "signature": "XVqj1O-Ac-CjiyYmIGHRljNWQMl7T2oafJtDfr3hY4AodL_n6qzBAPiakVhM6hoCNAVDp-A57ET-R1YXkWivDg"
+        },
+        "last_counter": 7,
+        "signing_input": "intent-pause-v1\n{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"action\":\"pause\",\"counter\":7,\"issued_at\":\"2026-10-18T20:00:00Z\"}"
+      },
+      "expected": {
+        "signature_valid": true,
+        "answer": "409 counter_replayed"
+      }
+    },
+    {
+      "name": "a replayed counter: below the last accepted",
+      "input": {
+        "body": {
+          "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
+          "counter": 5,
+          "issued_at": "2026-10-18T20:00:00Z",
+          "signature": "xjyNfscsunVHCvHAe9O19xbbICK8lF_DfgPi3bFVtasiqhjFZHQuh9rfAKW8Idgqdhh-YpAW5xeGBsO1u5Y0Bw"
+        },
+        "last_counter": 6,
+        "signing_input": "intent-pause-v1\n{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"action\":\"pause\",\"counter\":5,\"issued_at\":\"2026-10-18T20:00:00Z\"}"
+      },
+      "expected": {
+        "signature_valid": true,
+        "answer": "409 counter_replayed"
+      }
+    },
+    {
+      "name": "clock skew: 5 min 1 s early",
+      "input": {
+        "body": {
+          "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
+          "counter": 7,
+          "issued_at": "2026-10-18T19:54:59Z",
+          "signature": "vuGRkQSYSF14fO1EvWN0qVTMj5qELou2k_4e_bD1BX4-SXi04dV37xjAranAE730dBU19B4hMYdSQJA7ju6WDA"
+        },
+        "last_counter": 6,
+        "signing_input": "intent-pause-v1\n{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"action\":\"pause\",\"counter\":7,\"issued_at\":\"2026-10-18T19:54:59Z\"}"
+      },
+      "expected": {
+        "signature_valid": true,
+        "answer": "400 clock_skew"
+      }
+    },
+    {
+      "name": "clock skew: 5 min 1 s late",
+      "input": {
+        "body": {
+          "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
+          "counter": 7,
+          "issued_at": "2026-10-18T20:05:01Z",
+          "signature": "0psL2d9rbflgAM7TvXlVbBxZ8rNwFUNqPSZAg3AW1V2IimhddXRdcZgUOUlpECqxTIM0iAbMnoHo1VciWQEgCA"
+        },
+        "last_counter": 6,
+        "signing_input": "intent-pause-v1\n{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"action\":\"pause\",\"counter\":7,\"issued_at\":\"2026-10-18T20:05:01Z\"}"
+      },
+      "expected": {
+        "signature_valid": true,
+        "answer": "400 clock_skew"
+      }
+    },
+    {
+      "name": "at the edge of the window: 5 min early",
+      "input": {
+        "body": {
+          "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
+          "counter": 7,
+          "issued_at": "2026-10-18T19:55:00Z",
+          "signature": "ONO-PhNfhOGdVazLooge2pDv5ITddqz2KB3dwxwKfjJ-jbpVxyTEGpQ4ehsHN1L440Kt1P6tlUBy3MxjnVxXCA"
+        },
+        "last_counter": 6,
+        "signing_input": "intent-pause-v1\n{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"action\":\"pause\",\"counter\":7,\"issued_at\":\"2026-10-18T19:55:00Z\"}"
+      },
+      "expected": {
+        "signature_valid": true,
+        "answer": "200"
+      }
+    }
+  ]
+}

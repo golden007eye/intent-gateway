@@ -3,6 +3,7 @@
 // In demo mode (`intent demo`, `--demo`) the same gateway runs against the in-process demo Intent Cloud with the
 // published test root pinned, the store in `<data>/demo`, approval links on the local confirm page, and the demo
 // banner on stderr and on every tool result.
+import { ensureAccountKey } from "../account/index.ts";
 import { type Config, DOCKER_EXEC, DOCKER_STOP, INTENT } from "../config/index.ts";
 import { DEMO_BANNER, type Demo, nextSteps } from "../demo/index.ts";
 import { createGateway } from "../gateway/index.ts";
@@ -49,6 +50,9 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       store,
       completerKeys: openCompleterKeys(dataDir, io.now === undefined ? {} : { now: io.now }),
       ...(oneTap === null ? {} : { oneTap }),
+      // The account key (ADR-0022): its public half goes in every checkout submitted (contract 1.7.0). Made on first
+      // use when `intent init` has not made it yet, never overwritten.
+      accountKey: async () => (await ensureAccountKey(dataDir)).key,
       policy,
       pinnedRootKeys,
       logger: { warn: log },

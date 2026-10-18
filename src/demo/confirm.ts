@@ -18,6 +18,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { AnySnapshot } from "../contract/index.ts";
 import type { ApprovalRecordView, FakeCloud, Outcome, SoftPasskey } from "../cloud-fake/index.ts";
 import { ICONS, LOGO_SVG, UI_CSS } from "../ui/index.ts";
 import { DEMO_BANNER } from "./banner.ts";
@@ -158,13 +159,41 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
     const s = view.snapshot;
     const locked = problem?.kind === "locked" || wrongCodes >= MAX_WRONG_CODES;
     const wrong = problem?.kind === "wrong" ? problem : undefined;
-    const total = money(s.total.amount_minor);
+    const total = s.v === 4 ? (s.currency === "USD" ? money(s.totals.total) : `${s.currency} ${amount(s.totals.total)}`) : money(s.total.amount_minor);
     const check = view.snapshot_hash.slice(0, 8);
     const short = handle.length > 12 ? `${handle.slice(0, 7)}…${handle.slice(-3)}` : handle;
-    // A v2 or v3 snapshot (contract 1.6.x) binds the 5-digit ZIP; a v1 snapshot its 3-digit prefix.
-    const zip = s.v === 1 ? `${s.ship_to.postal_prefix}xx` : s.ship_to.postal_code;
+    const checkRows =
+      `<div><dt>Check code</dt><dd class="strong check" title="Matches the check code your agent showed">` +
+      `<span>${esc(check.slice(0, 4))}</span><span>${esc(check.slice(4))}</span></dd></div>` +
+      `<div><dt>Approval</dt><dd title="${esc(handle)}">${esc(short)}</dd></div></dl>`;
 
+    // A v4 snapshot (contract 1.7.0): the Shop checkout the gateway submitted, shown as Appendix A "Confirm page (v4)"
+    // requires before the passkey prompt: store name, site and myshopify domain, title, quantity, total with currency,
+    // country and coarse postcode, and the completion mode in words.
     const receipt =
+      s.v === 4
+        ? `<div class="total"><span class="k">Total</span><span class="v">${total}</span>` +
+          `<span class="to">to ${esc(s.store_name)} · ships to ${esc(s.ship_to.country)} ${esc(s.ship_to.postal_code_coarse)}</span></div>` +
+          `<dl class="lines dash">` +
+          `<div class="item"><dt>${String(s.quantity)} × ${esc(s.title)}</dt><dd class="amt">${amount(s.totals.subtotal)}</dd></div>` +
+          `<div><dt>Shipping</dt><dd class="amt">${amount(s.totals.shipping)}</dd></div>` +
+          `<div><dt>Tax</dt><dd class="amt">${amount(s.totals.tax)}</dd></div>` +
+          `<div><dt>Store</dt><dd>${esc(s.store_name)}</dd></div>` +
+          `<div><dt>Store site</dt><dd>${esc(s.store_site)}</dd></div>` +
+          `<div><dt>Shopify store</dt><dd>${esc(s.myshopify_domain)}</dd></div>` +
+          `<div><dt>Ship to</dt><dd>${esc(s.ship_to.country)}, postcode ${esc(s.ship_to.postal_code_coarse)}</dd></div>` +
+          `<div><dt>Payment</dt><dd>${
+            s.completion_mode === "shop_agent"
+              ? "One tap: approving pays now with your Shop account."
+              : "Hand-off: you pay on Shop's checkout page."
+          }</dd></div>` +
+          checkRows
+        : v3Receipt(s);
+
+    function v3Receipt(s: Exclude<AnySnapshot, { v: 4 }>): string {
+      // A v2 or v3 snapshot (contract 1.6.x) binds the 5-digit ZIP; a v1 snapshot its 3-digit prefix.
+      const zip = s.v === 1 ? `${s.ship_to.postal_prefix}xx` : s.ship_to.postal_code;
+      return (
       `<div class="total"><span class="k">${s.total_kind === "max" ? "Total, at most" : "Total"}</span>` +
       `<span class="v">${total}</span>` +
       `<span class="to">to ${esc(s.merchant.name)} · ships to ZIP ${esc(zip)}</span></div>` +
@@ -173,9 +202,9 @@ export async function startConfirmPage(options: ConfirmPageOptions): Promise<Con
       `<div><dt>${s.total_kind === "max" ? "Shipping, up to" : "Shipping"}</dt><dd class="amt">${amount(s.shipping.amount_minor)}</dd></div>` +
       `<div><dt>Merchant</dt><dd>${esc(s.merchant.domain)}</dd></div>` +
       `<div><dt>Ship to</dt><dd>US, ZIP ${esc(zip)}</dd></div>` +
-      `<div><dt>Check code</dt><dd class="strong check" title="Matches the check code your agent showed">` +
-      `<span>${esc(check.slice(0, 4))}</span><span>${esc(check.slice(4))}</span></dd></div>` +
-      `<div><dt>Approval</dt><dd title="${esc(handle)}">${esc(short)}</dd></div></dl>`;
+      checkRows
+      );
+    }
 
     const hint =
       `<p class="hint" id="code-hint">Paste works; spaces and dashes are ignored.</p>` +

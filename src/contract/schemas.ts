@@ -91,9 +91,38 @@ export type ApprovalState = z.infer<typeof ApprovalState>;
 // ---- Errors ---------------------------------------------------------------------------------------------------
 
 /** The body of every 4xx except 429 (spec name `Error`, renamed so it does not shadow the global). */
+export const ErrorName = z.enum([
+  "bad_request",
+  "digest_mismatch",
+  "unauthorized",
+  "forbidden",
+  "not_found",
+  "conflict",
+  "gone",
+  "too_large",
+  "clock_skew",
+  "counter_replayed",
+]);
+export type ErrorName = z.infer<typeof ErrorName>;
+
+/** A 403 refusal of `POST /v1/checkouts`, or `paused` on a 409 (1.7.0, Appendix A "Refusals"). */
+export const RefusalCode = z.enum([
+  "ceiling_order",
+  "ceiling_week",
+  "currency_unsupported",
+  "store_blocked",
+  "category_excluded",
+  "paused",
+  "one_tap_off",
+  "account_key_other_buyer",
+]);
+export type RefusalCode = z.infer<typeof RefusalCode>;
+
 export const ErrorBody = z.strictObject({
-  error: z.enum(["bad_request", "digest_mismatch", "unauthorized", "forbidden", "not_found", "conflict", "gone", "too_large"]),
+  error: ErrorName,
   message: z.string().max(200),
+  code: RefusalCode.optional(),
+  last_counter: z.int().min(1).max(MAX_SAFE).optional(),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;
 
@@ -101,7 +130,7 @@ export type ErrorBody = z.infer<typeof ErrorBody>;
 export const RateLimited = z.strictObject({
   error: z.literal("rate_limited"),
   message: z.string().max(200),
-  limit: z.enum(["requests", "carts", "approvals", "enrolments"]),
+  limit: z.enum(["requests", "carts", "approvals", "enrolments", "pause", "checkouts"]),
   retry_after_seconds: z.int().min(1),
 });
 export type RateLimited = z.infer<typeof RateLimited>;
@@ -151,12 +180,35 @@ export const GatewayLimits = z.strictObject({
 });
 export type GatewayLimits = z.infer<typeof GatewayLimits>;
 
+/** An ISO 4217 code (1.7.0); only the currencies of the currency table are supported. */
+export const CurrencyCode = z.string().regex(/^[A-Z]{3}$/);
+export type CurrencyCode = z.infer<typeof CurrencyCode>;
+
+export const CurrencyTableVersion = z.string().regex(/^ct-[0-9a-f]{16}$/);
+export type CurrencyTableVersion = z.infer<typeof CurrencyTableVersion>;
+
+/** One currency's ceilings, in its minor units: the most one order and one buyer's rolling week may total. */
+export const CurrencyCeiling = z.strictObject({ order: z.int().min(0).max(MAX_SAFE), week: z.int().min(0).max(MAX_SAFE) });
+export type CurrencyCeiling = z.infer<typeof CurrencyCeiling>;
+
+/** Intent Cloud's ceiling per currency (1.7.0, Appendix A); `version` is "ct-" + 16 hex of SHA-256(JCS(currencies)). */
+export const CurrencyTable = z.strictObject({
+  version: CurrencyTableVersion,
+  // The spec gives no propertyNames; each key must still be a 3-letter upper-case code (refined, not in the schema).
+  currencies: z
+    .record(z.string(), CurrencyCeiling)
+    .refine((c) => Object.keys(c).length >= 1 && Object.keys(c).every((k) => /^[A-Z]{3}$/.test(k)), "one or more ISO 4217 codes")
+    .meta({ minProperties: 1 }),
+});
+export type CurrencyTable = z.infer<typeof CurrencyTable>;
+
 /** `GET /v1/meta`. `limits` and `enrol_origin` are optional (and provisional); unknown keys are rejected. */
 export const Meta = z.strictObject({
   contract_version: z.string().regex(/^\d+\.\d+\.\d+$/),
   contract_sums_sha256: ContractSums,
   rule_versions: z.array(z.string().min(1)).min(1),
   limits: GatewayLimits.optional(),
+  currency_table: CurrencyTable.optional(),
   enrol_origin: z
     .string()
     .regex(/^https:\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?$/)
@@ -359,19 +411,141 @@ export type SnapshotV2 = z.infer<typeof SnapshotV2>;
 export const SnapshotV3 = SnapshotV2.extend({ v: z.literal(3), myshopify_domain: MyshopifyDomain.optional() });
 export type SnapshotV3 = z.infer<typeof SnapshotV3>;
 
+// ---- Submitted checkouts (1.7.0) ------------------------------------------------------------------------------
+
+const RefHash = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+
+/** A v4 store's origin (1.7.0, Appendix A): a real DNS name, never an IP literal, one label or a numeric last label. */
+export const StoreSite = z
+  .string()
+  .max(261)
+  .regex(/^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9](?:[a-z0-9-]{0,57}[a-z0-9])?)$/);
+export type StoreSite = z.infer<typeof StoreSite>;
+
+/** Integer minor units of the checkout's currency. `total == subtotal + shipping + tax` is a rule for callers (totalsAddUp). */
+export const CheckoutTotals = z.strictObject({
+  subtotal: z.int().min(0).max(MAX_SAFE),
+  shipping: z.int().min(0).max(MAX_SAFE),
+  tax: z.int().min(0).max(MAX_SAFE),
+  total: z.int().min(1).max(MAX_SAFE),
+});
+export type CheckoutTotals = z.infer<typeof CheckoutTotals>;
+
+const COARSE = /^(?:[0-9]{5}|[A-Z][0-9][A-Z]|[0-9]{4})$/;
+/** The destination as country and coarse postcode only (Appendix A "Coarse postcodes"). */
+export const CoarseShipTo = z.strictObject({ country: z.enum(["US", "CA", "AU"]), postal_code: z.string().regex(COARSE) });
+export type CoarseShipTo = z.infer<typeof CoarseShipTo>;
+
+/** The v4 snapshot's ship-to: the request's country and coarse postcode. */
+export const SnapshotShipTo = z.strictObject({ country: z.enum(["US", "CA", "AU"]), postal_code_coarse: z.string().regex(COARSE) });
+export type SnapshotShipTo = z.infer<typeof SnapshotShipTo>;
+
+/**
+ * The hand-off page (1.7.0): https, a lowercase host, then a path. Which hosts are allowed (shop.app, the checkout's
+ * myshopify domain, the host of its store site) is checkout-v4's continueUrlAllowed, which a schema cannot say.
+ */
+export const ShopContinueUrl = z
+  .string()
+  .max(2048)
+  .regex(/^https:\/\/[a-z0-9.-]+\/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*$/);
+export type ShopContinueUrl = z.infer<typeof ShopContinueUrl>;
+
+/** A Shop checkout the gateway created and read back (1.7.0), as the passkey will sign it. */
+export const SubmittedCheckout = z.strictObject({
+  checkout_ref_hash: RefHash,
+  myshopify_domain: MyshopifyDomain,
+  store_site: StoreSite,
+  store_name: z.string().min(1).max(80),
+  variant_ref: VariantRef,
+  title: z.string().min(1).max(120),
+  quantity: z.int().min(1).max(3),
+  currency: CurrencyCode,
+  totals: CheckoutTotals,
+  ship_to: CoarseShipTo,
+  continue_url: ShopContinueUrl.optional(),
+});
+export type SubmittedCheckout = z.infer<typeof SubmittedCheckout>;
+
+const B64URL_KEY = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
+/** The public half of the gateway's Ed25519 account key, an RFC 8037 JWK (1.7.0, Appendix H). */
+export const AccountKey = z.strictObject({ kty: z.literal("OKP"), crv: z.literal("Ed25519"), x: z.string().regex(B64URL_KEY) });
+export type AccountKey = z.infer<typeof AccountKey>;
+
+/** The RFC 7638 SHA-256 thumbprint of the account key, base64url (Appendix H). */
+export const AccountKeyThumbprint = z.string().regex(B64URL_KEY);
+export type AccountKeyThumbprint = z.infer<typeof AccountKeyThumbprint>;
+
+/** `POST /v1/checkouts` (1.7.0): one Shop checkout, exactly one completion mode, a new completer key, the account key. */
+export const CheckoutRequest = z.strictObject({
+  checkout: SubmittedCheckout,
+  completion_mode: CompletionMode,
+  completer_keyid: GatewayKeyId,
+  account_key: AccountKey,
+});
+export type CheckoutRequest = z.infer<typeof CheckoutRequest>;
+
+/**
+ * The purchase snapshot v4 (Appendix A "Snapshot v4", 1.7.0): the submitted Shop checkout, its one completion mode,
+ * the currency table version and the account key thumbprint; `continue_url_hash` exactly for `handoff`.
+ */
+export const SnapshotV4 = z.strictObject({
+  v: z.literal(4),
+  approval: z.string().min(1),
+  nonce: z.string().regex(/^[A-Za-z0-9_-]{21}[AQgw]$/),
+  expires_at: Timestamp,
+  rule_version: z.string().min(1),
+  store_name: z.string().min(1).max(80),
+  store_site: StoreSite,
+  myshopify_domain: MyshopifyDomain,
+  variant_ref: VariantRef,
+  title: z.string().min(1).max(120),
+  quantity: z.int().min(1).max(3),
+  currency: CurrencyCode,
+  totals: CheckoutTotals,
+  ship_to: SnapshotShipTo,
+  checkout_ref_hash: RefHash,
+  completion_mode: CompletionMode,
+  completer_keyid: GatewayKeyId,
+  currency_table: CurrencyTableVersion,
+  account_key_thumbprint: AccountKeyThumbprint,
+  continue_url_hash: RefHash.optional(),
+});
+export type SnapshotV4 = z.infer<typeof SnapshotV4>;
+
+/** `POST /v1/pause` (1.7.0, Appendix H): signed in the body by the account key. */
+export const PauseRequest = z.strictObject({
+  account_key_thumbprint: AccountKeyThumbprint,
+  counter: z.int().min(1).max(MAX_SAFE),
+  issued_at: Timestamp,
+  signature: Ed25519Signature,
+});
+export type PauseRequest = z.infer<typeof PauseRequest>;
+
+export const PauseAccepted = z.strictObject({
+  state: z.literal("paused"),
+  account_key_thumbprint: AccountKeyThumbprint,
+  counter: z.int().min(1).max(MAX_SAFE),
+  paused_at: Timestamp,
+});
+export type PauseAccepted = z.infer<typeof PauseAccepted>;
+
 /** A snapshot binding-v1 can read: v2 (1.6.0) or v3 (1.6.1). Not a spec schema. */
 export const BindableSnapshot = z.discriminatedUnion("v", [SnapshotV2, SnapshotV3]);
 export type BindableSnapshot = z.infer<typeof BindableSnapshot>;
 
+/** A snapshot a 1.7.0 approval may carry: v3 for a cart, v4 for a submitted checkout. The spec's `oneOf`. */
+export const ServedSnapshot = z.discriminatedUnion("v", [SnapshotV3, SnapshotV4]);
+export type ServedSnapshot = z.infer<typeof ServedSnapshot>;
+
 /** Any snapshot version, for reading chains that may hold 1.5.0 or 1.6.0 approvals; they differ in `v`. Not a spec schema. */
-export const AnySnapshot = z.discriminatedUnion("v", [SnapshotV1, SnapshotV2, SnapshotV3]);
+export const AnySnapshot = z.discriminatedUnion("v", [SnapshotV1, SnapshotV2, SnapshotV3, SnapshotV4]);
 export type AnySnapshot = z.infer<typeof AnySnapshot>;
 
 /** `POST /v1/carts/{cart_handle}/approvals` 201. */
 export const ApprovalCreated = z.strictObject({
   approval_handle: ApprovalHandle,
   approval_link_path: z.string().regex(/^\/c\/[A-Za-z0-9_-]{16,64}$/),
-  snapshot: SnapshotV3,
+  snapshot: ServedSnapshot,
   snapshot_hash: z.string().regex(/^[0-9a-f]{64}$/),
   check_code: z.string().regex(/^[0-9a-f]{8}$/),
   state: ApprovalState,
@@ -428,7 +602,7 @@ export type LedgerRef = z.infer<typeof LedgerRef>;
 export const ApprovalProof = z.strictObject({
   v: z.literal(1),
   approval_handle: ApprovalHandle,
-  snapshot: SnapshotV3,
+  snapshot: ServedSnapshot,
   snapshot_hash: z.string().regex(/^[0-9a-f]{64}$/),
   assertion: WebAuthnAssertion,
   credential_public_key: CredentialPublicKey,
@@ -495,7 +669,7 @@ export type BindingCheck = z.infer<typeof BindingCheck>;
 
 /** binding-v1: five checks of an observed order against the approved snapshot. No observed value is copied in. */
 export const Binding = z.strictObject({
-  rule_version: z.literal("binding-v1"),
+  rule_version: z.enum(["binding-v1", "binding-v2"]),
   result: z.enum(["ok", "mismatch", "incomplete"]),
   checks: z.strictObject({
     merchant_origin: BindingCheck,
@@ -740,4 +914,22 @@ export const SCHEMAS = {
   LedgerRef,
   KeyStatement,
   StatementKey,
+  CurrencyCode,
+  CurrencyTable,
+  CurrencyTableVersion,
+  CurrencyCeiling,
+  CheckoutTotals,
+  CoarseShipTo,
+  SnapshotShipTo,
+  ShopContinueUrl,
+  SubmittedCheckout,
+  AccountKey,
+  AccountKeyThumbprint,
+  CheckoutRequest,
+  SnapshotV4,
+  PauseRequest,
+  PauseAccepted,
+  ErrorName,
+  RefusalCode,
+  StoreSite,
 } as const satisfies Record<string, z.ZodType>;

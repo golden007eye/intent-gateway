@@ -42,6 +42,7 @@ import type {
   ApprovalStatus,
   Cart,
   CartRequest,
+  CheckoutRequest,
   Jwks,
   KeyStatement,
   Meta,
@@ -52,6 +53,7 @@ import type {
   SearchRequest,
   SearchResponse,
 } from "../contract/index.ts";
+import { CLOUD_SECRET_PATHS } from "../privacy/index.ts";
 import type { Session } from "../signing/index.ts";
 import type { Store } from "../store/index.ts";
 import { type KeySet, type SentRequest, verifyReceipt } from "../trust/index.ts";
@@ -72,6 +74,7 @@ export interface DisclosedCloud {
   search(request: SearchRequest): Promise<DisclosedResult<SearchResponse>>;
   createCart(request: CartRequest): Promise<DisclosedResult<Cart>>;
   createApproval(cartHandle: string): Promise<DisclosedResult<ApprovalCreated>>;
+  createCheckout(request: CheckoutRequest): Promise<DisclosedResult<ApprovalCreated>>;
   getApproval(approvalHandle: string, signer?: Session): Promise<DisclosedResult<ApprovalStatus>>;
   reportOutcome(approvalHandle: string, report: OutcomeReport, signer?: Session): Promise<DisclosedResult<OutcomeReportAccepted>>;
   /**
@@ -201,6 +204,8 @@ export function createDisclosedCloud(cloud: IntentCloud, store: Store, options: 
     search: (request) => disclosed(true, (beforeSend) => cloud.search(request, { beforeSend })),
     createCart: (request) => disclosed(true, (beforeSend) => cloud.createCart(request, { beforeSend })),
     createApproval: (handle) => disclosed(true, (beforeSend) => cloud.createApproval(handle, { beforeSend })),
+    // A hand-off page's URL holds the checkout key: logged as its sha256 (ADR-0024), sent as the contract requires.
+    createCheckout: (request) => disclosed(true, (beforeSend) => cloud.createCheckout(request, { beforeSend }), { secretPaths: CLOUD_SECRET_PATHS.createCheckout ?? [] }),
     getApproval: (handle, signer) => disclosed(true, (beforeSend) => cloud.getApproval(handle, { beforeSend, ...signedBy(signer) })),
     reportOutcome: (handle, report, signer) =>
       disclosed(true, (beforeSend) => cloud.reportOutcome(handle, report, { beforeSend, ...signedBy(signer) })),

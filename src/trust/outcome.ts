@@ -8,7 +8,20 @@
 // signature held (`signed`): the content rules run only after it did, so a content refusal is a signed claim.
 import { verify } from "node:crypto";
 import { z } from "zod";
-import { type AnySnapshot, ApprovalHandle, Binding, type BindableSnapshot, Ed25519Signature, LedgerRef, OutcomeSource, OutcomeState, Timestamp } from "../contract/index.ts";
+import {
+  type AnySnapshot,
+  ApprovalHandle,
+  Binding,
+  type BindableSnapshot,
+  bindingRuleFor,
+  Ed25519Signature,
+  LedgerRef,
+  OutcomeSource,
+  OutcomeState,
+  type SnapshotV4,
+  snapshotTotal,
+  Timestamp,
+} from "../contract/index.ts";
 import { PINNED_HOSTS } from "../config/index.ts";
 import { canonicalize } from "../jcs/index.ts";
 import { bindingResult, CLOUD_SOURCES, GATEWAY_SOURCES, MODE_STATES, ORDER_REF, REPORT_STATES, REPORTED_ONLY_SOURCES, shipToOptional } from "../outcome/index.ts";
@@ -136,7 +149,7 @@ export function verifyOutcomeStatement(
 }
 
 /** Step 3 of statement validity, plus O1, for a statement whose signature held. */
-function contentProblem(o: StatedOutcome, s: BindableSnapshot, options: OutcomeCheckOptions): OutcomeRefusal | null {
+function contentProblem(o: StatedOutcome, s: BindableSnapshot | SnapshotV4, options: OutcomeCheckOptions): OutcomeRefusal | null {
   if (!MODE_STATES[s.completion_mode].has(o.state)) return "mode";
   if (!CLOUD_SOURCES.has(o.source)) return "source";
   if (o.source === "staging_webhook" && !options.stagingSource) return "source";
@@ -150,7 +163,9 @@ function contentProblem(o: StatedOutcome, s: BindableSnapshot, options: OutcomeC
   if (o.order_ref !== undefined && !ORDER_REF.test(o.order_ref)) return "order_ref";
   if (o.reported?.order_ref !== undefined && !ORDER_REF.test(o.reported.order_ref)) return "order_ref";
   if (o.final_total !== undefined && o.final_total.currency !== "USD") return "final_total";
-  if (o.state === "ordered" && o.final_total !== undefined && o.final_total.amount_minor > s.total.amount_minor) return "final_total";
+  if (o.state === "ordered" && o.final_total !== undefined && o.final_total.amount_minor > snapshotTotal(s).amount_minor) return "final_total";
+  // A v4 approval's outcomes are bound with binding-v2, earlier ones with binding-v1 (Appendix G).
+  if (binding !== undefined && binding.rule_version !== bindingRuleFor(s)) return "binding_result";
   if (binding !== undefined && binding.result !== bindingResult(binding.checks, shipToOptional(o.source))) return "binding_result";
   const reportedBinding = o.reported?.[BINDING];
   if (o.reported !== undefined && reportedBinding !== undefined && reportedBinding.result !== bindingResult(reportedBinding.checks, shipToOptional(o.reported.source))) {

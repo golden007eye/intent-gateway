@@ -8,6 +8,8 @@ export { CONFIRM_ORIGIN, RP_ID } from "./keys.ts";
 export { type Action, type AssertOptions, assertionProblem, challengeFor, SoftPasskey, type SoftPasskeyOptions } from "./passkey.ts";
 export {
   type ApprovalRecordView,
+  type CheckoutControls,
+  DEFAULT_CURRENCIES,
   DEFAULT_QUOTAS,
   type FakeCloud,
   type FakeCloudOptions,
@@ -16,6 +18,9 @@ export {
   type ServedVersion,
   statusState,
   SUMS_1_5_0,
+  SUMS_1_6_0,
+  SUMS_1_6_1,
+  type SnapshotPatch,
   variantRef,
   type Quotas,
   startFakeCloud,

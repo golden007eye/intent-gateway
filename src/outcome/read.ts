@@ -26,10 +26,15 @@ const BINDING_KEY = "binding";
  * Reads Intent Cloud's outcome (the statement's `outcome`) for an approval in `mode` whose snapshot total is
  * `approvedMinor`, given what the statement verification said.
  */
-export function readCloudOutcome(outcome: unknown, approvedMinor: number, check: StatementCheck): CloudReading {
+export function readCloudOutcome(
+  outcome: unknown,
+  approvedMinor: number,
+  check: StatementCheck,
+  approved: { readonly currency: string; readonly rule: Binding["rule_version"] } = { currency: "USD", rule: "binding-v1" },
+): CloudReading {
   const o = record(outcome);
   const state = typeof o.state === "string" ? o.state : "";
-  const local = localBinding(o, approvedMinor);
+  const local = localBinding(o, approvedMinor, approved.currency, approved.rule);
   if (!check.ok) return { state_shown: null, local_binding: local };
   if (state === "ordered" && local?.result !== "ok") return { state_shown: null, local_binding: local };
   return { state_shown: state as OutcomeState, local_binding: local };
@@ -42,14 +47,14 @@ export function shownStatus(state: OutcomeState, mode: CompletionMode): "approve
 }
 
 /** The statement's checks with check 5 re-run by the gateway against the approved total, and the result rule re-run. */
-function localBinding(o: Record<string, unknown>, approvedMinor: number): Binding | null {
+function localBinding(o: Record<string, unknown>, approvedMinor: number, currency: string, rule: Binding["rule_version"]): Binding | null {
   const cloud = record(o[BINDING_KEY]);
   const checks = record(cloud.checks);
   const names = ["merchant_origin", "checkout_ref", "line", "ship_to", "total"] as const;
   if (!names.every((n) => checks[n] === "match" || checks[n] === "differs" || checks[n] === "unknown")) return null;
-  const mine = { ...(checks as BindingChecks), total: totalMatches(approvedMinor, o.final_total) ? "match" : "differs" } as BindingChecks;
+  const mine = { ...(checks as BindingChecks), total: totalMatches(approvedMinor, o.final_total, currency) ? "match" : "differs" } as BindingChecks;
   const source = typeof o.source === "string" ? o.source : "";
-  return { rule_version: "binding-v1", result: bindingResult(mine, shipToOptional(source)), checks: mine };
+  return { rule_version: rule, result: bindingResult(mine, shipToOptional(source)), checks: mine };
 }
 
 function record(value: unknown): Record<string, unknown> {

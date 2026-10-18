@@ -5,7 +5,7 @@
 // Inputs come from outside (Shop, Intent Cloud, a chain), so every observed value is typed `unknown`: a reference
 // must be a JSON string and an amount or quantity a JSON integer, and anything else is `differs`, never converted.
 // Parse wire JSON with parseIntegerJson (src/jcs) first, so `1.0` reaches this file as a non-number.
-import { type BindableSnapshot, type Binding, type BindingCheck, checkoutRefHash, type CompletionMode } from "../contract/index.ts";
+import { type BindableSnapshot, type Binding, type BindingCheck, checkoutRefHash, coarsePostcode, type CompletionMode, type SnapshotV4 } from "../contract/index.ts";
 
 /** An observed order (Appendix G `O`). `checkout_ref` is the raw checkout id, which never leaves the checking service. */
 export interface ObservedOrder {
@@ -69,12 +69,47 @@ export function normaliseOrigin(value: string): string | null {
   return host === undefined || host.length > 253 ? null : `https://${host}`;
 }
 
-/** Rule 25 in integers (`recheck-v1`): USD, `5·R ≥ 4·A` and `R ≤ A`, so exactly `ceil(0.8·A) ≤ R ≤ A`. */
-export function totalMatches(approvedMinor: number, final: unknown): boolean {
+/**
+ * Rule 25 in integers (`recheck-v1`): the approved currency (USD before v4), `5·R ≥ 4·A` and `R ≤ A`, so exactly
+ * `ceil(0.8·A) ≤ R ≤ A`. The same integer in another currency differs: amounts are never converted.
+ */
+export function totalMatches(approvedMinor: number, final: unknown, approvedCurrency = "USD"): boolean {
   if (typeof final !== "object" || final === null) return false;
   const { amount_minor: r, currency } = final as { amount_minor?: unknown; currency?: unknown };
-  if (currency !== "USD" || typeof r !== "number" || !Number.isSafeInteger(r) || r < 0) return false;
+  if (currency !== approvedCurrency || typeof r !== "number" || !Number.isSafeInteger(r) || r < 0) return false;
   return 5 * r >= 4 * approvedMinor && r <= approvedMinor;
+}
+
+/** An observed order for binding-v2 (Appendix G, 1.7.0): binding-v1's, plus the ship-to country. */
+export interface ObservedOrderV2 extends ObservedOrder {
+  readonly ship_to_country?: unknown;
+}
+
+/**
+ * binding-v2 (contract 1.7.0, Appendix G; vector o6) over a v4 snapshot. Check 1 accepts either signed name of the
+ * store in both modes; check 2 is bound in both modes (the passkey signed the checkout's hash); check 4 coarsens the
+ * observed postcode by the snapshot country's rule and compares the country; check 5 compares in the snapshot's
+ * currency only. Throws BindingError for an unknown mode.
+ */
+export function bindingV2(s: SnapshotV4, o: ObservedOrderV2, m: BindingContext): Binding {
+  if (m.mode !== "handoff" && m.mode !== "shop_agent") throw new BindingError(`unknown completion mode ${JSON.stringify(m.mode)}`);
+  const checks: BindingChecks = {
+    merchant_origin: checkOrigin([s.store_site, `https://${s.myshopify_domain}`], o.merchant_origin),
+    checkout_ref: checkCheckout({ checkout_ref_hash: s.checkout_ref_hash }, o, { ...m, mode: "handoff" }),
+    line: checkLine(s, o.lines),
+    ship_to: checkShipToV2(s, o),
+    total: totalMatches(s.totals.total, o.final_total, s.currency) ? "match" : "differs",
+  };
+  return { rule_version: "binding-v2", result: bindingResult(checks, m.ship_to_optional === true), checks };
+}
+
+function checkShipToV2(s: SnapshotV4, o: ObservedOrderV2): BindingCheck {
+  if (!absent(o.ship_to_country) && o.ship_to_country !== s.ship_to.country) return "differs";
+  const code = o.ship_to_postal_code;
+  if (absent(code)) return "unknown";
+  if (typeof code !== "string") return "differs";
+  const coarse = coarsePostcode(s.ship_to.country, code);
+  return coarse !== null && coarse === s.ship_to.postal_code_coarse ? "match" : "differs";
 }
 
 /** The binding-v1 result rule over five check values. */
@@ -117,7 +152,7 @@ function checkOrigin(approved: readonly string[], observed: unknown): BindingChe
   return o !== null && approved.some((a) => normaliseOrigin(a) === o) ? "match" : "differs";
 }
 
-function checkCheckout(s: BindableSnapshot, o: ObservedOrder, m: BindingContext): BindingCheck {
+function checkCheckout(s: { readonly checkout_ref_hash: string }, o: ObservedOrder, m: BindingContext): BindingCheck {
   // One order, one approval: an order already bound elsewhere differs, whatever else is present or absent.
   if (m.bound_elsewhere === true) return "differs";
   let observed: string | null;
@@ -136,7 +171,7 @@ function checkCheckout(s: BindableSnapshot, o: ObservedOrder, m: BindingContext)
   return expected === observed ? "match" : "differs";
 }
 
-function checkLine(s: BindableSnapshot, lines: unknown): BindingCheck {
+function checkLine(s: { readonly variant_ref: string; readonly quantity: number }, lines: unknown): BindingCheck {
   if (!Array.isArray(lines) || lines.length !== 1) return "differs";
   const line: unknown = lines[0];
   if (typeof line !== "object" || line === null) return "differs";

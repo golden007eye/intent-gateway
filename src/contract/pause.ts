@@ -1,6 +1,4 @@
-// The pause call of contract 1.7.0 (ADR-0023), not yet in the vendored tree: its wire shape lives here, in one place,
-// so it can be checked against the 1.7.0 spec once that tree is vendored. Until then this file is the platform's
-// announced shape, word for word:
+// The pause call of contract 1.7.0 (ADR-0023; Appendix H, vectors h1 and h2):
 // - `POST /v1/pause`, sent with `Intent-Contract-Version: 1.7.0` and signed by the gateway session (Appendix C).
 // - Body exactly {account_key_thumbprint, counter, issued_at, signature}. `signature` is base64url Ed25519 by the
 //   account key over UTF-8 "intent-pause-v1\n" || JCS({account_key_thumbprint, counter, issued_at, action: "pause"});
@@ -10,36 +8,18 @@
 //   409 counter_replayed with last_counter, 429 rate_limited (Retry-After).
 // There is no resume route and no status route: resume is by passkey on the confirm page's /account. While paused, a
 // submit, the `completing` outcome report and the confirm decision answer 409 {error: "conflict", code: "paused"}.
+//
+// The request and answer schemas are the vendored spec's (PauseRequest, PauseAccepted, AccountKeyThumbprint in
+// schemas.ts, at parity with contract 1.7.0): one source. This file keeps the pause call's own error reading, its
+// endpoint shape and the signing bytes.
 import { z } from "zod";
 import { canonicalize } from "../jcs/index.ts";
-import { Timestamp } from "./schemas.ts";
+import { PauseAccepted, PauseRequest } from "./schemas.ts";
 
 /** The contract version the pause call is sent in. */
 export const PAUSE_CONTRACT_VERSION = "1.7.0";
 /** The domain separator the account key signs before the JCS payload. */
 export const PAUSE_SIGNING_PREFIX = "intent-pause-v1\n";
-
-/** RFC 7638 SHA-256 thumbprint of {crv, kty, x}, base64url without padding. */
-export const AccountKeyThumbprint = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-/** 64 signature bytes, base64url without padding. */
-const Signature = z.string().regex(/^[A-Za-z0-9_-]{85}[AQgw]$/);
-const Counter = z.int().min(1).max(Number.MAX_SAFE_INTEGER);
-
-export const PauseRequest = z.strictObject({
-  account_key_thumbprint: AccountKeyThumbprint,
-  counter: Counter,
-  issued_at: Timestamp,
-  signature: Signature,
-});
-export type PauseRequest = z.infer<typeof PauseRequest>;
-
-export const PauseAccepted = z.strictObject({
-  state: z.literal("paused"),
-  account_key_thumbprint: AccountKeyThumbprint,
-  counter: Counter,
-  paused_at: Timestamp,
-});
-export type PauseAccepted = z.infer<typeof PauseAccepted>;
 
 /** Every pause error: {error, message}, plus `last_counter` on 409 counter_replayed. Unknown members are dropped. */
 export const PauseError = z.object({

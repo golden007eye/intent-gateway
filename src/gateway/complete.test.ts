@@ -143,7 +143,7 @@ async function approvedCart(base: Base, p: Proc): Promise<string> {
   if (found.status !== "offers" || found.offers[0] === undefined) throw new Error(`no offers: ${found.message}`);
   const cart = await p.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
   if (cart.status !== "approval_needed") throw new Error(`no approval: ${cart.message}`);
-  expect(cart.cart.completion_mode).toBe("shop_agent");
+  expect(cart.cart?.completion_mode).toBe("shop_agent");
   expect(base.fake.approveWithPasskey(cart.approval_handle, base.passkey).status).toBe(200);
   return cart.approval_handle;
 }
@@ -1037,7 +1037,7 @@ describe("security review fixes", () => {
     if (found.status !== "offers" || found.offers[0] === undefined) throw new Error("no offers");
     const cart = await p.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
     if (cart.status !== "approval_needed") throw new Error(cart.message);
-    expect(cart.cart.completion_mode).toBe("handoff");
+    expect(cart.cart?.completion_mode).toBe("handoff");
     const logged = ofKind(await chainOf(base), "disclosure").find((d) => d.endpoint === "createCart");
     expect((JSON.parse(Buffer.from(String(logged?.body_b64), "base64").toString("utf8")) as { completion_accepts: unknown }).completion_accepts).toEqual(["handoff"]);
   });

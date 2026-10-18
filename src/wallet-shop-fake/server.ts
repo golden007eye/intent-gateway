@@ -166,6 +166,8 @@ export interface FakeShopFaults {
   connectionRemoved?: boolean;
   /** The revocation endpoint's status (200 by default). */
   revokeStatus?: number;
+  /** The host of the checkout's continue_url: the store's myshopify domain by default, as S1 saw it. */
+  continueUrlHost?: string;
   /** Whether a repeated complete_checkout idempotency key returns the first result (true by default). */
   idempotency?: boolean;
   /** The `?key=` credential in every checkout id (random by default). */
@@ -521,7 +523,8 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         : { order: { id: c.orderId, label: "FAKE1ORDER", permalink_url: `https://${shop.faults.permalinkHost ?? c.shop}/checkouts/cn/${token}/thank_you?key=${randomBytes(8).toString("hex")}` } }),
       messages: c.messages,
       status: c.status,
-      ...(c.status === "completed" ? {} : { continue_url: `https://shop.example/checkouts/finalizer/r/${token}?key=${randomBytes(8).toString("hex")}` }),
+      // S1: an ineligible checkout's page is on the store's myshopify domain, a cart permalink with a key.
+      ...(c.status === "completed" ? {} : { continue_url: `https://${shop.faults.continueUrlHost ?? c.shop}/cart/c/${token}?key=${randomBytes(8).toString("hex")}` }),
       next: ["Several instruments: ask which unless already chosen, not by position."],
       ...identity(),
     };

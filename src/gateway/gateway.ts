@@ -23,6 +23,7 @@
 // - Completer key (contract 1.6.x, ADR-0016): each cart gets a fresh Ed25519 key, saved to disk before the cart
 //   request names it, so a restarted gateway (new session key) can still read the approval. A cart that goes no
 //   further deletes it; otherwise the retention rules (retention.ts) do, on start and after each status call.
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import {
@@ -30,8 +31,20 @@ import {
   ApprovalHandle,
   type ApprovalStatus,
   BindableApprovalProof,
+  bindingRuleFor,
+  snapshotTotal,
   type AnySnapshot,
   type Cart,
+  type CheckoutRequest,
+  COARSE_COUNTRIES,
+  coarsePostcode,
+  continueUrlAllowed,
+  type CurrencyTable,
+  currencyTableVersion,
+  snapshotV4Problem,
+  totalsAddUp,
+  StoreSite,
+  TWO_DECIMAL_CURRENCIES,
   type CartRequest as CloudCartRequest,
   type CompletionMode as CloudCompletionMode,
   CONTRACT_VERSION,
@@ -39,6 +52,8 @@ import {
   type KeyStatement,
   type Offer as CloudOffer,
   type OutcomeState,
+  type RefusalCode,
+  type SnapshotV3,
   OfferHandle,
   type PauseAccepted,
   type PauseRequest,
@@ -80,12 +95,17 @@ import {
   verifyOutcomeStatement,
   SENT_WORDS,
   readSent,
+  readSentCheckout,
+  type SentCheckout,
+  SENT_CHECKOUT_WORDS,
+  sentCheckoutOf,
+  sentCheckoutProblems,
   stagingSourceAllowed,
   type SentPurchase,
   sentProblems,
   verifyStatement,
 } from "../trust/index.ts";
-import { type WalletAdapter, WalletRailError } from "../wallet/index.ts";
+import { AddressFieldsRequiredError, CheckoutUnconfirmedError, type WalletAdapter, type WalletCheckout, WalletRailError } from "../wallet/index.ts";
 import { advanceCompletion, type CompletionStep, type CompletionView } from "./complete.ts";
 import { disclosedSince, spendHistory, summaryLine } from "./history.ts";
 import { type ApprovalQr, approvalQr } from "./qr.ts";
@@ -118,6 +138,11 @@ export interface GatewayOptions {
    * mode (where the policy allows one_tap), and get_approval_status completes a verified `shop_agent` approval.
    */
   oneTap?: OneTapOptions;
+  /**
+   * The account key (ADR-0022, contract 1.7.0 Appendix H): its public JWK goes as `account_key` in every checkout the
+   * gateway submits, and the v4 snapshot signs its thumbprint. Read at each submit; without it nothing is submitted.
+   */
+  accountKey?: () => Promise<AccountKeyPort>;
   policy: Policy;
   /** The root keys pinned for the Intent Cloud host (config's PINNED_HOSTS, or `--trust-keys`). */
   pinnedRootKeys: readonly PinnedRootKey[];
@@ -136,6 +161,12 @@ export interface GatewayOptions {
     /** A line added to a search that finds no offer, naming what the sample catalog holds ("The demo catalog has: …"). */
     catalogNote?: string;
   };
+}
+
+/** What the gateway needs of the account key: its public half and RFC 7638 thumbprint (src/account's AccountKey fits). */
+export interface AccountKeyPort {
+  readonly publicJwk: { readonly kty: "OKP"; readonly crv: "Ed25519"; readonly x: string };
+  readonly thumbprint: string;
 }
 
 export interface OneTapOptions {
@@ -258,6 +289,21 @@ export type FindOffersResult =
   | (Told & { readonly status: "shop_offers"; readonly offers: readonly ShopOfferView[]; readonly hidden: number })
   | Refused;
 
+/**
+ * A Shop checkout this gateway created, read back and submitted for approval (contract 1.7.0), as the agent sees it:
+ * what the passkey will sign, never the checkout id or the full postcode.
+ */
+export interface SubmittedCheckoutView {
+  readonly store: string;
+  readonly title: string;
+  readonly quantity: number;
+  readonly totals: { readonly subtotal: number; readonly shipping: number; readonly tax: number; readonly total: number };
+  readonly currency: string;
+  readonly ship_to: { readonly country: string; readonly postal_code_coarse: string };
+  /** `shop_agent`: approving pays at once with the linked Shop wallet; `handoff`: the buyer pays on the store's checkout page. */
+  readonly completion_mode: CloudCompletionMode;
+}
+
 export type CreateCartResult =
   | (Told & {
       readonly status: "approval_needed";
@@ -265,7 +311,10 @@ export type CreateCartResult =
       readonly approval_url: string;
       readonly check_code: string;
       readonly qr: ApprovalQr;
-      readonly cart: Cart;
+      /** The cart Intent Cloud made (an offer from Intent Cloud's catalog). */
+      readonly cart?: Cart;
+      /** The Shop checkout the gateway submitted (an offer from Shop search, contract 1.7.0). */
+      readonly checkout?: SubmittedCheckoutView;
     })
   | Refused;
 
@@ -353,6 +402,8 @@ export function createGateway(options: GatewayOptions): Gateway {
     },
   };
   let keySet: KeySet | null = null;
+  /** Intent Cloud's currency table from Meta at start (1.7.0), or null when it sent none or one whose version is not its hash. */
+  let currencyTable: CurrencyTable | null = null;
   const cloud = options.cloud(() => keySet);
   let wallet: WalletAdapter | null = null;
   try {
@@ -468,8 +519,17 @@ export function createGateway(options: GatewayOptions): Gateway {
     }
     if (result.ok) return { ok: true, body: result.body, seq: result.disclosureSeq };
     if (isPausedAnswer(result)) return { ...refuse("refused", PAUSED_BY_CLOUD), paused: true as const };
-    const said = result.body === null ? "" : `: ${result.body.message}`;
+    // Every other 1.7.0 refusal names its reason in `code` (403, or a 409 ceiling): told in the gateway's words, by code.
+    const code = result.body !== null && "code" in result.body ? result.body.code : undefined;
+    if (code !== undefined && (result.status === 403 || result.status === 409)) {
+      return refuse("refused", `Refused: ${code}. ${REFUSAL_CODE_WORDS[code]}`);
+    }
     const retry = result.retryAfter === null ? "" : ` Try again in ${String(result.retryAfter)} s.`;
+    // 1.7.0: the per-IP checkout quota. Said once; the gateway never resubmits on its own.
+    if (result.status === 429 && result.body !== null && "limit" in result.body && result.body.limit === "checkouts") {
+      return refuse("refused", `Refused: Intent Cloud answered that this network has submitted too many checkouts this hour. Nothing was bought, and the gateway does not resubmit by itself.${retry}`);
+    }
+    const said = result.body === null ? "" : `: ${result.body.message}`;
     return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}`);
   }
 
@@ -523,6 +583,13 @@ export function createGateway(options: GatewayOptions): Gateway {
           `${problems.join("; ")}. Update the gateway, or point it at an Intent Cloud host that serves ${CONTRACT_VERSION}.`,
       );
     }
+
+    // The currency table (1.7.0): which currencies a submitted checkout may be in. Its version must be the hash of its
+    // own currencies, or the table is not used (a submit then refuses, naming why).
+    const table = meta.body.currency_table;
+    // Only two-decimal currencies may be listed (1.7.0): a table with any other is not used.
+    const twoDecimal = table !== undefined && Object.keys(table.currencies).every((c) => (TWO_DECIMAL_CURRENCIES as readonly string[]).includes(c));
+    currencyTable = table !== undefined && twoDecimal && currencyTableVersion(table.currencies) === table.version ? table : null;
 
     const statement = await cloud.keyStatement();
     if (!statement.ok) throw new GatewayStartError(`Intent Cloud key statement failed with status ${String(statement.status)}`);
@@ -776,15 +843,8 @@ export function createGateway(options: GatewayOptions): Gateway {
     const parsed = CreateCartInput.safeParse(raw);
     if (!parsed.success) return { status: "invalid", message: `Not sent: ${z.prettifyError(parsed.error)}`, summary: summary(fromSeq) };
     const quantity = parsed.data.quantity ?? 1;
-    if (localOffers.has(parsed.data.offer_handle)) {
-      // SEAM (G6): the Shop checkout is created here from the kept offer (store, variant, quantity), read back and
-      // submitted for the passkey approval.
-      return {
-        status: "refused",
-        message: "Not sent: this offer came from Shop search, and this gateway version cannot yet prepare a cart for it. Nothing was bought.",
-        summary: summary(fromSeq),
-      };
-    }
+    const local = localOffers.get(parsed.data.offer_handle);
+    if (local !== undefined) return submitShopCheckout(local, quantity, fromSeq);
     const known = offers.get(parsed.data.offer_handle);
     if (known === undefined) {
       return {
@@ -909,8 +969,14 @@ export function createGateway(options: GatewayOptions): Gateway {
       if (approvalCall.paused === true) await pausedByCloud("create_approval", "createApproval", fromSeq);
       return approvalCall.refused;
     }
-    const created = approvalCall.body;
-    await store.append("observed", observeApproval(approvalCall.seq, created));
+    const served = approvalCall.body;
+    await store.append("observed", observeApproval(approvalCall.seq, served));
+    // A cart's approval carries a v3 snapshot (1.7.0 keeps v3 for carts); a v4 one belongs to a submitted checkout.
+    if (served.snapshot.v !== 3) {
+      return block("createApproval", ["snapshot"], [`snapshot: ${SENT_WORDS.v}`], fromSeq, "refused",
+        `Refused: the purchase snapshot does not match the cart (${SENT_WORDS.v}). Do not approve it.`);
+    }
+    const created = { ...served, snapshot: served.snapshot };
     const snapshotProblems = [
       ...checkSnapshot(created, cart, sent),
       ...spendCheck(policyOffer(created.snapshot.merchant.domain, known.category, created.snapshot.total, null, created.snapshot.quantity), mode).map(
@@ -991,6 +1057,248 @@ export function createGateway(options: GatewayOptions): Gateway {
     return [...new Set(wallets), ...(allowed.includes("handoff") ? ["handoff" as const] : [])];
   }
 
+  // ---- submitted Shop checkout (contract 1.7.0, G6) ----------------------------------------------------------------
+
+  /**
+   * An offer from Shop search: the gateway creates the Shop checkout (line items only: Shop fills delivery from the
+   * account), reads it back, checks it here, and submits what the buyer will pay to `POST /v1/checkouts` for the
+   * passkey approval (ADR-0024). Every send is logged first (invariant 2); only the country and the coarse postcode
+   * leave for Intent Cloud, never the full postcode or any buyer identity (invariant 3). A checkout that goes no
+   * further is forgotten (its id released). After the passkey, get_approval_status redeems it under the one-tap rules.
+   */
+  async function submitShopCheckout(local: LocalOffer, quantity: number, fromSeq: number): Promise<CreateCartResult> {
+    const offer = local.offer;
+    const endpoint = "createCheckout";
+    const refuse = (blocked: string, message: string, status: Refused["status"] = "refused", held: Readonly<Record<string, unknown>> = {}): Promise<Refused> =>
+      block(endpoint, ["checkout"], [blocked], fromSeq, status, message, held);
+
+    // The policy on the offer as searched (its price, in USD: the policy's caps are in USD and never converted).
+    if (offer.price.currency !== "USD") {
+      return refuse(`currency ${offer.price.currency}`, `Not sent: the offer is priced in ${offer.price.currency}; the gateway policy's limits are in USD and the gateway never converts.`);
+    }
+    const before = spendCheck({ merchant: offer.storeDomain, category: local.category, price_usd: offer.price.amountMinor / 100, quantity });
+    if (before.length > 0) {
+      return block(endpoint, ["checkout"], before.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
+        `Not sent: the gateway policy refuses this purchase (${before.map((b) => b.reason).join("; ")}).`, { title: offer.title, quantity });
+    }
+    if (wallet === null) return refuse("wallet: none", "Not sent: no usable Shop wallet is linked, so the gateway cannot prepare this Shop checkout.", "error");
+    const table = currencyTable;
+    if (table === null) {
+      return refuse("currency_table: none", "Not sent: the meta Intent Cloud returns holds no valid currency table, so the gateway cannot check the checkout's currency. Restart the gateway.", "error");
+    }
+    let account: AccountKeyPort;
+    try {
+      const read = await options.accountKey?.();
+      if (read === undefined) throw new Error("no account key is configured");
+      account = read;
+    } catch (error) {
+      return refuse("account_key: none", `Not sent: the account key could not be read (${(error as Error).message}). Run \`${INTENT} init\`.`, "error");
+    }
+    const fresh = await currentKeys(fromSeq);
+    if (!fresh.ok) return fresh.refused;
+
+    // 1. Create the Shop checkout (line items only), then read it back: what Shop will charge is what is submitted.
+    const purchase = `pc_${randomBytes(12).toString("base64url")}`;
+    let created: WalletCheckout;
+    try {
+      created = await wallet.createCheckout({ purchase, storeDomain: offer.storeDomain, lines: [{ variantRef: offer.variantRef, quantity }], shipToPostalCode: local.zip });
+    } catch (error) {
+      return { status: providerFailure(error), message: checkoutFailureMessage(error), summary: summary(fromSeq) };
+    }
+    const forget = (c: WalletCheckout): Promise<void> => wallet.release({ storeDomain: c.storeDomain, checkoutRef: c.checkoutRef }).catch(() => undefined);
+    let checkout: WalletCheckout;
+    try {
+      checkout = await wallet.getCheckout({ storeDomain: created.storeDomain, checkoutRef: created.checkoutRef }, purchase);
+    } catch (error) {
+      await forget(created);
+      return { status: providerFailure(error), message: checkoutFailureMessage(error), summary: summary(fromSeq) };
+    }
+
+    // 2. The checkout must be the offer, in a currency Intent Cloud supports, shipping to the ZIP the user gave.
+    const problem = shopCheckoutProblem(checkout, created, offer, quantity, local.zip, table);
+    if (problem !== null) {
+      await forget(checkout);
+      return refuse(problem.rule, `Not sent: ${problem.words}. Nothing was submitted for approval and nothing was bought.`, "refused",
+        problem.rule.startsWith("currency_unsupported") ? { currency: checkout.total?.currency ?? "", currency_table: table.version } : {});
+    }
+    const totals = checkout.totals as NonNullable<WalletCheckout["totals"]>;
+    const area = checkout.shipToArea as NonNullable<WalletCheckout["shipToArea"]>;
+    const currency = (checkout.total as NonNullable<WalletCheckout["total"]>).currency;
+
+    // 3. The completion mode: one tap when the policy allows it and Shop can pay this checkout from the agent budget
+    //    now; otherwise Shop's own checkout page (decision 28), when the policy allows the hand-off.
+    const allowed = meet(policy, CLOUD_BASELINE).completion;
+    let budgetCovers: boolean;
+    try {
+      const acct = await wallet.account();
+      budgetCovers = acct.connected && acct.budgetRemaining !== null && acct.budgetRemaining.currency === currency && acct.budgetRemaining.amountMinor >= totals.total;
+    } catch {
+      budgetCovers = false;
+    }
+    const oneTapReady = allowed.includes("one_tap") && checkout.status === "open" && checkout.budgetOffered && budgetCovers;
+    // A real DNS name only (1.7.0 StoreSite): a storefront origin that is an IP literal, one label or ends in a number
+    // is refused here, before anything reaches Intent Cloud, as Intent Cloud would refuse it (400).
+    const storeSite = offer.storefrontOrigin ?? `https://${offer.storeDomain}`;
+    if (!StoreSite.safeParse(storeSite).success) {
+      await forget(checkout);
+      return refuse("store_site", "Not sent: the store's site is not a DNS name the contract allows (an IP address, a single label or a numeric ending).");
+    }
+    let mode: CloudCompletionMode;
+    let continueUrl: string | undefined;
+    if (oneTapReady) {
+      mode = "shop_agent";
+    } else if (allowed.includes("handoff") && checkout.continueUrl != null && continueUrlAllowed(checkout.continueUrl, { myshopify_domain: offer.storeDomain, store_site: storeSite })) {
+      mode = "handoff";
+      continueUrl = checkout.continueUrl;
+    } else {
+      await forget(checkout);
+      const why = !allowed.includes("one_tap")
+        ? "the gateway policy does not allow one tap, and Shop gave no checkout page on the store's own hosts to hand off to"
+        : !budgetCovers || !checkout.budgetOffered
+          ? 'the Shop agent budget does not cover this checkout (turn on "Allow agent to pay" with a budget in the Shop app), and no hand-off page is allowed'
+          : "Shop asks the buyer to finish this checkout, and gave no checkout page on the store's own hosts to hand off to";
+      return refuse("completion: none", `Not sent: ${why}.`, "blocked");
+    }
+    const spend = spendCheck({ merchant: offer.storeDomain, category: local.category, price_usd: totals.total / 100 / quantity, quantity }, mode);
+    if (spend.length > 0) {
+      await forget(checkout);
+      return block(endpoint, ["checkout"], spend.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
+        `Not sent: the gateway policy refuses this checkout's total (${spend.map((b) => b.reason).join("; ")}).`, { title: offer.title, quantity });
+    }
+
+    // 4. The completer key, on disk before the request names it (ADR-0016), then the submit, logged before it is sent.
+    let completer: Session;
+    try {
+      const earlier = new Set(store.entries().flatMap((e) => (e.kind === "approval_pending" ? [bodyOf(e).completer_keyid] : [])));
+      completer = await completerKeys.create((keyid) => !earlier.has(keyid) && findIdentity({ completer_keyid: keyid }).length === 0);
+    } catch (error) {
+      await forget(checkout);
+      return { status: "error", message: `Not sent: the completer key could not be saved (${(error as Error).message}).`, summary: summary(fromSeq) };
+    }
+    const lineTitle = checkout.lines[0]?.title ?? "";
+    const request: CheckoutRequest = {
+      checkout: {
+        checkout_ref_hash: checkout.checkoutRef,
+        myshopify_domain: checkout.storeDomain,
+        store_site: storeSite,
+        store_name: storeNameOf(offer),
+        variant_ref: offer.variantRef,
+        title: (lineTitle !== "" ? lineTitle : offer.title !== "" ? offer.title : "(untitled)").slice(0, 120),
+        quantity,
+        currency,
+        totals: { subtotal: totals.subtotal, shipping: totals.shipping, tax: totals.tax, total: totals.total },
+        ship_to: { country: area.country as "US" | "CA" | "AU", postal_code: area.postalCodeCoarse },
+        ...(continueUrl === undefined ? {} : { continue_url: continueUrl }),
+      },
+      completion_mode: mode,
+      completer_keyid: completer.keyid,
+      account_key: { kty: "OKP", crv: "Ed25519", x: account.publicJwk.x },
+    };
+    // What step 7 checks, chained: the request without its continue_url (a credential, never chained), and its hash.
+    const sent = sentCheckoutOf(request, table.version);
+    let keep = false;
+    try {
+      const outcome = await submitAndCheck(request, sent, checkout, fresh.keys.confirmOrigin, fromSeq);
+      keep = outcome.status === "approval_needed";
+      return outcome;
+    } finally {
+      if (!keep) {
+        await dropKey(completer.keyid);
+        await forget(checkout);
+      }
+    }
+  }
+
+  /** The submit, the checks of the approval it returns (Appendix E step 7 before the passkey), and the pending entry. */
+  async function submitAndCheck(
+    request: CheckoutRequest,
+    sent: SentCheckout,
+    checkout: WalletCheckout,
+    confirmOrigin: string,
+    fromSeq: number,
+  ): Promise<CreateCartResult> {
+    // A pause chained since create_cart began (another process, the panel) stops the submit too (ADR-0023).
+    if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_cart", source: "gateway" }))) {
+      return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
+    }
+    const submitted = await call(() => cloud.createCheckout(request), fromSeq);
+    if (!submitted.ok) {
+      if (submitted.paused === true) await pausedByCloud("create_cart", "createCheckout", fromSeq);
+      return submitted.refused;
+    }
+    // The submit went through: a resume the developer confirmed at a terminal is confirmed by Intent Cloud's answer.
+    if (pauseState(store.entries()).unconfirmedResume !== null) await noteSubmitAnswer(store, { paused: false, disclosureSeq: submitted.seq });
+    const created = submitted.body;
+    await store.append("observed", observeApproval(submitted.seq, created));
+    const s = created.snapshot;
+    const parsedSent = readSentCheckout(sent);
+    const problems: string[] = [];
+    if (parsedSent === null) problems.push("the request is not what step 7 can check");
+    if (sha256Hex(canonicalize(s)) !== created.snapshot_hash) problems.push("snapshot_hash is not the snapshot's hash");
+    if (created.check_code !== created.snapshot_hash.slice(0, 8)) problems.push("check_code is not the start of snapshot_hash");
+    if (s.approval !== created.approval_handle) problems.push("snapshot is for another approval");
+    if (created.state !== "pending") problems.push(`approval is ${created.state}, not pending`);
+    const own = snapshotV4Problem(s);
+    if (own !== null) problems.push(`snapshot breaks the v4 rules (${own})`);
+    if (parsedSent !== null) problems.push(...sentCheckoutProblems(s, parsedSent).map((r) => SENT_CHECKOUT_WORDS[r]));
+    if (problems.length > 0 || s.v !== 4) {
+      return block("createCheckout", ["snapshot"], problems.map((p) => `snapshot: ${p}`), fromSeq, "refused",
+        `Refused: the purchase snapshot is not the checkout this gateway submitted (${problems.join("; ")}). Do not approve it.`);
+    }
+    const approvalUrl = (options.demo?.confirmBaseUrl ?? confirmOrigin) + created.approval_link_path;
+    const mode = s.completion_mode;
+    const reserved = { merchant: s.myshopify_domain, category: "", price_usd: s.totals.total / 100 / s.quantity, quantity: s.quantity };
+    try {
+      await store.appendUnless(
+        "approval_pending",
+        {
+          handle: created.approval_handle,
+          approval_url: approvalUrl,
+          snapshot_hash: created.snapshot_hash,
+          total_minor: s.totals.total,
+          expires_at: s.expires_at,
+          completion_mode: mode,
+          completer_keyid: request.completer_keyid,
+          checkout_ref: s.checkout_ref_hash,
+          sent,
+        },
+        (chain) => spendCheck(reserved, mode, chain).length > 0,
+      );
+    } catch (error) {
+      if (!(error instanceof StoreConflictError)) throw error;
+      const over = spendCheck(reserved, mode).map((b) => b.reason);
+      return block("createCheckout", ["snapshot"], over.map((p) => `snapshot: ${p}`), fromSeq, "refused",
+        `Refused: another purchase took the room under the gateway policy's limits meanwhile (${over.join("; ")}). Do not approve it.`);
+    }
+    createdHere.add(created.approval_handle);
+    const total = formatMinor(s.totals.total, s.currency);
+    const how = mode === "shop_agent" ? "approving pays at once from the buyer's Shop agent budget" : "after approving, the buyer pays on Shop's checkout page";
+    return {
+      status: "approval_needed",
+      approval_handle: created.approval_handle,
+      approval_url: approvalUrl,
+      check_code: created.check_code,
+      qr: approvalQr(approvalUrl),
+      checkout: {
+        store: s.store_name,
+        title: s.title,
+        quantity: s.quantity,
+        totals: s.totals,
+        currency: s.currency,
+        ship_to: s.ship_to,
+        completion_mode: mode,
+      },
+      message:
+        (options.demo === undefined
+          ? `Ask the buyer to open ${approvalUrl} (or scan the QR code) and approve ${total} with their passkey; ${how}. ` +
+            `The page shows check code ${created.check_code}. Then call get_approval_status.`
+          : `Demo: ask the user to open the approval link ${approvalUrl} and click "${approveLabel(s.totals.total)}" ` +
+            `(enter the code shown in the gateway's terminal); ${how}. The page shows check code ${created.check_code}. ` +
+            "Then call get_approval_status."),
+      summary: summary(fromSeq),
+    };
+  }
+
   // ---- approval status ------------------------------------------------------------------------------------------
 
   async function getApprovalStatus(raw: unknown): Promise<ApprovalStatusResult> {
@@ -1008,6 +1316,11 @@ export function createGateway(options: GatewayOptions): Gateway {
       return { status: "unknown", message: "This gateway did not ask for that approval, so it cannot report on it.", summary: summary(fromSeq) };
     }
     const chained = chain.find((e) => e.kind === "approval" && bodyOf(e).handle === handle);
+    // Contract 1.7.0: a later submit of the same checkout in the same mode supersedes this approval (Intent Cloud
+    // expires it), so it is dead here too, whatever is read for it: only the newest one can be approved.
+    if (chained === undefined && supersededIn(chain, pending)) {
+      return { status: "expired", message: "This approval was replaced by a newer one for the same Shop checkout; use the newest approval link.", summary: summary(fromSeq) };
+    }
 
     const fresh = await currentKeys(fromSeq);
     if (!fresh.ok) return fresh.refused;
@@ -1034,7 +1347,7 @@ export function createGateway(options: GatewayOptions): Gateway {
 
     // A live approval is a 1.6.x one, chained with step 7's `sent`. A pending entry without it (written by a 1.5.0
     // gateway) is refused here, so the released 1.5.0 proof form is accepted only by `intent verify` on old chains.
-    if (readSent(bodyOf(pending).sent) === null) {
+    if (readSent(bodyOf(pending).sent) === null && readSentCheckout(bodyOf(pending).sent) === null) {
       return {
         ...(await block("getApproval", ["proof"], ["approval_proof: chained without what Appendix E step 7 checks (sent)"], fromSeq, "refused", "")),
         status: "not_verified",
@@ -1128,7 +1441,8 @@ export function createGateway(options: GatewayOptions): Gateway {
           // This purchase counted once: its own approval and pending entries left out, then evaluated as a new cart.
           const others = chain.filter((e) => !((e.kind === "approval" || e.kind === "approval_pending") && bodyOf(e).handle === handle));
           const s = proof.snapshot;
-          return spendCheck(policyOffer(s.merchant.domain, "", s.total, null, s.quantity), "shop_agent", others).some(
+          const offer = s.v === 4 ? policyOffer(s.myshopify_domain, "", { amount_minor: s.totals.total }, null, s.quantity) : policyOffer(s.merchant.domain, "", s.total, null, s.quantity);
+          return spendCheck(offer, "shop_agent", others).some(
             (b) => b.rule.startsWith("spend.") || b.rule === "history_invalid",
           );
         },
@@ -1167,7 +1481,8 @@ export function createGateway(options: GatewayOptions): Gateway {
     // then it is not kept, and nothing in it is acted on (refused_by "identity").
     const held = statement !== undefined && findIdentity(statement, { orderRefAt: ORDER_REF_AT.statement }).length === 0;
     if (statement !== undefined && !held) check = { ok: false, refused_by: "identity", signed: false };
-    const reading = readCloudOutcome(stated, snapshot.total.amount_minor, check);
+    const approvedTotal = snapshotTotal(snapshot);
+    const reading = readCloudOutcome(stated, approvedTotal.amount_minor, check, { currency: approvedTotal.currency, rule: bindingRuleFor(snapshot) });
     const shownState = reading.state_shown;
     const cloud = { state: stated.state, source: stated.source, assurance: stated.assurance };
     const named = shownState !== null && stated.order_ref !== undefined && ORDER_REF.test(stated.order_ref);
@@ -1373,7 +1688,7 @@ function cartV16Problems(cart: Cart, offer: CloudOffer, accepts: readonly CloudC
  * that passes Appendix E step 7 against what was sent and received (`sent`, trust's sentProblems): the same check
  * the approval must pass again when it is accepted.
  */
-function checkSnapshot(created: ApprovalCreated, cart: Cart, sent: SentPurchase): string[] {
+function checkSnapshot(created: ApprovalCreated & { readonly snapshot: SnapshotV3 }, cart: Cart, sent: SentPurchase): string[] {
   const s = created.snapshot;
   const problems: string[] = [];
   if (sha256Hex(canonicalize(s)) !== created.snapshot_hash) problems.push("snapshot_hash is not the snapshot's hash");
@@ -1450,7 +1765,27 @@ const REFUSAL_WORDS: Readonly<Record<string, string>> = {
   create_unconfirmed: "Shop gave no usable answer to the checkout request, and the gateway never sends it twice.",
 };
 
+/**
+ * Intent Cloud's refusal codes (contract 1.7.0, Appendix A "Refusals" and Appendix H), each as one clear line: what
+ * Intent Cloud answered and what the developer or the buyer can do. Nothing was bought in any of them.
+ */
+export const REFUSAL_CODE_WORDS: Readonly<Record<RefusalCode, string>> = {
+  one_tap_off: "Intent Cloud answered that one tap is off for this account, so it refused a purchase paid by the gateway's wallet. Nothing was bought.",
+  currency_unsupported: "Intent Cloud answered that it does not support this checkout's currency. Nothing was bought.",
+  store_blocked: "Intent Cloud answered that this store is on its block list. Nothing was bought; choose another store.",
+  category_excluded: "Intent Cloud answered that this item is in a category it excludes (health and medical, age-restricted, financial or digital goods). Nothing was bought.",
+  ceiling_order: "Intent Cloud answered that this order is above its per-order ceiling for the currency. Nothing was bought.",
+  ceiling_week: "Intent Cloud answered that this order would pass the buyer's weekly ceiling for the currency. Nothing was bought.",
+  // Contract 1.7.0 final: there is no unpin; the developer's recovery is a new account key. `intent init` never replaces
+  // a key (ADR-0022), so the key file is moved away first.
+  account_key_other_buyer:
+    `Intent Cloud answered that this gateway's account key is pinned to another buyer (the first buyer who approved with it), and Intent Cloud has no unpin. Nothing was bought. To recover, make a new account key: move account-key.json out of the gateway's data directory, then run \`${INTENT} init\`, which makes a new one.`,
+  paused: "Intent Cloud answered that the buyer paused purchases for this account key; the buyer resumes with their passkey on the confirm page. Nothing was bought.",
+};
+
 function refusalWords(reason: string | undefined): string {
+  const code = reason?.startsWith("redeem_refused:") === true ? reason.slice("redeem_refused:".length) : undefined;
+  if (code !== undefined && code in REFUSAL_CODE_WORDS) return ` ${REFUSAL_CODE_WORDS[code as RefusalCode]}`;
   if (reason?.startsWith("store_pair:") === true) {
     return " The merchant's storefront (its /meta.json) did not confirm the Shopify store in the approved snapshot, so the gateway paid nothing.";
   }
@@ -1510,6 +1845,86 @@ function shopOfferView(handle: string, offer: SearchOffer): ShopOfferView {
     ...(offer.imageUrl === null ? {} : { image_url: offer.imageUrl }),
     ...(offer.productUrl === null ? {} : { product_url: offer.productUrl }),
   };
+}
+
+/**
+ * Why a Shop checkout read back cannot be submitted, or null (contract 1.7.0, G6 and G7). Each rule is local, so a
+ * refusal sends nothing to Intent Cloud. `rule` goes into the block entry (no value), `words` to the agent.
+ */
+function shopCheckoutProblem(
+  checkout: WalletCheckout,
+  created: WalletCheckout,
+  offer: SearchOffer,
+  quantity: number,
+  zip: string,
+  table: CurrencyTable,
+): { rule: string; words: string } | null {
+  // The checkout read back is the one created, at the store the offer named: the store a checkout actually lives at is
+  // what the passkey will sign (as binding check 1 holds a shop_agent purchase to it), never a storefront Shop paired.
+  if (checkout.checkoutRef !== created.checkoutRef) return { rule: "checkout: another checkout", words: "Shop read back another checkout than it created" };
+  if (checkout.storeDomain !== offer.storeDomain) return { rule: "checkout: another store", words: "Shop's checkout lives at another store than the offer's" };
+  if (checkout.status !== "open" && checkout.status !== "buyer_review") return { rule: `checkout: ${checkout.status}`, words: `Shop's checkout is ${checkout.status.replace("_", " ")}, not open` };
+  const line = checkout.lines[0];
+  if (checkout.lines.length !== 1 || line?.variantRef !== offer.variantRef || line.quantity !== quantity) {
+    return { rule: "checkout: lines", words: "Shop's checkout does not hold exactly the offered item and quantity" };
+  }
+  const total = checkout.total;
+  if (total === null) return { rule: "checkout: no total", words: "Shop's checkout shows no total" };
+  // G7: a currency Intent Cloud's table does not list is refused here, naming the table version it was checked against.
+  if (table.currencies[total.currency] === undefined) {
+    return { rule: `currency_unsupported: ${total.currency} (${table.version})`, words: `Shop's checkout is in ${total.currency}, which the currency table Intent Cloud returns (${table.version}) does not list` };
+  }
+  // The policy's limits are in USD and are compared in the checkout's own currency only: never converted.
+  if (total.currency !== "USD") return { rule: `currency: ${total.currency}`, words: `Shop's checkout is in ${total.currency}; the gateway policy's limits are in USD and the gateway never converts` };
+  const totals = checkout.totals ?? null;
+  if (totals === null || !totalsAddUp(totals) || totals.total !== total.amountMinor) {
+    return { rule: "checkout: totals", words: "Shop's checkout totals do not add up to its total (a discount or a fee the gateway does not submit)" };
+  }
+  const area = checkout.shipToArea ?? null;
+  if (area === null || !(COARSE_COUNTRIES as readonly string[]).includes(area.country)) {
+    return { rule: "checkout: ship_to", words: "Shop's checkout ships to no single destination in the US, Canada or Australia" };
+  }
+  // The coarse postcode only leaves the gateway; it must be the one the user gave for the search.
+  if (area.country !== "US" || coarsePostcode("US", zip) !== area.postalCodeCoarse) {
+    return { rule: "checkout: ship_to differs", words: "Shop's saved address ships to another ZIP than the one given for the search; set the preferred address in the Shop app, or search with its ZIP" };
+  }
+  return null;
+}
+
+/** Whether a later `approval_pending` submitted the same Shop checkout in the same mode (1.7.0 supersession). */
+function supersededIn(chain: readonly Entry[], pending: Entry): boolean {
+  const mine = readSentCheckout(bodyOf(pending).sent);
+  if (mine === null) return false;
+  const key = (s: NonNullable<typeof mine>): string => `${s.checkout_request.checkout.checkout_ref_hash} ${s.checkout_request.completion_mode}`;
+  return chain.some((e) => {
+    if (e.kind !== "approval_pending" || e.seq <= pending.seq || bodyOf(e).handle === bodyOf(pending).handle) return false;
+    const other = readSentCheckout(bodyOf(e).sent);
+    return other !== null && key(other) === key(mine);
+  });
+}
+
+/** The store name the snapshot carries: the storefront host, else the myshopify domain (what the agent was shown). */
+function storeNameOf(offer: SearchOffer): string {
+  const host = offer.storefrontOrigin === null ? null : new URL(offer.storefrontOrigin).host;
+  return (host ?? offer.storeDomain).slice(0, 80);
+}
+
+/** An amount for a sentence: `$12.34` in USD, `CAD 12.34` otherwise. */
+function formatMinor(minor: number, currency: string): string {
+  const text = `${Math.floor(minor / 100).toLocaleString("en-US")}.${String(minor % 100).padStart(2, "0")}`;
+  return currency === "USD" ? `$${text}` : `${currency} ${text}`;
+}
+
+/** A failed Shop checkout create or read, in the gateway's words: never Shop's own message, which can carry identity. */
+function checkoutFailureMessage(error: unknown): string {
+  if (error instanceof DisclosureBlockedError) return "Not sent: the checkout request looked like buyer identity.";
+  if (error instanceof DisclosureRefusedError) return `Not sent: ${error.reasons.join("; ")}.`;
+  if (error instanceof DisclosureStoppedError) return `Not sent: ${error.message}. The developer must restart the gateway.`;
+  if (error instanceof AddressFieldsRequiredError) return "Not sent: Shop asked for the buyer's address fields, which the gateway never sends. Set a preferred address in the Shop app.";
+  if (error instanceof CheckoutUnconfirmedError) return "Shop gave no usable answer to the checkout request; the gateway does not send it again. Nothing was submitted for approval.";
+  if (error instanceof WalletRailError) return `Shop could not prepare the checkout: ${error.label}.`;
+  if (error instanceof Error && error.name === "ShopTransportError") return `Shop could not be reached for the checkout: ${error.message}.`;
+  throw error;
 }
 
 function providerFailure(error: unknown): "blocked" | "error" {

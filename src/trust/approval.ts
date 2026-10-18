@@ -6,7 +6,7 @@ import { AnyApprovalProof, type AnySnapshot, ApprovalState, BindableApprovalProo
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { approverFingerprint } from "./fingerprint.ts";
 import { fromBase64Url, utf8 } from "./bytes.ts";
-import { readSent, type SentReason, sentProblems } from "./sent.ts";
+import { readSent, readSentCheckout, type SentCheckoutReason, sentCheckoutProblems, type SentReason, sentProblems } from "./sent.ts";
 import { type KeySet, trustedKeys } from "./statement.ts";
 
 /** A chain entry as the store returns it; trust reads only `kind` and `body`. */
@@ -47,7 +47,7 @@ export type ApprovalFailure =
   | { ok: false; step: 4; reason: "bad_client_data" | "wrong_type" | "wrong_challenge" | "wrong_origin" | "cross_origin" }
   | { ok: false; step: 5; reason: "bad_authenticator_data" | "wrong_rp_id" | "user_not_present" | "user_not_verified" }
   | { ok: false; step: 6; reason: "bad_credential_key" | "bad_assertion_signature" }
-  | { ok: false; step: 7; reason: SentReason | "bad_sent" };
+  | { ok: false; step: 7; reason: SentReason | SentCheckoutReason | "bad_sent" };
 
 export type ApprovalResult = VerifiedApproval | ApprovalFailure;
 
@@ -143,11 +143,18 @@ export function verifyApprovalProof(
 
   // Step 7 (contract 1.6.1): a pending entry the gateway chained with `sent` (every 1.6.x cart) is matched fact by
   // fact against the signed snapshot, its version included (v3 for 1.6.1). Entries from before 1.6.0 have none.
+  // A submitted Shop checkout (1.7.0) is chained with its CheckoutRequest, and takes only a v4 snapshot that is it.
   if (pending.sent !== undefined) {
-    const sent = readSent(pending.sent);
-    if (sent === null) return fail(7, "bad_sent");
-    const reason = sentProblems(proof.snapshot, sent)[0];
-    if (reason !== undefined) return fail(7, reason);
+    const checkout = readSentCheckout(pending.sent);
+    if (checkout !== null) {
+      const reason = sentCheckoutProblems(proof.snapshot, checkout)[0];
+      if (reason !== undefined) return fail(7, reason);
+    } else {
+      const sent = readSent(pending.sent);
+      if (sent === null) return fail(7, "bad_sent");
+      const reason = sentProblems(proof.snapshot, sent)[0];
+      if (reason !== undefined) return fail(7, reason);
+    }
   }
 
   const credential: VerifiedCredential = Object.freeze({

@@ -25,6 +25,20 @@ export {
   verifyOutcomeStatement,
 } from "./outcome.ts";
 export { type ReceiptFailure, type ReceiptResponse, type ReceiptResult, type SentRequest, verifyReceipt } from "./receipt.ts";
-export { instant, readSent, SENT_FIELDS, SENT_WORDS, SentPurchase, type SentReason, sentProblems } from "./sent.ts";
+export {
+  instant,
+  readSent,
+  readSentCheckout,
+  SENT_CHECKOUT_WORDS,
+  SENT_FIELDS,
+  SENT_WORDS,
+  SentCheckout,
+  type SentCheckoutReason,
+  sentCheckoutOf,
+  sentCheckoutProblems,
+  SentPurchase,
+  type SentReason,
+  sentProblems,
+} from "./sent.ts";
 export { isTestRoot, onlyTestRoot, TEST_ROOT_KEY, TEST_ROOT_X } from "./test-root.ts";
 export { type KeySet, MAX_CLOCK_SKEW_MS, type PinnedRootKey, type StatementFailure, type StatementResult, verifyStatement } from "./statement.ts";

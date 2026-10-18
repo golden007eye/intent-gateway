@@ -104,6 +104,29 @@ export interface WalletCheckout extends CheckoutLocator {
    * instrument). One tap pays only that way; a checkout that offers only a card is never completed (S1 step 6).
    */
   readonly budgetOffered: boolean;
+  /**
+   * The checkout's four totals in `total.currency` minor units (contract 1.7.0 `CheckoutTotals`), or null when the rail
+   * gave them in a shape that does not add up to its total (a discount line included): never guessed.
+   */
+  readonly totals?: WalletTotals | null;
+  /**
+   * The destination's country and coarse postcode (contract 1.7.0 "Coarse postcodes": US 5 digits, CA 3 characters,
+   * AU 4 digits), coarsened inside the adapter: the full postcode never crosses the port. Null when the rail shows no
+   * single destination, or its country has no coarse form.
+   */
+  readonly shipToArea?: { readonly country: string; readonly postalCodeCoarse: string } | null;
+  /**
+   * The rail's own page where the buyer can finish this checkout (Shop's `continue_url`), for a hand-off; null when
+   * none. It may carry a credential in its query, so the gateway never logs or shows it except in the submit that needs it.
+   */
+  readonly continueUrl?: string | null;
+}
+
+export interface WalletTotals {
+  readonly subtotal: number;
+  readonly shipping: number;
+  readonly tax: number;
+  readonly total: number;
 }
 
 /**

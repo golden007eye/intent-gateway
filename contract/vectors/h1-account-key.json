@@ -1,0 +1,35 @@
+{
+  "id": "H1",
+  "appendix": "H",
+  "description": "RFC 7638 SHA-256 thumbprints of Ed25519 account keys: base64url(SHA-256(members)), members the JWK's required members {crv, kty, x} in lexicographic order with no whitespace. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "cases": [
+    {
+      "input": {
+        "seed_hex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+        "jwk": {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g"
+        }
+      },
+      "expected": {
+        "members": "{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"3eO8zsfzpmoRFfRdcg9NwTXDrnxOItyjj9se_WpJX_g\"}",
+        "thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
+      "input": {
+        "seed_hex": "3031323334353637383930313233343536373839303132333435363738393031",
+        "jwk": {
+          "kty": "OKP",
+          "crv": "Ed25519",
+          "x": "e8MHlRjtEdoDNghb9pYpIP-H-zxNYwqbWMthU2dPXdY"
+        }
+      },
+      "expected": {
+        "members": "{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"e8MHlRjtEdoDNghb9pYpIP-H-zxNYwqbWMthU2dPXdY\"}",
+        "thumbprint": "Nay1z-GgDSMncqC7oX4CD7eG9mpru1PqGrWOU27iJkA"
+      }
+    }
+  ]
+}

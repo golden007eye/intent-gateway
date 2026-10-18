@@ -57,6 +57,8 @@ function normal(node: Json): Json {
     else if (k === "pattern") out[k] = (v as string).replaceAll("\\/", "/");
     else out[k] = normal(v);
   }
+  // zod writes a string-keyed record's keys as `propertyNames: {type: "string"}`, which every JSON object meets.
+  if (canonicalJson(out["propertyNames"]) === '{"type":"string"}') delete out["propertyNames"];
   if ("const" in out) {
     if (out["type"] === "number" && Number.isInteger(out["const"])) out["type"] = "integer";
     delete out["minimum"];
@@ -66,6 +68,9 @@ function normal(node: Json): Json {
     out["maximum"] ??= Number.MAX_SAFE_INTEGER;
   }
   return out;
+}
+function canonicalJson(value: Json | undefined): string {
+  return value === undefined ? "" : JSON.stringify(value);
 }
 // The input side: what the schema accepts. (The output side reports a stripping z.object as closed too.)
 const fromZod = (schema: z.ZodType): Json => normal(z.toJSONSchema(schema, { io: "input" }) as Json);
@@ -143,14 +148,14 @@ describe("operations", () => {
   const ENDPOINTS = contract.ENDPOINTS as Record<string, contract.Endpoint>;
   const schemaOf = (body: Obj): z.ZodType => SCHEMAS[refName(((body["content"] as Obj)["application/json"] as Obj)["schema"] as Json)] as z.ZodType;
 
-  it("names exactly the spec's operations: the seven gateway endpoints and GET /v1/key-statement", () => {
+  it("names exactly the spec's operations: the nine gateway endpoints and GET /v1/key-statement", () => {
     expect(Object.keys(ENDPOINTS).sort()).toEqual(ops.map((o) => o.op.operationId).sort());
-    expect(ops).toHaveLength(8);
+    expect(ops).toHaveLength(10);
   });
 
-  it("every operation takes the optional Intent-Contract-Version request header, 1.5.0, 1.6.0 or 1.6.1", () => {
+  it("every operation takes the optional Intent-Contract-Version request header, 1.5.0, 1.6.0, 1.6.1 or 1.7.0", () => {
     const param = (components["parameters"] as Record<string, Obj>)["ContractVersion"] as Obj;
-    expect(param).toMatchObject({ name: "Intent-Contract-Version", in: "header", required: false, schema: { enum: ["1.5.0", "1.6.0", "1.6.1"] } });
+    expect(param).toMatchObject({ name: "Intent-Contract-Version", in: "header", required: false, schema: { enum: ["1.5.0", "1.6.0", "1.6.1", "1.7.0"] } });
     for (const { op } of ops) {
       const params = ((op as unknown as Obj)["parameters"] ?? []) as Obj[];
       expect(params.map((p) => p["$ref"]), op.operationId).toContain("#/components/parameters/ContractVersion");
@@ -261,6 +266,11 @@ describe("vectors", () => {
     "o4-report-transitions.json": "none: Intent Cloud's report transitions and precedence (G4 and G7b)",
     "j1-jcs.json": "none: JCS edge cases, not contract objects",
     "s1-key-statement.json": "KeyStatement",
+    "a4-snapshot-v4.json": "SnapshotV4, coarse postcodes and currency tables (replayed in checkout-v4.test.ts)",
+    "e3-snapshot-v4-request.json": "SnapshotV4 and CheckoutRequest (step 7 for v4, replayed in checkout-v4.test.ts)",
+    "h1-account-key.json": "AccountKey thumbprints (replayed in checkout-v4.test.ts)",
+    "h2-pause.json": "PauseRequest (replayed in checkout-v4.test.ts)",
+    "o6-binding-v2.json": "SnapshotV4 and Binding (binding-v2 itself is src/outcome's)",
   };
 
   it("lists every vector file", () => {

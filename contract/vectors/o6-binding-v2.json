@@ -1,0 +1,502 @@
+{
+  "id": "O6",
+  "appendix": "G",
+  "description": "binding-v2 (1.7.0): observed Shop orders against the a4 v4 shop_agent snapshot. checkout_ref is the raw Shop checkout id (hashed over the part before ?); check 4 coarsens ship_to_postal_code by the snapshot country's rule; check 5 compares only in the snapshot's currency. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "snapshot": {
+    "v": 4,
+    "approval": "ap_TEST0005",
+    "nonce": "ICEiIyQlJicoKSorLC0uLw",
+    "expires_at": "2026-10-18T20:15:00Z",
+    "rule_version": "recheck-v1",
+    "store_name": "Test Shop",
+    "store_site": "https://shop.example",
+    "myshopify_domain": "test-shop.myshopify.com",
+    "variant_ref": "gid://shopify/ProductVariant/1001",
+    "title": "Trail Runner 3 - US 10 / Blue",
+    "quantity": 1,
+    "currency": "USD",
+    "totals": {
+      "subtotal": 1200,
+      "shipping": 500,
+      "tax": 107,
+      "total": 1807
+    },
+    "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+    "ship_to": {
+      "country": "US",
+      "postal_code_coarse": "94110"
+    },
+    "completion_mode": "shop_agent",
+    "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+    "currency_table": "ct-a5ec7a18fbcbdda7",
+    "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+  },
+  "cases": [
+    {
+      "name": "Shop reports the myshopify domain: ok",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "ok",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "the storefront origin: ok",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://shop.example",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "ok",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "another store's myshopify domain",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://other-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "differs",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "another checkout paid",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/OTHER?key=K",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "differs",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "the same checkout with another key query",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=NEW",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "ok",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "the same integer in another currency",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "CAD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "differs"
+        }
+      }
+    },
+    {
+      "name": "rule 25: 80 % of the total",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1446,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "ok",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "rule 25: below 80 %",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1445,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "differs"
+        }
+      }
+    },
+    {
+      "name": "rule 25: above the total",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1808,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "match",
+          "total": "differs"
+        }
+      }
+    },
+    {
+      "name": "another ZIP",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94111",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "differs",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "another country",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "CA",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "mismatch",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "differs",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "no postcode",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "checkout_ref": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "incomplete",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "match",
+          "line": "match",
+          "ship_to": "unknown",
+          "total": "match"
+        }
+      }
+    },
+    {
+      "name": "no checkout ref",
+      "input": {
+        "observed": {
+          "merchant_origin": "https://test-shop.myshopify.com",
+          "lines": [
+            {
+              "variant_ref": "gid://shopify/ProductVariant/1001",
+              "quantity": 1
+            }
+          ],
+          "ship_to_country": "US",
+          "ship_to_postal_code": "94110-1234",
+          "final_total": {
+            "amount_minor": 1807,
+            "currency": "USD"
+          }
+        },
+        "context": {
+          "mode": "shop_agent",
+          "ship_to_optional": false
+        }
+      },
+      "expected": {
+        "rule_version": "binding-v2",
+        "result": "incomplete",
+        "checks": {
+          "merchant_origin": "match",
+          "checkout_ref": "unknown",
+          "line": "match",
+          "ship_to": "match",
+          "total": "match"
+        }
+      }
+    }
+  ]
+}

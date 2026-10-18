@@ -1,7 +1,24 @@
-// zod schemas and types for the Intent Cloud public contract 1.6.1 (contract/gateway-api.v1.yaml and appendices A–G),
+// zod schemas and types for the Intent Cloud public contract 1.7.0 (contract/gateway-api.v1.yaml and appendices A–H),
 // plus its endpoints and response headers. Each schema is exported under its spec name (Error as ErrorBody).
 export * from "./schemas.ts";
 export { approvalPath, approvalsPath, CONTRACT_VERSION, ENDPOINTS, errorBody, HEADERS, outcomeReportsPath } from "./endpoints.ts";
+export {
+  accountKeyThumbprint,
+  bindingRuleFor,
+  checkoutRequestProblems,
+  COARSE_COUNTRIES,
+  type CoarseCountry,
+  coarsePostcode,
+  continueUrlAllowed,
+  continueUrlHash,
+  currencyTableVersion,
+  snapshotTotal,
+  snapshotV4Problem,
+  totalsAddUp,
+  TWO_DECIMAL_CURRENCIES,
+  V4_FIELDS,
+  type V4Field,
+} from "./checkout-v4.ts";
 export type { Endpoint, OperationId } from "./endpoints.ts";
 export { checkoutRefHash } from "./checkout.ts";
 export {
@@ -15,13 +32,10 @@ export {
   type StorePairReason,
 } from "./store-pair.ts";
 export {
-  AccountKeyThumbprint,
   isPausedRefusal,
   PAUSE_CONTRACT_VERSION,
   PAUSE_ENDPOINT,
   PAUSE_SIGNING_PREFIX,
-  PauseAccepted,
   PauseError,
-  PauseRequest,
   pauseSigningBytes,
 } from "./pause.ts";

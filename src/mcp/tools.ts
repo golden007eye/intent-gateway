@@ -114,10 +114,17 @@ function findOffersResult(result: FindOffersResult): CallToolResult {
 
 function createCartResult(result: CreateCartResult): CallToolResult {
   if (result.status !== "approval_needed") return told(result);
-  const { cart } = result;
+  const { cart, checkout } = result;
+  const what =
+    cart !== undefined
+      ? `Cart: ${String(cart.quantity)} × ${cart.item.title} (${cart.item.variant}) from ${cart.merchant.name}, total ${totalText(cart.total, cart.total_kind)}.`
+      : checkout !== undefined
+        ? `Shop checkout: ${String(checkout.quantity)} × ${checkout.title} from ${checkout.store}, total ${minorText(checkout.totals.total, checkout.currency)} ` +
+          `(shipping ${minorText(checkout.totals.shipping, checkout.currency)}, tax ${minorText(checkout.totals.tax, checkout.currency)}), ` +
+          `${checkout.completion_mode === "shop_agent" ? "paid at once by one tap" : "paid by the buyer on Shop's checkout page"}.`
+        : "";
   const details = [
-    `Cart: ${String(cart.quantity)} × ${cart.item.title} (${cart.item.variant}) from ${cart.merchant.name}, ` +
-      `total ${totalText(cart.total, cart.total_kind)}.`,
+    what,
     `approval_handle: ${result.approval_handle}\nApproval link: ${result.approval_url}\nCheck code: ${result.check_code}`,
     `QR code for the approval link:\n${result.qr.text}`,
   ];
@@ -154,6 +161,12 @@ function shopOfferLine(offer: ShopOfferView): string {
 
 function totalText(total: Money, kind: "exact" | "max"): string {
   return kind === "max" ? `at most ${money(total)}` : money(total);
+}
+
+/** Minor units in a currency: `$12.34` for USD, `CAD 12.34` otherwise. */
+function minorText(minor: number, currency: string): string {
+  const text = `${String(Math.floor(minor / 100))}.${String(minor % 100).padStart(2, "0")}`;
+  return currency === "USD" ? `$${text}` : `${currency} ${text}`;
 }
 
 function money(value: Money): string {

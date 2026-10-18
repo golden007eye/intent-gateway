@@ -19,7 +19,7 @@ Claude Code starts the gateway over stdio when it needs it. The gateway starts a
 Start `claude` and ask:
 
 ```text
-> Find running shoes to ZIP 94103, under $200, and prepare a cart for the cheapest.
+> Find stickers to ZIP 94107, under $20, and prepare a cart for the cheapest.
 ```
 
 1. The agent calls `find_offers`. Each result ends with what the gateway sent (field names, never values) and what it blocked.

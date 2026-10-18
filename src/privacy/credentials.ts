@@ -94,6 +94,23 @@ export function isCredentialHeader(name: string): boolean {
 
 export type PathSegment = string | number;
 
+/**
+ * The body paths of a request to Intent Cloud that carry a credential the contract requires, by operation (ADR-0014,
+ * ADR-0024): logged as their sha256, so the logged body differs from the sent one only there, and `content_digest`
+ * stays the sent bytes' (the receipt's). The disclosure core redacts exactly these and still refuses every other
+ * credential to Intent Cloud; `intent verify` accepts a redacted Intent Cloud body only at these paths.
+ */
+export const CLOUD_SECRET_PATHS: Readonly<Record<string, readonly (readonly PathSegment[])[]>> = {
+  // contract 1.7.0: a hand-off checkout's `continue_url`, the buyer's checkout page, which holds the checkout's `key`.
+  createCheckout: [["checkout", "continue_url"]],
+};
+
+/** Whether every redaction of a logged Intent Cloud request sits at one of its operation's CLOUD_SECRET_PATHS. */
+export function cloudRedactionsAllowed(operation: string, at: readonly string[]): boolean {
+  const allowed = (CLOUD_SECRET_PATHS[operation] ?? []).map((p) => formatPath("body", p));
+  return at.every((a) => allowed.includes(a));
+}
+
 /** `.key`, `["key"]` or `[n]` per segment, after `prefix`. */
 export function formatPath(prefix: string, segments: readonly PathSegment[]): string {
   return (
