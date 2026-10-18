@@ -83,4 +83,13 @@ describe("projectCatalog", () => {
     expect(projectCatalog({ products: many })).toHaveLength(MAX_CATALOG_HITS);
     expect(projectCatalog({})).toEqual([]);
   });
+  it("drops a variant whose storefront reads as identity, so the block list still sees the store by both names", () => {
+    const seller = { domain: "sticker-store.myshopify.com", url: "https://call-415-555-0134.blocked.example" };
+    expect(projectCatalog({ products: [product({}, { seller })] })).toEqual([]);
+  });
+
+  it("strips control and format characters from titles (a terminal escape, a bidi override)", () => {
+    const [hit] = projectCatalog({ products: [product({ title: "Mug\u001b[31m\u202eevil\u0007 x\u200b" })] });
+    expect(hit?.title).toBe("Mug [31mevil x");
+  });
 });

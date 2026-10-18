@@ -358,8 +358,9 @@ const CATALOG_URL_MAX = 512;
  * it (step 5), a product has `variants[]`, and each variant carries `id` (a ProductVariant gid), `title`,
  * `price {amount, currency}`, `availability {available}` and `seller {domain, url}`. The product-level fields (title,
  * url, media, type, tags) are read where Shop puts them and dropped when absent. A variant with no myshopify store,
- * no variant gid or no integer price is dropped whole. Titles that read as identity become "", and URLs keep only
- * their origin and path (a query can carry a tracking id or a key).
+ * no variant gid or no integer price is dropped whole, and so is one whose storefront reads as identity. Titles lose
+ * control and format characters, those that read as identity become "", and URLs keep only their origin and path
+ * (a query can carry a tracking id or a key).
  */
 export function projectCatalog(content: Json): CatalogHit[] {
   const hits: CatalogHit[] = [];
@@ -377,11 +378,14 @@ export function projectCatalog(content: Json): CatalogHit[] {
       const price = money(record(variant.price));
       if (!STORE_DOMAIN.test(store) || typeof variantRef !== "string" || !VARIANT_GID.test(variantRef) || price === null) continue;
       const storefront = origin(seller?.url);
+      // A storefront that reads as identity drops the variant, not just the name: kept as null, the policy's block
+      // list could no longer match the store by the storefront host it is known by.
+      if (storefront !== null && findIdentity(storefront).length > 0) continue;
       const variantTitle = cleanTitle(variant.title);
       const shipping = variant.requires_shipping ?? product.requires_shipping;
       hits.push({
         storeDomain: store,
-        storefrontOrigin: storefront !== null && findIdentity(storefront).length === 0 ? storefront : null,
+        storefrontOrigin: storefront,
         productRef: productId,
         variantRef,
         title: productTitle !== "" ? productTitle : variantTitle,
@@ -402,7 +406,8 @@ const VARIANT_GID = /^gid:\/\/shopify\/ProductVariant\/[0-9]{1,20}$/;
 
 function cleanTitle(value: unknown): string {
   if (typeof value !== "string") return "";
-  const title = value.replace(/\s+/g, " ").trim().slice(0, 120);
+  // Control and format characters (a terminal escape, a bidi override) never reach the agent or a screen.
+  const title = value.replace(/[\s\p{Cc}]+/gu, " ").replace(/\p{Cf}/gu, "").trim().slice(0, 120);
   // Merchant text: one that reads as identity (an engraving, a gift note) is dropped.
   return findIdentity(title).length === 0 ? title : "";
 }
