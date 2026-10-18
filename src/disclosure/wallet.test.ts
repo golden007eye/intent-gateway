@@ -425,3 +425,18 @@ describe("L1: a lost send condition never stops the shared core", () => {
     expect(logged()).toEqual([]);
   });
 });
+
+describe("opaque wallet ids (ADR-0019)", () => {
+  const ID = /^gid:\/\/shopify\/Checkout\/[A-Za-z0-9]{1,128}(?:\?key=[A-Za-z0-9]{1,256})?$/;
+  it("an id of the declared shape at its path passes the identity scan even when it reads as a card; elsewhere, or off-shape, it is blocked", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop", opaqueIds: [{ path: "params.arguments.id", pattern: ID }] });
+    await shop.call("get_checkout", rpc("get_checkout", { id: "gid://shopify/Checkout/4111111111111111?key=ab12" }));
+    expect(sent).toHaveLength(1);
+    await expect(shop.call("get_checkout", rpc("get_checkout", { other: "gid://shopify/Checkout/4111111111111111" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    await expect(shop.call("get_checkout", rpc("get_checkout", { id: "card 4111 1111 1111 1111" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    await expect(shop.call("get_checkout", rpc("get_checkout", { id: "gid://shopify/Checkout/x?key=a b jane@example.com" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    expect(sent).toHaveLength(1);
+  });
+});

@@ -841,3 +841,20 @@ describe("evidence pack of a one-tap purchase (G9)", () => {
     expect(report.exitCode).toBe(0);
   });
 });
+
+
+describe("a checkout id that reads as a card by chance (the flaky M2 run's root cause)", () => {
+  it("a Shop checkout token that is a Luhn-valid digit run is not refused as a card: the purchase is ordered", async () => {
+    const base = await setup({ faults: { checkoutToken: "4111111111111111", checkoutKey: "5500000000000004" } });
+    const p = await proc(base);
+    const handle = await approvedCart(base, p);
+    expect(completionOf(await status(p, handle)).state).toBe("ordered");
+    const chain = await chainOf(base);
+    expect(ofKind(chain, "block")).toEqual([]);
+    expect(base.shop.completeCount).toBe(1);
+    // The id is still digested in the log: neither digit run is in the chain in clear.
+    const audit = await fsp.readFile(join(base.dir, "audit.jsonl"), "utf8");
+    expect(audit).not.toContain("4111111111111111");
+    expect(audit).not.toContain("5500000000000004");
+  });
+});

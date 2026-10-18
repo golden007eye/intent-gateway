@@ -60,6 +60,8 @@ export interface FakeShopFaults {
   addressId?: string;
   /** The `?key=` credential in every checkout id (random by default). */
   checkoutKey?: string;
+  /** The token before `?` in every checkout id (16 random hex digits by default). */
+  checkoutToken?: string;
   /**
    * The token endpoint's answers to device-code polls, in order (the last one repeats): `ok` issues the tokens, the
    * others are RFC 8628 errors. ["ok"] by default.
@@ -352,7 +354,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         return remember(key, () => {
           const c: Checkout = {
             // A UCP checkout id carries a credential in its query, as Shopify's do.
-            id: `gid://shopify/Checkout/${randomBytes(8).toString("hex")}?key=${shop.faults.checkoutKey ?? randomBytes(16).toString("hex")}`,
+            id: `gid://shopify/Checkout/${shop.faults.checkoutToken ?? randomBytes(8).toString("hex")}?key=${shop.faults.checkoutKey ?? randomBytes(16).toString("hex")}`,
             shop: args.shop as string,
             variant: shop.faults.otherVariant === true ? FAKE_OTHER_VARIANT : String((line.item as Record<string, unknown> | undefined)?.id),
             quantity: typeof line.quantity === "number" ? line.quantity : 1,

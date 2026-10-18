@@ -81,6 +81,16 @@ export function parseShopCredentials(text: string): ShopCredentials | null {
 export const SHOP_SECRET_PATHS: readonly string[] = ["params.arguments.checkout.payment.instruments[0].credential", "params.arguments.id"];
 
 /**
+ * The checkout id get_checkout and complete_checkout send back to Shop, let through the identity scan (ADR-0019):
+ * Shop issues it, and its random token or key can read as a card number by chance (a run of 13 to 19 digits that
+ * passes Luhn), which would refuse the purchase's own checkout read. Only a whole value of exactly this shape: a
+ * Checkout gid with an alphanumeric token and an optional alphanumeric `?key=`, so no text, `@` or space fits.
+ */
+export const SHOP_OPAQUE_IDS: readonly { readonly path: string; readonly pattern: RegExp }[] = [
+  { path: "params.arguments.id", pattern: /^gid:\/\/shopify\/Checkout\/[A-Za-z0-9]{1,128}(?:\?key=[A-Za-z0-9]{1,256})?$/ },
+];
+
+/**
  * Body paths of a request to Shop's account server whose values are digested in the log: the device code (token
  * requests), a refresh token and the token being revoked. privacy's secret keys already cover each one; they are
  * named here too, so the account server's credentials stay digested whatever privacy's list becomes.

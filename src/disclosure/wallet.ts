@@ -30,6 +30,11 @@ export interface WalletDisclosureOptions {
    * the `authorization` header and the secret keys (privacy's SECRET_KEYS), which are digested wherever they are.
    */
   readonly secretPaths?: readonly string[];
+  /**
+   * Wallet-issued ids let through the identity scan at exactly their dotted path (plain keys only), while the whole
+   * value matches the pattern (`{path: "params.arguments.id", pattern}`).
+   */
+  readonly opaqueIds?: readonly { readonly path: string; readonly pattern: RegExp }[];
 }
 
 /** An answer as the transport returned it, plus the seq of the `disclosure` entry that logged its request. */
@@ -74,6 +79,11 @@ export function createDisclosedWallet(transport: DestinationTransport, cloud: Di
     if (segments === null || segments.length === 0) throw new TypeError(`not a body path: ${JSON.stringify(path)}`);
     return segments;
   });
+  const opaqueIds = (options.opaqueIds ?? []).map((o) => {
+    const at = o.path.split(".");
+    if (!at.every((k) => /^[A-Za-z_$][\w$]*$/.test(k))) throw new TypeError(`not a plain body path: ${JSON.stringify(o.path)}`);
+    return { at, pattern: o.pattern };
+  });
   const core = coreOf(cloud);
 
   return {
@@ -108,7 +118,7 @@ export function createDisclosedWallet(transport: DestinationTransport, cloud: Di
           },
           discard: (logged, _response, reason) => new Error(`response to disclosure #${String(logged.seq)} discarded: ${reason}`),
         },
-        { secretPaths, ...(purchase === undefined ? {} : { purchase }), ...(unless === undefined ? {} : { unless }) },
+        { secretPaths, opaqueIds, ...(purchase === undefined ? {} : { purchase }), ...(unless === undefined ? {} : { unless }) },
       );
       return { ...result, disclosureSeq: seq };
     },

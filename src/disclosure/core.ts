@@ -156,6 +156,12 @@ export interface DiscloseSteps<R, B> {
 export interface DiscloseOptions {
   /** Body paths whose values are digested in the log, besides the secret keys found anywhere. */
   readonly secretPaths?: readonly (readonly PathSegment[])[];
+  /**
+   * Opaque ids a wallet issued, let through the identity scan at exactly their path and only while the whole value
+   * matches its pattern (ADR-0019): a Shop checkout id's random token can read as a card number by chance. Any other
+   * value at that path, and every other path, is scanned as usual.
+   */
+  readonly opaqueIds?: readonly OpaqueId[];
   /** The approval handle a wallet send belongs to, kept in the disclosure entry only; never sent. */
   readonly purchase?: string;
   /**
@@ -163,6 +169,12 @@ export interface DiscloseOptions {
    * chain, evaluated under the store lease; otherwise nothing is logged or sent and DisclosureConflictError is thrown.
    */
   readonly unless?: (entries: readonly Entry[]) => boolean;
+}
+
+/** A wallet-issued id at one body path, exempt from the identity scan while the whole value matches `pattern`. */
+export interface OpaqueId {
+  readonly at: readonly string[];
+  readonly pattern: RegExp;
 }
 
 export interface DisclosureCore {
@@ -237,7 +249,7 @@ export function createDisclosureCore(store: Store): DisclosureCore {
         await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: refusals, rule: "logging" });
         throw new DisclosureRefusedError(request.operation, refusals);
       }
-      const findings = findIdentity(json, { mcpEnvelope: destination !== INTENT_CLOUD });
+      const findings = opaqueFiltered(findIdentity(json, { mcpEnvelope: destination !== INTENT_CLOUD }), json, destination === INTENT_CLOUD ? [] : (options.opaqueIds ?? []));
       if (findings.length > 0) {
         await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: findings.map(describe), rule: "identity" });
         throw new DisclosureBlockedError(request.operation, findings);
@@ -325,6 +337,21 @@ export function createDisclosureCore(store: Store): DisclosureCore {
   }
 
   return { disclose, assertOpen, store };
+}
+
+/** The findings left once those sitting exactly at an opaque id whose whole value matches its pattern are dropped. */
+function opaqueFiltered(findings: Finding[], json: unknown, opaque: readonly OpaqueId[]): Finding[] {
+  if (opaque.length === 0) return findings;
+  const exempt = new Set(
+    opaque
+      .filter((o) => {
+        let value: unknown = json;
+        for (const key of o.at) value = typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
+        return typeof value === "string" && o.pattern.test(value);
+      })
+      .map((o) => `$.${o.at.join(".")}`),
+  );
+  return findings.filter((f) => !exempt.has(f.path));
 }
 
 export function describe(finding: Finding): string {

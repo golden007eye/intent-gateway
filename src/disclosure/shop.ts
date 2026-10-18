@@ -14,6 +14,7 @@ import {
   parseShopCredentials,
   runDeviceFlow,
   SHOP_ACCOUNTS_SECRET_PATHS,
+  SHOP_OPAQUE_IDS,
   SHOP_SECRET_PATHS,
   shopCredentialsText,
 } from "../wallet-shop/index.ts";
@@ -46,7 +47,7 @@ export function connectShop(owner: DisclosedCloud | WalletSession, connection: S
       ...timing,
     }),
     owner,
-    { destination: "shop", secretPaths: SHOP_SECRET_PATHS },
+    { destination: "shop", secretPaths: SHOP_SECRET_PATHS, opaqueIds: SHOP_OPAQUE_IDS },
   );
   return createShopAdapter({
     mcp,

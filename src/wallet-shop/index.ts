@@ -5,6 +5,7 @@ export {
   createShopAdapter,
   parseShopCredentials,
   SHOP_ACCOUNTS_SECRET_PATHS,
+  SHOP_OPAQUE_IDS,
   SHOP_SECRET_PATHS,
   type ShopAdapterOptions,
   type ShopCaller,
