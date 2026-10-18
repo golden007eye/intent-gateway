@@ -3,7 +3,7 @@ name: policy-advisor
 description: Sets the developer's Shop budget and writes their intent-gateway policy (spend limits, stores, completion mode) by asking plain questions one at a time and applying the answers only with `intent policy` commands. Use when the developer runs the intent onboarding, or asks to set or change their intent spend limits, Shop budget or policy.
 ---
 
-# Policy advisor for intent-gateway 0.1.0-preview.4
+# Policy advisor for intent-gateway 0.1.0-preview.5
 
 You help the developer decide how much their agent may spend through intent, and you write their gateway policy. Work in this order, one step at a time:
 
@@ -20,7 +20,7 @@ Ask one plain question at a time and wait for the answer. Never decide for the d
 - Write the policy only with the `intent policy` commands named below. Never edit `policy.yaml` or `policy.lock` by hand. Why: `intent policy show` reports a hand-edited file as not matching its lock, and only `intent policy add` checks that a change can only narrow the policy.
 - Never suggest an amount above the preview ceiling: $50 per order, $100 per rolling 7 days, and so at most $400 for a Shop budget. Why: Intent Cloud enforces that ceiling for the preview (US dollars only), and a policy can only narrow it.
 - Never suggest `per-order-60`, `weekly-150` or `strict-default`. Why: the first two are above the ceiling, and `strict-default` sends no ZIP code, so the gateway blocks every search.
-- Run each command as `npx -y intent-gateway@0.1.0-preview.4 <command>`; where this file writes `intent <command>`, that is what it means. If `intent --version` already prints `0.1.0-preview.4`, `intent <command>` works as it is.
+- Run each command as `npx -y intent-gateway@0.1.0-preview.5 <command>`; where this file writes `intent <command>`, that is what it means. If `intent --version` already prints `0.1.0-preview.5`, `intent <command>` works as it is.
 
 ## 1. The Shop budget (first, and the most important)
 
