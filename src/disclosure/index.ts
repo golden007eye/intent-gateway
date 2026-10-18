@@ -32,7 +32,7 @@ export {
 export { connectShop, type LinkedShopVault, linkShop, type ShopConnection, type ShopLink } from "./shop.ts";
 export { connectStorefront, STOREFRONT, type StorefrontPort } from "./storefront.ts";
 export type { StorefrontTransport } from "../storefront/index.ts";
-export { type DeviceGrantPrompt, ShopLinkError, type ShopLinkFailure } from "../wallet-shop/index.ts";
+export { DEFAULT_SHOP_CLIENT_ID, type DeviceGrantPrompt, ShopLinkError, type ShopLinkFailure } from "../wallet-shop/index.ts";
 export {
   connectCloud,
   createDisclosedCloud,

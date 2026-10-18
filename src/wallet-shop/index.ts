@@ -19,6 +19,7 @@ export {
   createShopAccountsTransport,
   createShopMcpTransport,
   DEFAULT_SHOP_AUTH_URL,
+  DEFAULT_SHOP_CLIENT_ID,
   DEFAULT_SHOP_MCP_URL,
   DEVICE_AUTHORIZATION,
   MCP_PROTOCOL,

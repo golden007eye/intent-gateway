@@ -99,3 +99,4 @@ nav:
       - "ADR-0018: Evidence pack": adr/0018-evidence-pack.md
       - "ADR-0019: One-tap completion": adr/0019-one-tap-completion.md
       - "ADR-0020: Signed store pair and storefront check": adr/0020-signed-store-pair-and-storefront-check.md
+      - "ADR-0021: Account key": adr/0021-account-key.md

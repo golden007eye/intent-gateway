@@ -1,7 +1,10 @@
 // `intent init`: the first run (plan G8). It checks the data dir and the chain and names the policy in force (the
-// checks of `intent doctor`), offers to link Shop for one-tap purchases, and prints the line that connects an agent.
-// The Shop step never blocks setup: with no Shop client set, in demo mode, with no terminal to ask at (Docker, a
+// checks of `intent doctor`), makes the account key once (ADR-0021), offers to link Shop for one-tap purchases, and
+// prints the line that connects an agent.
+// The Shop step never blocks setup: in demo mode, with no terminal to ask at (Docker, a
 // pipe) or with --yes it is skipped with a line that says so, and purchases are handed off to the merchant's checkout.
+import { stat } from "node:fs/promises";
+import { AccountKeyError, ensureAccountKey } from "../account/index.ts";
 import { type Config, INTENT } from "../config/index.ts";
 import { describeError } from "./errors.ts";
 import { checkChain, checkDataDir, checkPolicy, LABELS, type Level } from "./doctor.ts";
@@ -25,6 +28,7 @@ export async function init(io: Io, config: Config, options: { yes: boolean }): P
   await checkDataDir(config.dataDir, report);
   checkChain(config.dataDir, report);
   await checkPolicy(config.policyPath, report);
+  await accountKeyStep(config.dataDir, report);
 
   const shop = await shopStep(io, config, options.yes);
 
@@ -46,15 +50,33 @@ export async function init(io: Io, config: Config, options: { yes: boolean }): P
   return shop && !levels.includes("fail") ? 0 : 1;
 }
 
+/**
+ * Makes the account key when there is none, and never replaces one (ADR-0021). Only its path and thumbprint are
+ * printed; the key stays in its file.
+ */
+async function accountKeyStep(dataDir: string, report: (level: Level, text: string) => void): Promise<void> {
+  try {
+    const { key, created } = await ensureAccountKey(dataDir);
+    const mode = (await stat(key.path)).mode & 0o777;
+    if (process.platform !== "win32" && (mode & 0o077) !== 0) {
+      report("fail", `account key: other users can read ${key.path} (mode ${mode.toString(8)}); run chmod 600 ${key.path}`);
+      return;
+    }
+    report("ok", `account key: ${created ? "made" : "kept"} ${key.path} (thumbprint ${key.thumbprint})`);
+  } catch (error) {
+    if (!(error instanceof AccountKeyError)) {
+      report("fail", `account key: ${describeError(error, { dataDir })}`);
+      return;
+    }
+    report("fail", `account key: ${error.message}`);
+  }
+}
+
 /** Offers to link Shop when it can; false only when the developer said yes and the link failed. */
 async function shopStep(io: Io, config: Config, yes: boolean): Promise<boolean> {
   const later = `link it later with ${INTENT} wallet link shop`;
   if (config.demo) {
     line(io.stdout, `Shop one-tap: not offered in demo mode; ${HANDOFF}`);
-    return true;
-  }
-  if (config.wallet.shopClientId === null) {
-    line(io.stdout, `Shop one-tap: unavailable until a registered Shop client is set (INTENT_SHOP_CLIENT_ID); ${HANDOFF}`);
     return true;
   }
   if (await hasSecret(config.dataDir, "shop")) {

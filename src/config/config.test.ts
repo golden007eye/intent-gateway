@@ -319,7 +319,7 @@ describe("wallet settings", () => {
     expect(() => load({ INTENT_SHOP_AUTH_URL: "https://u:p@shop.example/" })).toThrow(/must not carry credentials/);
   });
 
-  it("has no Shop client id by default: the gateway ships none, so one-tap needs INTENT_SHOP_CLIENT_ID", () => {
+  it("has no Shop client id until INTENT_SHOP_CLIENT_ID is set: null means the gateway's own client (the Shop adapter names it)", () => {
     expect(load({}).wallet.shopClientId).toBeNull();
     expect(load({ INTENT_SHOP_CLIENT_ID: "0f8e2a6c-1111-4222-8333-444455556666" }).wallet.shopClientId).toBe("0f8e2a6c-1111-4222-8333-444455556666");
     expect(load({ INTENT_SHOP_CLIENT_ID: "https://gateway.example/shop-client.json" }).wallet.shopClientId).toBe("https://gateway.example/shop-client.json");

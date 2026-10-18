@@ -7,22 +7,22 @@ With one tap, the buyer approves a purchase with their passkey and the gateway c
 | | Status |
 |---|---|
 | One tap in [demo mode](demo.md) | Works. Ask for stickers and buy the holographic sticker: the demo completes it with a local fake Shop, and `intent log --demo` and `intent verify --demo` show the whole purchase. |
-| The code path in `intent serve` | Built and tested against a fake Shop that answers with the shapes the S1 spike captured from Shop (one real order, 2026-10-18): when a Shop client is set and a Shop wallet is linked, `get_approval_status` completes a verified one-tap approval. |
-| One tap for you | Planned: it needs a registered Shop client, and none exists yet (below). |
+| The code path in `intent serve` | Built and tested against a fake Shop that answers with the shapes the S1 spike captured from Shop (one real order, 2026-10-18): when a Shop wallet is linked, `get_approval_status` completes a verified one-tap approval. |
+| One tap for you | Planned: Shop does not accept the gateway's own client yet (a formal registration is pending); until it does, linking needs `INTENT_SHOP_CLIENT_ID` (below). |
 | One tap on Intent Cloud staging | Not possible: the staging store's test payment gateway makes Shop refuse to pay (`checkout_completion_ineligible`). Staging covers hand-off only; one tap is proven by hand with a small real order at a real store with the developer's own Shop account. |
 | Stores one tap can reach | A Shopify store whose `*.myshopify.com` domain Intent Cloud returns with the offer (contract 1.6.1): the offer, the cart and the snapshot the buyer approves name the pair, and before paying the gateway checks it against the storefront itself ([the store pair check](#the-store-pair-check)). Any other merchant's cart is handed off from the start. |
 | Real purchases of any kind | Wait for the [launch gate](adr/0004-public-pre-alpha.md): the preview talks to the Intent Cloud staging host. |
 
 <!-- feature: one-tap -->
 !!! planned "One tap with your own Shop account"
-    The gateway has no Shop client built in. Shop's public device-flow client is for a shopper's own agent, and a gateway shipped to others needs a client registered with Shop; that registration is being arranged. Until it exists, one tap runs in demo mode only. Every purchase outside the demo is handed off to the merchant's checkout.
+    The gateway signs in to Shop as its own client: the client-ID metadata document at `https://gateway.intentai.shop/shop-client.json`, whose client id is that URL. Shop does not accept the gateway's own client yet (a formal registration is pending): Shop answers `invalid_client`, and `intent wallet link shop` says so in one line and tries no other client. Until then, linking needs `INTENT_SHOP_CLIENT_ID` set explicitly to a client Shop accepts, such as Shop's public client for your own agent. Until one tap with your own account is proven, every purchase outside the demo is handed off to the merchant's checkout.
 
 ## How to turn it on
 
-Read the [known risks](threat-model.md#known-risks) before you link an account. Once you have a Shop client id:
+Read the [known risks](threat-model.md#known-risks) before you link an account. Until Shop accepts the gateway's own client, set `INTENT_SHOP_CLIENT_ID` to a client Shop accepts, such as Shop's public client for your own agent. The wallet remembers the client it was linked with (below).
 
 ```console
-$ export INTENT_SHOP_CLIENT_ID=<client id>
+$ export INTENT_SHOP_CLIENT_ID=<a client id Shop accepts>
 $ export INTENT_WALLET_KEY_FILE=/path/outside/the/data/dir/wallet-key
 $ intent init                  # offers "Pay in one tap with Shop?" at a terminal
 $ intent wallet link shop      # or link it directly
@@ -31,7 +31,9 @@ $ intent wallet status         # linked, the encrypted vault opens, and the budg
 
 In the Shop app, turn on "Allow agent to pay" with a budget for the connection. One tap pays from that agent budget only, never from your Shop Pay card; with no budget shown, every one-tap purchase is refused before anything is sent to pay, and a new cart hands it off.
 
-`intent wallet link shop` prints a code and a Shop page; you approve there, in your own browser. The gateway asks for the scope `openid personal_agent` (no email) and keeps the tokens in an encrypted file in the data dir ([wallet vault](#what-the-gateway-keeps)). Shop's access token lasts an hour; the gateway refreshes it with the refresh token Shop issued, logging that request first with the refresh token as a digest, and keeps the new tokens in the vault. If Shop refuses the refresh, link again. Without `INTENT_SHOP_CLIENT_ID` it sends nothing and says so. `intent init` skips the step with `--yes`, in demo mode and when there is no terminal to ask at; purchases are then handed off.
+`intent wallet link shop` prints a code and a Shop page; you approve there, in your own browser. The gateway asks for the scope `openid personal_agent` (no email) and keeps the tokens in an encrypted file in the data dir ([wallet vault](#what-the-gateway-keeps)). Shop's access token lasts an hour; the gateway refreshes it with the refresh token Shop issued, logging that request first with the refresh token as a digest, and keeps the new tokens in the vault. If Shop refuses the refresh, link again.
+
+The gateway signs in as its own Shop client, `https://gateway.intentai.shop/shop-client.json`. `INTENT_SHOP_CLIENT_ID` replaces it with another client id or client-ID metadata URL, for example Shop's public client for your own agent; only that setting changes the client, and the gateway never switches to another one by itself. When Shop answers `invalid_client`, the command prints one line that says which client Shop refused and names `INTENT_SHOP_CLIENT_ID`, and sends nothing more. `intent init` skips the step with `--yes`, in demo mode and when there is no terminal to ask at; purchases are then handed off.
 
 Your policy decides whether one tap may be used: `completion` lists `handoff`, `one_tap` or both, and both is the default ([Gateway policy](policy.md#completion-modes)). Restart the gateway after linking. `intent wallet unlink shop` asks Shop to revoke the refresh token and the access token, deletes the vault file whatever the answers, and records whether Shop answered that it revoked both. Revoking does not remove the connection from the Shop app: remove it there too (Shop app › Connections). `intent wallet status` reads the account once, through the log; a connection removed in the Shop app shows as not linked at Shop, with one tap unavailable.
 
@@ -81,6 +83,7 @@ Shop's terms limit use to "personal, individual shopping use only, unless separa
 | `<data dir>/wallet/shop.enc` | The Shop token, AES-256-GCM, mode 600. |
 | `<data dir>/wallet/shop-checkouts/` | Each checkout id Shop issued for a purchase, sealed the same way, so a restarted gateway can read a checkout it may have completed. Deleted when the purchase ends. |
 | The wallet key | From `INTENT_WALLET_KEY_FILE` (refused inside the data dir), else `INTENT_WALLET_KEY`, else a generated 600 file in your config folder. |
+| `<data dir>/account-key.json` | The account key: an Ed25519 key `intent init` makes once, mode 600, never replaced ([ADR-0021](adr/0021-account-key.md)). Only its public half is ever sent. |
 | `<data dir>/completer/` | One key per open cart, which signs that approval's reads and outcome reports ([ADR-0016](adr/0016-per-approval-completer-key.md)). |
 
 Against malware running as your user, these files are obfuscation, not protection: see [Known risks](threat-model.md#known-risks).

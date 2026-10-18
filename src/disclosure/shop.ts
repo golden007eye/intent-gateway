@@ -9,6 +9,7 @@ import {
   createShopAdapter,
   createShopMcpTransport,
   DEFAULT_SHOP_AUTH_URL,
+  DEFAULT_SHOP_CLIENT_ID,
   DEFAULT_SHOP_MCP_URL,
   type DeviceGrantPrompt,
   parseShopCredentials,
@@ -84,8 +85,8 @@ export interface ShopLink {
   readonly mcpUrl: string | null;
   /** INTENT_SHOP_AUTH_URL; null for Shop's own. */
   readonly authUrl: string | null;
-  /** The gateway's registered Shop client (INTENT_SHOP_CLIENT_ID). */
-  readonly clientId: string;
+  /** INTENT_SHOP_CLIENT_ID; null for the gateway's own client (DEFAULT_SHOP_CLIENT_ID). */
+  readonly clientId: string | null;
   readonly show: (prompt: DeviceGrantPrompt) => void;
   readonly sleep: (ms: number) => Promise<void>;
   readonly now: () => number;
@@ -106,6 +107,6 @@ export interface LinkedShopVault {
  */
 export async function linkShop(owner: DisclosedCloud | WalletSession, link: ShopLink): Promise<LinkedShopVault> {
   const resource = new URL(link.mcpUrl ?? DEFAULT_SHOP_MCP_URL).origin;
-  const linked = await runDeviceFlow(accountsOf(owner, link), { clientId: link.clientId, resource, show: link.show, sleep: link.sleep, now: link.now });
+  const linked = await runDeviceFlow(accountsOf(owner, link), { clientId: link.clientId ?? DEFAULT_SHOP_CLIENT_ID, resource, show: link.show, sleep: link.sleep, now: link.now });
   return { vaultText: shopCredentialsText(linked.credentials), refreshIssued: linked.credentials.refreshToken !== null, expiresInS: linked.expiresInS };
 }
