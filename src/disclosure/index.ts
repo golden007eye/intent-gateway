@@ -29,7 +29,7 @@ export {
   type WalletResult,
   type WalletSession,
 } from "./wallet.ts";
-export { connectShop, type LinkedShopVault, linkShop, type ShopConnection, type ShopLink } from "./shop.ts";
+export { connectShop, type LinkedShopVault, linkedShopClientId, linkShop, type ShopConnection, type ShopLink } from "./shop.ts";
 export { connectStorefront, STOREFRONT, type StorefrontPort } from "./storefront.ts";
 export type { StorefrontTransport } from "../storefront/index.ts";
 export { DEFAULT_SHOP_CLIENT_ID, type DeviceGrantPrompt, ShopLinkError, type ShopLinkFailure } from "../wallet-shop/index.ts";

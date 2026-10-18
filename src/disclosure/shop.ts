@@ -29,6 +29,11 @@ export interface ShopConnection {
   readonly authUrl: string | null;
   /** The wallet vault's text for `shop`. When it holds no usable tokens, every call fails and revoke sends nothing. */
   readonly vaultText: string;
+  /**
+   * INTENT_SHOP_CLIENT_ID, or null. Used only for a vault from before the link's client id was kept in it; the gateway's
+   * own client (DEFAULT_SHOP_CLIENT_ID) when it is null too. A vault that names its client always uses that one.
+   */
+  readonly clientId?: string | null;
   readonly timeoutMs?: number;
   /** Makes each create_checkout idempotency key (a UUID v4); random by default, fixed by tests. */
   readonly newKey?: () => string;
@@ -45,7 +50,7 @@ export interface ShopConnection {
 
 /** The Shop wallet adapter, every send of it logged first by the disclosure core of `owner`. */
 export function connectShop(owner: DisclosedCloud | WalletSession, connection: ShopConnection): WalletAdapter {
-  let credentials = parseShopCredentials(connection.vaultText);
+  let credentials = parseShopCredentials(connection.vaultText, connection.clientId ?? DEFAULT_SHOP_CLIENT_ID);
   const timing = connection.timeoutMs === undefined ? {} : { timeoutMs: connection.timeoutMs };
   const mcp = createDisclosedWallet(
     createShopMcpTransport({
@@ -78,6 +83,11 @@ function accountsOf(owner: DisclosedCloud | WalletSession, connection: Pick<Shop
     destination: "shop_accounts",
     secretPaths: SHOP_ACCOUNTS_SECRET_PATHS,
   });
+}
+
+/** The client id the wallet in `vaultText` was linked with, or null when the vault names none (an older vault). */
+export function linkedShopClientId(vaultText: string): string | null {
+  return parseShopCredentials(vaultText)?.clientId ?? null;
 }
 
 export interface ShopLink {

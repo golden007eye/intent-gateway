@@ -9,12 +9,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_SHOP_CLIENT_ID } from "../disclosure/index.ts";
-import { readChain } from "../store/index.ts";
-import { loadSecret, vaultPath, WalletKey } from "../wallet/index.ts";
+import { loadConfig } from "../config/index.ts";
+import { DEFAULT_SHOP_CLIENT_ID, type DisclosedCloud, openWalletSession } from "../disclosure/index.ts";
+import { openStore, readChain } from "../store/index.ts";
+import { loadSecret, saveSecret, vaultPath, WalletKey } from "../wallet/index.ts";
 import { FAKE_BUYER, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
 import { hostConnect } from "./connect.ts";
 import { type Io, main } from "./index.ts";
+import { oneTapFor } from "./wallet.ts";
 
 interface Result {
   code: number;
@@ -294,6 +296,79 @@ describe("intent wallet link shop", () => {
     expect((await s.run(["wallet", "link", "paypal"])).code).toBe(2);
     expect((await s.run(["wallet", "link"])).code).toBe(2);
     expect(s.shop.oauthRequests).toEqual([]);
+  });
+});
+
+describe("a linked wallet keeps the client it was linked with", () => {
+  /** The token requests sent after `from`, as [grant_type, client_id]. */
+  const grants = (shop: FakeShop, from: number) => shop.oauthRequests.slice(from).map((q) => [q.form.grant_type, q.form.client_id]);
+
+  it("linked with INTENT_SHOP_CLIENT_ID, then run without it: status refreshes and unlink revokes as the linked client", async () => {
+    const s = await setup();
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    s.shop.expireAccessTokens();
+    const before = s.shop.oauthRequests.length;
+    const env = without(s.env, "INTENT_SHOP_CLIENT_ID");
+    const status = await s.run(["wallet", "status"], { env });
+    expect(status.err).toBe("");
+    expect(status.out).toContain("Shop budget left for the gateway: 50.00 USD");
+    expect(grants(s.shop, before)).toEqual([["refresh_token", s.shop.clientId]]);
+    expect(s.shop.oauthRequests.slice(before).map((q) => q.form.client_id)).not.toContain(DEFAULT_SHOP_CLIENT_ID);
+    const unlink = await s.run(["wallet", "unlink", "shop"], { env });
+    expect(unlink.code).toBe(0);
+    expect(s.shop.revocations.map((r) => r.clientId)).toEqual([s.shop.clientId, s.shop.clientId]);
+  });
+
+  it("serve's one tap, started without INTENT_SHOP_CLIENT_ID (as claude mcp add does), refreshes as the linked client", async () => {
+    const s = await setup();
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    s.shop.expireAccessTokens();
+    const before = s.shop.oauthRequests.length;
+    const env = without(s.env, "INTENT_SHOP_CLIENT_ID");
+    const err: string[] = [];
+    const io: Io = { env, stdin: new PassThrough(), stdout: { write: () => true }, stderr: { write: (t: string) => err.push(t) }, isTTY: { stdin: false, stdout: false } };
+    const oneTap = await oneTapFor(io, loadConfig(env, [], { requireTrust: false }), s.dir);
+    expect(oneTap).not.toBeNull();
+    const store = await openStore(s.dir);
+    try {
+      const wallet = oneTap?.connect(openWalletSession(store) as unknown as DisclosedCloud);
+      expect((await wallet?.account())?.connected).toBe(true);
+    } finally {
+      await store.close();
+    }
+    expect(grants(s.shop, before)).toEqual([["refresh_token", s.shop.clientId]]);
+    expect(err.join("")).toBe("");
+  });
+
+  it("INTENT_SHOP_CLIENT_ID set later to another client: one warning line, and the linked client is still used", async () => {
+    const s = await setup();
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    s.shop.expireAccessTokens();
+    const before = s.shop.oauthRequests.length;
+    const status = await s.run(["wallet", "status"], { env: { ...s.env, INTENT_SHOP_CLIENT_ID: "another-client" } });
+    expect(status.err).toBe(
+      `intent: warning: this Shop wallet was linked as the client ${s.shop.clientId}, so INTENT_SHOP_CLIENT_ID (another-client) is not used for it; run intent wallet link shop to link it as that client\n`,
+    );
+    expect(status.out).toContain("Shop budget left for the gateway: 50.00 USD");
+    expect(grants(s.shop, before)).toEqual([["refresh_token", s.shop.clientId]]);
+  });
+
+  it("an older vault with no client_id: the env client when set, else the gateway's own; the next refresh records it", async () => {
+    const older = async (clientId: string | undefined, env: (s: Setup) => Record<string, string>) => {
+      const s = await setup({}, clientId);
+      await saveSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"), JSON.stringify({ v: 1, access_token: s.shop.accessToken, refresh_token: s.shop.refreshToken }));
+      s.shop.expireAccessTokens();
+      const status = await s.run(["wallet", "status"], { env: env(s) });
+      expect(status.err).toBe("");
+      expect(status.out).toContain("Shop budget left for the gateway: 50.00 USD");
+      expect(grants(s.shop, 0)).toEqual([["refresh_token", s.shop.clientId]]);
+      const vault = JSON.parse((await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"))) ?? "{}") as { client_id?: string };
+      expect(vault.client_id).toBe(s.shop.clientId);
+      return s;
+    };
+    expect((await older(undefined, (s) => s.env)).shop.clientId).toBe("fake-shop-client");
+    await shop?.close();
+    expect((await older(DEFAULT_SHOP_CLIENT_ID, (s) => without(s.env, "INTENT_SHOP_CLIENT_ID"))).shop.clientId).toBe(DEFAULT_SHOP_CLIENT_ID);
   });
 });
 
