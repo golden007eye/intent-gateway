@@ -15,7 +15,8 @@
 //    - to a wallet destination, a path whose query names a secret key (`?access_token=`), which cannot be digested;
 //    - to Intent Cloud, any credential: its requests are logged byte for byte, never redacted, so their
 //      content_digest and receipts stay checkable against the logged bytes.
-// 2. findIdentity on the outbound body, JSON or form (the MCP envelope's tool and client names exempt for wallets):
+// 2. findIdentity on the outbound body, JSON or form (the MCP envelope's tool and client names exempt for wallets, an
+//    outcome report's order gid exempt at `order_ref` for Intent Cloud: privacy's sentOrderRefAt):
 //    a finding appends a `block` entry (`rule: "identity"`) and throws DisclosureBlockedError.
 // 3. Credentials are digested in what is logged, never in what is sent: a credential header (privacy's
 //    CREDENTIAL_HEADERS), every body value under a secret key (privacy's isSecretKey) and every value at one of the
@@ -43,6 +44,7 @@ import {
   redactionMarker,
   secretDigest,
   secretQueryKeys,
+  sentOrderRefAt,
 } from "../privacy/index.ts";
 import { type Entry, NOT_SENT_REASON, type Store, StoreConflictError } from "../store/index.ts";
 
@@ -249,7 +251,9 @@ export function createDisclosureCore(store: Store): DisclosureCore {
         await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: refusals, rule: "logging" });
         throw new DisclosureRefusedError(request.operation, refusals);
       }
-      const findings = opaqueFiltered(findIdentity(json, { mcpEnvelope: destination !== INTENT_CLOUD }), json, destination === INTENT_CLOUD ? [] : (options.opaqueIds ?? []));
+      const toCloud = destination === INTENT_CLOUD;
+      const identity = findIdentity(json, { mcpEnvelope: !toCloud, orderRefAt: sentOrderRefAt(request.operation, toCloud) });
+      const findings = opaqueFiltered(identity, json, toCloud ? [] : (options.opaqueIds ?? []));
       if (findings.length > 0) {
         await store.append("block", { endpoint: request.operation, ...elsewhere, fields, blocked: findings.map(describe), rule: "identity" });
         throw new DisclosureBlockedError(request.operation, findings);

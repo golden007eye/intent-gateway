@@ -59,7 +59,7 @@ import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { CLOUD_BASELINE, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
 import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
 import { CloudOutcomeEntry, ORDER_REF, outcomesFor, readCloudOutcome, replaces, shownStatus, type StatementCheck } from "../outcome/index.ts";
-import { findIdentity } from "../privacy/index.ts";
+import { findIdentity, ORDER_REF_AT } from "../privacy/index.ts";
 import type { CompleterKeys, Session } from "../signing/index.ts";
 import { type Entry, type Store, StoreConflictError } from "../store/index.ts";
 import {
@@ -1037,7 +1037,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     }
     // The statement is kept so `intent verify` can re-check it offline, unless it holds what looks like buyer identity:
     // then it is not kept, and nothing in it is acted on (refused_by "identity").
-    const held = statement !== undefined && findIdentity(statement).length === 0;
+    const held = statement !== undefined && findIdentity(statement, { orderRefAt: ORDER_REF_AT.statement }).length === 0;
     if (statement !== undefined && !held) check = { ok: false, refused_by: "identity", signed: false };
     const reading = readCloudOutcome(stated, snapshot.total.amount_minor, check);
     const shownState = reading.state_shown;

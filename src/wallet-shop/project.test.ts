@@ -226,6 +226,12 @@ describe("projectCheckout (S1 step 6 shape)", () => {
     const read = (patch: Record<string, unknown>) => projectCheckout({ ...base, ...patch }, "asked.myshopify.com", undefined).checkout;
     expect(read({ status: "completed", order: { id: "gid://shopify/Order/9" } })).toMatchObject({ status: "completed", orderRef: "gid://shopify/Order/9" });
     expect(read({ status: "completed", order: { id: "gid://shopify/Order/9?key=SECRET" } }).orderRef).toBeNull();
+    // A 14-digit order number that passes Luhn (fixed) is kept as the order's ref (ADR-0019, ORDER_REF_AT.projection) ...
+    expect(read({ status: "completed", order: { id: "gid://shopify/Order/12345678901237" } }).orderRef).toBe("gid://shopify/Order/12345678901237");
+    // ... but not the same digits bare, nor in any other gid shape: those read as a card and are dropped.
+    for (const id of ["12345678901237", "4111111111111111", "gid://shopify/Checkout/4111111111111111", "gid://shopify/Order/4111111111111111/x", "x/gid://shopify/Order/4111111111111111"]) {
+      expect(read({ status: "completed", order: { id } }).orderRef, id).toBeNull();
+    }
     expect(read({ line_items: [{ item: { id: "gid://shopify/ProductVariant/1?key=SECRET" }, quantity: 1 }] }).lines).toEqual([]);
     expect(read({ status: "requires_escalation" }).status).toBe("buyer_review");
     expect(read({ status: "canceled" }).status).toBe("failed");

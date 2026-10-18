@@ -1633,10 +1633,24 @@ describe("outcomes: only a verified statement is acted on, and never more than i
     expect((await verify(h)).exitCode).toBe(0);
   });
 
-  it("attack (invariant 3): a statement holding what looks like a card number (a 16-digit Luhn-valid order id) is not kept: refused identity, and verify passes", async () => {
+  it("a statement naming a Shopify order gid whose 14-digit number passes Luhn is kept and shown ordered (ADR-0019), and verify passes", async () => {
     const h = await setup();
     const approval = await orderedPurchase(h);
-    serveSigned(h, (o) => ({ ...o, order_ref: "gid://shopify/Order/4111111111111111" }));
+    // Fixed: 12345678901237 passes Luhn, so the card check alone reads this gid as a card.
+    const gid = "gid://shopify/Order/12345678901237";
+    serveSigned(h, (o) => ({ ...o, order_ref: gid }));
+    const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
+    expect(result).toMatchObject({ outcome: { state_shown: "ordered", statement_verified: true } });
+    expect(outcomes(h).at(-1)).toMatchObject({ statement_verified: true, state_shown: "ordered", order_ref: gid });
+    expect(outcomes(h).at(-1)).toHaveProperty("statement_jcs");
+    const report = await verify(h);
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+  });
+
+  it("attack (invariant 3): a statement holding what looks like a card number (a 16-digit Luhn-valid order id, not an order gid) is not kept: refused identity, and verify passes", async () => {
+    const h = await setup();
+    const approval = await orderedPurchase(h);
+    serveSigned(h, (o) => ({ ...o, order_ref: "4111111111111111" }));
     const result = await h.gateway.getApprovalStatus({ approval_handle: approval });
     expect(result).toMatchObject({ outcome: { state_shown: "handed_off", kept_earlier: true, statement_verified: false, refused_by: "identity" } });
     expect(result).not.toHaveProperty("order_number");

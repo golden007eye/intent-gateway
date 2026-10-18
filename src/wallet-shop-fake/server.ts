@@ -96,6 +96,8 @@ export interface FakeShopFaults {
   checkoutKey?: string;
   /** The token before `?` in every checkout id (16 random hex digits by default). */
   checkoutToken?: string;
+  /** The order number of every completed order, the digits of its `gid://shopify/Order/<digits>` (a counter by default). */
+  orderNumber?: string;
   /**
    * The token endpoint's answers to device-code polls, in order (the last one repeats): `ok` issues the tokens, the
    * others are RFC 8628 errors. ["ok"] by default.
@@ -556,7 +558,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
           if (shop.faults.buyerReview === true) c.status = "requires_escalation";
           else {
             c.status = "completed";
-            c.orderId = `gid://shopify/Order/${String(++orders)}`;
+            c.orderId = `gid://shopify/Order/${shop.faults.orderNumber ?? String(++orders)}`;
             shop.orders.push({ id: c.orderId, totalMinor: UNIT_PRICE_MINOR * c.quantity + SHIPPING_MINOR + (shop.faults.totalAboveMinor ?? 0), createdAt: new Date().toISOString() });
           }
           return result(view(c));
