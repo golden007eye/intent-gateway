@@ -15,6 +15,7 @@ docs/adr/0008-public-contract-copy.md | its fake and Intent Cloud all reproduce 
 docs/adr/0009-policy-v1-narrow-only.md | never looser than Intent Cloud's rules | names the baseline a policy is compared with
 docs/adr/0011-approver-pin.md | if Intent Cloud were wrong or compromised | a threat the approver pin defends against, not a claim
 docs/adr/0011-approver-pin.md | The first purchase still trusts Intent Cloud | states a limit of the gateway's own check
+docs/adr/0011-approver-pin.md | Intent Cloud passkeys are now invite-only during preview | names who can hold an approval passkey, not data handling
 
 # CLI strings: status lines about a response the gateway received, or names of configuration.
 src/cli/doctor.ts | Intent Cloud: the demo gateway runs its own | doctor's label for the demo's local stand-in
@@ -34,3 +35,7 @@ src/cloud/http.ts | cannot be reached | reports that no complete response came b
 src/gateway/gateway.ts | Intent Cloud key statement failed with status | reports the status a response came back with
 src/gateway/gateway.ts | the cart Intent Cloud created does not match | reports a mismatch between the cart returned and the one asked for
 src/policy/policy.ts | never allow ones Intent Cloud excludes | a policy load error naming the baseline's excluded categories
+
+# Docs: the name of the buyer's passkey, not a claim about what Intent Cloud does.
+docs/one-tap.md | The buyer approves with their Intent Cloud passkey | names the passkey the buyer approves with
+docs/threat-model.md | a person has one Intent Cloud passkey | names the passkey the proof carries; says who could link approvals, not what Intent Cloud does

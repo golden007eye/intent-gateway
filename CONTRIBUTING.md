@@ -41,7 +41,9 @@ Three scenarios run the gateway for real, with no demo: a fresh data dir and the
 |---|---|---|
 | `s` | unattended | `doctor` (contract 1.6 and the key statement), `init --yes`, a search, a hand-off cart (completion mode `handoff`, a completer key, the merchant's origin and variant from the snapshot, an exact total), still pending, four refusals that disclose nothing, no evidence before an approval, `verify` ok. The cart expires unapproved. |
 | `j` | manual, `E2E_STAGING=1` | The hand-off purchase (AC-J1), described below. |
-| `j2` | manual, `E2E_ONETAP=1` | The one-tap skeleton (AC-J2). It also needs `INTENT_SHOP_CLIENT_ID`, `INTENT_WALLET_KEY_FILE`, a Shop account to link and a store one tap can reach. Staging has none of these today, so it skips. |
+| `j2` | manual, `E2E_ONETAP=1` | The one-tap skeleton (AC-J2). It also needs `INTENT_SHOP_CLIENT_ID`, `INTENT_WALLET_KEY_FILE`, a Shop account to link and a store one tap can reach. It cannot pass on staging: the staging store's test payment gateway makes Shop refuse to pay (`checkout_completion_ineligible`). |
+
+Staging covers hand-off only. One tap (AC-J2) is proven by hand: a small real order at a real store, paid from the developer's own Shop account.
 
 ```console
 $ scripts/e2e-outsider.sh --tarball --only s
@@ -52,11 +54,11 @@ The search defaults to a tee to ZIP 07093 under $20 (`E2E_STAGING_PRODUCT`, `E2E
 
 #### Hand-off on staging (`j`)
 
-You need an intent account on staging with its passkey on this device or your phone, and about five minutes. Nothing is charged: the staging store uses its payment provider's test gateway.
+You need your Intent Cloud passkey (invite-only during preview) on this device or your phone, and about five minutes. Nothing is charged: the staging store uses its payment provider's test gateway.
 
 1. Run `E2E_STAGING=1 scripts/e2e-outsider.sh --docker --only j` (or `--tarball`). The clock starts at `docker run`. The script runs `intent init --yes`, then a headless Claude Code calls `find_offers` and `create_cart`.
 2. The script prints an **ACTION NEEDED** box with the approval link, the check code, the ZIP and the total. Open the link. Check that the confirm page shows the same check code, ZIP and total.
-3. Click **Approve with passkey** and use your intent passkey.
+3. Click **Approve with passkey** and use your Intent Cloud passkey.
 4. Click **Continue to … checkout**. On the merchant's checkout, enter any email (`you@example.com`), any name, a street address in the ZIP shown, and card number `1` with any future expiry (`12/30`), any CVV (`123`) and any name on the card. Pay.
 5. Do nothing else. The script calls `get_approval_status` every 15 s (`E2E_J_POLL`) for up to 20 minutes (`E2E_J_WAIT`). It stops when the status says Intent Cloud reported the order in a statement the gateway verified; the wait leaves room for that report to arrive late. `intent log -v` names the source Intent Cloud gave for it. It fails at once on a rejected or expired approval, an approval that does not verify, a mismatch or an expired checkout.
 6. The script then asks Claude for the status, and checks that `intent log -v` shows the ordered outcome as served and that `intent verify` counts the approval and the ordered outcome. It prints the time from start to `verify: ok`, which must be at most 300 s (`E2E_J_BUDGET`). Then `intent evidence <approval handle>` writes the pack, and `intent verify --evidence` checks it with no chain: from a fresh HOME, or in a container with no network.

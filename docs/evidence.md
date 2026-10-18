@@ -49,6 +49,8 @@ The approval handle is the `ap_…` value `intent log` shows for the purchase. `
 
 What it never holds: buyer identity (the gateway never stores a name, a postal address or a card, invariant 3); a credential in clear; anything kept beside the chain, such as the wallet vault, the wallet key, or the completer and session private keys. Other purchases appear only as the hashes in `skeleton`.
 
+The approval proof carries no buyer id, and the gateway never learns the buyer's account id. It does carry the passkey's credential id and public key, which are the same on every approval by that person, including approvals in intent's ChatGPT and Claude apps. Anyone who sees two of them can tell that one passkey approved both: Intent Cloud, which signs each approval proof, or whoever holds several packs.
+
 ## What the checks prove
 
 | Check | What it proves | What it does not |

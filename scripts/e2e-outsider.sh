@@ -23,12 +23,14 @@
 #       snapshot, completer key), still pending, the refusals, no evidence before an approval, verify ok. It creates
 #       a cart that expires unapproved; it buys nothing.
 #   j   MANUAL (AC-J1), runs only with E2E_STAGING=1: as s, with Claude making the cart; then a person approves it
-#       with a staging intent passkey and pays the test order on the merchant checkout; the script polls until
-#       the verified outcome says ordered, then verify, evidence and verify --evidence. Timed against
-#       E2E_J_BUDGET (default 300 s); it waits E2E_J_WAIT (default 1200 s) for the person. CONTRIBUTING.md says
-#       what the person does.
+#       with their Intent Cloud passkey (invite-only during preview) and pays the test order on the merchant
+#       checkout; the script polls until the verified outcome says ordered, then verify, evidence and
+#       verify --evidence. Timed against E2E_J_BUDGET (default 300 s); it waits E2E_J_WAIT (default 1200 s)
+#       for the person. CONTRIBUTING.md says what the person does.
 #   j2  MANUAL (AC-J2) one-tap skeleton, runs only with E2E_ONETAP=1, INTENT_SHOP_CLIENT_ID and
-#       INTENT_WALLET_KEY_FILE set, and a store one tap can reach (the staging store is hand-off only today).
+#       INTENT_WALLET_KEY_FILE set, and a store one tap can reach. It cannot pass on staging: the staging store's
+#       test payment gateway makes Shop refuse to pay (checkout_completion_ineligible). One tap is proven by hand
+#       with a small real order at a real store and the developer's own Shop account; staging covers hand-off only.
 # The search: E2E_STAGING_PRODUCT (default tee), E2E_STAGING_CATEGORY (t-shirts), E2E_STAGING_BUDGET (20, US
 # dollars), E2E_STAGING_ZIP (07093). The merchant is read from each run's snapshot, never named here.
 set -Eeuo pipefail
@@ -999,7 +1001,7 @@ PROMPT_STAGING_CART='Find a '"$STAGING_PRODUCT"' ('"$STAGING_CATEGORY"') to ZIP 
 scenario_j() {
   if [ "${E2E_STAGING:-0}" != 1 ]; then
     SKIPPED=1
-    WHY="manual: a person approves with a staging intent passkey and pays a test order; run it with E2E_STAGING=1 (CONTRIBUTING.md, Hand-off on staging)"
+    WHY="manual: a person approves with their Intent Cloud passkey (invite-only) and pays a test order; run it with E2E_STAGING=1 (CONTRIBUTING.md, Hand-off on staging)"
     return 1
   fi
   J_T0=$SECONDS
@@ -1017,7 +1019,7 @@ scenario_j() {
   tell_person \
     "1. Open the approval link: $(pending_value approval_url)" \
     "   Check that the page shows check code $(pending_value check_code), ZIP $STAGING_ZIP and total \$$(awk -v m="$(pending_value total_minor)" 'BEGIN{printf "%.2f", m/100}')." \
-    "2. Click 'Approve with passkey' and use your intent passkey on staging." \
+    "2. Click 'Approve with passkey' and use your Intent Cloud passkey." \
     "3. Click 'Continue to <merchant> checkout'. On the merchant's checkout (the store's test gateway):" \
     "   any email such as you@example.com, any name, a street in ZIP $STAGING_ZIP, card number 1," \
     "   any future expiry (12/30), any CVV (123), name on card anything. Pay. No real money moves." \
@@ -1044,11 +1046,12 @@ scenario_j() {
 }
 
 # j2 (AC-J2): one tap. A skeleton: it needs a registered Shop client, a Shop account to link and a store one tap can
-# reach, none of which staging has today, so it has never run end to end.
+# reach. The staging store's test payment gateway makes Shop refuse to pay (checkout_completion_ineligible), so it
+# cannot pass on staging; one tap is proven by hand with a small real order at a real store.
 scenario_j2() {
   if [ "${E2E_ONETAP:-0}" != 1 ] || [ -z "${INTENT_SHOP_CLIENT_ID:-}" ] || [ -z "${INTENT_WALLET_KEY_FILE:-}" ]; then
     SKIPPED=1
-    WHY="manual skeleton: needs E2E_ONETAP=1, INTENT_SHOP_CLIENT_ID, INTENT_WALLET_KEY_FILE, a Shop account to link and a store one tap can reach (the staging store is hand-off only)"
+    WHY="manual skeleton: needs E2E_ONETAP=1, INTENT_SHOP_CLIENT_ID, INTENT_WALLET_KEY_FILE, a Shop account to link and a store one tap can reach (staging covers hand-off only; one tap is proven by hand at a real store)"
     return 1
   fi
   [ -r "$INTENT_WALLET_KEY_FILE" ] || { WHY="INTENT_WALLET_KEY_FILE is not readable"; return 1; }

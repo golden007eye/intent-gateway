@@ -16,3 +16,7 @@ Invariant 4 requires a passkey-signed Approval the gateway has verified and chai
 ## Consequences
 
 After the first purchase, the approval check no longer rests on Intent Cloud alone: a new passkey must be accepted at the developer's terminal. The first purchase still trusts Intent Cloud. If the agent enrols a passkey and approves before the human does, its passkey becomes the pin; the fingerprint shown at creation and the human's own passkey being flagged are the signals. The TTY check raises the bar but is not a guarantee, since an agent that can open a pseudo-terminal can pass it; the threat model says so and names payment by hand at the merchant as the backstop.
+
+## Update · 2026-10-18
+
+Intent Cloud passkeys are now invite-only during preview, one per person, so an agent cannot enrol its own passkey unaided. The decision stands: the agent-goes-first risk remains when the agent controls an invited person's passkey or the device it is on, and the fingerprint shown at creation and the human's own passkey being flagged are still the signals.
