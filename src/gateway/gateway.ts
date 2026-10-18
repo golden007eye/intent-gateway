@@ -314,8 +314,11 @@ export interface Gateway {
   findOffers(input: unknown): Promise<FindOffersResult>;
   createCart(input: unknown): Promise<CreateCartResult>;
   getApprovalStatus(input: unknown): Promise<ApprovalStatusResult>;
-  /** Sends a signed pause to Intent Cloud through the disclosure log (ADR-0023); throws as the disclosed cloud does. */
-  sendPause(request: PauseRequest): Promise<DisclosedResult<PauseAccepted>>;
+  /**
+   * Sends a signed pause to Intent Cloud through the disclosure log (ADR-0023); throws as the disclosed cloud does. When
+   * `unless` holds over the chain under the store lease, nothing is logged or sent (DisclosureConflictError).
+   */
+  sendPause(request: PauseRequest, unless?: (entries: readonly Entry[]) => boolean): Promise<DisclosedResult<PauseAccepted>>;
 }
 
 interface RememberedOffer {
@@ -897,6 +900,10 @@ export function createGateway(options: GatewayOptions): Gateway {
         "Refused: the cart and offer do not give what the approval is checked against (Appendix E step 7). No approval was requested.");
     }
 
+    // A pause chained while the cart was being made stops the purchase at its next outward step (ADR-0023).
+    if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_approval", source: "gateway" }))) {
+      return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
+    }
     const approvalCall = await call(() => cloud.createApproval(cart.cart_handle), fromSeq);
     if (!approvalCall.ok) {
       if (approvalCall.paused === true) await pausedByCloud("create_approval", "createApproval", fromSeq);
@@ -1293,9 +1300,9 @@ export function createGateway(options: GatewayOptions): Gateway {
     start: () => serial(start),
     findOffers: (input) => serial(() => findOffers(input)),
     createCart: (input) => serial(() => createCart(input)),
-    sendPause: (request) => {
+    sendPause: (request, unless) => {
       started();
-      return cloud.pause(request);
+      return cloud.pause(request, unless);
     },
     getApprovalStatus: (input) =>
       serial(async () => {

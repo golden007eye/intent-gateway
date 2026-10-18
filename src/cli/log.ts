@@ -320,7 +320,7 @@ function describe(item: Item, demo: boolean): [string, string, Tone] {
       return ["pause sent", `${sent}: ${counter}${words}; retrying while ${INTENT} serve runs`, "warn"];
     }
     case "resume":
-      return ["resumed", "the local pause is cleared after the developer resumed with the passkey (unconfirmed, pending the next submit)", null];
+      return ["resumed", "the local pause is cleared: `resumed` was typed at a terminal (unconfirmed, pending the next submit)", null];
     case "resume_check":
       return b.result === "repaused"
         ? ["paused", "the next submit got paused from Intent Cloud: paused again here", "warn"]

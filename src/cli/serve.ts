@@ -60,7 +60,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
     // A pause not yet acknowledged by Intent Cloud (this process's, the CLI's or the panel's) is sent again with backoff
     // while serve runs (ADR-0023); the local pause holds meanwhile.
     const retry = startPauseRetry(
-      { store, accountKey: accountKeyFor(io, dataDir), connect: () => Promise.resolve((request) => gateway.sendPause(request)), now: io.now ?? Date.now },
+      { store, accountKey: accountKeyFor(io, dataDir), connect: () => Promise.resolve((request, unless) => gateway.sendPause(request, unless)), now: io.now ?? Date.now },
       {
         onError: (error) => {
           log(`intent-gateway: the pause could not be sent: ${error instanceof Error ? error.message : String(error)}`);

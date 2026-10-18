@@ -271,7 +271,7 @@ function rawRow(a: Activity, g: Glyphs): Row {
     }
     case "resume": {
       const state = f.resume_state ?? "unconfirmed";
-      const values = `local pause cleared after the passkey resume`;
+      const values = "local pause cleared (`resumed` typed at a terminal)";
       if (state === "confirmed") return { verb: "resumed", verbTone: "sage", values, outcome: `${g.ok} confirmed by the next submit`, outcomeTone: "good" };
       if (state === "repaused") return { verb: "resumed", verbTone: "warn", values, outcome: `${g.bad} paused answer received from Intent Cloud: paused again`, outcomeTone: "bad" };
       return { verb: "resumed", verbTone: "sage", values, outcome: `${g.warn} unconfirmed, pending the next submit`, outcomeTone: "warn" };

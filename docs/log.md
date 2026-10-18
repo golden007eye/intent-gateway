@@ -100,7 +100,7 @@ The chain records a pause with five entry kinds, each appended before the step i
 | `pause_sent` | `{pause_seq, counter, disclosure_seq, result, reason, status?, last_counter?, retry_after_s?}` | One send of the pause to Intent Cloud (its `disclosure`, logged first) and what came back. `result` is `acknowledged` only for a 200 whose receipt verified; `failed` for a 400 `bad_request` or a 401 (not retried); otherwise `retrying`. `reason` names why: `no_account_key`, `unreachable`, `not_found` (the account key is pinned only at the first passkey approval), `rate_limited`, `clock_skew`, `counter_replayed`, `unauthorized`, `bad_request`, `discarded`, `no_keys`, `stopped`. |
 | `resume` | `{from, confirmed: false, pending: "next submit"}` | The developer typed `resumed` at a terminal after resuming with the passkey on the confirm page's `/account`. The local pause is cleared, unconfirmed. |
 | `resume_check` | `{resume_seq, result, disclosure_seq}` | The next submit's answer: `confirmed` (not answered `paused`) or `repaused` (answered `paused`, so purchases are paused again here). |
-| `refused` | `{step, reason: "paused", source, purchase?, disclosure_seq?}` | A step a pause stopped: `create_cart` or `complete_checkout` refused by the gateway (nothing sent), or `create_cart`, `create_approval` or `report_outcome` answered `paused` (`source: "intent_cloud"`, naming the request). |
+| `refused` | `{step, reason: "paused", source, purchase?, disclosure_seq?}` | A step a pause stopped: `create_cart`, `create_approval` (a pause chained while its cart was made) or `complete_checkout` refused by the gateway (nothing sent), or `create_cart`, `create_approval` or `report_outcome` answered `paused` (`source: "intent_cloud"`, naming the request). |
 
 The timeline shows them as:
 
@@ -108,7 +108,7 @@ The timeline shows them as:
 14:02:11  paused    purchases paused · from the CLI       ✓ Intent Cloud acknowledged
 14:02:40  refused   create_cart                           ✗ refused: paused (by the gateway, nothing sent)
 14:03:05  refused   create_cart                           ✗ refused: paused (by Intent Cloud)
-14:20:17  resumed   local pause cleared after the passkey resume  ⚠ unconfirmed, pending the next submit
+14:20:17  resumed   local pause cleared (`resumed` typed at a terminal)  ⚠ unconfirmed, pending the next submit
 ```
 
 A pause line ends with `✓ Intent Cloud acknowledged`, `⚠ not acknowledged by Intent Cloud (<reason>): retrying`, `✗ refusal received from Intent Cloud (<reason>); paused here only` or `⚠ not sent to Intent Cloud yet`. A resume line ends with `⚠ unconfirmed, pending the next submit`, `✓ confirmed by the next submit` or `✗ paused answer received from Intent Cloud: paused again`. A refused step of a one-tap purchase names its approval (`complete_checkout · approval ap_xyCp…lXmw`). `-v` prints each entry, for example `refused  create_cart: refused: paused (by the gateway; nothing sent)` and `pause sent  #41: counter 3, Intent Cloud acknowledged the pause`. `intent status` prints where the pause stands, and `intent verify` checks the entries' order and that each logged pause counter is above every earlier one.

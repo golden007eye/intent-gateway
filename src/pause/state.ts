@@ -146,10 +146,13 @@ export function nextCounter(entries: readonly PauseEntry[]): number {
 
 const BASE_DELAY_MS = 5_000;
 const MAX_DELAY_MS = 300_000;
+/** The longest Retry-After honoured: a larger one (an answer from anyone on the path) cannot put the pause off for days. */
+const MAX_RETRY_AFTER_MS = 3_600_000;
 
 /**
  * When the pause in effect should next be sent to Intent Cloud (milliseconds since the epoch), or null when it needs no
- * send: not paused, acknowledged, or refused for good. Backoff from 5 s doubling to 5 min, or Retry-After when longer.
+ * send: not paused, acknowledged, or refused for good. Backoff from 5 s doubling to 5 min, or Retry-After when longer
+ * (1 hour at most).
  */
 export function nextSendAt(state: PauseState): number | null {
   if (state.paused === null) return null;
@@ -159,7 +162,7 @@ export function nextSendAt(state: PauseState): number | null {
   if (last === null) return Date.parse(state.paused.since);
   if (last.result !== "retrying") return null;
   const backoff = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.max(0, state.retries - 1));
-  const delay = Math.max(backoff, (last.retryAfterS ?? 0) * 1000);
+  const delay = Math.max(backoff, Math.min(MAX_RETRY_AFTER_MS, (last.retryAfterS ?? 0) * 1000));
   return Date.parse(last.at) + delay;
 }
 

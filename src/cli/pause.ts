@@ -63,7 +63,7 @@ export function pauseDeps(io: Io, config: Config, store: Store, demo: Demo | nul
         ...(io.now === undefined ? {} : { now: io.now }),
       });
       await gateway.start();
-      const transport: PauseTransport = (request) => gateway.sendPause(request);
+      const transport: PauseTransport = (request, unless) => gateway.sendPause(request, unless);
       return transport;
     })();
     // A start that failed is tried again on the next send.

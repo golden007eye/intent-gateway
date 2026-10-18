@@ -32,8 +32,11 @@ export type AccountKey = Pick<FullAccountKey, "thumbprint" | "sign">;
 /** Reads the account key; null when this machine has none (the pause then holds locally only). */
 export type AccountKeySource = () => Promise<AccountKey | null>;
 
-/** Sends one pause through the disclosed cloud (DisclosedCloud.pause of a started gateway). */
-export type PauseTransport = (request: PauseRequest) => Promise<DisclosedResult<PauseAccepted>>;
+/**
+ * Sends one pause through the disclosed cloud (DisclosedCloud.pause of a started gateway). `unless` is evaluated over
+ * the chain under the store lease: when it holds, nothing is logged or sent and DisclosureConflictError is thrown.
+ */
+export type PauseTransport = (request: PauseRequest, unless: (entries: readonly Entry[]) => boolean) => Promise<DisclosedResult<PauseAccepted>>;
 
 export interface SendDeps {
   readonly store: Store;
@@ -46,7 +49,7 @@ export interface SendDeps {
 /** What one sendPause ended with: the last `pause_sent` it appended, or why it sent nothing. */
 export type SendOutcome =
   | { readonly sent: true; readonly result: SendResult; readonly reason: SendReason }
-  | { readonly sent: false; readonly why: "not_paused" | "acknowledged" | "no_account_key" };
+  | { readonly sent: false; readonly why: "not_paused" | "acknowledged" | "no_account_key" | "conflict" };
 
 /** Appends the local pause. It takes effect at once, before Intent Cloud is contacted. */
 export async function pauseLocally(store: Store, from: PauseSource): Promise<Entry> {
@@ -65,14 +68,15 @@ export function signPause(key: AccountKey, counter: number, at: string): PauseRe
   return { ...fields, signature };
 }
 
-const MAX_REPLAYS = 3;
+const MAX_ROUNDS = 3;
 
 /**
- * Sends the pause in effect to Intent Cloud once (and again at once after a 409 counter_replayed, up to 3 times), and
- * chains each send's result as `pause_sent`. Never throws for a network or Intent Cloud failure: those are results.
+ * Sends the pause in effect to Intent Cloud once (and again at once after a 409 counter_replayed or a lost counter race,
+ * 3 rounds at most), and chains each send's result as `pause_sent`. Never throws for a network or Intent Cloud failure:
+ * those are results.
  */
 export async function sendPause(deps: SendDeps): Promise<SendOutcome> {
-  const { store, now } = deps;
+  const { store } = deps;
   for (let round = 0; ; round++) {
     const state = pauseState(store.entries());
     if (state.paused === null) return { sent: false, why: "not_paused" };
@@ -85,9 +89,14 @@ export async function sendPause(deps: SendDeps): Promise<SendOutcome> {
       if (state.cloud?.reason !== "no_account_key") await store.append("pause_sent", { pause_seq: pauseSeq, counter: null, disclosure_seq: null, result: "retrying", reason: "no_account_key" });
       return { sent: false, why: "no_account_key" };
     }
-    const counter = nextCounter(store.entries());
     const head = store.entries().at(-1)?.seq ?? -1;
-    const attempt = await attemptOnce(deps, signPause(key, counter, issuedAt(now())));
+    const attempt = await attemptOnce(deps, key);
+    // Another process sent this counter first, or the pause was resumed meanwhile: nothing left; read the chain again.
+    if (attempt === "conflict") {
+      if (round + 1 >= MAX_ROUNDS) return { sent: false, why: "conflict" };
+      continue;
+    }
+    const { counter } = attempt;
     const disclosure = store.entries().find((e) => e.seq > head && e.kind === "disclosure" && (e.body as { endpoint?: unknown }).endpoint === "pause");
     await store.append("pause_sent", {
       pause_seq: pauseSeq,
@@ -99,11 +108,13 @@ export async function sendPause(deps: SendDeps): Promise<SendOutcome> {
       ...(attempt.lastCounter === undefined ? {} : { last_counter: attempt.lastCounter }),
       ...(attempt.retryAfterS === undefined ? {} : { retry_after_s: attempt.retryAfterS }),
     });
-    if (attempt.reason !== "counter_replayed" || round + 1 >= MAX_REPLAYS) return { sent: true, result: attempt.result, reason: attempt.reason };
+    if (attempt.reason !== "counter_replayed" || round + 1 >= MAX_ROUNDS) return { sent: true, result: attempt.result, reason: attempt.reason };
   }
 }
 
 interface Attempt {
+  /** The counter sent, or null when nothing was (no connection). */
+  counter: number | null;
   result: SendResult;
   reason: SendReason;
   status?: number;
@@ -111,38 +122,50 @@ interface Attempt {
   retryAfterS?: number;
 }
 
-async function attemptOnce(deps: SendDeps, request: PauseRequest): Promise<Attempt> {
+/**
+ * Connects, then signs the next counter and sends it. The counter is read after connecting (a gateway start can take a
+ * while), and the `disclosure` is compare-and-appended under the store lease: it is written only while the chain is
+ * still paused and holds no pause request with this counter or a higher one, so two processes (serve's retry and
+ * `intent pause`) never send the same counter. "conflict": nothing was logged or sent.
+ */
+async function attemptOnce(deps: SendDeps, key: AccountKey): Promise<Attempt | "conflict"> {
   let transport: PauseTransport;
   try {
     transport = await deps.connect();
   } catch {
-    return { result: "retrying", reason: "unreachable" };
+    // Nothing was signed or sent: no counter is used up.
+    return { counter: null, result: "retrying", reason: "unreachable" };
   }
+  const counter = nextCounter(deps.store.entries());
+  const request = signPause(key, counter, issuedAt(deps.now()));
+  const unless = (chain: readonly Entry[]): boolean => !pausedIn(chain) || nextCounter(chain) > counter;
+  const attempt = (rest: Omit<Attempt, "counter">): Attempt => ({ counter, ...rest });
   let answer: DisclosedResult<PauseAccepted>;
   try {
-    answer = await transport(request);
+    answer = await transport(request, unless);
   } catch (error) {
+    if (named(error, "DisclosureConflictError")) return "conflict";
     const status = typeof (error as { status?: unknown } | null)?.status === "number" ? { status: (error as { status: number }).status } : {};
-    if (named(error, "CloudNetworkError")) return { result: "retrying", reason: "unreachable" };
-    if (named(error, "DisclosureDiscardedError")) return { result: "retrying", reason: "discarded", ...status };
-    if (named(error, "DisclosureNoKeysError", "DisclosureKeysExpiredError")) return { result: "retrying", reason: "no_keys" };
-    if (named(error, "DisclosureStoppedError")) return { result: "retrying", reason: "stopped" };
-    return { result: "retrying", reason: "error", ...status };
+    if (named(error, "CloudNetworkError")) return attempt({ result: "retrying", reason: "unreachable" });
+    if (named(error, "DisclosureDiscardedError")) return attempt({ result: "retrying", reason: "discarded", ...status });
+    if (named(error, "DisclosureNoKeysError", "DisclosureKeysExpiredError")) return attempt({ result: "retrying", reason: "no_keys" });
+    if (named(error, "DisclosureStoppedError")) return attempt({ result: "retrying", reason: "stopped" });
+    return attempt({ result: "retrying", reason: "error", ...status });
   }
-  if (answer.ok) return { result: "acknowledged", reason: "acknowledged", status: answer.status };
+  if (answer.ok) return attempt({ result: "acknowledged", reason: "acknowledged", status: answer.status });
   const status = answer.status;
   const body = PauseError.safeParse(answer.body);
   const code = body.success ? body.data.error : null;
   const retryAfterS = answer.retryAfter ?? undefined;
   if (status === 409 && code === "counter_replayed" && body.success && body.data.last_counter !== undefined) {
-    return { result: "retrying", reason: "counter_replayed", status, lastCounter: body.data.last_counter };
+    return attempt({ result: "retrying", reason: "counter_replayed", status, lastCounter: body.data.last_counter });
   }
-  if (status === 404) return { result: "retrying", reason: "not_found", status };
-  if (status === 429) return { result: "retrying", reason: "rate_limited", status, ...(retryAfterS === undefined ? {} : { retryAfterS }) };
-  if (status === 400 && code === "clock_skew") return { result: "retrying", reason: "clock_skew", status };
-  if (status === 401) return { result: "failed", reason: "unauthorized", status };
-  if (status === 400) return { result: "failed", reason: "bad_request", status };
-  return { result: "retrying", reason: "error", status };
+  if (status === 404) return attempt({ result: "retrying", reason: "not_found", status });
+  if (status === 429) return attempt({ result: "retrying", reason: "rate_limited", status, ...(retryAfterS === undefined ? {} : { retryAfterS }) });
+  if (status === 400 && code === "clock_skew") return attempt({ result: "retrying", reason: "clock_skew", status });
+  if (status === 401) return attempt({ result: "failed", reason: "unauthorized", status });
+  if (status === 400) return attempt({ result: "failed", reason: "bad_request", status });
+  return attempt({ result: "retrying", reason: "error", status });
 }
 
 export interface PauseRetry {

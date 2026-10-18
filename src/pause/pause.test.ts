@@ -6,12 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isPausedRefusal, pauseSigningBytes } from "../contract/index.ts";
-import { CloudNetworkError, type DisclosedResult } from "../disclosure/index.ts";
+import { CloudNetworkError, type DisclosedResult, DisclosureConflictError } from "../disclosure/index.ts";
 import type { PauseAccepted, PauseRequest } from "../contract/index.ts";
-import { type Entry, openStore, type Store } from "../store/index.ts";
+import { type Entry, openStore, type Store, StoreConflictError } from "../store/index.ts";
 import {
   type AccountKey,
   nextCounter,
+  nextSendAt,
   noteSubmitAnswer,
   pauseLocally,
   pauseProblems,
@@ -51,11 +52,14 @@ async function freshStore(clock: { at: number }, dir?: string): Promise<{ store:
   return { store, dir: where };
 }
 
-/** A transport that logs a `pause` disclosure as the core would, then answers as `answer` says. */
+/** A transport that compare-and-appends a `pause` disclosure as the core would, then answers as `answer` says. */
 function transport(store: Store, answer: (request: PauseRequest) => "ok" | "down" | { status: number; body: unknown; retryAfter?: number }, sent: PauseRequest[]) {
-  return async (request: PauseRequest): Promise<DisclosedResult<PauseAccepted>> => {
+  return async (request: PauseRequest, unless: (entries: readonly Entry[]) => boolean): Promise<DisclosedResult<PauseAccepted>> => {
+    const body = { endpoint: "pause", body_b64: Buffer.from(JSON.stringify(request)).toString("base64") };
+    const logged = await store.appendUnless("disclosure", body, unless).catch((error: unknown) => {
+      throw error instanceof StoreConflictError ? new DisclosureConflictError("pause") : error;
+    });
     sent.push(request);
-    const logged = await store.append("disclosure", { endpoint: "pause", body_b64: Buffer.from(JSON.stringify(request)).toString("base64") });
     const a = answer(request);
     if (a === "down") {
       await store.append("unacknowledged", { disclosure_seq: logged.seq, reason: "CloudNetworkError: not sent (connection refused)" });
@@ -187,6 +191,51 @@ describe("pause and send", () => {
     await retry.tick();
     expect(sent).toHaveLength(3);
     expect(pausedIn(store.entries())).toBe(true);
+  });
+
+  it("attack: serve's retry and `intent pause` sending at once never log the same counter, so verify stays clean", async () => {
+    const clock = { at: T0 };
+    const a = await freshStore(clock);
+    const b = await freshStore(clock, a.dir); // a second process on the same data dir
+    await pauseLocally(a.store, "cli");
+    const sent: PauseRequest[] = [];
+    // Both connect slowly (a gateway start), so both would read the same counter before either logs its send.
+    const slow = (s: Store) => () => new Promise<ReturnType<typeof transport>>((resolve) => {
+        setTimeout(() => {
+          resolve(transport(s, () => "ok", sent));
+        }, 50);
+      });
+    await Promise.all([sendPause(deps(a.store, clock, slow(a.store))), sendPause(deps(b.store, clock, slow(b.store)))]);
+    expect(sent.map((r) => r.counter)).toEqual([1]);
+    expect(pauseProblems(a.store.entries())).toEqual([]);
+  });
+
+  it("a resume chained while the send was connecting stops the send: nothing is logged or sent", async () => {
+    const clock = { at: T0 };
+    const { store } = await freshStore(clock);
+    await pauseLocally(store, "cli");
+    const sent: PauseRequest[] = [];
+    const outcome = await sendPause(
+      deps(store, clock, async () => {
+        await resumeLocally(store, "cli");
+        return transport(store, () => "ok", sent);
+      }),
+    );
+    expect(outcome).toEqual({ sent: false, why: "not_paused" });
+    expect(sent).toEqual([]);
+    expect(kinds(store)).not.toContain("disclosure");
+  });
+
+  it("attack: a huge Retry-After puts the next send off by 1 hour at most", () => {
+    const at = "2026-10-18T12:00:00.000Z";
+    const due = nextSendAt({
+      paused: { since: at, seq: 0, from: "cli" },
+      unconfirmedResume: null,
+      cloud: { seq: 1, at, result: "retrying", reason: "rate_limited", retryAfterS: 1_000_000_000 },
+      retries: 1,
+      refusals: 0,
+    });
+    expect(due).toBe(Date.parse(at) + 3_600_000);
   });
 
   it("no account key: the pause holds here only, said once", async () => {

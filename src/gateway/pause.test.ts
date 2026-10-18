@@ -74,6 +74,41 @@ const cartSends = (h: H) => ofKind(h, "disclosure").filter((d) => d.endpoint ===
 const verify = (h: H) => runVerify({ dataDir: h.dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(h.now()), skipSupplyChain: true });
 
 describe("pause at the gateway", () => {
+  it("attack: a pause chained while the cart is being made stops the approval request; nothing more is sent", async () => {
+    const now = (): number => T0;
+    const fake = await startFakeCloud({ now });
+    const dir = join(await fsp.mkdtemp(join(tmpdir(), "pause-gw-")), "data");
+    const store = await openStore(dir, { clock: now });
+    cleanup.push(() => fake.close(), () => store.close());
+    const session = createSession();
+    const gateway = createGateway({
+      cloud: (keySet) => {
+        const cloud = connectCloud({ baseUrl: fake.url, session, now }, store, { keySet, now });
+        const createCart = cloud.createCart.bind(cloud);
+        // `intent pause` in another terminal, while Intent Cloud is answering the cart.
+        cloud.createCart = async (request) => {
+          const answer = await createCart(request);
+          await pauseLocally(store, "cli");
+          return answer;
+        };
+        return cloud;
+      },
+      store,
+      completerKeys: openCompleterKeys(dir, { now }),
+      policy: loadPolicy("version: 1\napproval: passkey\n"),
+      pinnedRootKeys: [fake.keys.rootPin],
+      now,
+      logger: { warn: () => undefined },
+    });
+    await gateway.start();
+    const h: H = { fake, store, dir, gateway, now };
+    const result = await gateway.createCart({ offer_handle: await offer(h) });
+    expect(result.status).toBe("refused");
+    expect(ofKind(h, "disclosure").filter((d) => d.endpoint === "createApproval")).toHaveLength(0);
+    expect(ofKind(h, "refused")).toEqual([{ step: "create_approval", reason: "paused", source: "gateway" }]);
+    expect((await verify(h)).exitCode).toBe(0);
+  });
+
   it("a local pause refuses create_cart before anything is sent, logs `refused: paused`, and verify accepts the chain", async () => {
     const h = await setup();
     const handle = await offer(h);

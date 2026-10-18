@@ -429,11 +429,17 @@ function feedLine(a: Activity, time: Clock): Line {
         tone: "warn",
         text: join([
           f.pause_from === "intent_cloud" ? "Paused answer received from Intent Cloud" : `Purchases paused from the ${f.pause_from === "panel" ? "panel" : "CLI"}`,
-          f.pause_result === "acknowledged" ? "Intent Cloud acknowledged" : f.pause_result === undefined ? "" : `Intent Cloud: ${f.pause_result}`,
+          f.pause_result === "acknowledged"
+            ? "Intent Cloud acknowledged"
+            : f.pause_result === "failed"
+              ? "refusal received from Intent Cloud; paused here only"
+              : f.pause_result === undefined
+                ? ""
+                : "not acknowledged by Intent Cloud yet",
         ]),
       };
     case "resume":
-      return { ...base, label: "resumed", tone: f.resume_state === "repaused" ? "bad" : "plain", text: join(["Local pause cleared after the passkey resume", f.resume_state ?? "unconfirmed"]) };
+      return { ...base, label: "resumed", tone: f.resume_state === "repaused" ? "bad" : "plain", text: join(["Local pause cleared: \"resumed\" typed at a terminal", f.resume_state ?? "unconfirmed"]) };
     case "refused":
       return {
         ...base,
