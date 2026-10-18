@@ -43,6 +43,10 @@ const CREATE_UUID = "52738107-9017-4321-abcd-ef0123456789";
 const COMPLETE_UUID = "87654321-1002-4000-8000-0000000000ab";
 /** The complete_checkout idempotency key. */
 const KEY = COMPLETE_UUID;
+// A fixed Shop checkout id for the test that scans raw outbound bodies: the fake's random hex id can hold a 13 to 19
+// digit run that passes Luhn. The disclosure core lets exactly that Shop-issued id through (SHOP_OPAQUE_IDS, covered in
+// disclosure/wallet.test.ts); a bare findIdentity has no such exemption, so these values hold no digit run that long.
+const FIXED_CHECKOUT: FakeShopFaults = { checkoutToken: "fixedcheckout", checkoutKey: "fixedkey" };
 
 let store: Store;
 let shop: FakeShop;
@@ -133,7 +137,7 @@ describe("the wire: MCP 2026-07-28, stateless, tools on the allow-list only", ()
 
 describe("a purchase's Shop calls", () => {
   it("creates with the lines only (Shop fills the preferred address), completes once with the agent budget and a UUID v4 key, and projects every answer", async () => {
-    const { wallet } = await setup();
+    const { wallet } = await setup(FIXED_CHECKOUT);
     const created = await wallet.createCheckout(request);
     expect(created).toEqual({
       checkoutRef: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) as unknown,

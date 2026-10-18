@@ -1,6 +1,6 @@
 # Demo mode
 
-Demo mode runs the whole gateway flow on your machine before you can reach an Intent Cloud host: search, cart, approval, and the checks afterwards. The [Quickstart](quickstart.md) walks through it.
+Demo mode runs the whole gateway flow on your machine before you can reach an Intent Cloud host: a Shop search for stickers, the checkout submitted for approval, one tap to order it after you approve, and the checks afterwards. The [Quickstart](quickstart.md) walks through it.
 
 ```console
 $ claude mcp add intent -- npx -y "file:$PWD/intent-gateway.tgz" demo
@@ -17,10 +17,10 @@ DEMO: test keys, sample catalog, nothing can be bought.
 | Part | What it is |
 |---|---|
 | Demo Intent Cloud | A stand-in for Intent Cloud inside the gateway process, on `127.0.0.1`, following the public contract. It signs receipts, key statements and approvals with the published test keys. |
-| Sample catalog | About seventy US offers from `*.example` merchants across everyday categories: running shoes, water bottles and mugs, coffee and kitchen gear, headphones and phone accessories, backpacks, books, toys and games, home basics, office supplies, camping gear, pet supplies, beauty basics and gifts under $30. Some exist so a seed policy has something to act on: electronics (`no-electronics`), drop-ship merchants (`block-dropship`) and items over $60 (`per-order-60`). See [Searching the sample catalog](#searching-the-sample-catalog). |
+| Demo Shop catalog | What the demo Shop's search returns: a holographic sticker from `stickers.example`, a vinyl sticker sheet from `paper.example`, and two items the gateway drops before your agent sees them (a CBD product and a digital gift card). Searches run in the gateway against the demo Shop; nothing is sent to Intent Cloud for them. Ask for stickers: other products find nothing. See [A one-tap run](#a-one-tap-run). |
 | Local confirm page | `http://127.0.0.1:8788/confirm/c/<link>`, with the receipt (total, items, check code) and **Approve $<total> with demo passkey** and **Reject**; Approve turns on once the six digits of the demo code are in. A click signs on the server with a demo passkey kept in `<data dir>/demo/demo-passkey.json`. Approve also needs the demo code (below). |
 | Demo code | Six digits, new on every start, printed on the gateway's stderr with the next steps and kept in `<data dir>/demo/approval-code` (mode 600). It never appears in a tool result. Type or paste it as it comes: only its digits count, so `469 226`, `469-226` and `Demo code: 469226` all work. When your agent started the gateway, you do not see its stderr: the confirm page shows the command that reads the file. |
-| Demo Shop wallet | A fake Shop on `127.0.0.1`, already linked, for [one-tap purchases](one-tap.md). The catalog's holographic sticker (search for stickers) is sold by its demo store, so a cart for it is completed by the gateway after your approval instead of being handed off. Its checkout ids stay in memory: after a demo restart, an unfinished one-tap purchase cannot be read again. |
+| Demo Shop wallet | A fake Shop on `127.0.0.1`, already linked, for [one-tap purchases](one-tap.md) and an agent budget with $50 left. A cart creates the Shop checkout, and the gateway submits it to the demo Intent Cloud for your approval (contract 1.7.0). The holographic sticker's store accepts agent checkouts, so after your approval the gateway completes it with one tap instead of handing it off. Its checkout ids stay in memory: after a demo restart, an unfinished one-tap purchase cannot be read again. |
 | Demo data dir | `<data dir>/demo`. Its chain starts with a demo `session` entry, and the gateway refuses to mix a demo chain with a real one. |
 
 The gateway itself is the same code as in a real run: the same policy, identity block, disclosure log, receipt checks, approval proof check and approver pin.
@@ -39,7 +39,7 @@ Here `intent` stands for the command that runs your gateway: `npx -y "file:$PWD/
 
 Every other command takes `--demo` and then reads the demo data dir: `intent log --demo`, `intent verify --demo`, `intent panel --demo`, `intent doctor --demo`, `intent policy show --demo`, `intent approver list --demo`.
 
-In demo mode the policy file is `<data dir>/demo/policy.yaml`. With none, the bundled `zip-only` policy applies, as it does outside the demo. Try `intent policy add per-order-60 --demo` and then ask for something over $60.
+In demo mode the policy file is `<data dir>/demo/policy.yaml`. With none, the bundled `zip-only` policy applies, as it does outside the demo.
 
 If Claude Code already has an MCP server named `intent` (for example a connector added in your Claude account), add the demo under another name, so the agent cannot pick the wrong one:
 
@@ -57,22 +57,49 @@ When the gateway runs on a remote machine over SSH and your browser runs on your
 $ ssh -L 8788:127.0.0.1:8788 <host>
 ```
 
-## Searching the sample catalog
+## A one-tap run
 
-The demo Intent Cloud searches the way a shop's search box does, so the first thing you ask for should find something. For example, "a stainless water bottle around 1 liter, ZIP 10001, budget $40" returns several bottles.
+Ask your agent for stickers shipped to ZIP 94107, under $20. This is what a run printed, shortened.
 
-- Case, plurals and common synonyms do not matter: "Sneakers", "running shoe" and "running shoes" find the same shoes, and "earbuds" finds headphones.
-- A category matches at any level: "drinkware", "kitchen" and "water bottles" all find water bottles.
-- Each must-have has to match. A size matches within 20%, so "1 liter" also finds a 32 oz bottle, but not a 750 ml one.
-- The budget counts shipping.
-- Results are ranked by how many of your words match, then by price.
+`find_offers` searches the demo Shop from the gateway. The CBD product is hidden by the bundled policy:
 
-When a search finds nothing, the result still has 0 offers. In demo mode the gateway adds one line, "The demo catalog has: running shoes, water bottles, …", so your agent can try something the catalog holds.
+```text
+2 offers from Shop search, made by this gateway; nothing was sent to Intent Cloud for it. Shipping is shown at checkout. 1 more hidden by the gateway policy (excluded_categories).
 
-The catalog also holds items in the excluded categories, such as alcohol, tobacco, weapons, health products and gift cards, so you can watch them being refused:
+- Holographic sticker (Default) from stickers.example: $5.00, shipping shown at checkout, in stock.
+- Vinyl sticker sheet (Default) from paper.example: $3.50, shipping shown at checkout, in stock.
+```
 
-- A search that names such a category is blocked by the gateway before anything is sent.
-- A search that names only the product is sent, but the demo Intent Cloud never returns the item, as Intent Cloud never does.
+`create_cart` for the holographic sticker creates the Shop checkout, reads it back and submits it to the demo Intent Cloud. Only the country and the 5-digit ZIP go with it:
+
+```text
+Shop checkout: 1 × Holographic sticker from stickers.example, total $8.99 (shipping $3.99, tax $0.00), paid at once by one tap.
+Approval link: http://127.0.0.1:8788/confirm/c/<link>
+```
+
+Open the link, enter the demo code and click **Approve $8.99 with demo passkey**. Then `get_approval_status` checks the passkey proof, completes the checkout with the demo Shop's agent budget and reads the order back:
+
+```text
+One-tap: ordered (read from Shop), order gid://shopify/Order/5001
+```
+
+`intent log --demo` then lists each step. The submit is listed with the cart:
+
+```text
+call      Shop search_catalog · …                                ✓ answered 200 (no receipt: unsigned)
+call      Shop create_checkout · …                               ✓ answered 200 (no receipt: unsigned)
+call      Shop get_checkout · …                                  ✓ answered 200 (no receipt: unsigned)
+call      Shop get_account · …                                   ✓ answered 200 (no receipt: unsigned)
+cart      submit checkout · Holographic sticker ×1 · $8.99 · stickers.example  → approval link  ✓ receipt
+status    approval ap_3jnL…VYQs                                  → Intent Cloud says approved · ✓ receipt
+approved  $8.99 · passkey efed…c048 (pinned now)                 ✓ passkey proof checked
+call      Shop complete_checkout · …                             ✓ answered 200 (no receipt: unsigned)
+outcome   outcome report sent to Intent Cloud · approval ap_3jnL…VYQs  ✓ receipt
+```
+
+`intent verify --demo` on the same chain says `verify: ok`.
+
+Items in the excluded categories are refused, so you can watch it happen: a search that names such a category (alcohol, say) is blocked by the gateway before anything is sent, and the demo Shop's CBD product never reaches your agent.
 
 ## What it proves, and what it does not
 

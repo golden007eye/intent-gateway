@@ -185,6 +185,7 @@ function rawRow(a: Activity, g: Glyphs): Row {
               ...(f.zip === undefined ? [] : [`ZIP ${f.zip}`]),
             ]
           : [`${f.title} ${g.times}${String(f.quantity ?? 1)}`, ...total(f), ...(f.merchant === undefined ? [] : [f.merchant])];
+      if (f.submit === true) parts.unshift("submit checkout");
       const values = parts.length > 0 ? parts.join(sep) : names(a);
       if (a.outcome === "refused") return { verb: "cart", verbTone: "bad", values, outcome: `${g.bad} refused: ${a.blocked.join("; ")}`, outcomeTone: "bad" };
       if (a.outcome === "approval_asked") {
@@ -331,7 +332,7 @@ function offersWord(count: number, hidden: number): string {
   return `${plural(count, "offer", "offers")}${hidden === 0 ? "" : `, ${String(hidden)} hidden by your policy`}`;
 }
 
-const ENDPOINT_WORDS: Readonly<Record<string, string>> = { searchCatalog: "search", createCart: "cart", createApproval: "approval request", getApproval: "status check" };
+const ENDPOINT_WORDS: Readonly<Record<string, string>> = { searchCatalog: "search", createCart: "cart", createCheckout: "checkout submit", createApproval: "approval request", getApproval: "status check" };
 
 const IDENTITY_WORDS: Readonly<Record<string, string>> = {
   card: "a card number",
