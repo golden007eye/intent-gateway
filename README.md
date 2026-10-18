@@ -84,7 +84,7 @@ Always publish ports as `-p 127.0.0.1:…`, never a bare `-p 8787:8787`. For a b
 
 Not yet. The preview gateway talks to Intent Cloud staging and pins its root key: `intent serve` without `--demo` serves against it, and when it cannot reach the host it stops with a line saying so and the next step to take. Real purchases wait for the [launch gate](https://github.com/golden007eye/intent-gateway/blob/main/docs/adr/0004-public-pre-alpha.md). When they arrive, the buyer still approves each purchase on intent's confirm page and pays on the merchant's checkout. Approving needs your Intent Cloud passkey (invite-only during preview), the same one you use with intent's ChatGPT and Claude apps; the demo needs no invite or account.
 
-**One tap** completes an approved purchase with the developer's own Shop account instead, with no second step at the checkout. It works in the demo today: ask for stickers and buy the holographic sticker. One tap with your own account is planned: it needs a registered Shop client, which does not exist yet, and reaches only stores on their own myshopify domain until the store alias rule is settled. Shop holds the card, the addresses and the budget; the gateway never sees them. See [One-tap purchases](https://github.com/golden007eye/intent-gateway/blob/main/docs/one-tap.md).
+**One tap** completes an approved purchase with the developer's own Shop account instead, with no second step at the checkout. It works in the demo today: ask for stickers and buy the holographic sticker. One tap with your own account is planned: Shop does not accept the gateway's own client yet (a formal registration is pending), so linking needs `INTENT_SHOP_CLIENT_ID` set explicitly to a client Shop accepts, such as Shop's public client for your own agent, and it reaches only stores on their own myshopify domain until the store alias rule is settled. Shop holds the card, the addresses and the budget; the gateway never sees them. See [One-tap purchases](https://github.com/golden007eye/intent-gateway/blob/main/docs/one-tap.md).
 
 ## How privacy is verified
 
@@ -127,7 +127,7 @@ merchants:
   block: [dropship.example]
 ```
 
-The policy library holds ten reviewed policies, bundled with the gateway. `intent policy add <name>` narrows your policy with one and shows the change as a diff first; `intent policy test <cases.yaml>` runs test cases against it. See [Gateway policy](https://github.com/golden007eye/intent-gateway/blob/main/docs/policy.md) and [Policy library](https://github.com/golden007eye/intent-gateway/blob/main/docs/policy-library.md).
+The policy library holds thirteen reviewed policies, bundled with the gateway. `intent policy add <name>` narrows your policy with one and shows the change as a diff first; `intent policy test <cases.yaml>` runs test cases against it. See [Gateway policy](https://github.com/golden007eye/intent-gateway/blob/main/docs/policy.md) and [Policy library](https://github.com/golden007eye/intent-gateway/blob/main/docs/policy-library.md).
 
 ## Security and threat model
 

@@ -64,6 +64,7 @@ import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { CLOUD_BASELINE, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
 import { isPausedAnswer, noteSubmitAnswer, pausedIn, pauseState, refuseForPause } from "../pause/index.ts";
 import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
+import { createShopProvider, filterOffers, newOfferHandle, type SearchOffer, type SearchProvider, searchProviders } from "../search/index.ts";
 import { CloudOutcomeEntry, ORDER_REF, outcomesFor, readCloudOutcome, replaces, shownStatus, type StatementCheck } from "../outcome/index.ts";
 import { findIdentity, ORDER_REF_AT } from "../privacy/index.ts";
 import type { CompleterKeys, Session } from "../signing/index.ts";
@@ -84,7 +85,7 @@ import {
   sentProblems,
   verifyStatement,
 } from "../trust/index.ts";
-import type { WalletAdapter } from "../wallet/index.ts";
+import { type WalletAdapter, WalletRailError } from "../wallet/index.ts";
 import { advanceCompletion, type CompletionStep, type CompletionView } from "./complete.ts";
 import { disclosedSince, spendHistory, summaryLine } from "./history.ts";
 import { type ApprovalQr, approvalQr } from "./qr.ts";
@@ -144,6 +145,12 @@ export interface OneTapOptions {
    * Default: the real storefront transport (src/disclosure's connectStorefront); demo mode and tests pass a fake.
    */
   readonly storefront?: (cloud: DisclosedCloud) => StorefrontPort;
+  /**
+   * The search seam (G5, ADR-0021): find_offers searches the linked wallet's catalog (Shop's search_catalog) in the
+   * gateway, and sends nothing to Intent Cloud for the search. Off by default, so a wallet without it keeps Intent
+   * Cloud's catalog.
+   */
+  readonly searchInGateway?: boolean;
   /** Test seams (complete.ts). */
   readonly hook?: (step: CompletionStep) => void | Promise<void>;
   readonly newReportId?: () => string;
@@ -229,9 +236,26 @@ interface Told {
 /** Nothing was sent: the input was malformed, identity was found, or the policy refused the request. */
 export type Refused = Told & { readonly status: "invalid" | "blocked" | "refused" | "error" };
 
+/**
+ * An offer found by the gateway's own search (G5), as the agent sees it: display fields and an opaque handle. The
+ * store, variant and provider stay in the gateway, behind the handle, for the Shop checkout (G6).
+ */
+export interface ShopOfferView {
+  readonly offer_handle: string;
+  readonly title: string;
+  readonly variant: string;
+  /** The storefront host, else the myshopify domain. */
+  readonly store: string;
+  readonly price: { readonly amount_minor: number; readonly currency: string };
+  readonly availability: "in_stock";
+  readonly image_url?: string;
+  readonly product_url?: string;
+}
+
 export type FindOffersResult =
   | (Told & { readonly status: "needs_details"; readonly missing: readonly MissingDetail[] })
   | (Told & { readonly status: "offers"; readonly offers: readonly CloudOffer[]; readonly hidden: number })
+  | (Told & { readonly status: "shop_offers"; readonly offers: readonly ShopOfferView[]; readonly hidden: number })
   | Refused;
 
 export type CreateCartResult =
@@ -301,6 +325,17 @@ interface RememberedOffer {
   readonly zip: string;
 }
 
+/**
+ * An offer the gateway's own search found (G5), kept behind its opaque handle: everything a Shop checkout needs (G6),
+ * the store's myshopify domain, the variant and the quantity, plus what the policy checks on a cart.
+ */
+interface LocalOffer {
+  readonly offer: SearchOffer;
+  readonly quantity: number;
+  readonly category: string;
+  readonly zip: string;
+}
+
 const MAX_REMEMBERED_OFFERS = 500;
 const US_ZIP = /^[0-9]{5}$/;
 /** The contract's completion mode for each policy mode. */
@@ -325,6 +360,8 @@ export function createGateway(options: GatewayOptions): Gateway {
   // The store pair check's storefront, behind the same disclosure core (log before send to every destination).
   const storefront: StorefrontPort | null = wallet === null ? null : (options.oneTap?.storefront ?? connectStorefront)(cloud);
   const offers = new Map<string, RememberedOffer>();
+  const localOffers = new Map<string, LocalOffer>();
+  const providers: SearchProvider[] = options.oneTap?.searchInGateway === true && wallet?.searchCatalog !== undefined ? [createShopProvider(wallet)] : [];
   /** Approvals whose cart this process's session key created; any other is read with its completer key. */
   const createdHere = new Set<string>();
   let stopReported = false;
@@ -636,6 +673,9 @@ export function createGateway(options: GatewayOptions): Gateway {
       );
     }
 
+    // A linked Shop wallet: the search runs here, against Shop, and Intent Cloud is sent nothing (G5).
+    if (providers.length > 0) return localSearch({ product, category, mustHaves: mustHaves ?? [], budget, zip }, fromSeq);
+
     const keys = await currentKeys(fromSeq);
     if (!keys.ok) return keys.refused;
     const sent = await call(() => cloud.search(request), fromSeq);
@@ -668,13 +708,55 @@ export function createGateway(options: GatewayOptions): Gateway {
   }
 
   function remember(handle: string, offer: RememberedOffer): void {
-    offers.delete(handle);
-    offers.set(handle, offer);
-    while (offers.size > MAX_REMEMBERED_OFFERS) {
-      const oldest = offers.keys().next();
-      if (oldest.done === true) break;
-      offers.delete(oldest.value);
+    keep(offers, handle, offer);
+  }
+
+  /**
+   * The search seam (G5, ADR-0021): the providers (Shop's search_catalog, logged before it is sent), then merge, the
+   * policy filter and the excluded categories, all here. Each offer kept gets a new opaque handle.
+   */
+  async function localSearch(
+    asked: { product: string | undefined; category: string | undefined; mustHaves: readonly string[]; budget: number; zip: string },
+    fromSeq: number,
+  ): Promise<FindOffersResult> {
+    const budget = { amountMinor: Math.round(asked.budget * 100), currency: "USD" };
+    let found: SearchOffer[];
+    try {
+      found = await searchProviders(providers, {
+        ...(asked.product === undefined ? {} : { product: asked.product }),
+        ...(asked.category === undefined ? {} : { category: asked.category }),
+        mustHaves: asked.mustHaves,
+        budget,
+        country: "US",
+        postcode: asked.zip,
+      });
+    } catch (error) {
+      return { status: providerFailure(error), message: searchFailureMessage(error), summary: summary(fromSeq) };
     }
+    const filtered = filterOffers(policy, found, {
+      ...(asked.category === undefined ? {} : { category: asked.category }),
+      budget,
+      history: spendHistory(store.entries(), now()),
+      now: now(),
+    });
+    const shown = filtered.kept.map((offer): ShopOfferView => {
+      const handle = newOfferHandle();
+      keep(localOffers, handle, { offer, quantity: 1, category: asked.category ?? "", zip: asked.zip });
+      return shopOfferView(handle, offer);
+    });
+    const { hidden } = filtered;
+    const rules = filtered.rules.join(", ");
+    const hiddenNote = hidden === 0 ? "" : ` ${String(hidden)} more hidden by the gateway policy (${rules}).`;
+    const hiddenBlocked = hidden === 0 ? [] : [`${String(hidden)} offer${hidden === 1 ? "" : "s"} (${rules})`];
+    return {
+      status: "shop_offers",
+      offers: shown,
+      hidden,
+      message:
+        `${String(shown.length)} offer${shown.length === 1 ? "" : "s"} from Shop search, made by this gateway; nothing was sent to Intent Cloud for it. ` +
+        `Shipping is shown at checkout.${hiddenNote}`,
+      summary: summary(fromSeq, hiddenBlocked),
+    };
   }
 
   // ---- create cart ----------------------------------------------------------------------------------------------
@@ -691,6 +773,15 @@ export function createGateway(options: GatewayOptions): Gateway {
     const parsed = CreateCartInput.safeParse(raw);
     if (!parsed.success) return { status: "invalid", message: `Not sent: ${z.prettifyError(parsed.error)}`, summary: summary(fromSeq) };
     const quantity = parsed.data.quantity ?? 1;
+    if (localOffers.has(parsed.data.offer_handle)) {
+      // SEAM (G6): the Shop checkout is created here from the kept offer (store, variant, quantity), read back and
+      // submitted for the passkey approval.
+      return {
+        status: "refused",
+        message: "Not sent: this offer came from Shop search, and this gateway version cannot yet prepare a cart for it. Nothing was bought.",
+        summary: summary(fromSeq),
+      };
+    }
     const known = offers.get(parsed.data.offer_handle);
     if (known === undefined) {
       return {
@@ -1386,4 +1477,45 @@ function inputFields(value: unknown, prefix = "", out = new Set<string>()): stri
     }
   }
   return [...out].sort();
+}
+
+/** Puts `value` last in an insertion-ordered map and drops the oldest past MAX_REMEMBERED_OFFERS. */
+function keep<T>(map: Map<string, T>, handle: string, value: T): void {
+  map.delete(handle);
+  map.set(handle, value);
+  while (map.size > MAX_REMEMBERED_OFFERS) {
+    const oldest = map.keys().next();
+    if (oldest.done === true) break;
+    map.delete(oldest.value);
+  }
+}
+
+/** What the agent sees of a searched offer: no provider, myshopify pairing or variant id. */
+function shopOfferView(handle: string, offer: SearchOffer): ShopOfferView {
+  const storefront = offer.storefrontOrigin === null ? null : new URL(offer.storefrontOrigin).host;
+  return {
+    offer_handle: handle,
+    title: offer.title === "" ? "(untitled)" : offer.title,
+    variant: offer.variantTitle === "" ? "Default" : offer.variantTitle,
+    store: storefront ?? offer.storeDomain,
+    price: { amount_minor: offer.price.amountMinor, currency: offer.price.currency },
+    availability: "in_stock",
+    ...(offer.imageUrl === null ? {} : { image_url: offer.imageUrl }),
+    ...(offer.productUrl === null ? {} : { product_url: offer.productUrl }),
+  };
+}
+
+function providerFailure(error: unknown): "blocked" | "error" {
+  return error instanceof DisclosureBlockedError || error instanceof DisclosureRefusedError ? "blocked" : "error";
+}
+
+/** A failed provider search in the gateway's words: never the provider's own message, which can carry identity. */
+function searchFailureMessage(error: unknown): string {
+  if (error instanceof DisclosureBlockedError) return "Not sent: the search looked like buyer identity.";
+  if (error instanceof DisclosureRefusedError) return `Not sent: ${error.reasons.join("; ")}.`;
+  if (error instanceof DisclosureStoppedError) return `Not sent: ${error.message}. The developer must restart the gateway.`;
+  if (error instanceof WalletRailError) return `Shop could not search: ${error.label}.`;
+  // ShopTransportError's message names the host and a failure in plain words, no content.
+  if (error instanceof Error && error.name === "ShopTransportError") return `Shop could not be reached for the search: ${error.message}.`;
+  throw error;
 }

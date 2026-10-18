@@ -1,4 +1,4 @@
-// The 10 seed policies in policies/: each loads under the strict schema, passes every one of its cases, and
+// The 13 library policies in policies/ (the 10 seeds and the 3 the policy advisor uses): each loads under the strict schema, passes every one of its cases, and
 // matches the sha256 recorded in policies/index.json (which `intent policy add --commit` checks against).
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -12,19 +12,22 @@ const SEEDS = [
   "block-dropship",
   "daily-40",
   "gifts-under-30",
+  "handoff-only",
   "no-electronics",
   "no-history",
   "one-item",
+  "per-order-20",
   "per-order-60",
   "strict-default",
   "weekly-150",
+  "weekly-40",
   "zip-only",
 ];
 
 const index = JSON.parse(read("index.json")) as { version: number; policies: Record<string, { sha256: string }> };
 
 describe("seed policy library", () => {
-  it("holds exactly the 10 seeds, each with policy.yaml, cases.yaml and README.md, all in the index", () => {
+  it("holds exactly the 13 library policies, each with policy.yaml, cases.yaml and README.md, all in the index", () => {
     const dirs = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory());
     expect(dirs.map((d) => d.name).sort()).toEqual(SEEDS);
     for (const name of SEEDS) expect(readdirSync(new URL(`${name}/`, root)).sort()).toEqual(["README.md", "cases.yaml", "policy.yaml"]);

@@ -83,6 +83,11 @@ const positives: [label: string, body: unknown, expected: Finding][] = [
   ["key full-width name", { "ｎａｍｅ": "x" }, { path: '$["ｎａｍｅ"]', kind: "banned_key" }],
   ["key with a zero-width space", { "e\u200bmail": "x" }, { path: '$["e\u200bmail"]', kind: "banned_key" }],
   ["key customer_name", { customer_name: "x" }, { path: "$.customer_name", kind: "banned_key" }],
+  ["key address_country holding a street", { address_country: "123 Main St" }, { path: "$.address_country", kind: "banned_key" }],
+  ["key address_country holding an object", { address_country: { line1: "x" } }, { path: "$.address_country", kind: "banned_key" }],
+  ["key address_country lower case", { address_country: "us" }, { path: "$.address_country", kind: "banned_key" }],
+  ["key shipping_address_country", { shipping_address_country: "US" }, { path: "$.shipping_address_country", kind: "banned_key" }],
+  ["key AddressCountry", { AddressCountry: "US" }, { path: "$.AddressCountry", kind: "banned_key" }],
 ];
 
 // Product, slug and search content that must pass (false positives would block ordinary searches).
@@ -147,6 +152,26 @@ describe("findIdentity negatives", () => {
   });
   it.each(negatives)("leaves %s clean", (_label, body) => {
     expect(findIdentity(body)).toEqual([]);
+  });
+});
+
+describe("findIdentity address_country (Shop search_catalog, G5)", () => {
+  const call = (catalog: unknown, name = "search_catalog"): unknown => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: { catalog } } });
+  const PATH = "$.params.arguments.catalog.context.address_country";
+  it("lets a two-letter country through at the search_catalog context path", () => {
+    expect(findIdentity(call({ query: "mug", context: { address_country: "US", currency: "USD" } }), { mcpEnvelope: true })).toEqual([]);
+  });
+  it.each([
+    ["without the MCP envelope option", call({ context: { address_country: "US" } }), {}, PATH],
+    ["in another tool's call", call({ context: { address_country: "US" } }, "create_checkout"), { mcpEnvelope: true }, PATH],
+    ["lower case", call({ context: { address_country: "us" } }), { mcpEnvelope: true }, PATH],
+    ["a postcode", call({ context: { address_country: "94110" } }), { mcpEnvelope: true }, PATH],
+    ["at another path", call({ filters: { address_country: "US" } }), { mcpEnvelope: true }, "$.params.arguments.catalog.filters.address_country"],
+    ["at the top of a plain body", { address_country: "US" }, {}, "$.address_country"],
+    ["nested in an order", { order: { address_country: "US" } }, {}, "$.order.address_country"],
+    ["two letters at a time in an array", { x: [{ address_country: "JO" }, { address_country: "HN" }] }, {}, "$.x[0].address_country"],
+  ])("still bans it %s", (_label, body, options, path) => {
+    expect(findIdentity(body, options)).toContainEqual({ path, kind: "banned_key" });
   });
 });
 

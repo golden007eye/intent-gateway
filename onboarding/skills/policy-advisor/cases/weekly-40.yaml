@@ -1,0 +1,14 @@
+# Run after `intent policy add weekly-40`.
+- name: $35 in 7 days is sent
+  now: "2026-10-15T12:00:00Z"
+  history:
+    - {at: "2026-10-12T09:00:00Z", total_usd: 20}
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 15, quantity: 1}}
+  expect: {send: true}
+- name: $45 in 7 days is refused by the weekly limit
+  now: "2026-10-15T12:00:00Z"
+  history:
+    - {at: "2026-10-12T09:00:00Z", total_usd: 20}
+    - {at: "2026-10-13T09:00:00Z", total_usd: 10}
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 15, quantity: 1}}
+  expect: {send: false, blocked: [spend.per_week_usd]}

@@ -71,8 +71,9 @@ The actions group the chain's entries:
 - `pin`: an approver pin written by `intent approver accept`. `flagged`: a passkey flagged as not the pinned approver.
 - `wallet`: a wallet change on this machine: the Shop wallet linked, or unlinked (`intent wallet unlink shop` deletes its vault file) with whether Shop confirmed revoking the token (`token revoked at Shop`) or not (`token not revoked (deleted here only)`); or a Shop check (`intent wallet check shop`, [below](#orders-the-log-does-not-name)): how many orders Shop reported and how many no purchase in the log names.
 - `call`: one request to a wallet destination (Shop) and its response entry: the operation, its argument names, and the status that came back. A call has no receipt; one without a response entry is `maybe sent`.
-
 - `pause`, `resume`, `refused`: a pause, a resume and each step refused because of a pause ([below](#pause)).
+
+A search with a linked Shop wallet (the [search seam](adr/0021-search-seam.md)) is a `call` to Shop, `search_catalog`, and no `search` action: nothing is sent to Intent Cloud for it. Its argument names are the query text, the country and currency context, the price ceiling, the ships-to country and the page size; no postcode. Shop's answer is logged as a status, a sha256 and a size, like every Shop answer.
 
 A cart or status check the gateway refused after an answer (the cart, snapshot or proof did not match) carries outcome `refused` and the reasons in `blocked`.
 
@@ -116,7 +117,7 @@ A pause line ends with `✓ Intent Cloud acknowledged`, `⚠ not acknowledged by
 
 <!-- feature: wallet-check -->
 !!! planned "Checking Shop for orders the log does not name"
-    `intent wallet check shop` is in the CLI, but it cannot run for you yet: it needs a registered Shop client (`INTENT_SHOP_CLIENT_ID`; none is built in) and a linked wallet. The fields it reads from Shop's order list (`shopify_order_id`, `seller.domain`, `placed_at`, `totals`, `pagination.has_next_page`) are the ones the S1 spike saw on a real Shop account (2026-10-18); an order whose fields differ comes back with no total, origin or time, never with buyer details.
+    `intent wallet check shop` is in the CLI, but it cannot run for you yet: it needs a linked wallet, and Shop does not accept the gateway's own client yet (a formal registration is pending), so linking needs `INTENT_SHOP_CLIENT_ID` set explicitly to a client Shop accepts, such as Shop's public client for your own agent ([One-tap purchases](one-tap.md#how-to-turn-it-on)). The fields it reads from Shop's order list (`shopify_order_id`, `seller.domain`, `placed_at`, `totals`, `pagination.has_next_page`) are the ones the S1 spike saw on a real Shop account (2026-10-18); an order whose fields differ comes back with no total, origin or time, never with buyer details.
 
 The log shows what went through this gateway. A linked Shop account can also be spent from in other ways: in the Shop app, by another agent, or by Shop's own agent payments. `intent wallet check shop` compares the two, on demand; nothing polls in the background.
 
@@ -131,7 +132,7 @@ The output says how many orders Shop reported in the period, how many a purchase
 
 Each check is chained as a `wallet` entry `{rail, action: "checked", since, order_count, unmatched_count, unmatched_total_minor, complete}`: counts and a total, never an order. `intent verify` fails a `checked` entry with any other key. `intent log` shows it as `Shop wallet checked · Shop reported 3 orders since 2026-10-10 · 2 not matched to a purchase in this log (21.49 USD)`, and the panel's feed shows the same line, as a warning when any order is unmatched or the check covers only part of the orders.
 
-What it can't see: orders Shop does not report to the gateway's token, orders older than the period or beyond the first page, and anything about an order beyond the four values above. The command needs a Shop client (`INTENT_SHOP_CLIENT_ID`) and a linked wallet (`intent wallet link shop`); without either it says so, exits 1 and sends nothing.
+What it can't see: orders Shop does not report to the gateway's token, orders older than the period or beyond the first page, and anything about an order beyond the four values above. The command needs a linked wallet (`intent wallet link shop`); without one it says so, exits 1 and sends nothing.
 
 ## What came back
 

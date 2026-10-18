@@ -58,8 +58,9 @@ afterEach(async () => {
   for (const stop of stops.splice(0)) await stop();
 });
 
-// Every listener a test opens through INTENT_HTTP_PORT or INTENT_DEMO_CONFIRM_PORT gets a port the kernel picked, so a
-// process holding 8788 or any fixed port on this machine cannot fail a test.
+// Every listener a test opens through INTENT_HTTP_PORT or INTENT_DEMO_CONFIRM_PORT gets a port from freePort: checked
+// free, and outside the kernel's ephemeral range, so neither a process holding 8788 nor a listen(0) in another test
+// worker can take it before the CLI binds it.
 const freePortText = async (): Promise<string> => String(await freePort());
 
 function setup(env: Record<string, string> = {}): Setup {
@@ -1186,7 +1187,7 @@ describe("the demo confirm page's port, for an ssh -L forward set up in advance 
   it("defaults to 8788 and prints the address and the ssh -L line with the next steps", async () => {
     expect(DEMO_CONFIRM_PORT).toBe(8788);
     const result = await setup({ INTENT_HTTP_PORT: await freePortText() }).run(["demo", "--http"]);
-    expect(result.code).toBe(0);
+    expect(result.code, result.err).toBe(0);
     // 8788 is the default; only when something else on this machine already holds it does the fallback line appear.
     if (result.err.includes("Port 8788 is taken")) expect(result.err).not.toContain(confirmLine(8788));
     else expect(result.err).toContain(confirmLine(8788));
@@ -1196,7 +1197,7 @@ describe("the demo confirm page's port, for an ssh -L forward set up in advance 
   it("falls back to a free port when 8788 is taken (a second demo), and says so", async () => {
     await hold(8788);
     const result = await setup({ INTENT_HTTP_PORT: await freePortText() }).run(["demo", "--http"]);
-    expect(result.code).toBe(0);
+    expect(result.code, result.err).toBe(0);
     const port = /^Port 8788 is taken \(another demo running\?\), so the confirm page uses ([0-9]+); set INTENT_DEMO_CONFIRM_PORT to choose one\.$/m.exec(result.err)?.[1];
     expect(port).toBeDefined();
     expect(port).not.toBe("8788");

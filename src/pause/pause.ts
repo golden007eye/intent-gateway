@@ -11,7 +11,7 @@
 // 4. Resume needs the buyer's passkey on the confirm page's /account; the gateway never resumes Intent Cloud. After the
 //    developer confirms at a terminal, resumeLocally clears the local pause, unconfirmed; the next submit's answer
 //    confirms it or pauses again (noteSubmitAnswer).
-// The account key is a port: `intent init` makes it (the file and its format are its own); this module only signs.
+// The account key is src/account's (ADR-0022): `intent init` makes it; this module only reads its thumbprint and signs.
 import {
   answerError,
   type PauseAccepted,
@@ -21,17 +21,13 @@ import {
 // Types only: the panel reads this module's state and must reach no network module, so the disclosure errors are
 // told apart by name (each sets its own `name`).
 import type { DisclosedResult } from "../disclosure/index.ts";
+import type { AccountKey as FullAccountKey } from "../account/index.ts";
 import { pauseSigningBytes } from "../contract/index.ts";
 import { type Entry, type Store, StoreConflictError } from "../store/index.ts";
 import { nextCounter, nextSendAt, pausedIn, pauseState, type PauseSource, type SendReason, type SendResult } from "./state.ts";
 
-/** What the pause needs from the account key `intent init` makes: its RFC 7638 thumbprint and an Ed25519 signature. */
-export interface AccountKey {
-  /** RFC 7638 SHA-256 thumbprint of {crv, kty, x}, base64url without padding (43 characters). */
-  readonly thumbprint: string;
-  /** Ed25519 signature (64 bytes) over `message`. */
-  sign(message: Uint8Array): Uint8Array;
-}
+/** What the pause needs from the account key `intent init` makes (src/account, ADR-0022): its thumbprint and sign(). */
+export type AccountKey = Pick<FullAccountKey, "thumbprint" | "sign">;
 
 /** Reads the account key; null when this machine has none (the pause then holds locally only). */
 export type AccountKeySource = () => Promise<AccountKey | null>;

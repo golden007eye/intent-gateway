@@ -1,8 +1,8 @@
 // `intent wallet status | link <rail> | unlink <rail>` (plans G6, G7a, G8). status says whether a wallet is linked
-// and whether its vault opens, never the token, and whether one-tap with Shop is available (it needs
-// INTENT_SHOP_CLIENT_ID); with a client set and a vault that opens, it reads the account once through the log (the
-// budget left, or a connection removed in the Shop app). link runs Shop's OAuth device flow as the gateway's registered client; with none set it
-// sends nothing and exits 1. Every request of the flow is logged before it leaves (invariant 2), with the device
+// and whether its vault opens, never the token; with a vault that opens, it reads the account once through the log (the
+// budget left, or a connection removed in the Shop app). link runs Shop's OAuth device flow as the gateway's own Shop
+// client (DEFAULT_SHOP_CLIENT_ID), or as the client INTENT_SHOP_CLIENT_ID names; it never falls back to another client
+// by itself. Every request of the flow is logged before it leaves (invariant 2), with the device
 // code and the tokens digested; the user code and the page to approve on are printed for the developer and never
 // sent. The tokens go to the encrypted vault, then `wallet {rail, action: "linked", revoked: false}` is chained.
 // unlink first asks the rail to revoke the refresh token and the access token (two disclosed sends, each logged before
@@ -11,7 +11,7 @@
 // the Shop app (S1 step 12), so the output always says to remove it there (invariant 5).
 // check (plan G12) asks the rail for recent orders, through the log, and says which ones no chained outcome names.
 import { type Config, INTENT } from "../config/index.ts";
-import { connectShop, type DeviceGrantPrompt, linkShop, openWalletSession, ShopLinkError, type WalletSession } from "../disclosure/index.ts";
+import { connectShop, DEFAULT_SHOP_CLIENT_ID, type DeviceGrantPrompt, linkedShopClientId, linkShop, openWalletSession, ShopLinkError, type WalletSession } from "../disclosure/index.ts";
 import { approvalQr, type OneTapOptions } from "../gateway/index.ts";
 import { openStore } from "../store/index.ts";
 import { printable, printableLines } from "../ui/index.ts";
@@ -45,15 +45,6 @@ const RAIL_NAMES: Readonly<Record<WalletRail, string>> = { shop: "Shop" };
 /** Where the developer revokes the gateway's access by hand. */
 const RAIL_SETTING: Readonly<Record<WalletRail, string>> = { shop: "the Shop app: Account › Connections" };
 
-/** Why one-tap with each rail is unavailable in this configuration, or null when it is available. */
-const ONE_TAP_UNAVAILABLE: Readonly<Record<WalletRail, (config: Config) => string | null>> = {
-  shop: (config) =>
-    config.wallet.shopClientId === null
-      ? "Shop one-tap: unavailable, no Shop client is set (INTENT_SHOP_CLIENT_ID); purchases are handed off to the merchant's checkout"
-      : null,
-};
-const oneTapUnavailable = (config: Config, rail: WalletRail): string | null => ONE_TAP_UNAVAILABLE[rail](config);
-
 /** Exit 0 when every wallet is linked and opens or is not linked; 1 when a vault does not open. */
 export async function walletStatus(io: Io, config: Config): Promise<number> {
   warn(io, config);
@@ -61,13 +52,10 @@ export async function walletStatus(io: Io, config: Config): Promise<number> {
   for (const rail of WALLET_RAILS) {
     const name = RAIL_NAMES[rail];
     const file = vaultPath(config.dataDir, rail);
-    const unavailable = oneTapUnavailable(config, rail);
     if (!(await hasSecret(config.dataDir, rail))) {
       line(io.stdout, `${name} wallet: not linked`);
-      if (unavailable !== null) line(io.stdout, unavailable);
       continue;
     }
-    if (unavailable !== null) line(io.stdout, unavailable);
     const fix = `unlink it with ${INTENT} wallet unlink ${rail} and link it again`;
     try {
       const key = await loadWalletKey(config.wallet.key, { create: false });
@@ -75,7 +63,7 @@ export async function walletStatus(io: Io, config: Config): Promise<number> {
       // Opened to prove the vault is readable; the token itself is never printed.
       const vaultText = await loadSecret(config.dataDir, rail, key);
       line(io.stdout, printable(`${name} wallet: linked (encrypted vault ${file}; key from ${describeKeySource(config.wallet.key)})`));
-      if (unavailable === null && vaultText !== null) await accountStatus(io, config, rail, vaultText, key);
+      if (vaultText !== null) await accountStatus(io, config, rail, vaultText, key);
     } catch (error) {
       if (!(error instanceof WalletVaultError)) throw error;
       code = 1;
@@ -97,6 +85,7 @@ async function accountStatus(io: Io, config: Config, rail: WalletRail, vaultText
     }, io.now),
   });
   try {
+    warnClientMismatch(io, config, vaultText);
     const wallet = connectShop(openWalletSession(store), { ...shopWhere(config), vaultText, saveVaultText: vaultSaver(config.dataDir, rail, key) });
     for (const text of accountLines(name, rail, await wallet.account())) line(io.stdout, text);
   } catch (error) {
@@ -122,7 +111,25 @@ function accountLines(name: string, rail: WalletRail, account: WalletAccount): s
   return [`${name} budget left for the gateway: ${(budget.amountMinor / 100).toFixed(2)} ${budget.currency}`];
 }
 
-const shopWhere = (config: Config): { mcpUrl: string | null; authUrl: string | null } => ({ mcpUrl: config.wallet.shopMcpUrl, authUrl: config.wallet.shopAuthUrl });
+const shopWhere = (config: Config): { mcpUrl: string | null; authUrl: string | null; clientId: string | null } => ({
+  mcpUrl: config.wallet.shopMcpUrl,
+  authUrl: config.wallet.shopAuthUrl,
+  clientId: config.wallet.shopClientId,
+});
+
+/**
+ * A linked wallet keeps the client it was linked with, for every call, refresh and revocation: INTENT_SHOP_CLIENT_ID
+ * set later to another client is not used for it (only `wallet link` again changes it), and one line says so.
+ */
+function warnClientMismatch(io: Io, config: Config, vaultText: string): void {
+  const explicit = config.wallet.shopClientId;
+  const linked = linkedShopClientId(vaultText);
+  if (explicit === null || linked === null || explicit === linked) return;
+  line(
+    io.stderr,
+    printable(`intent: warning: this Shop wallet was linked as the client ${linked}, so INTENT_SHOP_CLIENT_ID (${explicit}) is not used for it; run ${INTENT} wallet link shop to link it as that client`),
+  );
+}
 
 /** Keeps refreshed tokens in the wallet vault (S1: Shop issues a refresh token, and its access token lives an hour). */
 const vaultSaver =
@@ -131,8 +138,10 @@ const vaultSaver =
     saveSecret(dataDir, rail, key, text);
 
 /**
- * Links `rail` with Shop's device flow: exit 0 once the tokens are in the vault and the link is chained; 1 when one-tap
- * is unavailable (no client set: nothing is sent) or the flow ends without tokens (the line says how to try again).
+ * Links `rail` with Shop's device flow as the gateway's own client, or INTENT_SHOP_CLIENT_ID's: exit 0 once the
+ * tokens are in the vault and the link is chained; 1 when the flow ends without tokens (the line says how to try
+ * again, or, when Shop refuses the client, names INTENT_SHOP_CLIENT_ID as the explicit opt-in: no other client is
+ * ever tried by itself).
  * A wallet already linked stays untouched until the new sign-in has succeeded; only then is it unlinked as `wallet
  * unlink` does (its token revoked by a logged send, a failed revocation warned about; its vault file deleted;
  * `wallet {action: "unlinked", revoked}` chained), before the new tokens are saved and the link chained.
@@ -141,13 +150,6 @@ export async function walletLink(io: Io, config: Config, rail: string): Promise<
   if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
   const name = RAIL_NAMES[rail];
   const clientId = config.wallet.shopClientId;
-  if (clientId === null) {
-    line(
-      io.stderr,
-      `intent: ${name} one-tap is unavailable until a registered ${name} client is set (INTENT_SHOP_CLIENT_ID); nothing was sent to ${name}, and purchases are handed off to the merchant's checkout`,
-    );
-    return 1;
-  }
   warn(io, config);
   // The key comes first, so a setup that cannot keep the tokens (the Docker image without a key secret) stops before
   // anything is sent.
@@ -162,7 +164,7 @@ export async function walletLink(io: Io, config: Config, rail: string): Promise<
     const session = openWalletSession(store);
     const relink = await hasSecret(config.dataDir, rail);
     if (relink) line(io.stdout, `${name} wallet already linked: it stays as it is unless this new link succeeds`);
-    const where = { mcpUrl: config.wallet.shopMcpUrl, authUrl: config.wallet.shopAuthUrl };
+    const where = shopWhere(config);
     let linked;
     try {
       linked = await linkShop(session, {
@@ -177,12 +179,16 @@ export async function walletLink(io: Io, config: Config, rail: string): Promise<
     } catch (error) {
       if (!(error instanceof ShopLinkError)) throw error;
       const kept = relink ? `; the earlier link is kept unchanged` : "";
+      if (error.code === "invalid_client") {
+        line(io.stderr, `intent: ${name} wallet not linked: ${refusedClient(config)}${kept}`);
+        return 1;
+      }
       line(io.stderr, `intent: ${name} wallet not linked: ${error.message}${kept}; run ${INTENT} wallet link ${rail} to try again`);
       return 1;
     }
     if (relink) {
       // The new tokens are in hand: now end the earlier link, revoking first as `wallet unlink` does.
-      const revoked = await revoke(io, config, rail, session);
+      const revoked = await revoke(io, config, rail, session, { relinking: true });
       await deleteSecret(config.dataDir, rail);
       await store.append("wallet", { rail, action: "unlinked", revoked });
       if (revoked) line(io.stdout, `${name} acknowledged the revocation of the earlier tokens (HTTP 200)`);
@@ -215,6 +221,16 @@ export async function walletLink(io: Io, config: Config, rail: string): Promise<
     await store.close();
   }
   return 0;
+}
+
+/**
+ * Shop refused the client the flow signed in as (invalid_client). The gateway tries no other client by itself: the
+ * line names the explicit opt-in, INTENT_SHOP_CLIENT_ID, or, when that set the client, says to check it.
+ */
+function refusedClient(config: Config): string {
+  return config.wallet.shopClientId !== null
+    ? `Shop does not accept the client INTENT_SHOP_CLIENT_ID names (invalid_client); check its value`
+    : `Shop does not accept the gateway's own client ${DEFAULT_SHOP_CLIENT_ID} (invalid_client), and no other client was tried; to sign in as another client (such as Shop's public client, for your own agent), set INTENT_SHOP_CLIENT_ID explicitly`;
 }
 
 /** Where and how to approve the link: the page, the code to check there, and a QR code of the page at a terminal. */
@@ -267,7 +283,7 @@ export async function walletUnlink(io: Io, config: Config, rail: string): Promis
  * Asks the rail to revoke the vault's refresh and access tokens; true only when it acknowledged both. A vault that does not open, holds no
  * token, or names no client, and every failure of the send, give false with the reason on stderr (never the token).
  */
-async function revoke(io: Io, config: Config, rail: WalletRail, session: WalletSession): Promise<boolean> {
+async function revoke(io: Io, config: Config, rail: WalletRail, session: WalletSession, options: { relinking?: boolean } = {}): Promise<boolean> {
   const name = RAIL_NAMES[rail];
   try {
     const key = await loadWalletKey(config.wallet.key, { create: false });
@@ -276,11 +292,9 @@ async function revoke(io: Io, config: Config, rail: WalletRail, session: WalletS
       line(io.stderr, `intent: the ${name} vault cannot be opened (no key), so its token cannot be revoked from here`);
       return false;
     }
-    const wallet = connectShop(session, {
-      mcpUrl: config.wallet.shopMcpUrl,
-      authUrl: config.wallet.shopAuthUrl,
-      vaultText: text,
-    });
+    // Relinking is how the client changes: the earlier link is revoked as the client it was linked with, with no warning.
+    if (options.relinking !== true) warnClientMismatch(io, config, text);
+    const wallet = connectShop(session, { ...shopWhere(config), vaultText: text });
     const result = await wallet.revoke();
     if (result === "not_sent") line(io.stderr, `intent: the ${name} vault holds no token and client to revoke with, so no revocation was sent`);
     if (result === "not_revoked") line(io.stderr, `intent: ${name} answered the revocation with an error`);
@@ -300,16 +314,12 @@ export const CHECK_DEFAULT_SINCE = "7d";
  * disclosed send: logged before it leaves), keeps each order's reference, total, merchant origin and time only, and
  * lists the orders in the period that no `outcome` entry of this chain names. Chains `wallet {rail, action:
  * "checked", since, order_count, unmatched_count, unmatched_total_minor, complete}`: counts and a total, no order.
- * Exit 1, with nothing sent, when no Shop client is set or no wallet is linked.
+ * Exit 1, with nothing sent, when no wallet is linked.
  */
 export async function walletCheck(io: Io, config: Config, rail: string, sinceText: string | undefined): Promise<number> {
   if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
   const name = RAIL_NAMES[rail];
   const since = parseSince(sinceText ?? CHECK_DEFAULT_SINCE, (io.now ?? Date.now)(), false);
-  if (config.wallet.shopClientId === null) {
-    line(io.stderr, `intent: ${name} is not set up: no registered ${name} client is set (INTENT_SHOP_CLIENT_ID); nothing was sent to ${name}`);
-    return 1;
-  }
   if (!(await hasSecret(config.dataDir, rail))) {
     line(io.stderr, `intent: no ${name} wallet is linked, so there is nothing to check; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail}`);
     return 1;
@@ -328,6 +338,7 @@ export async function walletCheck(io: Io, config: Config, rail: string, sinceTex
   let seq: number;
   try {
     const chained = chainedOrderRefs(store.entries());
+    warnClientMismatch(io, config, vaultText);
     const wallet = connectShop(openWalletSession(store), { ...shopWhere(config), vaultText, saveVaultText: vaultSaver(config.dataDir, rail, key) });
     check = checkOrders(await wallet.orders(), chained, since);
     seq = (await store.append("wallet", checkedEntry(rail, check))).seq;
@@ -368,19 +379,21 @@ function warn(io: Io, config: Config): void {
 
 /**
  * One-tap for `intent serve` (plan G7b): the linked Shop wallet behind the gateway's disclosed cloud, with its checkout
- * ids in the encrypted checkout vault (ADR-0019). Null, with nothing sent, when no Shop client is set, no wallet is
- * linked, or the vault does not open (said on stderr): purchases are then handed off.
+ * ids in the encrypted checkout vault (ADR-0019). Null, with nothing sent, when no wallet is linked or the vault does
+ * not open (said on stderr): purchases are then handed off.
  */
 export async function oneTapFor(io: Io, config: Config, dataDir: string): Promise<OneTapOptions | null> {
-  if (config.wallet.shopClientId === null || !(await hasSecret(dataDir, "shop"))) return null;
+  if (!(await hasSecret(dataDir, "shop"))) return null;
   try {
     warn(io, config);
     const key = await loadWalletKey(config.wallet.key, { create: false });
     const vaultText = key === null ? null : await loadSecret(dataDir, "shop", key);
     if (key === null || vaultText === null) return null;
     const checkoutIds = await openCheckoutVault(dataDir, "shop", key, io.now ?? Date.now);
-    const where = { mcpUrl: config.wallet.shopMcpUrl, authUrl: config.wallet.shopAuthUrl };
-    return { connect: (cloud) => connectShop(cloud, { ...where, vaultText, checkoutIds, saveVaultText: vaultSaver(dataDir, "shop", key) }) };
+    warnClientMismatch(io, config, vaultText);
+    const where = shopWhere(config);
+    // The search runs in the gateway, against Shop (G5, ADR-0021): Intent Cloud is sent nothing for it.
+    return { connect: (cloud) => connectShop(cloud, { ...where, vaultText, checkoutIds, saveVaultText: vaultSaver(dataDir, "shop", key) }), searchInGateway: true };
   } catch (error) {
     if (!(error instanceof WalletVaultError)) throw error;
     line(io.stderr, printable(`intent: Shop one-tap is unavailable, purchases are handed off: ${error.message}`));

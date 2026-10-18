@@ -18,10 +18,13 @@
 //   a read (get_account, get_checkout, search_orders) is sent again after a refresh; create_checkout and
 //   complete_checkout never are.
 // - Every idempotency key is a UUID v4 (Shop's schema: `format: uuid`).
+// - Search (G5, ADR-0021): search_catalog carries the query text, the country and the currency only, and its answer
+//   is projected to named product fields (project.ts projectCatalog).
 import { randomUUID } from "node:crypto";
 import { findIdentity } from "../privacy/index.ts";
 import {
   AddressFieldsRequiredError,
+  type CatalogQuery,
   type CheckoutIdStore,
   type CheckoutLocator,
   type CheckoutRequest,
@@ -41,6 +44,7 @@ import {
   checkoutOf,
   ORDERS_PAGE,
   projectAccount,
+  projectCatalog,
   projectCheckout,
   projectOrders,
   railLabel,
@@ -72,8 +76,12 @@ export function shopCredentialsText(credentials: ShopCredentials): string {
   return JSON.stringify({ v: 1, client_id: credentials.clientId, access_token: credentials.accessToken, refresh_token: credentials.refreshToken, ...expires });
 }
 
-/** Shop credentials from the vault text, or null when it holds none the adapter can use. */
-export function parseShopCredentials(text: string): ShopCredentials | null {
+/**
+ * Shop credentials from the vault text, or null when it holds none the adapter can use. The client id is the one the
+ * wallet was linked with, kept in the vault; `fallbackClientId` stands in only for a vault written before the client
+ * id was kept there (no `client_id`), and is then written into the vault at the next refresh.
+ */
+export function parseShopCredentials(text: string, fallbackClientId?: string): ShopCredentials | null {
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -81,10 +89,14 @@ export function parseShopCredentials(text: string): ShopCredentials | null {
     return null;
   }
   const v = record(value);
-  if (v?.v !== 1 || typeof v.client_id !== "string" || v.client_id === "" || typeof v.access_token !== "string" || v.access_token === "") return null;
+  if (v?.v !== 1 || typeof v.access_token !== "string" || v.access_token === "") return null;
+  const stored = typeof v.client_id === "string" && v.client_id !== "" ? v.client_id : null;
+  // A client_id that is there but not a usable string is a damaged vault, not an older one: no fallback.
+  const clientId = stored ?? (v.client_id === undefined ? (fallbackClientId ?? null) : null);
+  if (clientId === null) return null;
   const refresh = typeof v.refresh_token === "string" && v.refresh_token !== "" ? v.refresh_token : null;
   const expiresAt = Number.isSafeInteger(v.expires_at) && (v.expires_at as number) > 0 ? (v.expires_at as number) : null;
-  return { clientId: v.client_id, accessToken: v.access_token, refreshToken: refresh, expiresAt };
+  return { clientId, accessToken: v.access_token, refreshToken: refresh, expiresAt };
 }
 
 /**
@@ -143,7 +155,7 @@ export interface ShopAdapterOptions {
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const VARIANT = /^gid:\/\/shopify\/ProductVariant\/[0-9]{1,20}$/;
 /** The tools that only read: the only ones sent again after a token refresh. */
-const READS: ReadonlySet<ShopTool> = new Set(["get_account", "get_checkout", "search_orders"]);
+const READS: ReadonlySet<ShopTool> = new Set(["get_account", "get_checkout", "search_orders", "search_catalog"]);
 const RELINK = "Shop refused the token and it could not be refreshed: link the wallet again";
 
 export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
@@ -305,6 +317,25 @@ export function createShopAdapter(options: ShopAdapterOptions): WalletAdapter {
       const answer = await tool("search_orders", { pagination: { limit: ORDERS_PAGE } });
       refused(answer);
       return projectOrders(answer.content);
+    },
+
+    async searchCatalog(query: CatalogQuery) {
+      // The arguments S1 sent (step 5): the text, the buyer's country and currency as context, a price ceiling and the
+      // ships-to country as filters. No postcode, no address and no account detail: Shop's search needs none.
+      if (!/^[A-Z]{3}$/.test(query.currency) || !/^[A-Z]{2}$/.test(query.country)) throw new TypeError("a catalog search names an ISO currency and country");
+      if (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 20) throw new TypeError("a catalog search asks for 1 to 20 products");
+      const max = query.maxPriceMinor;
+      if (max !== null && (!Number.isSafeInteger(max) || max < 0)) throw new TypeError("a catalog price ceiling is integer minor units");
+      const answer = await tool("search_catalog", {
+        catalog: {
+          query: query.text,
+          context: { address_country: query.country, currency: query.currency },
+          filters: { ...(max === null ? {} : { price: { max } }), ships_to: { country: query.country } },
+          pagination: { limit: query.limit },
+        },
+      });
+      refused(answer);
+      return projectCatalog(answer.content);
     },
 
     async revoke() {

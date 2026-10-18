@@ -4,6 +4,7 @@
 // (log before send). Resume needs the buyer's passkey on the confirm page's /account: the gateway never resumes Intent
 // Cloud itself, so `intent resume` prints that address and clears the local pause only after the developer confirms at
 // a terminal, unconfirmed until the next submit's answer.
+import { loadAccountKey } from "../account/index.ts";
 import type { Config } from "../config/index.ts";
 import { INTENT } from "../config/index.ts";
 import type { Demo } from "../demo/index.ts";
@@ -32,11 +33,11 @@ import { activePolicy, cloudFor, rootKeys, startDemoFor } from "./setup.ts";
 export const HONEST_LINE = "`intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.";
 
 /**
- * The account key `intent init` makes (Ed25519, 0600 in the data dir). Until a build carries it, a machine has none and
- * the pause holds locally only, which `intent log` and `intent status` say. Tests pass `io.accountKey`.
+ * The account key `intent init` makes in `dataDir` (src/account, ADR-0022). Without one the pause holds locally only,
+ * which `intent log` and `intent status` say. Tests pass `io.accountKey`.
  */
-export function accountKeyFor(io: Io): AccountKeySource {
-  return io.accountKey ?? (() => Promise.resolve(null));
+export function accountKeyFor(io: Io, dataDir: string): AccountKeySource {
+  return io.accountKey ?? (() => loadAccountKey(dataDir));
 }
 
 /**
@@ -72,7 +73,7 @@ export function pauseDeps(io: Io, config: Config, store: Store, demo: Demo | nul
     });
     return attempt;
   };
-  return { store, accountKey: accountKeyFor(io), connect, now };
+  return { store, accountKey: accountKeyFor(io, demo?.dataDir ?? config.dataDir), connect, now };
 }
 
 /** The local pause, then one send to Intent Cloud; the lines say where it stands. */

@@ -50,6 +50,82 @@ export const UNIT_PRICE_MINOR = 500;
 export const SHIPPING_MINOR = 399;
 /** The budget the fake's account has left by default (minor units, USD). */
 export const FAKE_BUDGET_MINOR = 5000;
+/** A second store search_catalog returns, so a merge has two stores to keep apart. */
+export const FAKE_OTHER_STORE = "paper-goods.myshopify.com";
+export const FAKE_OTHER_STOREFRONT = "https://paper.example";
+
+/**
+ * The fake catalog search_catalog answers from (G5), in the shape S1 step 5 saw: products with `variants[]`, each
+ * variant with its gid, title, price {amount, currency}, availability and seller {domain, url}. It holds the demo's
+ * one-tap sticker, a sticker sheet at a second store, and two items the gateway must drop: a CBD product and a
+ * digital gift card.
+ */
+export const FAKE_CATALOG: readonly Record<string, unknown>[] = Object.freeze([
+  {
+    id: "gid://shopify/Product/7001",
+    title: "Holographic sticker",
+    url: `${FAKE_STOREFRONT}/products/holographic-sticker?variant=4401&_pos=1`,
+    product_type: "Stickers",
+    tags: ["sticker", "holographic"],
+    media: [{ type: "image", url: `${FAKE_STOREFRONT}/cdn/holo.png` }],
+    variants: [
+      {
+        id: FAKE_VARIANT,
+        title: "Default",
+        price: { amount: UNIT_PRICE_MINOR, currency: "USD" },
+        availability: { available: true },
+        seller: { domain: FAKE_STORE, url: FAKE_STOREFRONT },
+      },
+    ],
+  },
+  {
+    id: "gid://shopify/Product/7002",
+    title: "Vinyl sticker sheet",
+    url: `${FAKE_OTHER_STOREFRONT}/products/vinyl-sheet`,
+    product_type: "Stickers",
+    tags: ["sticker"],
+    variants: [
+      {
+        id: "gid://shopify/ProductVariant/5501",
+        title: "Default",
+        price: { amount: 350, currency: "USD" },
+        availability: { available: true },
+        seller: { domain: FAKE_OTHER_STORE, url: FAKE_OTHER_STOREFRONT },
+      },
+    ],
+  },
+  {
+    id: "gid://shopify/Product/7003",
+    title: "CBD calm sticker gummies",
+    product_type: "Wellness",
+    tags: ["sticker", "cbd"],
+    variants: [
+      {
+        id: "gid://shopify/ProductVariant/6601",
+        title: "Default",
+        price: { amount: 1500, currency: "USD" },
+        availability: { available: true },
+        seller: { domain: FAKE_OTHER_STORE, url: FAKE_OTHER_STOREFRONT },
+      },
+    ],
+  },
+  {
+    id: "gid://shopify/Product/7004",
+    title: "Sticker shop e-gift card",
+    product_type: "Gift Cards",
+    tags: ["sticker"],
+    variants: [
+      {
+        id: "gid://shopify/ProductVariant/6602",
+        title: "$25",
+        price: { amount: 2500, currency: "USD" },
+        availability: { available: true },
+        requires_shipping: false,
+        seller: { domain: FAKE_STORE, url: FAKE_STOREFRONT },
+      },
+    ],
+  },
+]);
 const CARD_ID = "0b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a40";
 
 export interface FakeShopFaults {
@@ -196,6 +272,8 @@ export interface FakeShop {
   readonly createCount: number;
   /** The instrument type each complete_checkout paid with (`delegated_budget`, `shop_pay`). */
   readonly paidWith: string[];
+  /** The arguments of each search_catalog call that reached the fake, in order. */
+  readonly searches: Record<string, unknown>[];
   /** The account's order history, as search_orders answers it; a completed checkout adds its order. Tests may replace it. */
   orders: FakeOrder[];
   /** Every access token issued so far now answers 401, as an expired one does. */
@@ -256,6 +334,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
   const revocations: FakeRevocation[] = [];
   const protocolErrors: string[] = [];
   const paidWith: string[] = [];
+  const searches: Record<string, unknown>[] = [];
   let completeCount = 0;
   let createCount = 0;
   let orders = 5000;
@@ -286,6 +365,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       return createCount;
     },
     paidWith,
+    searches,
     orders: [{ id: "gid://shopify/Order/4001", totalMinor: 899, createdAt: new Date(Date.now() - 86_400_000).toISOString() }],
     expireAccessTokens: () => {
       for (const g of grants) expired.add(g.access);
@@ -505,6 +585,20 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         return result({ ...account(), ...identity() });
       case "create_spend_request":
         return result({ card: { number: FAKE_PAN } });
+      case "search_catalog": {
+        searches.push(args);
+        const catalog = (args.catalog ?? {}) as Record<string, unknown>;
+        const words = (typeof catalog.query === "string" ? catalog.query : "").toLowerCase().split(/\s+/).filter((w) => w !== "");
+        const max = (((catalog.filters ?? {}) as Record<string, unknown>).price as Record<string, unknown> | undefined)?.max;
+        const products = FAKE_CATALOG.filter((p) => {
+          const text = `${String(p.title)} ${(p.tags as string[]).join(" ")}`.toLowerCase();
+          return words.length === 0 || words.some((w) => text.includes(w.replace(/s$/, "")));
+        })
+          .map((p): Record<string, unknown> & { variants: Record<string, unknown>[] } => ({ ...p, variants: (p.variants as Record<string, unknown>[]).filter((v) => typeof max !== "number" || ((v.price as { amount: number }).amount <= max)) }))
+          .filter((p) => p.variants.length > 0)
+          .map((p) => (shop.faults.identityEverywhere === true ? { ...p, title: `${String(p.title)} for ${FAKE_BUYER.email}`, ...identity() } : p));
+        return result({ ucp: { version: UCP_VERSION }, products, pagination: { has_next_page: false }, ...identity() });
+      }
       case "search_orders":
         return result({ ucp: { version: UCP_VERSION }, orders: shop.orders.map(order), pagination: { has_next_page: shop.faults.moreOrders === true, cursor: "eyJmYWtlIjp0cnVlfQ" }, ...identity() });
       case "create_checkout": {
