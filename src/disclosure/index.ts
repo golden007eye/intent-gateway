@@ -30,7 +30,7 @@ export {
   type WalletSession,
 } from "./wallet.ts";
 export { connectShop, type LinkedShopVault, linkShop, type ShopConnection, type ShopLink } from "./shop.ts";
-export { type DeviceGrantPrompt, ShopLinkError, type ShopLinkFailure } from "../wallet-shop/index.ts";
+export { DEFAULT_SHOP_CLIENT_ID, type DeviceGrantPrompt, ShopLinkError, type ShopLinkFailure } from "../wallet-shop/index.ts";
 export {
   connectCloud,
   createDisclosedCloud,

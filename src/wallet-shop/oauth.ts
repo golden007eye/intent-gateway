@@ -41,14 +41,17 @@ export type ShopLinkFailure = "expired" | "denied" | "refused" | "unreadable";
 export class ShopLinkError extends Error {
   override name = "ShopLinkError";
   readonly failure: ShopLinkFailure;
-  constructor(failure: ShopLinkFailure, message: string) {
+  /** The RFC 6749 / 8628 error code Shop answered (`invalid_client`), or null when it gave none the gateway knows. */
+  readonly code: string | null;
+  constructor(failure: ShopLinkFailure, message: string, code: string | null = null) {
     super(message);
     this.failure = failure;
+    this.code = code;
   }
 }
 
 export interface DeviceFlowOptions {
-  /** The gateway's registered Shop client (INTENT_SHOP_CLIENT_ID). */
+  /** The Shop client the gateway signs in as (its own client file, or INTENT_SHOP_CLIENT_ID). */
   readonly clientId: string;
   /** The protected resource the tokens are for: Shop's MCP server origin (RFC 8707). */
   readonly resource: string;
@@ -68,7 +71,7 @@ const EXPIRED = "the sign-in code expired before it was approved";
 const ERROR_LABELS: Readonly<Record<string, [ShopLinkFailure, string]>> = {
   expired_token: ["expired", EXPIRED],
   access_denied: ["denied", "the link was declined in Shop"],
-  invalid_client: ["refused", "Shop does not accept this gateway's client (invalid_client); check INTENT_SHOP_CLIENT_ID"],
+  invalid_client: ["refused", "Shop does not accept this gateway's client (invalid_client)"],
   unauthorized_client: ["refused", "Shop does not let this client use the device flow (unauthorized_client)"],
   invalid_scope: ["refused", `Shop refused the scope "${SHOP_SCOPE}" (invalid_scope)`],
   invalid_grant: ["refused", "Shop refused the sign-in code (invalid_grant)"],
@@ -147,7 +150,7 @@ export async function refreshTokens(accounts: ShopCaller, credentials: ShopCrede
 function failed(json: Record<string, unknown>, fallback: string): ShopLinkError {
   const code = json.error;
   const known = typeof code === "string" && Object.hasOwn(ERROR_LABELS, code) ? ERROR_LABELS[code] : undefined;
-  return known === undefined ? new ShopLinkError("refused", fallback) : new ShopLinkError(known[0], known[1]);
+  return known === undefined ? new ShopLinkError("refused", fallback) : new ShopLinkError(known[0], known[1], code as string);
 }
 
 function readForm(response: WireResponse): { status: number; json: Record<string, unknown> } {

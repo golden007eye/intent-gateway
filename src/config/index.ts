@@ -132,9 +132,9 @@ export interface WalletConfig {
   shopMcpUrl: string | null;
   shopAuthUrl: string | null;
   /**
-   * INTENT_SHOP_CLIENT_ID: the Shop OAuth client the gateway signs in as, a client id or the https URL of a client-ID
-   * metadata document. No default: the gateway ships no Shop client of its own yet, so without it one-tap with Shop
-   * is unavailable and purchases are handed off (ADR-0017).
+   * INTENT_SHOP_CLIENT_ID: a Shop OAuth client for the gateway to sign in as instead of its own, a client id or the
+   * https URL of a client-ID metadata document. Null until set: the gateway then signs in as its own client, which
+   * the Shop adapter names (ADR-0017). Another client is used only when this names it, never as a fallback.
    */
   shopClientId: string | null;
 }

@@ -13,7 +13,6 @@ import { type FakeShop, startFakeShop } from "../wallet-shop-fake/index.ts";
 import { type Io, main } from "./index.ts";
 
 const TOKEN = "shop-refresh-token-do-not-print-0123456789";
-const UNAVAILABLE = "Shop one-tap: unavailable, no Shop client is set (INTENT_SHOP_CLIENT_ID); purchases are handed off to the merchant's checkout";
 
 interface Setup {
   dir: string;
@@ -50,10 +49,10 @@ function setup(): Setup {
 }
 
 describe("intent wallet status", () => {
-  it("says not linked when there is no vault, and that one-tap needs a Shop client (none is built in)", async () => {
+  it("says not linked when there is no vault, with or without INTENT_SHOP_CLIENT_ID (the gateway has its own client)", async () => {
     const s = setup();
     const r = await s.run(["wallet", "status"]);
-    expect(r).toMatchObject({ code: 0, out: `Shop wallet: not linked\n${UNAVAILABLE}\n`, err: "" });
+    expect(r).toMatchObject({ code: 0, out: "Shop wallet: not linked\n", err: "" });
     const withClient = await s.run(["wallet", "status"], { INTENT_SHOP_CLIENT_ID: "my-gateway-client" });
     expect(withClient).toMatchObject({ code: 0, out: "Shop wallet: not linked\n", err: "" });
   });
@@ -73,7 +72,7 @@ describe("intent wallet status", () => {
     await saveSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"), TOKEN);
     const r = await s.run(["wallet", "status"], { INTENT_WALLET_KEY: s.keyText });
     expect(r.code).toBe(0);
-    expect(r.err).toMatch(/^intent: warning: the wallet key comes from INTENT_WALLET_KEY: .*set INTENT_WALLET_KEY_FILE instead\n$/);
+    expect(r.err).toMatch(/^intent: warning: the wallet key comes from INTENT_WALLET_KEY: .*set INTENT_WALLET_KEY_FILE instead\n/);
     for (const secret of [TOKEN, s.keyText]) expect(r.out + r.err).not.toContain(secret);
   });
 
@@ -160,7 +159,7 @@ describe("intent wallet unlink shop", () => {
     }
 
     const status = await s.run(["wallet", "status"]);
-    expect(status.out).toBe(`Shop wallet: not linked\n${UNAVAILABLE}\n`);
+    expect(status.out).toBe("Shop wallet: not linked\n");
     const log = await s.run(["log", "-v"]);
     expect(log.code).toBe(0);
     expect(log.out).toContain("Shop wallet unlinked, token not revoked (deleted here only)");
