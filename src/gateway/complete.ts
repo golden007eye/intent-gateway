@@ -137,8 +137,10 @@ const maybeSent = mayHaveSent;
  * them too (S1: Shop makes a new checkout for a replayed idempotency key, so a create that may have reached it is never
  * sent again). Each create_checkout `disclosure` logged after the purchase's approval and naming it counts, unless its
  * follow-up proves no checkout was made: an HTTP 4xx answer (the token's 401 included) or an `unacknowledged` that never
- * left. `in_flight`: every such send has no follow-up yet and was logged within the attempt window (its process may
- * still be waiting for the answer); `reached`: one may have reached Shop; `none`: no such send.
+ * left. `in_flight`: every such send was logged within the attempt window, answered or not: its process may still be
+ * waiting for Shop, or holding the answer on its way to the precheck and the `completion` entry, so another caller waits
+ * and never reads it as lost; `reached`: one may have reached Shop and its owner had the whole window to redeem or
+ * settle it; `none`: no such send. Callers check for a `completion` or a local outcome first.
  */
 function createState(entries: readonly { readonly kind: string; readonly body: unknown }[], handle: string, nowMs: number): "none" | "in_flight" | "reached" {
   const approvedAt = entries.findIndex((e) => e.kind === "approval" && asBody(e.body).handle === handle);
@@ -150,18 +152,16 @@ function createState(entries: readonly { readonly kind: string; readonly body: u
       creates.set((e as { seq?: unknown }).seq, Number.isFinite(at) ? at : 0);
     }
   });
-  const answered = new Set<unknown>();
   for (const e of entries) {
     const b = asBody(e.body);
     if (!creates.has(b.disclosure_seq) || (e.kind !== "response" && e.kind !== "unacknowledged")) continue;
-    answered.add(b.disclosure_seq);
     const status = b.status;
     if ((e.kind === "response" && typeof status === "number" && status >= 400 && status < 500) || (e.kind === "unacknowledged" && neverLeft(e.body))) {
       creates.delete(b.disclosure_seq);
     }
   }
   if (creates.size === 0) return "none";
-  const waiting = [...creates].every(([seq, at]) => !answered.has(seq) && nowMs - at < ATTEMPT_WINDOW_MS);
+  const waiting = [...creates.values()].every((at) => nowMs - at < ATTEMPT_WINDOW_MS);
   return waiting ? "in_flight" : "reached";
 }
 

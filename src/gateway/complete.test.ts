@@ -394,6 +394,31 @@ describe("races between processes", () => {
     expect((await p2.gateway.findOffers(SEARCH)).status).toBe("offers");
   });
 
+  it("race at step 4: a second process polls after the winner's create was answered, before its completion entry → it waits; the winner orders", async () => {
+    const base = await setup();
+    let other: Proc | null = null;
+    let handle = "";
+    let seenMidRace: string | null = null;
+    // Holds the winner's completion append until the other process has polled once (the CI interleaving, made fixed).
+    const gate = (real: Store): Store => ({
+      append: (k, b) => real.append(k, b),
+      appendUnless: async (k, b, c) => {
+        if (k === "completion" && seenMidRace === null && other !== null) seenMidRace = completionOf(await status(other, handle)).state;
+        return real.appendUnless(k, b, c);
+      },
+      entries: () => real.entries(),
+      close: () => real.close(),
+    });
+    const winner = await proc(base, { wrap: gate });
+    other = await proc(base);
+    handle = await chainedApproval(base, winner);
+    expect(completionOf(await status(winner, handle)).state).toBe("ordered");
+    expect(seenMidRace).toBe("completing");
+    expect(base.shop.createCount).toBe(1);
+    expect(base.shop.completeCount).toBe(1);
+    expect(localOutcomes(await chainOf(base)).map((o) => o.state)).not.toContain("failed");
+  });
+
   it("attack 4a (race at step 6, Shop idempotency off): B only reads the checkout while A's send is in flight; one attempt, one send", async () => {
     const base = await setup({ faults: { idempotency: false } });
     const a = await proc(base);
