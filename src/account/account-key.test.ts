@@ -1,4 +1,4 @@
-// The account key (ADR-0021): made once, mode 0600, never overwritten; its thumbprint follows RFC 7638 and its
+// The account key (ADR-0022): made once, mode 0600, never overwritten; its thumbprint follows RFC 7638 and its
 // signatures are Ed25519 (RFC 8037 test vectors). Attack cases: a file that is not a key, or whose public half does
 // not match its private half, is refused and left as it was.
 import { createPublicKey, verify } from "node:crypto";

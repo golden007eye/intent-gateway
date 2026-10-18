@@ -1,5 +1,5 @@
 // `intent init`: the first run (plan G8). It checks the data dir and the chain and names the policy in force (the
-// checks of `intent doctor`), makes the account key once (ADR-0021), offers to link Shop for one-tap purchases, and
+// checks of `intent doctor`), makes the account key once (ADR-0022), offers to link Shop for one-tap purchases, and
 // prints the line that connects an agent.
 // The Shop step never blocks setup: in demo mode, with no terminal to ask at (Docker, a
 // pipe) or with --yes it is skipped with a line that says so, and purchases are handed off to the merchant's checkout.
@@ -51,7 +51,7 @@ export async function init(io: Io, config: Config, options: { yes: boolean }): P
 }
 
 /**
- * Makes the account key when there is none, and never replaces one (ADR-0021). Only its path and thumbprint are
+ * Makes the account key when there is none, and never replaces one (ADR-0022). Only its path and thumbprint are
  * printed; the key stays in its file.
  */
 async function accountKeyStep(dataDir: string, report: (level: Level, text: string) => void): Promise<void> {

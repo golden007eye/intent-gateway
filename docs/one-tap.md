@@ -83,7 +83,7 @@ Shop's terms limit use to "personal, individual shopping use only, unless separa
 | `<data dir>/wallet/shop.enc` | The Shop token, AES-256-GCM, mode 600. |
 | `<data dir>/wallet/shop-checkouts/` | Each checkout id Shop issued for a purchase, sealed the same way, so a restarted gateway can read a checkout it may have completed. Deleted when the purchase ends. |
 | The wallet key | From `INTENT_WALLET_KEY_FILE` (refused inside the data dir), else `INTENT_WALLET_KEY`, else a generated 600 file in your config folder. |
-| `<data dir>/account-key.json` | The account key: an Ed25519 key `intent init` makes once, mode 600, never replaced ([ADR-0021](adr/0021-account-key.md)). Only its public half is ever sent. |
+| `<data dir>/account-key.json` | The account key: an Ed25519 key `intent init` makes once, mode 600, never replaced ([ADR-0022](adr/0022-account-key.md)). Only its public half is ever sent. |
 | `<data dir>/completer/` | One key per open cart, which signs that approval's reads and outcome reports ([ADR-0016](adr/0016-per-approval-completer-key.md)). |
 
 Against malware running as your user, these files are obfuscation, not protection: see [Known risks](threat-model.md#known-risks).

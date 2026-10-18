@@ -1,4 +1,4 @@
-# ADR-0021: Account key
+# ADR-0022: Account key
 
 Status: accepted · 2026-10-18 · Relates to ADR-0016 (completer key), ADR-0017 (wallet adapters)
 

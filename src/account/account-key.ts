@@ -1,4 +1,4 @@
-// The account key (ADR-0021): an Ed25519 key `intent init` makes once in the data dir, file mode 0600. Its public half
+// The account key (ADR-0022): an Ed25519 key `intent init` makes once in the data dir, file mode 0600. Its public half
 // goes in each checkout the gateway submits (`account_key`), and it signs a Pause. It is never overwritten: a file
 // that is there but does not read as an account key is an error, never replaced, because a new key would no longer
 // match the one Intent Cloud knows.
