@@ -143,7 +143,8 @@ describe("create_cart with a linked Shop wallet: the 1.7.0 submit", () => {
     const cloudBodies = disclosures(h).filter((d) => d.destination === undefined).map(sentBody);
     expect(cloudBodies.some((b) => b.includes('"postal_code":"94107"'))).toBe(true);
     for (const b of disclosures(h).map(sentBody)) expect(b).not.toMatch(/94107-?1234/);
-    expect(JSON.stringify(h.store.entries())).not.toContain("1234");
+    // The full postcode itself, never a bare "1234": random nonces and base64 in the chain can hold those four digits.
+    expect(JSON.stringify(h.store.entries())).not.toMatch(/94107-?1234/);
     for (const value of [FAKE_BUYER.email, FAKE_BUYER.last_name, FAKE_BUYER.phone]) expect(JSON.stringify(h.store.entries())).not.toContain(value);
   });
 

@@ -137,6 +137,8 @@ export interface ActivityFacts {
   zip?: string;
   country?: string;
   offer_handle?: string;
+  /** cart: the request was the Shop checkout submitted for the passkey (createCheckout, contract 1.7.0), not createCart. */
+  submit?: boolean;
   quantity?: number;
   approval_handle?: string;
   approval_url?: string;
@@ -331,6 +333,9 @@ export function buildActivity(items: readonly unknown[]): ActivityLog {
           activity = open(item, "search", searchFacts(request.fields));
         } else if (endpoint === "createCart") {
           activity = open(item, "cart", cartFacts(request.fields));
+        } else if (endpoint === "createCheckout") {
+          // The 1.7.0 submit: the Shop checkout sent to Intent Cloud for the passkey; its approval link joins this cart.
+          activity = open(item, "cart", checkoutFacts(request.fields));
         } else if (endpoint === "createApproval") {
           activity = last("cart", (a) => !a.requests.some((r) => r.endpoint === "createApproval")) ?? open(item, "cart");
         } else if (endpoint === "getApproval") {
@@ -592,14 +597,12 @@ export function summarise(items: readonly unknown[], activities: readonly Activi
         continue;
       }
       checked += 1;
-      // A wallet body is checked as the core checked it: whole, with its MCP tool name exempt (flattened, `params.name` reads as a name key).
-      let found;
-      if (r.destination === INTENT_CLOUD) {
-        found = findIdentity(r.fields, { orderRefAt: sentOrderRefAt(r.endpoint, true) });
-      } else {
-        bodies ??= bodiesBySeq(items);
-        found = findIdentity(bodies.get(r.seq) ?? r.fields, { mcpEnvelope: true });
-      }
+      // Every body is checked as the disclosure core checked it before the send: the logged body, nested, with the same
+      // options. The flattened fields would not do: their keys are dotted paths, so `checkout.store_name` reads as a
+      // name key, and a wallet's `params.name` loses its MCP exemption.
+      bodies ??= bodiesBySeq(items);
+      const toCloud = r.destination === INTENT_CLOUD;
+      const found = findIdentity(bodies.get(r.seq) ?? null, { mcpEnvelope: !toCloud, orderRefAt: sentOrderRefAt(r.endpoint, toCloud) });
       if (found.length > 0) findings.push({ seq: r.seq, kinds: [...new Set(found.map((f) => f.kind))].sort() });
     }
   }
@@ -839,6 +842,21 @@ function cartFacts(fields: Readonly<Record<string, unknown>> | null): ActivityFa
     ...(typeof f.offer_handle === "string" ? { offer_handle: f.offer_handle } : {}),
     ...(typeof f.quantity === "number" ? { quantity: f.quantity } : {}),
     ...shipTo(f),
+  };
+}
+
+/** What a createCheckout body sent, by its contract paths (`checkout.*`). */
+function checkoutFacts(fields: Readonly<Record<string, unknown>> | null): ActivityFacts {
+  if (fields === null) return { submit: true };
+  const f = fields;
+  return {
+    submit: true,
+    ...(typeof f["checkout.title"] === "string" ? { title: f["checkout.title"] } : {}),
+    ...(typeof f["checkout.quantity"] === "number" ? { quantity: f["checkout.quantity"] } : {}),
+    ...(typeof f["checkout.totals.total"] === "number" ? { total_minor: f["checkout.totals.total"] } : {}),
+    ...(typeof f["checkout.store_name"] === "string" ? { merchant: f["checkout.store_name"] } : {}),
+    ...(typeof f["checkout.ship_to.postal_code"] === "string" ? { zip: f["checkout.ship_to.postal_code"] } : {}),
+    ...(typeof f["checkout.ship_to.country"] === "string" ? { country: f["checkout.ship_to.country"] } : {}),
   };
 }
 
