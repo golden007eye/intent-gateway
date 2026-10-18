@@ -32,7 +32,8 @@ export interface WalletDisclosureOptions {
   readonly secretPaths?: readonly string[];
   /**
    * Wallet-issued ids let through the identity scan at exactly their dotted path (plain keys only), while the whole
-   * value matches the pattern (`{path: "params.arguments.id", pattern}`).
+   * value matches the pattern (`{path: "params.arguments.id", pattern}`). A pattern with the `g` or `y` flag is
+   * refused: it keeps state between tests.
    */
   readonly opaqueIds?: readonly { readonly path: string; readonly pattern: RegExp }[];
 }
@@ -82,6 +83,8 @@ export function createDisclosedWallet(transport: DestinationTransport, cloud: Di
   const opaqueIds = (options.opaqueIds ?? []).map((o) => {
     const at = o.path.split(".");
     if (!at.every((k) => /^[A-Za-z_$][\w$]*$/.test(k))) throw new TypeError(`not a plain body path: ${JSON.stringify(o.path)}`);
+    // `g` and `y` make test() resume at lastIndex, so the same id would pass on one send and fail on the next.
+    if (o.pattern.global || o.pattern.sticky) throw new TypeError(`an opaque-id pattern may not use the g or y flag: ${String(o.pattern)}`);
     return { at, pattern: o.pattern };
   });
   const core = coreOf(cloud);

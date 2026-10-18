@@ -152,7 +152,10 @@ export function redactionHeld(logged: { headers: readonly (readonly [string, str
 
 /** The path of every secret key holding something other than null or a redaction marker, as `body.<path>`. */
 export function unredactedSecrets(body: unknown, segments: PathSegment[] = [], out: string[] = []): string[] {
-  if (Array.isArray(body)) {
+  if (segments.length > SCAN_DEPTH) {
+    // Too deep to walk without risking the stack: reported as a credential, so a hand-edited chain cannot hide one there.
+    out.push(`${formatPath("body", segments)} (nested deeper than ${String(SCAN_DEPTH)} levels, not checked)`);
+  } else if (Array.isArray(body)) {
     (body as unknown[]).forEach((item, i) => unredactedSecrets(item, [...segments, i], out));
   } else if (typeof body === "object" && body !== null) {
     const keys = Object.keys(body);
@@ -160,6 +163,47 @@ export function unredactedSecrets(body: unknown, segments: PathSegment[] = [], o
       if (isSecretKey(key, keys) && value !== null && markerDigest(value) === null) out.push(formatPath("body", [...segments, key]));
       else unredactedSecrets(value, [...segments, key], out);
     }
+  }
+  return out;
+}
+
+/** How deep the credential scans walk nested objects, arrays and JSON text before they stop. */
+export const SCAN_DEPTH = 64;
+
+/**
+ * Whether `text` is JSON text (an object or array) holding a secret key, at any depth and in JSON text inside it,
+ * with anything but a redaction marker (`state: "{\"access_token\":…}"`). The disclosure core digests by key and
+ * path, never inside string values, so such a value is logged as sent (ADR-0014): the log views do not print it, and
+ * `intent verify` warns about it. Text nested deeper than SCAN_DEPTH counts as holding one (fail closed).
+ */
+export function holdsNestedSecret(text: string, depth = 0): boolean {
+  if (!/^\s*[[{]/.test(text)) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const holds = (value: unknown, level: number): boolean => {
+    if (level > SCAN_DEPTH) return true;
+    if (Array.isArray(value)) return value.some((item) => holds(item, level + 1));
+    if (typeof value === "string") return holdsNestedSecret(value, level + 1);
+    if (typeof value !== "object" || value === null) return false;
+    const keys = Object.keys(value);
+    return Object.entries(value).some(([key, item]) => (isSecretKey(key, keys) && item !== null && markerDigest(item) === null) || holds(item, level + 1));
+  };
+  return holds(parsed, depth);
+}
+
+/** The body paths of string values that hold a credential inside JSON text (holdsNestedSecret); paths only, never values. */
+export function nestedSecrets(body: unknown, segments: PathSegment[] = [], out: string[] = []): string[] {
+  if (segments.length > SCAN_DEPTH) return out;
+  if (typeof body === "string") {
+    if (holdsNestedSecret(body, segments.length)) out.push(formatPath("body", segments));
+  } else if (Array.isArray(body)) {
+    (body as unknown[]).forEach((item, i) => nestedSecrets(item, [...segments, i], out));
+  } else if (typeof body === "object" && body !== null) {
+    for (const [key, value] of Object.entries(body)) nestedSecrets(value, [...segments, key], out);
   }
   return out;
 }

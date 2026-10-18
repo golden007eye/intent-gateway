@@ -26,7 +26,7 @@
 // - approver_pin, approver_flag: fingerprint, handle, reason. keys: statement.kid, statement.expires_at.
 // - session: mode ("demo" on the first entry of a demo chain) or id.
 import { ObservedBody, type ObservedOffer, withheldAt } from "../observation/index.ts";
-import { bodyValue, findIdentity, isSecretKey, markerDigest } from "../privacy/index.ts";
+import { bodyValue, findIdentity, holdsNestedSecret, isSecretKey, markerDigest, SCAN_DEPTH } from "../privacy/index.ts";
 import { neverLeft, verifyChain, type ChainResult } from "../store/index.ts";
 
 /** What one action was. */
@@ -44,6 +44,16 @@ export type Delivery = "acknowledged" | "answered" | "unacknowledged" | "not_sen
 
 /** What a request's `fields` hold, instead of the value, for a credential the log holds in clear. */
 export const CLEAR_CREDENTIAL = "[a credential in clear, not shown: intent verify fails this entry]";
+
+/**
+ * What a request's `fields` hold, instead of the value, for a string that is JSON text with a secret key in it
+ * (`state: "{\"access_token\":…}"`). The core redacts by key, not inside string values, so the chain holds it as
+ * sent (ADR-0014); the views do not print it.
+ */
+export const NESTED_CREDENTIAL = "[JSON text holding a credential, not shown]";
+
+/** What a request's `fields` hold, instead of the value, for a value nested deeper than the views walk. */
+export const TOO_DEEP = "[nested too deep, not shown]";
 
 /** Where a disclosure without `destination` went. */
 export const INTENT_CLOUD = "intent_cloud";
@@ -260,7 +270,7 @@ const REFUSAL = /^(cart|snapshot|approval_proof): /;
  */
 const LOGGING_REFUSAL = /^(a credential at |a credential in the query |the body is not plain JSON|the form body is not written|the request has more than one content-type header)/;
 /** Block reasons of the buyer-identity check (findIdentity's kinds, written as `<kind> at <path>`). */
-const IDENTITY_REASON = /^(card|email|phone|street_address|banned_key) at /;
+const IDENTITY_REASON = /^(card|email|phone|street_address|banned_key|too_deep) at /;
 const SEVERITY: readonly Delivery[] = ["acknowledged", "answered", "not_sent", "unacknowledged", "maybe_sent", "discarded"];
 
 /** Reads the chain items `readChain` returns as actions, in chain order, with summary counts. */
@@ -745,17 +755,21 @@ function loggedBody(b: Readonly<Body>): unknown {
 
 /** Leaves by dotted path; an array of scalars stays one value (`must_haves: ["road"]`), an array of objects is walked as `[]`. */
 // A value under a credential key that is not a redaction marker (a hand-edited chain; `intent verify` fails it) is
-// never read out: it stands as CLEAR_CREDENTIAL, so no view prints a credential.
-function flatten(value: unknown, prefix: string, out: Record<string, unknown>, secretKey = false): void {
+// never read out: it stands as CLEAR_CREDENTIAL, so no view prints a credential. A value nested deeper than
+// SCAN_DEPTH stands as TOO_DEEP, so a deeply nested value cannot exhaust the stack (or hide a credential below it).
+function flatten(value: unknown, prefix: string, out: Record<string, unknown>, secretKey = false, depth = 0): void {
   if (secretKey && value !== null && markerDigest(value) === null) {
     out[prefix] = CLEAR_CREDENTIAL;
+  } else if (depth > SCAN_DEPTH && typeof value === "object" && value !== null) {
+    out[prefix] = TOO_DEEP;
   } else if (Array.isArray(value) && value.some((v) => typeof v === "object" && v !== null)) {
-    for (const item of value) flatten(item, `${prefix}[]`, out);
+    for (const item of value) flatten(item, `${prefix}[]`, out, false, depth + 1);
   } else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
     const keys = Object.keys(value);
-    for (const [key, item] of Object.entries(value)) flatten(item, prefix === "" ? key : `${prefix}.${key}`, out, isSecretKey(key, keys));
+    for (const [key, item] of Object.entries(value)) flatten(item, prefix === "" ? key : `${prefix}.${key}`, out, isSecretKey(key, keys), depth + 1);
   } else if (prefix !== "") {
-    out[prefix] = value;
+    const texts = Array.isArray(value) ? value : [value];
+    out[prefix] = texts.some((v) => typeof v === "string" && holdsNestedSecret(v)) ? NESTED_CREDENTIAL : value;
   }
 }
 

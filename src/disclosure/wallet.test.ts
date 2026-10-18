@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PINNED } from "../../test/support/trust-kit.ts";
 import { type Entry, neverLeft, openStore, type Store, type StoreFs } from "../store/index.ts";
 import { runVerify } from "../verify/index.ts";
+import { SHOP_OPAQUE_IDS, SHOP_SECRET_PATHS } from "../wallet-shop/index.ts";
 import {
   createDisclosedCloud,
   createDisclosedWallet,
@@ -438,5 +439,78 @@ describe("opaque wallet ids (ADR-0019)", () => {
     await expect(shop.call("get_checkout", rpc("get_checkout", { id: "card 4111 1111 1111 1111" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
     await expect(shop.call("get_checkout", rpc("get_checkout", { id: "gid://shopify/Checkout/x?key=a b jane@example.com" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
     expect(sent).toHaveLength(1);
+  });
+
+  it("refuses a pattern with the g or y flag at build: test() would keep state between sends", async () => {
+    const cloud = await setup();
+    const { transport } = fakeTransport();
+    for (const pattern of [/^gid:\/\/x$/g, /^gid:\/\/x$/y, /^gid:\/\/x$/gi]) {
+      expect(() => createDisclosedWallet(transport, cloud, { destination: "shop", opaqueIds: [{ path: "params.arguments.id", pattern }] })).toThrow(TypeError);
+    }
+    expect(() => createDisclosedWallet(transport, cloud, { destination: "shop", opaqueIds: [{ path: "params.arguments.id", pattern: /^gid:\/\/x$/i }] })).not.toThrow();
+  });
+
+  it("attack: Shop's own pattern lets no extra query through; an off-pattern id carrying a card number is blocked", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop", secretPaths: SHOP_SECRET_PATHS, opaqueIds: SHOP_OPAQUE_IDS });
+    const pattern = SHOP_OPAQUE_IDS[0]?.pattern ?? /$^/;
+    expect(pattern.test("gid://shopify/Checkout/abc?key=a")).toBe(true);
+    expect(pattern.test("gid://shopify/Checkout/abc?key=a&x=1")).toBe(false);
+    await expect(shop.call("get_checkout", rpc("get_checkout", { id: "gid://shopify/Checkout/abc?key=a&x=4111111111111111" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    await expect(shop.call("get_checkout", rpc("get_checkout", { id: "gid://shopify/Checkout/4111111111111111?key=a&x=1" }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    expect(sent).toHaveLength(0);
+    expect(logged().map((e) => bodyOf(e)["blocked"])).toEqual([["card at $.params.arguments.id"], ["card at $.params.arguments.id"]]);
+  });
+
+  it("attack: on the same core, an Intent Cloud request with a card-like value at params.arguments.id is still blocked", async () => {
+    dir = join(await fsp.mkdtemp(join(tmpdir(), "wallet-")), "data");
+    store = await openStore(dir);
+    let reached = 0;
+    const body = JSON.stringify({ params: { arguments: { id: "gid://shopify/Checkout/4111111111111111?key=ab12" } } });
+    const carding = {
+      meta: async (options?: { beforeSend?: (r: OutboundRequest) => void | Promise<void> }) => {
+        await options?.beforeSend?.({ operation: "getMeta", method: "POST", path: "/v1/meta", headers: [["content-type", "application/json"]], body: Buffer.from(body, "utf8") });
+        reached += 1;
+        throw new Error("sent");
+      },
+    } as unknown as IntentCloud;
+    const cloud = createDisclosedCloud(carding, store, { keySet: () => null });
+    // A wallet with the exemption shares the core: the exemption is the wallet's, never Intent Cloud's.
+    createDisclosedWallet(fakeTransport().transport, cloud, { destination: "shop", opaqueIds: SHOP_OPAQUE_IDS });
+    await expect(cloud.meta()).rejects.toBeInstanceOf(DisclosureBlockedError);
+    expect(reached).toBe(0);
+    expect(store.entries().map((e) => [e.kind, bodyOf(e)["blocked"]])).toEqual([["block", ["card at $.params.arguments.id"]]]);
+  });
+});
+
+describe("credentials inside JSON text, and values nested too deep (ADR-0014)", () => {
+  it("a token inside a JSON-text value is logged as sent; intent verify warns with its path, never its value, and does not fail", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    await shop.call("x", rpc("x", { state: JSON.stringify({ step: 1, auth: { sessionToken: REFRESH } }), plain: '{"note":"kept"}' }));
+    expect(sent).toHaveLength(1);
+    await store.close();
+    const report = await runVerify({ dataDir: dir, pinnedRootKeys: PINNED, now: new Date(), skipSupplyChain: true });
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(report.exitCode).toBe(0);
+    const details = report.checks.find((c) => c.name === "disclosures")?.details ?? [];
+    const warnings = details.filter((d) => d.startsWith("warning: "));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("a credential inside JSON text at body.params.arguments.state");
+    expect(JSON.stringify(report)).not.toContain(REFRESH);
+  });
+
+  it("attack: a wallet body nested deeper than the scans walk is blocked before the log and the send", async () => {
+    const cloud = await setup();
+    const { transport, sent } = fakeTransport();
+    const shop = createDisclosedWallet(transport, cloud, { destination: "shop" });
+    let deep: unknown = "x";
+    for (let i = 0; i < 200; i += 1) deep = [deep];
+    await expect(shop.call("x", rpc("x", { deep }))).rejects.toBeInstanceOf(DisclosureBlockedError);
+    expect(sent).toHaveLength(0);
+    expect(store.entries().map((e) => e.kind)).toEqual(["block"]);
+    expect(String((bodyOf(store.entries()[0])["blocked"] as string[])[0])).toMatch(/^too_deep at \$\.params\.arguments\.deep/);
   });
 });
