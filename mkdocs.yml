@@ -68,6 +68,7 @@ nav:
   - Overview: index.md
   - Quickstart: quickstart.md
   - Demo mode: demo.md
+  - One-tap purchases: one-tap.md
   - Gateway policy: policy.md
   - Policy library: policy-library.md
   - Verify: verify.md

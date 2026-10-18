@@ -1,6 +1,6 @@
 # Security
 
-The gateway is a pre-alpha preview: nothing can be bought with it yet, but its checks are real and open to review. The [threat model](threat-model.md) lists the assets, the trust boundaries, how each invariant is enforced, and what is out of scope.
+The gateway is a pre-alpha preview: nothing can be bought with it yet, but its checks are real and open to review. The [threat model](threat-model.md) lists the assets, the trust boundaries, how each invariant is enforced, the [known risks](threat-model.md#known-risks) of one-tap purchases with a Shop wallet, and what is out of scope.
 
 ## Reporting a vulnerability
 
@@ -12,14 +12,14 @@ These are invariants in the repository's agent guide; each change that touches o
 
 1. **The policy can only narrow.** A gateway policy never loosens a rule Intent Cloud enforces.
 2. **Log before send.** Every field sent to Intent Cloud or to any other outside destination, such as a linked wallet, is appended to the local hash chain before the request leaves; credentials are logged only as their sha256.
-3. **No buyer identity in the gateway.** The gateway never stores or forwards the buyer's name, postal address or card.
-4. **One human approval per purchase.** A purchase proceeds only with a passkey-signed Approval the gateway has verified and chained.
-5. **Claim only what was sent.** Docs, logs and CLI output describe what the gateway sent and what Intent Cloud acknowledged receiving, nothing more.
+3. **No buyer identity in the gateway.** The gateway never stores or forwards the buyer's name, postal address or card. With one tap, Shop holds them; the gateway sends a saved-address id, never address fields.
+4. **One human approval per purchase.** A purchase proceeds only with a passkey-signed Approval the gateway has verified and chained; with one tap, the gateway sends at most one `complete_checkout` per Approval.
+5. **Claim only what was sent.** Docs, logs and CLI output describe what the gateway sent, what Intent Cloud acknowledged receiving and what Shop returned, nothing more.
 
 ## What you can check yourself
 
 - `intent verify` re-checks the local hash chain, every receipt and every approval offline. [Verify](verify.md) says what each check proves and what it does not.
-- `intent log` and the [panel](panel.md) show every send field by field, and every block.
+- `intent log` and the [panel](panel.md) show every send field by field, to Intent Cloud and to Shop, and every block. A credential shows only as `redacted` with its sha256.
 - `intent doctor` checks the data dir's permissions, the policy, the chain, the root key and the Intent Cloud host, and gives the fix for each problem.
 - The release checks you run with your own tools, `npm audit signatures` and `cosign verify`, are on the [Verify](verify.md#self-check-and-outside-checks) page. They apply from the first preview release.
 - The package installs nothing but itself: its runtime dependencies are compiled into `dist/` ([ADR-0013](adr/0013-bundled-dependencies.md)), so its provenance covers their code. `dist/sbom.cdx.json` lists each bundled package with the SHA-512 the lockfile pins, and `dist/THIRD_PARTY_LICENSES` carries their licences.

@@ -36,6 +36,16 @@ $ npx -y intent-gateway@next verify --demo
 
 `log` lists each entry of the local hash chain. `verify` re-checks the chain, each receipt and the approval, and ends with `verify: ok` and the chain's head seq and hash. [Verify](verify.md) says what each check proves.
 
+## 4. Try one tap
+
+The demo also has a local fake Shop wallet. Ask:
+
+```text
+> Find stickers to ZIP 94107, under $20, and prepare a cart for the holographic sticker.
+```
+
+Approve it as before; the page says the gateway completes payment with demo Shop. Then ask the agent to check the approval status until it says `One-tap: ordered (read from Shop)`. `log --demo` now also shows the calls to Shop, each answered with its status and no receipt (Shop signs none), and `verify --demo` re-checks the outcome. [One-tap purchases](one-tap.md) says what works outside the demo: today, nothing yet, since it needs a registered Shop client.
+
 ## Without an MCP client
 
 `demo --http` (or `demo` run in a terminal) serves MCP over HTTP on `127.0.0.1:8787` and prints the line to connect with and the demo code:
@@ -92,6 +102,7 @@ Later starts reuse the token without printing it: their connect line reads it fr
 
 ## Next
 
+- `intent init` checks the setup for a real run, offers to link Shop for one tap when a Shop client is set (it skips the step otherwise, and purchases are handed off), and prints the line that connects your agent.
 - `intent doctor --demo` checks the setup; every problem it finds comes with its fix.
 - [Gateway policy](policy.md): narrow what leaves the gateway.
 - [Panel](panel.md): a read-only page with the same log, pending approvals and the approver pin.
