@@ -419,6 +419,41 @@ describe("races between processes", () => {
     expect(localOutcomes(await chainOf(base)).map((o) => o.state)).not.toContain("failed");
   });
 
+  it("race at step 7: B's read, taken while A's send was in flight, reaches the chain after A's ordered → never chained over it; B sees ordered", async () => {
+    const base = await setup();
+    let release: () => void = () => undefined;
+    const aDone = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // B's outcome from its in-flight read is held until A has chained its verdict (the CI interleaving, made fixed).
+    const late = (real: Store): Store => ({
+      append: async (k, b) => {
+        if (k === "outcome" && (b as { state?: unknown }).state === "indeterminate") await aDone;
+        return real.append(k, b);
+      },
+      appendUnless: async (k, b, c) => {
+        if (k === "outcome" && (b as { state?: unknown }).state === "indeterminate") await aDone;
+        return real.appendUnless(k, b, c);
+      },
+      entries: () => real.entries(),
+      close: () => real.close(),
+    });
+    const a = await proc(base);
+    const b = await proc(base, { wrap: late });
+    const handle = await chainedApproval(base, a);
+    base.shop.faults.completeDelayMs = 800;
+    const inFlight = status(a, handle);
+    for (let i = 0; i < 400 && completeSends(await chainOf(base)).length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(completeSends(await chainOf(base))).toHaveLength(1);
+    const seenByB = status(b, handle);
+    expect(completionOf(await inFlight).state).toBe("ordered");
+    release();
+    expect(completionOf(await seenByB).state).toBe("ordered");
+    expect(completionOf(await status(b, handle)).state).toBe("ordered");
+    expect(localOutcomes(await chainOf(base)).map((o) => o.state)).toEqual(["ordered"]);
+    expect(base.shop.completeCount).toBe(1);
+  });
+
   it("attack 4a (race at step 6, Shop idempotency off): B only reads the checkout while A's send is in flight; one attempt, one send", async () => {
     const base = await setup({ faults: { idempotency: false } });
     const a = await proc(base);
