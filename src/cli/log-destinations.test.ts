@@ -168,6 +168,46 @@ describe("intent log: wallet destinations, refusals and wallet entries", () => {
     }
     expect(formatVerbose(items, { style: STYLE })).toContain('params.arguments.refresh_token = "[a credential in clear, not shown: intent verify fails this entry]"');
   });
+
+  it("attack: a token inside a JSON-text value under a plain key is in the chain as sent (ADR-0014) but no view prints it", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "log-nested-")), "data");
+    store = await openStore(dir, { clock: () => TS });
+    const cloud = createDisclosedCloud(unreachableCloud, store, { keySet: () => null });
+    const shop = createDisclosedWallet(shopTransport(() => 200), cloud, { destination: "shop" });
+    const state = JSON.stringify({ step: 2, auth: { sessionToken: REFRESH } });
+    await shop.call("x", rpc("x", { state, list: [JSON.stringify([{ access_token: TOKEN }])], plain: '{"note":"kept"}' }));
+    await store.close();
+    store = null;
+    // The limit, pinned: the core redacts by key, not inside string values, so the chain holds the token as sent.
+    const items = readLog(dir);
+    const sentB64 = (items as { kind: string; body: { body_b64?: string } }[]).find((i) => i.kind === "disclosure")?.body.body_b64 ?? "";
+    expect(Buffer.from(sentB64, "base64").toString("utf8")).toContain(REFRESH);
+    const verbose = formatVerbose(items, { style: STYLE });
+    for (const out of [formatLog(items, { style: STYLE }), verbose, formatJson(items), renderPage(buildModel({ items, now: TS, mode: "real", intent: "intent", policy: null, verify: null, timeZone: "UTC" }))]) {
+      expect(out).not.toContain(REFRESH);
+      expect(out).not.toContain(TOKEN);
+    }
+    expect(verbose).toContain('params.arguments.state = "[JSON text holding a credential, not shown]"');
+    expect(verbose).toContain('params.arguments.list = "[JSON text holding a credential, not shown]"');
+    // JSON text with no secret key prints as sent.
+    expect(verbose).toContain('params.arguments.plain = "{\\"note\\":\\"kept\\"}"');
+  });
+
+  it("attack: a value nested 20 000 levels deep (a hand-edited chain) does not crash any view; it shows as too deep", () => {
+    const depth = 20_000;
+    const deepBody = `{"params":{"arguments":{"q":"lamp","deep":${"[".repeat(depth)}${"]".repeat(depth)},"text":${JSON.stringify(`${"[".repeat(depth)}${"]".repeat(depth)}`)}}}}`;
+    const items = [
+      { seq: 0, prev: "", ts: "2026-10-16T17:26:37.000Z", kind: "disclosure", hash: "", body: { endpoint: "x", destination: "shop", method: "POST", path: "/api/mcp", fields: ["params.arguments.q"], body_b64: Buffer.from(deepBody).toString("base64"), headers: [], content_digest: "sha-256=:x:" } },
+      { seq: 1, prev: "", ts: "2026-10-16T17:26:38.000Z", kind: "response", hash: "", body: { disclosure_seq: 0, status: 200, body_sha256: "0".repeat(64), bytes: 2 } },
+    ];
+    const page = () => renderPage(buildModel({ items, now: TS, mode: "real", intent: "intent", policy: null, verify: null, timeZone: "UTC" }));
+    for (const view of [() => formatLog(items, { style: STYLE }), () => formatVerbose(items, { style: STYLE }), () => formatJson(items), page]) {
+      expect(view).not.toThrow();
+    }
+    const verbose = formatVerbose(items, { style: STYLE });
+    expect(verbose).toContain('params.arguments.q = "lamp"');
+    expect(verbose).toContain("[nested too deep, not shown]");
+  });
 });
 
 describe("intent log: form bodies and the block's rule", () => {

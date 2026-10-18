@@ -316,6 +316,7 @@ const IDENTITY_WORDS: Readonly<Record<string, string>> = {
   phone: "a phone number",
   street_address: "a street address",
   banned_key: "an identity field",
+  too_deep: "a value nested too deep to check",
 };
 
 /** `categories.block at category` → `category excluded by your gateway policy`; `email at $.note` → `an email address in note`. */

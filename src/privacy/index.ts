@@ -36,22 +36,27 @@ export {
   bodyValue,
   FORM_CONTENT_TYPE,
   formatPath,
+  holdsNestedSecret,
   isFormBody,
   isCredentialHeader,
   isSecretKey,
   markerDigest,
+  nestedSecrets,
   parsePath,
   type PathSegment,
   redactionHeld,
   redactionMarker,
+  SCAN_DEPTH,
   SECRET_KEYS,
   secretDigest,
   secretQueryKeys,
   unredactedSecrets,
   valueAt,
 } from "./credentials.ts";
+import { SCAN_DEPTH } from "./credentials.ts";
 
-export type FindingKind = "card" | "email" | "phone" | "street_address" | "banned_key";
+/** `too_deep`: a value nested deeper than SCAN_DEPTH, not walked (so it cannot exhaust the stack) and so not cleared. */
+export type FindingKind = "card" | "email" | "phone" | "street_address" | "banned_key" | "too_deep";
 
 export interface Finding {
   /** Where the identity sits, as a JSONPath: `$`, `$.buyer.email`, `$.items[0]`, `$["first name"]`. */
@@ -107,15 +112,17 @@ function isToolCall(value: unknown): boolean {
   return typeof name === "string" && MCP_TOOL_NAME.test(name);
 }
 
-function walk(value: unknown, path: string, out: Finding[]): void {
-  if (typeof value === "string") {
+function walk(value: unknown, path: string, out: Finding[], depth = 0): void {
+  if (depth > SCAN_DEPTH && typeof value === "object" && value !== null) {
+    out.push({ path, kind: "too_deep" });
+  } else if (typeof value === "string") {
     for (const kind of scanText(normalize(value), isUuid(value))) out.push({ path, kind });
   } else if (typeof value === "bigint" || (typeof value === "number" && Number.isInteger(value))) {
     if (isCardDigits(value.toString())) out.push({ path, kind: "card" });
   } else if (Array.isArray(value)) {
     const items: unknown[] = value;
     items.forEach((item, i) => {
-      walk(item, `${path}[${String(i)}]`, out);
+      walk(item, `${path}[${String(i)}]`, out, depth + 1);
     });
     if (hasSplitCard(items)) out.push({ path, kind: "card" });
   } else if (typeof value === "object" && value !== null) {
@@ -125,7 +132,7 @@ function walk(value: unknown, path: string, out: Finding[]): void {
       const normalKey = normalize(key);
       if (isBannedKey(normalKey)) out.push({ path: keyPath, kind: "banned_key" });
       for (const kind of scanText(normalKey, isUuid(key))) out.push({ path: keyPath, kind });
-      walk(item, keyPath, out);
+      walk(item, keyPath, out, depth + 1);
     }
     if (hasSplitCard(entries.map(([, item]) => item))) out.push({ path, kind: "card" });
   }
