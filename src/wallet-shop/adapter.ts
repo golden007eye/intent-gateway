@@ -76,8 +76,12 @@ export function shopCredentialsText(credentials: ShopCredentials): string {
   return JSON.stringify({ v: 1, client_id: credentials.clientId, access_token: credentials.accessToken, refresh_token: credentials.refreshToken, ...expires });
 }
 
-/** Shop credentials from the vault text, or null when it holds none the adapter can use. */
-export function parseShopCredentials(text: string): ShopCredentials | null {
+/**
+ * Shop credentials from the vault text, or null when it holds none the adapter can use. The client id is the one the
+ * wallet was linked with, kept in the vault; `fallbackClientId` stands in only for a vault written before the client
+ * id was kept there (no `client_id`), and is then written into the vault at the next refresh.
+ */
+export function parseShopCredentials(text: string, fallbackClientId?: string): ShopCredentials | null {
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -85,10 +89,14 @@ export function parseShopCredentials(text: string): ShopCredentials | null {
     return null;
   }
   const v = record(value);
-  if (v?.v !== 1 || typeof v.client_id !== "string" || v.client_id === "" || typeof v.access_token !== "string" || v.access_token === "") return null;
+  if (v?.v !== 1 || typeof v.access_token !== "string" || v.access_token === "") return null;
+  const stored = typeof v.client_id === "string" && v.client_id !== "" ? v.client_id : null;
+  // A client_id that is there but not a usable string is a damaged vault, not an older one: no fallback.
+  const clientId = stored ?? (v.client_id === undefined ? (fallbackClientId ?? null) : null);
+  if (clientId === null) return null;
   const refresh = typeof v.refresh_token === "string" && v.refresh_token !== "" ? v.refresh_token : null;
   const expiresAt = Number.isSafeInteger(v.expires_at) && (v.expires_at as number) > 0 ? (v.expires_at as number) : null;
-  return { clientId: v.client_id, accessToken: v.access_token, refreshToken: refresh, expiresAt };
+  return { clientId, accessToken: v.access_token, refreshToken: refresh, expiresAt };
 }
 
 /**

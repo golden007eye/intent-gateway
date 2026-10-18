@@ -9,6 +9,7 @@ import {
   createShopAdapter,
   createShopMcpTransport,
   DEFAULT_SHOP_AUTH_URL,
+  DEFAULT_SHOP_CLIENT_ID,
   DEFAULT_SHOP_MCP_URL,
   type DeviceGrantPrompt,
   parseShopCredentials,
@@ -28,6 +29,11 @@ export interface ShopConnection {
   readonly authUrl: string | null;
   /** The wallet vault's text for `shop`. When it holds no usable tokens, every call fails and revoke sends nothing. */
   readonly vaultText: string;
+  /**
+   * INTENT_SHOP_CLIENT_ID, or null. Used only for a vault from before the link's client id was kept in it; the gateway's
+   * own client (DEFAULT_SHOP_CLIENT_ID) when it is null too. A vault that names its client always uses that one.
+   */
+  readonly clientId?: string | null;
   readonly timeoutMs?: number;
   /** Makes each create_checkout idempotency key (a UUID v4); random by default, fixed by tests. */
   readonly newKey?: () => string;
@@ -44,7 +50,7 @@ export interface ShopConnection {
 
 /** The Shop wallet adapter, every send of it logged first by the disclosure core of `owner`. */
 export function connectShop(owner: DisclosedCloud | WalletSession, connection: ShopConnection): WalletAdapter {
-  let credentials = parseShopCredentials(connection.vaultText);
+  let credentials = parseShopCredentials(connection.vaultText, connection.clientId ?? DEFAULT_SHOP_CLIENT_ID);
   const timing = connection.timeoutMs === undefined ? {} : { timeoutMs: connection.timeoutMs };
   const mcp = createDisclosedWallet(
     createShopMcpTransport({
@@ -79,13 +85,18 @@ function accountsOf(owner: DisclosedCloud | WalletSession, connection: Pick<Shop
   });
 }
 
+/** The client id the wallet in `vaultText` was linked with, or null when the vault names none (an older vault). */
+export function linkedShopClientId(vaultText: string): string | null {
+  return parseShopCredentials(vaultText)?.clientId ?? null;
+}
+
 export interface ShopLink {
   /** INTENT_SHOP_MCP_URL; null for Shop's own. Its origin is the resource the tokens are asked for. */
   readonly mcpUrl: string | null;
   /** INTENT_SHOP_AUTH_URL; null for Shop's own. */
   readonly authUrl: string | null;
-  /** The gateway's registered Shop client (INTENT_SHOP_CLIENT_ID). */
-  readonly clientId: string;
+  /** INTENT_SHOP_CLIENT_ID; null for the gateway's own client (DEFAULT_SHOP_CLIENT_ID). */
+  readonly clientId: string | null;
   readonly show: (prompt: DeviceGrantPrompt) => void;
   readonly sleep: (ms: number) => Promise<void>;
   readonly now: () => number;
@@ -106,6 +117,6 @@ export interface LinkedShopVault {
  */
 export async function linkShop(owner: DisclosedCloud | WalletSession, link: ShopLink): Promise<LinkedShopVault> {
   const resource = new URL(link.mcpUrl ?? DEFAULT_SHOP_MCP_URL).origin;
-  const linked = await runDeviceFlow(accountsOf(owner, link), { clientId: link.clientId, resource, show: link.show, sleep: link.sleep, now: link.now });
+  const linked = await runDeviceFlow(accountsOf(owner, link), { clientId: link.clientId ?? DEFAULT_SHOP_CLIENT_ID, resource, show: link.show, sleep: link.sleep, now: link.now });
   return { vaultText: shopCredentialsText(linked.credentials), refreshIssued: linked.credentials.refreshToken !== null, expiresInS: linked.expiresInS };
 }

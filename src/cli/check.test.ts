@@ -156,16 +156,6 @@ describe("intent wallet check shop", () => {
     expect(log.out).toContain("Shop search_orders");
   });
 
-  it("no Shop client set: a clear message, exit 1, nothing sent and nothing chained", async () => {
-    const s = await setup();
-    const env = Object.fromEntries(Object.entries(s.env).filter(([name]) => name !== "INTENT_SHOP_CLIENT_ID"));
-    const r = await s.run(["wallet", "check", "shop"], env);
-    expect(r.code).toBe(1);
-    expect(r.err).toContain("no registered Shop client is set (INTENT_SHOP_CLIENT_ID); nothing was sent to Shop");
-    expect(s.fake.calls).toEqual([]);
-    expect(s.entries()).toEqual([]);
-  });
-
   it("no wallet linked: a clear message naming the link command, exit 1, nothing sent and nothing chained", async () => {
     const s = await setup({ link: false });
     const r = await s.run(["wallet", "check", "shop"]);

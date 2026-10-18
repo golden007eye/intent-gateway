@@ -1,19 +1,22 @@
-// `intent wallet link shop` and `intent init` (plan G8, AC-G11), against the fake Shop. With no Shop client set,
-// nothing is sent. A link puts the tokens in the vault and chains `wallet {rail, action: "linked", revoked: false}`.
+// `intent wallet link shop` and `intent init` (plan G8, AC-G11), against the fake Shop. Without INTENT_SHOP_CLIENT_ID
+// the gateway signs in as its own client file; with it, as that client; a refused client is never swapped for another. A link puts the tokens in the vault and chains `wallet {rail, action: "linked", revoked: false}`.
 // Attack: the device code and the tokens are in none of stdout, stderr and audit.jsonl; the user code and the page
 // to approve on are on stdout only. init's Shop step never blocks setup: no terminal, --yes, "no" and no client each
 // skip it with a line saying so.
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { readChain } from "../store/index.ts";
-import { loadSecret, vaultPath, WalletKey } from "../wallet/index.ts";
+import { loadConfig } from "../config/index.ts";
+import { DEFAULT_SHOP_CLIENT_ID, type DisclosedCloud, openWalletSession } from "../disclosure/index.ts";
+import { openStore, readChain } from "../store/index.ts";
+import { loadSecret, saveSecret, vaultPath, WalletKey } from "../wallet/index.ts";
 import { FAKE_BUYER, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
 import { hostConnect } from "./connect.ts";
 import { type Io, main } from "./index.ts";
+import { oneTapFor } from "./wallet.ts";
 
 interface Result {
   code: number;
@@ -35,8 +38,8 @@ afterEach(async () => {
   shop = undefined;
 });
 
-async function setup(faults: FakeShopFaults = {}): Promise<Setup> {
-  const fake = await startFakeShop({ faults });
+async function setup(faults: FakeShopFaults = {}, clientId?: string): Promise<Setup> {
+  const fake = await startFakeShop({ faults, ...(clientId === undefined ? {} : { clientId }) });
   shop = fake;
   const root = mkdtempSync(join(tmpdir(), "wallet-link-"));
   const dir = join(root, "data");
@@ -205,18 +208,50 @@ describe("intent wallet link shop", () => {
     expect((await s.run(["wallet", "status"])).out).toContain("Shop wallet: linked");
   });
 
-  it("no Shop client set: unavailable, exit 1, nothing sent to Shop and nothing chained", async () => {
+  it("without INTENT_SHOP_CLIENT_ID: signs in as the gateway's own client file, logged before it is sent", async () => {
+    const s = await setup({}, DEFAULT_SHOP_CLIENT_ID);
+    expect(DEFAULT_SHOP_CLIENT_ID).toBe("https://gateway.intentai.shop/shop-client.json");
+    const r = await s.run(["wallet", "link", "shop"], { env: without(s.env, "INTENT_SHOP_CLIENT_ID") });
+    expect(r.code, r.err).toBe(0);
+    expect(s.shop.oauthRequests.length).toBeGreaterThan(1);
+    for (const request of s.shop.oauthRequests) expect(request.form.client_id).toBe(DEFAULT_SHOP_CLIENT_ID);
+    expect(s.shop.oauthRequests[0]?.form.scope).toBe("openid personal_agent");
+    // The chain logged the client id before the device request left (invariant 2).
+    const device = bodies(s.dir).find((b) => b.endpoint === "device_authorization");
+    expect(new URLSearchParams(Buffer.from(String(device?.body_b64), "base64").toString("utf8")).get("client_id")).toBe(DEFAULT_SHOP_CLIENT_ID);
+    const vault = await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"));
+    expect(JSON.parse(vault ?? "{}")).toMatchObject({ client_id: DEFAULT_SHOP_CLIENT_ID });
+    expectNoSecrets(s, r);
+  });
+
+  it("an explicit INTENT_SHOP_CLIENT_ID replaces the gateway's own client in every request", async () => {
     const s = await setup();
-    const env = without(s.env, "INTENT_SHOP_CLIENT_ID");
-    const r = await s.run(["wallet", "link", "shop"], { env });
+    expect(s.env.INTENT_SHOP_CLIENT_ID).not.toBe(DEFAULT_SHOP_CLIENT_ID);
+    const r = await s.run(["wallet", "link", "shop"]);
+    expect(r.code, r.err).toBe(0);
+    for (const request of s.shop.oauthRequests) expect(request.form.client_id).toBe(s.shop.clientId);
+    expect(readFileSync(join(s.dir, "audit.jsonl"), "utf8")).not.toContain(DEFAULT_SHOP_CLIENT_ID);
+  });
+
+  it("Shop refuses the gateway's own client (invalid_client): one line naming the opt-in, no other client tried", async () => {
+    const s = await setup();
+    const r = await s.run(["wallet", "link", "shop"], { env: without(s.env, "INTENT_SHOP_CLIENT_ID") });
     expect(r.code).toBe(1);
     expect(r.err).toBe(
-      "intent: Shop one-tap is unavailable until a registered Shop client is set (INTENT_SHOP_CLIENT_ID); nothing was sent to Shop, and purchases are handed off to the merchant's checkout\n",
+      `intent: Shop wallet not linked: Shop does not accept the gateway's own client ${DEFAULT_SHOP_CLIENT_ID} (invalid_client), and no other client was tried; to sign in as another client (such as Shop's public client, for your own agent), set INTENT_SHOP_CLIENT_ID explicitly\n`,
     );
-    expect(s.shop.oauthRequests).toEqual([]);
-    expect(s.shop.calls).toEqual([]);
-    expect(existsSync(join(s.dir, "audit.jsonl"))).toBe(false);
+    // One device request, as the gateway's own client; no second client, no token poll.
+    expect(s.shop.oauthRequests.map((q) => [q.path, q.form.client_id])).toEqual([["/oauth/device", DEFAULT_SHOP_CLIENT_ID]]);
     expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
+    expect(kinds(s.dir)).not.toContain("wallet");
+  });
+
+  it("Shop refuses an explicit INTENT_SHOP_CLIENT_ID (invalid_client): says to check it, and tries no other client", async () => {
+    const s = await setup();
+    const r = await s.run(["wallet", "link", "shop"], { env: { ...s.env, INTENT_SHOP_CLIENT_ID: "someone-elses-client" } });
+    expect(r.code).toBe(1);
+    expect(r.err).toBe("intent: Shop wallet not linked: Shop does not accept the client INTENT_SHOP_CLIENT_ID names (invalid_client); check its value\n");
+    expect(s.shop.oauthRequests.map((q) => q.form.client_id)).toEqual(["someone-elses-client"]);
   });
 
   it.runIf(process.platform === "linux")("no safe place for the wallet key (as in the Docker image without a key secret): exit 1 before anything is sent", async () => {
@@ -264,7 +299,110 @@ describe("intent wallet link shop", () => {
   });
 });
 
+describe("a linked wallet keeps the client it was linked with", () => {
+  /** The token requests sent after `from`, as [grant_type, client_id]. */
+  const grants = (shop: FakeShop, from: number) => shop.oauthRequests.slice(from).map((q) => [q.form.grant_type, q.form.client_id]);
+
+  it("linked with INTENT_SHOP_CLIENT_ID, then run without it: status refreshes and unlink revokes as the linked client", async () => {
+    const s = await setup();
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    s.shop.expireAccessTokens();
+    const before = s.shop.oauthRequests.length;
+    const env = without(s.env, "INTENT_SHOP_CLIENT_ID");
+    const status = await s.run(["wallet", "status"], { env });
+    expect(status.err).toBe("");
+    expect(status.out).toContain("Shop budget left for the gateway: 50.00 USD");
+    expect(grants(s.shop, before)).toEqual([["refresh_token", s.shop.clientId]]);
+    expect(s.shop.oauthRequests.slice(before).map((q) => q.form.client_id)).not.toContain(DEFAULT_SHOP_CLIENT_ID);
+    const unlink = await s.run(["wallet", "unlink", "shop"], { env });
+    expect(unlink.code).toBe(0);
+    expect(s.shop.revocations.map((r) => r.clientId)).toEqual([s.shop.clientId, s.shop.clientId]);
+  });
+
+  it("serve's one tap, started without INTENT_SHOP_CLIENT_ID (as claude mcp add does), refreshes as the linked client", async () => {
+    const s = await setup();
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    s.shop.expireAccessTokens();
+    const before = s.shop.oauthRequests.length;
+    const env = without(s.env, "INTENT_SHOP_CLIENT_ID");
+    const err: string[] = [];
+    const io: Io = { env, stdin: new PassThrough(), stdout: { write: () => true }, stderr: { write: (t: string) => err.push(t) }, isTTY: { stdin: false, stdout: false } };
+    const oneTap = await oneTapFor(io, loadConfig(env, [], { requireTrust: false }), s.dir);
+    expect(oneTap).not.toBeNull();
+    const store = await openStore(s.dir);
+    try {
+      const wallet = oneTap?.connect(openWalletSession(store) as unknown as DisclosedCloud);
+      expect((await wallet?.account())?.connected).toBe(true);
+    } finally {
+      await store.close();
+    }
+    expect(grants(s.shop, before)).toEqual([["refresh_token", s.shop.clientId]]);
+    expect(err.join("")).toBe("");
+  });
+
+  it("INTENT_SHOP_CLIENT_ID set later to another client: one warning line, and the linked client is still used", async () => {
+    const s = await setup();
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    s.shop.expireAccessTokens();
+    const before = s.shop.oauthRequests.length;
+    const status = await s.run(["wallet", "status"], { env: { ...s.env, INTENT_SHOP_CLIENT_ID: "another-client" } });
+    expect(status.err).toBe(
+      `intent: warning: this Shop wallet was linked as the client ${s.shop.clientId}, so INTENT_SHOP_CLIENT_ID (another-client) is not used for it; run intent wallet link shop to link it as that client\n`,
+    );
+    expect(status.out).toContain("Shop budget left for the gateway: 50.00 USD");
+    expect(grants(s.shop, before)).toEqual([["refresh_token", s.shop.clientId]]);
+  });
+
+  it("an older vault with no client_id: the env client when set, else the gateway's own; the next refresh records it", async () => {
+    const older = async (clientId: string | undefined, env: (s: Setup) => Record<string, string>) => {
+      const s = await setup({}, clientId);
+      await saveSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"), JSON.stringify({ v: 1, access_token: s.shop.accessToken, refresh_token: s.shop.refreshToken }));
+      s.shop.expireAccessTokens();
+      const status = await s.run(["wallet", "status"], { env: env(s) });
+      expect(status.err).toBe("");
+      expect(status.out).toContain("Shop budget left for the gateway: 50.00 USD");
+      expect(grants(s.shop, 0)).toEqual([["refresh_token", s.shop.clientId]]);
+      const vault = JSON.parse((await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"))) ?? "{}") as { client_id?: string };
+      expect(vault.client_id).toBe(s.shop.clientId);
+      return s;
+    };
+    expect((await older(undefined, (s) => s.env)).shop.clientId).toBe("fake-shop-client");
+    await shop?.close();
+    expect((await older(DEFAULT_SHOP_CLIENT_ID, (s) => without(s.env, "INTENT_SHOP_CLIENT_ID"))).shop.clientId).toBe(DEFAULT_SHOP_CLIENT_ID);
+  });
+});
+
 describe("intent init", () => {
+  it("makes the account key once (mode 0600), keeps it on every later run, and prints only its path and thumbprint", async () => {
+    const s = await setup();
+    const file = join(s.dir, "account-key.json");
+    const first = await s.run(["init"]);
+    expect(first.code, first.out + first.err).toBe(0);
+    expect(first.out).toMatch(new RegExp(`^ok +account key: made ${file.replaceAll(".", "\\.")} \\(thumbprint [A-Za-z0-9_-]{43}\\)$`, "m"));
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    const bytes = readFileSync(file, "utf8");
+    const { d, x } = JSON.parse(bytes) as { d: string; x: string };
+    const second = await s.run(["init"]);
+    expect(second.code).toBe(0);
+    expect(second.out).toContain(`account key: kept ${file} (thumbprint `);
+    expect(readFileSync(file, "utf8")).toBe(bytes);
+    // The private half is never printed or chained; the public half is not printed either (only its thumbprint).
+    const audit = existsSync(join(s.dir, "audit.jsonl")) ? readFileSync(join(s.dir, "audit.jsonl"), "utf8") : "";
+    for (const text of [first.out, first.err, second.out, second.err, audit]) expect(text).not.toContain(d);
+    expect(first.out + second.out).not.toContain(x);
+  });
+
+  it("attack: an account key file that is not one fails init and is never replaced", async () => {
+    const s = await setup();
+    await s.run(["init"]);
+    const file = join(s.dir, "account-key.json");
+    writeFileSync(file, "{}");
+    const r = await s.run(["init"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/^FAIL +account key: .+account-key\.json is not an account key .+; it was left as it is/m);
+    expect(readFileSync(file, "utf8")).toBe("{}");
+  });
+
   it("no terminal (Docker, a pipe): checks, names the policy, skips Shop without asking, prints the connect line; exit 0", async () => {
     const s = await setup();
     const r = await s.run(["init"]);
@@ -335,14 +473,13 @@ describe("intent init", () => {
     expect(existsSync(vaultPath(s.dir, "shop"))).toBe(false);
   });
 
-  it("no Shop client set: no prompt even at a terminal, and nothing sent", async () => {
-    const s = await setup();
-    const env = without(s.env, "INTENT_SHOP_CLIENT_ID");
-    const r = await s.run(["init"], { env, tty: true, input: "y\n" });
-    expect(r.code).toBe(0);
-    expect(r.out).toContain("Shop one-tap: unavailable until a registered Shop client is set (INTENT_SHOP_CLIENT_ID)");
-    expect(r.out).not.toContain("[y/N]");
-    expect(s.shop.oauthRequests).toEqual([]);
+  it("without INTENT_SHOP_CLIENT_ID: offers Shop at a terminal and links as the gateway's own client", async () => {
+    const s = await setup({}, DEFAULT_SHOP_CLIENT_ID);
+    const r = await s.run(["init"], { env: without(s.env, "INTENT_SHOP_CLIENT_ID"), tty: true, input: "y\n" });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("[y/N]");
+    expect(r.out).toContain("Shop wallet linked");
+    expect(s.shop.oauthRequests[0]?.form.client_id).toBe(DEFAULT_SHOP_CLIENT_ID);
   });
 
   it("demo mode: Shop is not offered, and the connect line runs the demo", async () => {
