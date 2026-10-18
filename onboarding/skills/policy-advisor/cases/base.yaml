@@ -1,0 +1,7 @@
+# Cases every policy the advisor writes must pass: a search still leaves, and a small hand-off cart is sent.
+- name: a search with a 5-digit ZIP is sent
+  outbound: {kind: search, category: home, ship_to_zip: "94110"}
+  expect: {send: true}
+- name: a $15 hand-off cart is sent
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 15, quantity: 1}, completion_mode: handoff}
+  expect: {send: true}

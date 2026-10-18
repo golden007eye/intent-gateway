@@ -1,0 +1,4 @@
+# Run after `intent policy add handoff-only`.
+- name: a one-tap cart is refused
+  outbound: {kind: cart, offer: {merchant: shop.example, category: home, price_usd: 15, quantity: 1}, completion_mode: one_tap}
+  expect: {send: false, blocked: [completion]}

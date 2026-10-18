@@ -23,14 +23,15 @@ import { printable, printableLines } from "../ui/index.ts";
 
 type Options = NonNullable<ParseArgsConfig["options"]>;
 
-const COMMON: Options = {
+/** The options every command takes. Exported so tests can check the commands docs and onboarding files name. */
+export const COMMON: Options = {
   demo: { type: "boolean" },
   "trust-keys": { type: "string" },
   help: { type: "boolean", short: "h" },
 };
 
 /** The options each command takes, beyond COMMON. The key is the command words joined by a space. */
-const COMMANDS: Readonly<Record<string, Options>> = {
+export const COMMANDS: Readonly<Record<string, Options>> = {
   serve: { http: { type: "boolean" } },
   demo: { http: { type: "boolean" } },
   log: {
