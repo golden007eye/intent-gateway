@@ -1,0 +1,14 @@
+# gitleaks: the default rules, plus one allowlist. The four contract 1.7.0 vectors below are Intent Cloud's published
+# test vectors (each says "TEST KEY ONLY"), vendored byte for byte and pinned by contract/SHA256SUMS: their account key
+# thumbprints and pause signatures match the generic-api-key rule. Only these files, by exact path.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "published contract 1.7.0 test vectors (TEST KEY ONLY), pinned by contract/SHA256SUMS"
+paths = [
+  '''^contract/vectors/a4-snapshot-v4\.json$''',
+  '''^contract/vectors/e3-snapshot-v4-request\.json$''',
+  '''^contract/vectors/h2-pause\.json$''',
+  '''^contract/vectors/o6-binding-v2\.json$''',
+]
