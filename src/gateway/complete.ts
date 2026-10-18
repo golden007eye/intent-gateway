@@ -165,8 +165,17 @@ function createState(entries: readonly { readonly kind: string; readonly body: u
   return waiting ? "in_flight" : "reached";
 }
 
-const localOutcomes = (entries: readonly ChainEntry[], handle: string): LocalOutcomeEntry[] =>
-  outcomesFor(entries, handle).filter((o): o is LocalOutcomeEntry => o.basis === "local");
+/**
+ * The purchase's local outcomes, up to and including its first terminal one: a terminal outcome is final, so anything
+ * chained after it (a chain written before local() refused to) never changes where the purchase stands.
+ */
+function localOutcomes(entries: readonly ChainEntry[], handle: string): LocalOutcomeEntry[] {
+  const all = outcomesFor(entries, handle).filter((o): o is LocalOutcomeEntry => o.basis === "local");
+  const end = all.findIndex((o) => TERMINAL.has(o.state));
+  return end === -1 ? all : all.slice(0, end + 1);
+}
+
+const settledIn = (entries: readonly ChainEntry[], handle: string): boolean => localOutcomes(entries, handle).some((o) => TERMINAL.has(o.state));
 
 /** One logged outcome report of this purchase: its body as sent, and the answer its receipt verified (null: none yet). */
 interface LoggedReport {
@@ -278,7 +287,11 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
   /** The wallet's store for the approved merchant origin (Shop: its myshopify domain), or null when none is known. */
   const pairedStore = ctx.storeFor(snapshot.merchant_origin);
 
-  /** Chains a local outcome (once per state in a row), optionally only unless `conflict` holds. */
+  /**
+   * Chains a local outcome (once per state in a row), never once the purchase is settled (a terminal outcome, maybe
+   * chained by another process since this one read Shop: its read may be older than that verdict), and optionally only
+   * unless `conflict` holds. Both are compare-and-append under the store lease. False when it was not chained.
+   */
   async function local(
     body: Omit<LocalOutcomeEntry, "handle" | "basis" | "state_shown">,
     conflict?: (entries: readonly Entry[]) => boolean,
@@ -287,8 +300,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     if (latest?.state === body.state) return true;
     const entry = { handle, basis: "local", ...body, state_shown: body.state };
     try {
-      if (conflict === undefined) await store.append("outcome", entry);
-      else await store.appendUnless("outcome", entry, conflict);
+      await store.appendUnless("outcome", entry, (chain) => settledIn(chain, handle) || conflict?.(chain) === true);
       return true;
     } catch (error) {
       if (error instanceof StoreConflictError) return false;
