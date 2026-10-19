@@ -106,8 +106,9 @@ This step is required: never skip it, also when the developer says they already 
 > <the code>
 
 2. Right away, run `intent wallet link shop --finish`, with a long timeout (10 minutes): it waits for the approval. If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1. If Shop denied the link, ask the developer whether to try again. If the developer has no Shop account, they create one from that link or in the Shop app, and add a payment card in Shop.
-3. Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page, where the developer pays by hand. Once the link is approved, `--finish` prints one of three outcomes:
+3. Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page, where the developer pays by hand. Once the link is approved, `--finish` prints one of four outcomes:
    - `Agent payments on: …` (they are already on): skip the block below and go to the note in 4.
+   - Agent payments are on and the limit is high enough, but this period's amount is spent: one line that starts `Agent payments are on, but only $<left> is left until Shop renews it` and ends `so wait for that renewal rather than raising it.` There is nothing to raise: say that line as a one-line status, not a **Your turn** block, and add in one line that until Shop renews it, purchases are handed off to Shop's checkout page. Then skip 4 and go to step 6. `intent wallet status` and `intent wallet status --wait-budget` can print the same line; say it the same way.
    - Agent payments are off: a Shop page, then `Tap …, turn on Allow agent to pay for me, enter $<amount>.`, with the amount the gateway sets from the policy.
    - Agent payments are on but too little is left for one purchase: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`
 
@@ -179,7 +180,7 @@ Then add, in one line, that turning off agent payments in Shop is that hard stop
 >
 > <the approval link, as a clickable link>
 
-5. Right away, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. Any other result is final: relay what it says, in one line, and no more. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that.
+5. Right away, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result's own advice, such as "Check the order in the Shop app", in one line. Any other result is final: relay what it says, in one line, and no more. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that.
 
 ## Step 9: read the log together
 
@@ -196,4 +197,4 @@ Setup is done. To change the limits later, the developer runs the policy-advisor
 >
 > `intent log` shows what the gateway sent.
 >
-> `intent pause` stops every intent purchase not yet approved or paid.
+> `intent pause` stops every purchase that goes through intent and isn't paid yet.

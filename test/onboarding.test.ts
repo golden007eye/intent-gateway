@@ -426,6 +426,12 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const step8 = prompt.slice(prompt.indexOf("## Step 8"), prompt.indexOf("## Step 9"));
     expect(step8).toContain("Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again.");
     expect(step8).toContain("Any other result is final: relay what it says, in one line, and no more.");
+    // The poll is capped: an indeterminate one-tap keeps saying "call again", so after about 3 minutes the agent stops
+    // and relays the result's own advice, which the gateway writes.
+    expect(step8).toContain(
+      'If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result\'s own advice, such as "Check the order in the Shop app", in one line.',
+    );
+    expect(read("src/gateway/gateway.ts")).toContain("Check the order in the Shop app if it does not resolve.");
     expect(step8).toContain("Never offer a link or a next step the result does not give; if it says to create a new cart, offer that.");
     // Attack: one-tap states are not the only final ones (a hand-off is `approved`; rejected, expired, flagged end too).
     expect(step8).not.toMatch(/until the purchase is settled|`ordered`, `failed` or `mismatch`/);
@@ -441,7 +447,12 @@ describe("onboarding prompt and policy-advisor skill", () => {
   it("ends with one card from the text the tools return: ordered only when the result says so, then intent log and intent pause", () => {
     const prompt = read(PROMPT);
     const end = prompt.slice(prompt.indexOf("Setup is done."));
-    expect(end).toMatch(/> \*\*Done:\*\* <outcome>, from <store>, total <total>\n>\n> `intent log` shows what the gateway sent\.\n>\n> `intent pause` stops every intent purchase not yet approved or paid\.\n$/);
+    expect(end).toMatch(/> \*\*Done:\*\* <outcome>, from <store>, total <total>\n>\n> `intent log` shows what the gateway sent\.\n>\n> `intent pause` stops every purchase that goes through intent and isn't paid yet\.\n$/);
+    // The Pause line is ADR-0023's honest line, as `intent pause` prints it (its first sentence), word for word.
+    const honest = /export const HONEST_LINE = "([^"]*)"/.exec(read("src/cli/pause.ts"))?.[1] ?? "";
+    expect(honest.startsWith("`intent pause` stops every purchase that goes through intent and isn't paid yet. ")).toBe(true);
+    expect(end).toContain(`> ${honest.slice(0, honest.indexOf(". ") + 1)}\n`);
+    expect(end).not.toContain("not yet approved");
     // Invariant 5: ordered (and an order number) only from the result; a hand-off is a hand-off; anything else is not completed.
     expect(end).toContain("`ordered`, with `order <number>` only when the `get_approval_status` result names one (`One-tap: ordered …, order <number>`, or \"placed the order (order <number>)\")");
     expect(end).toContain("\"handed off to Shop's checkout\" when the result says the buyer pays at the checkout or was handed off");
@@ -477,6 +488,13 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(step5).toContain("- Agent payments are on but too little is left for one purchase: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`");
     expect(wallet).toContain("`Agent payments are on, but only ${dollars(account.budgetRemaining?.amountMinor ?? 0)} is left; raise it to ${dollars(advice.maxMinor)}.`");
     expect(step5).toContain("`intent wallet status --wait-budget` can print the same low lines when it starts; show them the same way");
+    // 4. On, limit already high enough, budget spent this period: nothing to raise, so a status line, not a Your turn block.
+    expect(step5).toContain(
+      "- Agent payments are on and the limit is high enough, but this period's amount is spent: one line that starts `Agent payments are on, but only $<left> is left until Shop renews it` and ends `so wait for that renewal rather than raising it.`",
+    );
+    expect(step5).toContain("say that line as a one-line status, not a **Your turn** block, and add in one line that until Shop renews it, purchases are handed off to Shop's checkout page. Then skip 4 and go to step 6.");
+    expect(wallet).toContain("`Agent payments are on, but only ${dollars(account.budgetRemaining?.amountMinor ?? 0)} is left ${until}; the limit is already at least the suggested ${dollars(advice.maxMinor)}, so wait for that renewal rather than raising it.`");
+    expect(wallet).toContain("return `until Shop renews it at ${limit.renewsAt}`;");
     expect(step5).toContain("For the last two, show the last two lines `--finish` printed, word for word, and nothing else");
     // --wait-budget: success, too high, timeout.
     expect(step5).toContain("When it prints `Agent payments on: …`, say that line");
