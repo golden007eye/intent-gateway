@@ -50,7 +50,13 @@ Tap intent, turn on Allow agent to pay for me, enter $160.
 
 The page is the one Shop's answer names, printed only when it is an https page on shop.app (S1's `https://shop.app/account/connections` when Shop names none); a page anywhere else is not printed, only the second line. The connection is "Personal Agent" when the wallet was linked as Shop's public client, and "intent" otherwise. The amount is 4 × your policy's weekly cap, at most $400 (4 × the $100 weekly ceiling, also used when the policy sets no weekly cap): $160 with `weekly-40`.
 
-`intent wallet status --wait-budget` then reads the account through the log every 5 seconds (longer after errors, up to a minute), for 10 minutes or `--timeout <s>`, until Shop shows an agent budget with a limit. It prints `Agent payments on: <limit> <period>, <amount> left` with the period as Shop names it, and exits 0. Above 4 × your policy's weekly cap (or of the $100 weekly ceiling, whichever is lower), it adds a warning line: the Shop budget is the only hard stop. It stops at once, exit 1, when Shop says the connection is gone or refuses the token, and on timeout prints one line saying what to turn on.
+Agent payments that are on but have less left than one purchase may cost (your policy's per-order cap, or the $50 per-order ceiling when lower or unset) would quietly hand every purchase off. So `--finish`, `intent wallet status` and `--wait-budget` print the low case instead, in two lines, the page as above and then:
+
+```console
+Agent payments are on, but only $6.02 is left; raise it to $160.
+```
+
+`intent wallet status --wait-budget` then reads the account through the log every 5 seconds (longer after errors, up to a minute), for 10 minutes or `--timeout <s>`, until Shop shows an agent budget with a limit and at least the per-order cap left. It prints `Agent payments on: <limit> <period>, <amount> left` with the period as Shop names it, and exits 0. While the amount is low it prints the low lines once and keeps reading. A budget in another currency than US dollars is not compared with the policy's limits: the success line comes with one note saying so. Above 4 × your policy's weekly cap (or of the $100 weekly ceiling, whichever is lower), it adds a warning line: the Shop budget is the only hard stop. It stops at once, exit 1, when Shop says the connection is gone or refuses the token. On timeout it prints one line saying what to turn on or raise, naming the page and the connection as the next step does.
 
 `intent init` makes the gateway's account key once, `<data dir>/account-key.json` ([ADR-0022](adr/0022-account-key.md)). There is one per developer: every submitted checkout carries its public half, and your first passkey approval pins it to you. To replace it today, move `account-key.json` aside and run `intent init` again.
 

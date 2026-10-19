@@ -370,6 +370,84 @@ describe("the next step after --finish: turn on agent payments", () => {
   });
 });
 
+describe("agent payments on, but too little left for one purchase", () => {
+  const DEFAULTS = "version: 1\napproval: passkey\nspend:\n  per_order_usd: 20\n  per_week_usd: 40\n";
+  /** S1's account: $15 a month, $8.98 spent. */
+  const S1_LOW = { budgetLimitMinor: 1500, budgetMinor: 602 };
+  const LOW_LINES = "https://shop.app/account/connections\nAgent payments are on, but only $6.02 is left; raise it to $160.\n";
+
+  async function withPolicy(faults: FakeShopFaults, policy?: string): Promise<Setup> {
+    const s = await setup(faults);
+    if (policy !== undefined) {
+      mkdirSync(s.dir, { recursive: true, mode: 0o700 });
+      writeFileSync(join(s.dir, "policy.yaml"), policy);
+    }
+    return s;
+  }
+
+  it("--finish: the low lines instead of the success line; the step is not skipped", async () => {
+    const s = await withPolicy(S1_LOW, DEFAULTS);
+    await s.run(START);
+    const r = await s.run(FINISH);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain(`Shop budget left for the gateway: 6.02 USD\n${LOW_LINES}`);
+    expect(r.out).not.toContain("Agent payments on:");
+  });
+
+  it("wallet status: the low lines after the budget line", async () => {
+    const s = await withPolicy(S1_LOW, DEFAULTS);
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    const r = await s.run(["wallet", "status"]);
+    expect(r.out).toContain(`Shop budget left for the gateway: 6.02 USD\n${LOW_LINES}`);
+  });
+
+  it("--wait-budget: low lines once, keeps reading, and succeeds once the budget is raised (3rd read)", async () => {
+    const s = await withPolicy(S1_LOW, DEFAULTS);
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    const reads = () => s.shop.calls.filter((c) => c.tool === "get_account").length;
+    const before = reads();
+    const r = await s.run(["wallet", "status", "--wait-budget"], {
+      onSleep: () => {
+        if (reads() - before === 2) {
+          s.shop.faults.budgetLimitMinor = 16_000;
+          s.shop.faults.budgetMinor = 16_000;
+        }
+      },
+    });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toBe(`${LOW_LINES}Agent payments on: $160.00 per month, $160.00 left\n`);
+    expect(reads() - before).toBe(3);
+  });
+
+  it("--wait-budget still low at the timeout: one line saying so, exit 1", async () => {
+    const s = await withPolicy(S1_LOW, DEFAULTS);
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    const r = await s.run(["wallet", "status", "--wait-budget", "--timeout", "10"]);
+    expect(r.code).toBe(1);
+    expect(r.out).toBe(LOW_LINES);
+    expect(r.err).toBe(
+      "intent: Shop agent payments are still low after 10 s: only $6.02 is left, less than one purchase may cost ($20); open https://shop.app/account/connections, tap intent, raise it to $160, then run intent wallet status --wait-budget again\n",
+    );
+  });
+
+  it("no per-order cap in the policy: the $50 ceiling decides", async () => {
+    const s = await withPolicy({ budgetMinor: 4999 });
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    const low = await s.run(["wallet", "status", "--wait-budget", "--timeout", "5"]);
+    expect(low.out).toBe("https://shop.app/account/connections\nAgent payments are on, but only $49.99 is left; raise it to $400.\n");
+    s.shop.faults.budgetMinor = 5000;
+    expect((await s.run(["wallet", "status", "--wait-budget"])).out).toBe("Agent payments on: $150.00 per month, $50.00 left\n");
+  });
+
+  it("a budget in another currency is never compared with the USD limits: the success line and one note", async () => {
+    const s = await withPolicy({ accountCurrency: "CAD", budgetMinor: 100 }, DEFAULTS);
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    const r = await s.run(["wallet", "status", "--wait-budget"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toBe("Agent payments on: 150.00 CAD per month, 1.00 CAD left\nNote: Shop shows this budget in CAD; the gateway's limits are in USD, so it was not compared with them\n");
+  });
+});
+
 describe("intent wallet status --wait-budget", () => {
   const WAIT = ["wallet", "status", "--wait-budget"];
   const getAccounts = (s: Setup) => s.shop.calls.filter((c) => c.tool === "get_account").length;
@@ -430,7 +508,7 @@ describe("intent wallet status --wait-budget", () => {
     expect(r.code).toBe(0);
     expect(r.out).toBe("Agent payments on: $500.00 per month, $50.00 left\n");
     expect(r.err).toBe(
-      "intent: warning: this limit is above $400.00, 4 × the weekly ceiling Intent Cloud enforces ($100); the Shop budget is the only hard stop, so lower it in the Shop app: Account › Connections\n",
+      "intent: warning: this limit is above $400.00, 4 × the weekly ceiling Intent Cloud enforces ($100); the Shop budget is the only hard stop, so lower it: open https://shop.app/account/connections, tap intent\n",
     );
   });
 
@@ -440,8 +518,29 @@ describe("intent wallet status --wait-budget", () => {
     expect((await s.run(WAIT)).err).toBe("");
     s.shop.faults.budgetLimitMinor = 16_001;
     expect((await s.run(WAIT)).err).toBe(
-      "intent: warning: this limit is above $160.00, 4 × your policy's weekly cap ($40); the Shop budget is the only hard stop, so lower it in the Shop app: Account › Connections\n",
+      "intent: warning: this limit is above $160.00, 4 × your policy's weekly cap ($40); the Shop budget is the only hard stop, so lower it: open https://shop.app/account/connections, tap intent\n",
     );
+  });
+
+  it("Shop's public client, recorded in the vault: the timeout and the warning say Personal Agent, at the page Shop names", async () => {
+    const s = await setup({ budgetMinor: null, manageConnectionUrl: "https://shop.app/account/connections/agents" }, SHOP_PUBLIC_CLIENT_ID);
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    const late = await s.run([...WAIT, "--timeout", "5"]);
+    expect(late.err).toBe(
+      "intent: no Shop agent payments seen after 5 s (Shop shows no agent payments for this connection): open https://shop.app/account/connections/agents, tap Personal Agent, turn on Allow agent to pay for me, then run intent wallet status --wait-budget again\n",
+    );
+    s.shop.faults.budgetMinor = 5000;
+    s.shop.faults.budgetLimitMinor = 50_000;
+    expect((await s.run(WAIT)).err).toBe(
+      "intent: warning: this limit is above $400.00, 4 × the weekly ceiling Intent Cloud enforces ($100); the Shop budget is the only hard stop, so lower it: open https://shop.app/account/connections/agents, tap Personal Agent\n",
+    );
+  });
+
+  it("a page Shop names off shop.app is not printed in the timeout line; with no answer at all, S1's page", async () => {
+    const s = await linked({ budgetMinor: null, manageConnectionUrl: "https://evil.example/connections" });
+    const r = await s.run([...WAIT, "--timeout", "5"]);
+    expect(r.err).toContain("(Shop shows no agent payments for this connection): tap intent, turn on Allow agent to pay for me,");
+    expect(r.err).not.toContain("evil.example");
   });
 
   it("the link revoked during the wait: stops at once, exit 1", async () => {
