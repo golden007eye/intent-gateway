@@ -77,7 +77,7 @@ Runs a `cases.yaml` against the active policy, or against another file with `--p
 
 ## The policy advisor
 
-The npm package ships a Claude Code skill, `onboarding/skills/policy-advisor/SKILL.md`, which the [onboarding prompt](https://github.com/golden007eye/intent-gateway/blob/main/onboarding/claude-code.md) copies into your project's `.claude/skills/`. It helps you set the budget in the Shop app first, then asks about limits and completion modes one question at a time and applies your answers with `intent policy add` only, then runs `intent policy test`.
+The npm package ships a Claude Code skill, `onboarding/skills/policy-advisor/SKILL.md`, which the [onboarding prompt](https://github.com/golden007eye/intent-gateway/blob/main/onboarding/claude-code.md) copies into your project's `.claude/skills/`. It applies the default limits ($20 per order, $40 per 7 days) at once, shows them on the panel's Policy view, changes them only when you ask, with `intent policy add` only, tells you the matching amount for agent payments in Shop (4 × the weekly limit), then runs `intent policy test`.
 
 ## Proposing a policy
 

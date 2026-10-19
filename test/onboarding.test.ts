@@ -21,11 +21,12 @@ const FILES = [PROMPT, SKILL];
 /** Commands the prompt names before they ship (G8: Pause). Any other unknown command fails the test. */
 const PLANNED: ReadonlySet<string> = new Set(["pause", "resume"]);
 
-/** Options the prompt names before they ship: `wallet link shop --start` and `--finish` come from the Shop link
- * start/finish change, which merges first. Once the CLI has one, the test below fails until it is removed here. */
-const PLANNED_OPTIONS: ReadonlySet<string> = new Set(["wallet link --start", "wallet link --finish"]);
+/** Options the prompt names before they ship: `wallet link shop --start`/`--finish` and `wallet status --wait-budget`
+ * come from the Shop link start/finish change, which merges first. Once the CLI has one, the test below fails until it
+ * is removed here. */
+const PLANNED_OPTIONS: ReadonlySet<string> = new Set(["wallet link --start", "wallet link --finish", "wallet status --wait-budget"]);
 
-/** The Intent Cloud preview ceiling, in US dollars: per order and per rolling 7 days. A Shop budget is ≤ 4 weeks. */
+/** The Intent Cloud preview ceiling, in US dollars: per order and per rolling 7 days. Shop agent payments are ≤ 4 weeks. */
 const CEILING = { perOrder: 50, perWeek: 100, budget: 400 };
 
 /** Inline code spans and fenced code blocks: the only places a command is written. */
@@ -130,7 +131,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
 
   it("uses the commands the onboarding needs", () => {
     const lines = named.map(({ words }) => words.join(" "));
-    for (const command of ["--version", "init", "wallet link shop --start", "wallet link shop --finish", "wallet status", "policy add per-order-20 --yes", "policy add weekly-40 --yes", "policy add handoff-only --yes", "policy show", "log", "verify"]) {
+    for (const command of ["--version", "init", "wallet link shop --start", "wallet link shop --finish", "wallet status --wait-budget", "panel", "policy add per-order-20 --yes", "policy add weekly-40 --yes", "policy add handoff-only --yes", "policy show", "log", "verify"]) {
       expect(lines, command).toContain(command);
     }
     expect(lines.some((l) => l.startsWith("policy test "))).toBe(true);
@@ -160,8 +161,8 @@ describe("onboarding prompt and policy-advisor skill", () => {
         for (const m of line.matchAll(/\$(\d+(?:\.\d+)?)/g)) {
           const amount = Number(m[1]);
           expect(amount, `${file}: ${line}`).toBeLessThanOrEqual(CEILING.budget);
-          // Only a Shop budget (four weeks) may go above the weekly ceiling.
-          if (amount > CEILING.perWeek) expect(line, `${file}: $${String(amount)} outside a budget line`).toMatch(/budget/i);
+          // Only the Shop agent-payments amount (four weeks) may go above the weekly ceiling.
+          if (amount > CEILING.perWeek) expect(line, `${file}: $${String(amount)} outside an agent-payments line`).toMatch(/agent.payments/i);
         }
       }
     }
@@ -169,8 +170,8 @@ describe("onboarding prompt and policy-advisor skill", () => {
 
   it("names exactly the package.json version", () => {
     for (const file of FILES) {
-      // The Node range is checked on its own below; any other version is the package's.
-      const versions = [...read(file).split(SUPPORTED_NODE).join("").matchAll(/\b\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.\d+)*)?/g)].map((m) => m[0]);
+      // The Node range is checked on its own below, and the panel's loopback address is no version; any other is the package's.
+      const versions = [...read(file).split(SUPPORTED_NODE).join("").split("127.0.0.1").join("").matchAll(/\b\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.\d+)*)?/g)].map((m) => m[0]);
       expect(versions.length, file).toBeGreaterThan(0);
       expect(new Set(versions), file).toEqual(new Set([pkg.version]));
     }
@@ -233,9 +234,9 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const prompt = read(PROMPT);
     const step4 = prompt.slice(prompt.indexOf("## Step 4"), prompt.indexOf("## Step 5"));
     expect(step4).toMatch(/^## Step 4: sign up and create the passkey/);
-    expect(step4).toContain("create their passkey (this step is required)");
-    expect(step4).toContain("If the developer says they already have an account, do not skip this step");
-    expect(step4).toMatch(/check there that their account has a passkey, create one if it has none, and say "done"\. Wait for "done" either way\./);
+    expect(step4).toContain("This step is required: never skip it, also when the developer says they already have an account.");
+    expect(step4).toContain("create your passkey. If you already have an account, check on its account page that it has a passkey, and create one if it has none.");
+    expect(step4).toContain('Wait for "done": no command can see this step.');
     expect(step4).toContain("The first purchase's approval (step 8) is where the passkey is really checked.");
     expect(prompt).toMatch(/^## Step 8: the first purchase/m);
     // The agent checks nothing itself: no command in this step, and the developer opens the page.
@@ -248,18 +249,95 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain(
       "Anything the developer must see, click or type (a link, a code, a choice) goes in your own reply, written out in full, never only in a command's output.",
     );
-    expect(prompt).toContain("Put {{INTENT_SIGNUP_URL}} in your reply as a clickable link");
-    expect(prompt).toContain("In your reply, put the link as a clickable link and the code on its own line");
-    expect(prompt).toContain('"the code is already filled in if you use this link"');
-    expect(prompt).toContain("If it expired, go back to 2 and start again.");
-    expect(prompt).toContain("Put the approval link in your reply as a clickable link.");
+    expect(prompt).toContain("The code is already filled in if you use this link.");
+    expect(prompt).toContain("If it expired, go back to 1 and start again.");
     expect(prompt).toContain("go through it with the developer, in your reply");
-    // The Shop link is started and finished in two commands, with "done" between them, never one long wait.
+    expect(prompt).toContain("Put its last line in your reply.");
+    expect(prompt).toContain('Show its "Budget seen" line in your reply, and any warning it prints that the amount is too high.');
+    expect(prompt).toContain("send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.");
     const shop = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
-    expect(shop.indexOf("wallet link shop --start")).toBeLessThan(shop.indexOf('Wait for "done"'));
-    expect(shop.indexOf('Wait for "done"')).toBeLessThan(shop.indexOf("wallet link shop --finish"));
     expect(codeOf(shop).filter((c) => /wallet link shop$/.test(c))).toEqual([]);
     expect(shop).not.toContain("INTENT_SHOP_CLIENT_ID");
+  });
+
+  /** Each **Your turn** block in `markdown`: its lines, and the text after it up to the next block or step. */
+  function turns(markdown: string): { block: string[]; after: string }[] {
+    const lines = markdown.split("\n");
+    const out: { block: string[]; after: string }[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i] !== "> **Your turn**") continue;
+      let j = i;
+      while (j < lines.length && (lines[j] ?? "").startsWith(">")) j++;
+      let k = j;
+      while (k < lines.length && lines[k] !== "> **Your turn**" && !/^#{2,3} /.test(lines[k] ?? "")) k++;
+      out.push({ block: lines.slice(i, j), after: lines.slice(j, k).join("\n") });
+    }
+    return out;
+  }
+
+  /** The commands that see a developer action by themselves. */
+  const DETECTS = /--finish|--wait-budget|get_approval_status/;
+
+  it("every developer action is a **Your turn** block with one numbered action, and asks for done only when nothing can see it", () => {
+    for (const file of FILES) {
+      const blocks = turns(read(file));
+      expect(blocks.length, file).toBeGreaterThan(0);
+      for (const { block, after } of blocks) {
+        const text = block.join("\n");
+        expect(block.filter((l) => /^> *\d+\. /.test(l)), `${file}: one action in\n${text}`).toHaveLength(1);
+        expect(block.filter((l) => /^> *[-*] /.test(l)), `${file}: no list beside the action in\n${text}`).toEqual([]);
+        const asksDone = block.at(-1) === "> Reply done";
+        expect(text.replace(/\n> Reply done$/, ""), `${file}: "Reply done" only as the last line`).not.toMatch(/Reply done/);
+        // Attack: a block that asks for "done" while a command right after it would see the action.
+        if (asksDone) expect(after, `${file}: asks for done though a command detects it\n${text}`).not.toMatch(DETECTS);
+      }
+    }
+    // The target list: sign-up, the Shop link, agent payments, (a restart Claude Code needs), what to buy, the approval.
+    const prompt = turns(read(PROMPT));
+    expect(prompt.map(({ block }) => block.find((l) => /^> 1\. /.test(l))?.slice(5).split(/[.:,]/)[0])).toEqual([
+      "Open this page in your own browser",
+      "Open this link and approve intent in Shop",
+      "Turn on agent payments in Shop",
+      "Quit Claude Code",
+      "Tell me one small thing to buy",
+      "Open the approval page",
+    ]);
+    // Each detectable action is followed by the command that detects it, and asks for no done.
+    const [, link, payments, , , approval] = prompt;
+    expect(link?.after).toContain("intent wallet link shop --finish");
+    expect(payments?.after).toContain("intent wallet status --wait-budget");
+    expect(approval?.after).toContain("get_approval_status");
+    for (const t of [link, payments, approval]) expect(t?.block.at(-1)).not.toBe("> Reply done");
+    // Only the sign-up asks for done in the whole prompt.
+    expect([...read(PROMPT).matchAll(/^> Reply done$/gm)]).toHaveLength(1);
+  });
+
+  it("agent payments: Shop's permission to pay at all, the amount set from the policy, one safety-net line, no amount to choose", () => {
+    const prompt = read(PROMPT);
+    const step5 = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
+    expect(step5).toContain("This is Shop's permission for the agent to pay at all: without it no purchase completes in one tap, and every order goes to Shop's checkout page");
+    expect(step5).toContain("4 times the weekly limit of the default policy (step 6 applies $40 a week), so $160 a month");
+    expect(step5).toContain('turn on "Allow agent to pay for me" and enter $160 monthly.');
+    expect(step5).toContain("Shop enforces this amount itself, as a safety net, while intent's policy does the day-to-day limiting.");
+    expect(step5).toContain("it is the only stop an agent with shell access cannot get around");
+    // No amount to choose; "budget" appears only in the flag and the line the gateway prints (--wait-budget, "Budget seen").
+    expect(step5).not.toMatch(/[Ss]uggest|(?<!-)\bbudget\b/);
+    const skill = read(SKILL);
+    expect(skill).toContain("State the amount and ask \"OK?\"; discuss another amount only if the developer asks.");
+    expect(skill).toContain("as 4 times its weekly limit, so $160 a month with the default $40 a week");
+    expect(skill).not.toMatch(/[Ss]uggest a budget|set the budget with/);
+  });
+
+  it("the advisor applies the default policy at once and shows it in the panel, read-only", () => {
+    const skill = read(SKILL);
+    const code = codeOf(skill);
+    expect(code).toContain("$ intent policy add per-order-20 --yes\n$ intent policy add weekly-40 --yes\n");
+    expect(skill).toContain("Start `intent panel` in the background");
+    expect(skill).toContain("> 1. Here are your default rules. Keep them, or tell me what to change. Looking is optional.");
+    expect(skill).toContain("> http://127.0.0.1:<port>/#/policy");
+    expect(skill).toContain("The panel only shows the policy: changes go through you");
+    // The default is what the prompt's amount assumes: 4 × $40 = $160.
+    expect(read(PROMPT)).toContain("step 6 applies $40 a week");
   });
 
   it("the steps are numbered 1 to 9 in order, and every step it points to exists", () => {
@@ -280,12 +358,12 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(read(SKILL)).not.toMatch(/\{\{/);
     // The only URLs written out are public pages; every Intent Cloud address is a placeholder.
     const urls = [...prompt.matchAll(/https?:\/\/[^\s)`",]+/g)].map((m) => m[0]);
-    expect(new Set(urls)).toEqual(new Set(["https://nodejs.org", "https://shop.app"]));
+    expect(new Set(urls)).toEqual(new Set(["https://nodejs.org", "https://shop.app/account/connections"]));
   });
 
-  it("the skill says the Shop budget is the only hard stop, and why", () => {
+  it("the skill says Shop agent payments are the only stop an agent with a shell cannot get around, and why", () => {
     const skill = read(SKILL);
-    expect(skill).toMatch(/only hard stop/);
+    expect(skill).toMatch(/the only stop an agent with shell access cannot get around/);
     expect(skill).toMatch(/can read it and pay Shop directly/);
   });
 
