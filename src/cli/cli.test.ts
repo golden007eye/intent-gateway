@@ -1251,7 +1251,7 @@ describe("doctor checks the Node version (devrun F-a)", () => {
     if (level === "ok") expect(result.out).toContain(`ok    node: ${nodeVersion}\n`);
     else {
       expect(result.out).toContain(
-        `WARN  node: ${nodeVersion} is not supported; the gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+. Install Node 24 LTS (for example nvm install 24) and run it again\n`,
+        `WARN  node: ${nodeVersion} is not supported; the gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+. Install Node 24 LTS: nvm install 24, fnm install 24, brew install node@24 (then put $(brew --prefix node@24)/bin first on PATH), or the installer at https://nodejs.org/en/download; then run it again from a new terminal.\n`,
       );
     }
     expect(result.code).toBe(0);

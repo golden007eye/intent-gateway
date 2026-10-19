@@ -8,7 +8,7 @@ import { CONTRACT_VERSION } from "../contract/index.ts";
 import { chainMode, contractSums } from "../gateway/index.ts";
 import { LibraryError, lockOrigin, readLock } from "../library/index.ts";
 import { PolicyError } from "../policy/index.ts";
-import { SUPPORTED_NODE, nodeSupported } from "../runtime/index.ts";
+import { NODE_FIX, SUPPORTED_NODE, nodeSupported } from "../runtime/index.ts";
 import { type Entry, openStore, verifyChain } from "../store/index.ts";
 import { verifyStatement } from "../trust/index.ts";
 import { describeError, errorContext, metaRefused } from "./errors.ts";
@@ -78,7 +78,7 @@ export type Report = (level: Level, text: string) => void;
 
 function checkNode(version: string, report: Report): void {
   if (nodeSupported(version)) report("ok", `node: ${version}`);
-  else report("warn", `node: ${version} is not supported; the gateway needs ${SUPPORTED_NODE}. Install Node 24 LTS (for example nvm install 24) and run it again`);
+  else report("warn", `node: ${version} is not supported; the gateway needs ${SUPPORTED_NODE}. ${NODE_FIX}`);
 }
 
 export async function checkDataDir(dataDir: string, report: Report): Promise<void> {
