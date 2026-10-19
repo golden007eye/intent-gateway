@@ -16,6 +16,7 @@
 import { checkoutRefHash, coarsePostcode } from "../contract/index.ts";
 import { findIdentity, ORDER_REF_AT } from "../privacy/index.ts";
 import {
+  type BudgetRenewal,
   type CatalogHit,
   RAIL_CODE,
   type ShipToMatch,
@@ -131,23 +132,51 @@ export const CONNECTION_GONE = ["claims_unavailable", "addresses_unavailable", "
  * What the gateway keeps from get_account: the budget left and whether the connection still reads the account.
  * The budget is the one `payment.instruments[]` entry whose `display` has `remaining_amount` (integer minor units),
  * in the answer's top-level `currency` (S1 step 4). None, several, or a value that is not a non-negative integer
- * gives null: unknown, never assumed. `limit`, `renewal_type` and `renews_at` are not kept.
+ * gives null: unknown, never assumed. The same entry's `limit` (integer minor units) and `renewal_type` (one of the
+ * known words) are kept as the limit; `renews_at` is not kept. The connections page is the `manage_connection` link
+ * (S1: https://shop.app/account/connections), kept only when it is an https URL on shop.app with no credentials,
+ * query or fragment; any other link gives null. With no such link at all, S1's page (SHOP_CONNECTIONS_URL).
  */
 export function projectAccount(content: Json): WalletAccount {
   const warnings = list(content.messages).map((m) => m.code);
   const connected = !warnings.some((code) => (CONNECTION_GONE as readonly unknown[]).includes(code));
-  return { budgetRemaining: connected ? budgetOf(content) : null, connected };
+  const budget = connected ? budgetOf(content) : null;
+  return { budgetRemaining: budget?.remaining ?? null, budgetLimit: budget?.limit ?? null, manageUrl: manageUrlOf(content), connected };
 }
 
-function budgetOf(content: Json): WalletMoney | null {
+const RENEWALS: readonly BudgetRenewal[] = ["daily", "weekly", "monthly", "yearly"];
+/** The only host a connections page is taken from. */
+export const SHOP_APP_HOST = "shop.app";
+
+function budgetOf(content: Json): { remaining: WalletMoney; limit: WalletAccount["budgetLimit"] } | null {
   const currency = content.currency;
   if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) return null;
   const budgets = list(record(content.payment)?.instruments)
     .map((i) => record(i.display))
     .filter((d): d is Json => d !== null && "remaining_amount" in d);
   if (budgets.length !== 1) return null;
-  const remaining = budgets[0]?.remaining_amount;
-  return Number.isSafeInteger(remaining) && (remaining as number) >= 0 ? { amountMinor: remaining as number, currency } : null;
+  const { remaining_amount: remaining, limit, renewal_type: renewal } = budgets[0] ?? {};
+  if (!Number.isSafeInteger(remaining) || (remaining as number) < 0) return null;
+  const known = RENEWALS.find((r) => r === renewal) ?? null;
+  const limited = Number.isSafeInteger(limit) && (limit as number) > 0 ? { amount: { amountMinor: limit as number, currency }, renewal: known } : null;
+  return { remaining: { amountMinor: remaining as number, currency }, limit: limited };
+}
+
+/** Shop's connections page as S1 saw it, used only when Shop's answer has no manage_connection link at all. */
+export const SHOP_CONNECTIONS_URL = "https://shop.app/account/connections";
+
+function manageUrlOf(content: Json): string | null {
+  const links = list(content.links).filter((l) => l.type === "manage_connection");
+  if (links.length === 0) return SHOP_CONNECTIONS_URL;
+  if (links.length !== 1 || typeof links[0]?.url !== "string" || links[0].url.length > 512) return null;
+  let url: URL;
+  try {
+    url = new URL(links[0].url);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.hostname !== SHOP_APP_HOST || url.port !== "" || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") return null;
+  return url.href;
 }
 
 const STATUS: Readonly<Record<string, WalletCheckoutStatus>> = {

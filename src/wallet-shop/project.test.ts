@@ -114,13 +114,19 @@ describe("projectAccount (S1 step 4 shape)", () => {
         credential: { type: "shop_token", token: PII.cardToken },
       },
     ],
+    links: [{ type: "manage_connection", url: "https://shop.app/account/connections", title: "Manage connected apps" }],
     messages: [],
     ...patch,
   });
 
   it("attack: keeps the budget left and connected only; email, picture, names, addresses, card digits and the credential are dropped", () => {
     const projected = projectAccount(account());
-    expect(projected).toEqual({ budgetRemaining: { amountMinor: 1200, currency: "USD" }, connected: true });
+    expect(projected).toEqual({
+      budgetRemaining: { amountMinor: 1200, currency: "USD" },
+      budgetLimit: { amount: { amountMinor: 1500, currency: "USD" }, renewal: "monthly" },
+      manageUrl: "https://shop.app/account/connections",
+      connected: true,
+    });
     const text = JSON.stringify(projected);
     for (const value of [...Object.values(PII), "4242", "Apt 4", "6f9c1e2a"]) expect(text).not.toContain(value);
   });
@@ -138,9 +144,39 @@ describe("projectAccount (S1 step 4 shape)", () => {
 
   it("the connection removed in the Shop app (S1 step 12b warnings): not connected, no budget", () => {
     for (const code of ["claims_unavailable", "addresses_unavailable", "budget_unavailable", "payment_instruments_unavailable"]) {
-      expect(projectAccount(account({ messages: [{ type: "warning", code, content: IDENTITY }] }))).toEqual({ budgetRemaining: null, connected: false });
+      expect(projectAccount(account({ messages: [{ type: "warning", code, content: IDENTITY }] }))).toEqual({ budgetRemaining: null, budgetLimit: null, manageUrl: "https://shop.app/account/connections", connected: false });
     }
     expect(projectAccount(account({ messages: [{ type: "warning", code: "something_else" }] })).connected).toBe(true);
+  });
+
+  it("the limit: kept with a known renewal word only; none without a positive integer limit", () => {
+    const display = (d: Record<string, unknown>) => account({ payment: { instruments: [{ type: "shop_pay", display: { remaining_amount: 900, ...d } }] } });
+    expect(projectAccount(display({ limit: 4000, renewal_type: "weekly" })).budgetLimit).toEqual({ amount: { amountMinor: 4000, currency: "USD" }, renewal: "weekly" });
+    expect(projectAccount(display({ limit: 4000, renewal_type: "every full moon" })).budgetLimit).toEqual({ amount: { amountMinor: 4000, currency: "USD" }, renewal: null });
+    expect(projectAccount(display({ limit: 4000 })).budgetLimit?.renewal).toBeNull();
+    for (const limit of [undefined, 0, -5, 12.5, "4000"]) expect(projectAccount(display({ limit })).budgetLimit).toBeNull();
+  });
+
+  it("attack: the connections page is Shop's manage_connection link only when https on shop.app with nothing extra; S1's page when there is none", () => {
+    const linked = (url: unknown) => projectAccount(account({ links: [{ type: "manage_connection", url }] })).manageUrl;
+    expect(linked("https://shop.app/account/connections")).toBe("https://shop.app/account/connections");
+    for (const url of [
+      "http://shop.app/account/connections",
+      "https://shop.app.evil.example/account/connections",
+      "https://evil.example/shop.app",
+      "https://user:pw@shop.app/account/connections",
+      "https://shop.app:8443/account/connections",
+      "https://shop.app/account/connections?next=https://evil.example",
+      "https://shop.app/account/connections#x",
+      "javascript:alert(1)",
+      42,
+    ]) {
+      expect(linked(url)).toBeNull();
+    }
+    expect(linked(undefined)).toBeNull();
+    // No manage_connection link at all: S1's page; never another link type's URL.
+    expect(projectAccount(account({ links: [{ type: "account", url: "https://evil.example/account" }] })).manageUrl).toBe("https://shop.app/account/connections");
+    expect(projectAccount(account({ links: undefined })).manageUrl).toBe("https://shop.app/account/connections");
   });
 });
 

@@ -124,7 +124,12 @@ describe("the wire: MCP 2026-07-28, stateless, tools on the allow-list only", ()
   it("attack (raw card): a spend-request tool is advertised and a PAN is in get_account; the tool is never called, the PAN never chained (test 2)", async () => {
     const { wallet, session } = await setup({ spendRequestTool: true });
     const account = await wallet.account();
-    expect(account).toEqual({ budgetRemaining: { amountMinor: FAKE_BUDGET_MINOR, currency: "USD" }, connected: true });
+    expect(account).toEqual({
+      budgetRemaining: { amountMinor: FAKE_BUDGET_MINOR, currency: "USD" },
+      budgetLimit: { amount: { amountMinor: 15000, currency: "USD" }, renewal: "monthly" },
+      manageUrl: "https://shop.app/account/connections",
+      connected: true,
+    });
     expect(JSON.stringify(account)).not.toContain("4111");
     // Even asked directly, the transport refuses the tool before anything is logged or sent.
     const raw = createDisclosedWallet(createShopMcpTransport({ url: shop.mcpUrl, accessToken: shop.accessToken, clientVersion: "0" }), session, { destination: "shop" });
@@ -523,16 +528,21 @@ describe("unlink and a connection removed in the Shop app (S1 steps 12, 12b)", (
 
   it("the connection removed in the app: the token answers, the account reads as not connected with no budget", async () => {
     const { wallet } = await setup({ connectionRemoved: true });
-    expect(await wallet.account()).toEqual({ budgetRemaining: null, connected: false });
+    expect(await wallet.account()).toEqual({ budgetRemaining: null, budgetLimit: null, manageUrl: "https://shop.app/account/connections", connected: false });
   });
 
   it("no budget for the connection (S1 step 3), or another currency: the budget is unknown (null) or kept with its currency", async () => {
     let h = await setup({ budgetMinor: null });
-    expect(await h.wallet.account()).toEqual({ budgetRemaining: null, connected: true });
+    expect(await h.wallet.account()).toEqual({ budgetRemaining: null, budgetLimit: null, manageUrl: "https://shop.app/account/connections", connected: true });
     await store.close();
     await shop.close();
     h = await setup({ accountCurrency: "CAD", budgetMinor: 700 });
-    expect(await h.wallet.account()).toEqual({ budgetRemaining: { amountMinor: 700, currency: "CAD" }, connected: true });
+    expect(await h.wallet.account()).toEqual({
+      budgetRemaining: { amountMinor: 700, currency: "CAD" },
+      budgetLimit: { amount: { amountMinor: 15000, currency: "CAD" }, renewal: "monthly" },
+      manageUrl: "https://shop.app/account/connections",
+      connected: true,
+    });
   });
 });
 

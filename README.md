@@ -87,7 +87,7 @@ Real purchases go through the Intent Cloud host this preview uses by default, an
 What a real purchase needs:
 
 1. **Your Intent Cloud passkey**, made at the invite-gated sign-up. You approve every purchase with it on intent's confirm page.
-2. **Your own Shop account, linked.** Shop does not accept the gateway's own client yet (a formal registration is pending), so linking needs `INTENT_SHOP_CLIENT_ID` set explicitly to a client Shop accepts, such as Shop's public client for your own agent: `INTENT_SHOP_CLIENT_ID=<client id> intent wallet link shop`. Shop holds the card, the addresses and the budget; the gateway keeps only an encrypted token.
+2. **Your own Shop account, linked.** Shop does not accept the gateway's own client yet (a formal registration is pending), so linking needs `INTENT_SHOP_CLIENT_ID` set explicitly to a client Shop accepts, such as Shop's public client for your own agent: `INTENT_SHOP_CLIENT_ID=<client id> intent wallet link shop` (from an agent's shell, which shows output only when a command ends: `--start`, then `--finish`; see [one tap](https://github.com/golden007eye/intent-gateway/blob/main/docs/one-tap.md#linking-from-an-agents-shell)). Shop holds the card, the addresses and the budget; the gateway keeps only an encrypted token.
 3. **An agent budget in the Shop app** ("Allow agent to pay", with a limit). One tap pays from that budget only.
 4. **The account key**, which `intent init` makes once (`<data dir>/account-key.json`). There is one per developer: your first passkey approval pins it to you. To replace it today, move `account-key.json` aside and run `intent init` again.
 
