@@ -163,6 +163,8 @@ export interface FakeShopFaults {
   /** get_account's budget limit (minor units; 15000 by default) and how often it renews ("monthly" by default). */
   budgetLimitMinor?: number;
   budgetRenewal?: string;
+  /** get_account's budget renews_at ("2026-11-01T00:00:00Z" by default); null leaves it out. */
+  budgetRenewsAt?: string | null;
   /** get_account's manage_connection link (S1: https://shop.app/account/connections by default); null: no such link. */
   manageConnectionUrl?: string | null;
   /** get_account's top-level currency ("USD" by default). */
@@ -429,7 +431,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         instruments:
           budget === null
             ? []
-            : [{ handler_id: "shop_pay", type: "shop_pay", display: { limit: shop.faults.budgetLimitMinor ?? 15000, remaining_amount: budget, renewal_type: shop.faults.budgetRenewal ?? "monthly", renews_at: "2026-11-01T00:00:00Z" } }],
+            : [{ handler_id: "shop_pay", type: "shop_pay", display: { limit: shop.faults.budgetLimitMinor ?? 15000, remaining_amount: budget, renewal_type: shop.faults.budgetRenewal ?? "monthly", ...(shop.faults.budgetRenewsAt === null ? {} : { renews_at: shop.faults.budgetRenewsAt ?? "2026-11-01T00:00:00Z" }) } }],
         ...(shop.faults.spendRequestTool === true ? { card_number: FAKE_PAN } : {}),
       },
       selectable_instruments: [

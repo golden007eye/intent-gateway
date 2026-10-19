@@ -38,6 +38,7 @@ export {
 export {
   CHECKOUT_ID_MAX_AGE_MS,
   checkoutVaultDir,
+  CLAIM_HOST,
   claimPendingGrant,
   type ClaimedGrant,
   deleteSecret,
@@ -47,6 +48,7 @@ export {
   loadSecret,
   loadWalletKey,
   openCheckoutVault,
+  PENDING_GRANT_MAX_MS,
   pendingGrantPath,
   savePendingGrant,
   saveSecret,

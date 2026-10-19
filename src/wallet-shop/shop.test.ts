@@ -126,7 +126,7 @@ describe("the wire: MCP 2026-07-28, stateless, tools on the allow-list only", ()
     const account = await wallet.account();
     expect(account).toEqual({
       budgetRemaining: { amountMinor: FAKE_BUDGET_MINOR, currency: "USD" },
-      budgetLimit: { amount: { amountMinor: 15000, currency: "USD" }, renewal: "monthly" },
+      budgetLimit: { amount: { amountMinor: 15000, currency: "USD" }, renewal: "monthly", renewsAt: "2026-11-01T00:00:00Z" },
       manageUrl: "https://shop.app/account/connections",
       connected: true,
     });
@@ -539,7 +539,7 @@ describe("unlink and a connection removed in the Shop app (S1 steps 12, 12b)", (
     h = await setup({ accountCurrency: "CAD", budgetMinor: 700 });
     expect(await h.wallet.account()).toEqual({
       budgetRemaining: { amountMinor: 700, currency: "CAD" },
-      budgetLimit: { amount: { amountMinor: 15000, currency: "CAD" }, renewal: "monthly" },
+      budgetLimit: { amount: { amountMinor: 15000, currency: "CAD" }, renewal: "monthly", renewsAt: "2026-11-01T00:00:00Z" },
       manageUrl: "https://shop.app/account/connections",
       connected: true,
     });

@@ -34,6 +34,7 @@ export {
   finishShopLink,
   type LinkedShopVault,
   linkedShopClientId,
+  shopVaultHasToken,
   linkShop,
   openPendingShopLink,
   type PendingShopLink,

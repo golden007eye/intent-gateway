@@ -29,6 +29,7 @@ import {
   SHOP_CONNECTIONS_URL,
   SHOP_PUBLIC_CLIENT_ID,
   ShopTransportError,
+  shopVaultHasToken,
   startShopLink,
   type WalletSession,
 } from "../disclosure/index.ts";
@@ -136,8 +137,14 @@ async function accountStatus(io: Io, config: Config, rail: WalletRail, vaultText
     const account = await wallet.account();
     for (const text of accountLines(name, rail, account)) line(io.stdout, text);
     if (account.connected) {
-      const advice = await budgetAdvice(config);
-      if (agentPayments(account, advice) === "low") lowLines(io, account, advice, { page: account.manageUrl, connection: connectionName(linkedShopClientId(vaultText)) });
+      let advice: BudgetAdvice | null = null;
+      try {
+        advice = await budgetAdvice(config);
+      } catch (error) {
+        // The account was read; only the comparison with the policy is missing. Never blamed on Shop.
+        line(io.stderr, printable(`intent: the ${name} account was read, but the agent-payments check was skipped: the policy did not load: ${error instanceof Error ? error.message : String(error)}`));
+      }
+      if (advice !== null && agentPayments(account, advice) === "low") lowLines(io, account, advice, { page: account.manageUrl, connection: connectionName(linkedShopClientId(vaultText)) });
     }
   } catch (error) {
     // The gateway's own words (vault, transport, disclosure, a fixed Shop label); never Shop's text or a token.
@@ -159,7 +166,7 @@ function accountLines(name: string, rail: WalletRail, account: WalletAccount): s
   if (budget === null) {
     return [`${name} budget: ${name} shows none for this connection, so one-tap is unavailable; turn on "Allow agent to pay" with a budget in the ${name} app`];
   }
-  return [`${name} budget left for the gateway: ${(budget.amountMinor / 100).toFixed(2)} ${budget.currency}`];
+  return [`${name} budget left for the gateway: ${amountText(budget)}`];
 }
 
 /** How often `wallet status --wait-budget` reads the account, and the longest it waits by default (and at most). */
@@ -174,26 +181,50 @@ export const PREVIEW_PER_ORDER_CEILING_USD = 50;
 const BUDGET_WEEKS = 4;
 const RENEWAL_WORDS: Readonly<Record<BudgetRenewal, string>> = { daily: "per day", weekly: "per week", monthly: "per month", yearly: "per year" };
 
-const moneyText = (money: WalletMoney): string => (money.currency === "USD" ? `$${(money.amountMinor / 100).toFixed(2)}` : `${(money.amountMinor / 100).toFixed(2)} ${money.currency}`);
+/**
+ * ISO 4217 currencies whose minor unit is not a hundredth (JPY has none, KWD has thousandths); every other has two
+ * digits. A table, not Intl: CLDR's display digits differ from ISO 4217 for some (IQD), and Shop counts ISO minor units.
+ */
+const MINOR_DIGITS: Readonly<Record<string, number>> = {
+  ...Object.fromEntries(["BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG", "RWF", "UGX", "UYI", "VND", "VUV", "XAF", "XOF", "XPF"].map((c) => [c, 0])),
+  ...Object.fromEntries(["BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"].map((c) => [c, 3])),
+  CLF: 4,
+  UYW: 4,
+};
+
+/** Integer minor units as a decimal in the currency's own exponent: 1500 JPY is `1500`, 1500 KWD `1.500`, 1500 USD `15.00`. */
+function decimalText(money: WalletMoney): string {
+  const digits = MINOR_DIGITS[money.currency] ?? 2;
+  const sign = money.amountMinor < 0 ? "-" : "";
+  const text = String(Math.abs(money.amountMinor)).padStart(digits + 1, "0");
+  return digits === 0 ? `${sign}${text}` : `${sign}${text.slice(0, -digits)}.${text.slice(-digits)}`;
+}
+
+/** An amount with its currency code: `15.00 USD`, `1500 JPY`. */
+const amountText = (money: WalletMoney): string => `${decimalText(money)} ${money.currency}`;
+
+const moneyText = (money: WalletMoney): string => (money.currency === "USD" ? `$${decimalText(money)}` : amountText(money));
 
 /**
- * The largest Shop limit the gateway suggests (4 × the policy's weekly cap, the preview ceiling when lower or unset),
- * and the least a budget must have left to pay one purchase (the policy's per-order cap, the ceiling likewise).
+ * The largest Shop limit the gateway suggests (4 × the policy's weekly cap, the preview ceiling when lower or unset,
+ * and never below one purchase), and the least a budget must have left to pay one purchase: the smallest of the
+ * policy's per-order, per-day and weekly caps and the $50 per-order ceiling (the schema lets per-order exceed weekly).
  */
 interface BudgetAdvice {
   readonly maxMinor: number;
-  readonly perOrderMinor: number;
+  readonly purchaseMinor: number;
   readonly weeklyUsd: number;
   readonly basis: string;
 }
 
 async function budgetAdvice(config: Config): Promise<BudgetAdvice> {
   const { policy } = await activePolicy(config.policyPath);
-  const cap = policy.spend.per_week_usd;
+  const { per_order_usd: perOrder, per_day_usd: perDay, per_week_usd: cap } = policy.spend;
   const weeklyUsd = Math.min(cap ?? PREVIEW_WEEKLY_CEILING_USD, PREVIEW_WEEKLY_CEILING_USD);
   const basis = cap !== undefined && cap < PREVIEW_WEEKLY_CEILING_USD ? "your policy's weekly cap" : "the weekly ceiling Intent Cloud enforces";
-  const perOrderUsd = Math.min(policy.spend.per_order_usd ?? PREVIEW_PER_ORDER_CEILING_USD, PREVIEW_PER_ORDER_CEILING_USD);
-  return { maxMinor: Math.round(BUDGET_WEEKS * weeklyUsd * 100), perOrderMinor: Math.round(perOrderUsd * 100), weeklyUsd, basis };
+  const purchaseUsd = Math.min(PREVIEW_PER_ORDER_CEILING_USD, weeklyUsd, perOrder ?? Infinity, perDay ?? Infinity);
+  const purchaseMinor = Math.round(purchaseUsd * 100);
+  return { maxMinor: Math.max(Math.round(BUDGET_WEEKS * weeklyUsd * 100), purchaseMinor), purchaseMinor, weeklyUsd, basis };
 }
 
 /**
@@ -206,14 +237,35 @@ type AgentPayments = "off" | "low" | "on";
 function agentPayments(account: WalletAccount, advice: BudgetAdvice): AgentPayments {
   const { budgetLimit: limit, budgetRemaining: left } = account;
   if (limit === null || left === null) return "off";
-  return left.currency === "USD" && left.amountMinor < advice.perOrderMinor ? "low" : "on";
+  return left.currency === "USD" && left.amountMinor < advice.purchaseMinor ? "low" : "on";
+}
+
+/**
+ * When the low amount left comes from spending this period under a limit already at or above the suggestion, raising
+ * it is not the advice: "until Shop renews it …" (at Shop's renews_at when it gives one). Null otherwise.
+ */
+function untilRenewal(account: WalletAccount, advice: BudgetAdvice): string | null {
+  const limit = account.budgetLimit;
+  if (limit === null || limit.amount.currency !== "USD" || limit.amount.amountMinor < advice.maxMinor) return null;
+  if (limit.renewsAt !== null) return `until Shop renews it at ${limit.renewsAt}`;
+  return limit.renewal === null ? "until Shop renews it" : `until Shop renews it (${RENEWAL_WORDS[limit.renewal]})`;
 }
 
 /**
  * The low case in two lines: the connections page (as openAndTap picks it; none when Shop named one elsewhere), then
- * how much is left and the suggested limit.
+ * how much is left and the suggested limit. With a limit already at the suggestion, one line: wait for the renewal.
  */
 function lowLines(io: Io, account: WalletAccount, advice: BudgetAdvice, place: AgentPaymentsPlace): void {
+  const until = untilRenewal(account, advice);
+  if (until !== null) {
+    line(
+      io.stdout,
+      printable(
+        `Agent payments are on, but only ${dollars(account.budgetRemaining?.amountMinor ?? 0)} is left ${until}; the limit is already at least the suggested ${dollars(advice.maxMinor)}, so wait for that renewal rather than raising it.`,
+      ),
+    );
+    return;
+  }
   const page = place.page === undefined ? SHOP_CONNECTIONS_URL : place.page;
   if (page !== null) line(io.stdout, printable(page));
   line(io.stdout, `Agent payments are on, but only ${dollars(account.budgetRemaining?.amountMinor ?? 0)} is left; raise it to ${dollars(advice.maxMinor)}.`);
@@ -270,6 +322,11 @@ export async function walletWaitBudget(io: Io, config: Config, timeoutText: stri
   if (key === null) throw new CliError(`the ${name} vault cannot be opened: its key file ${describeKeySource(config.wallet.key)} is missing; nothing was sent to ${name}`);
   const vaultText = await loadSecret(config.dataDir, rail, key);
   if (vaultText === null) throw new CliError(`no ${name} wallet is linked; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail} --start`);
+  // Waiting cannot put a token in the vault: say so at once rather than retrying for the whole timeout.
+  if (!shopVaultHasToken(vaultText)) {
+    line(io.stderr, `intent: the ${name} wallet vault holds no token, so there is no budget to read; nothing was sent to ${name}. Run ${INTENT} wallet unlink ${rail}, then ${INTENT} wallet link ${rail} --start`);
+    return 1;
+  }
   const now = io.now ?? Date.now;
   const sleep = io.sleep ?? delay;
   const deadline = now() + timeoutS * 1000;
@@ -284,12 +341,15 @@ export async function walletWaitBudget(io: Io, config: Config, timeoutText: stri
     let lastError: string | null = null;
     // The amount left while it is too low for one purchase, said once (the first time), then waited out.
     let low: WalletAccount | null = null;
+    // The last account read, for the timeout's words.
+    let seen: WalletAccount | null = null;
     for (;;) {
       try {
         const account = await wallet.account();
         lastError = null;
         pause = BUDGET_POLL_MS;
         page = account.manageUrl;
+        seen = account;
         if (!account.connected) {
           line(io.stderr, `intent: ${name} answered that this connection can no longer read the account (as when it is removed in the ${name} app); ${relink}`);
           return 1;
@@ -314,11 +374,32 @@ export async function walletWaitBudget(io: Io, config: Config, timeoutText: stri
       await sleep(Math.min(pause, left));
       if (now() >= deadline) break;
     }
+    const lowUntil = low === null ? null : untilRenewal(low, advice);
+    if (low !== null && lastError === null && lowUntil !== null) {
+      line(
+        io.stderr,
+        printable(
+          `intent: ${name} agent payments are still low after ${String(timeoutS)} s: only ${dollars(low.budgetRemaining?.amountMinor ?? 0)} is left ${lowUntil}, less than one purchase may cost (${dollars(advice.purchaseMinor)}); the limit is already at least ${dollars(advice.maxMinor)}, so wait for that renewal, then run ${INTENT} wallet status --wait-budget again`,
+        ),
+      );
+      return 1;
+    }
     if (low !== null && lastError === null) {
       line(
         io.stderr,
         printable(
-          `intent: ${name} agent payments are still low after ${String(timeoutS)} s: only ${dollars(low.budgetRemaining?.amountMinor ?? 0)} is left, less than one purchase may cost (${dollars(advice.perOrderMinor)}); ${openAndTap({ page, connection })}, raise it to ${dollars(advice.maxMinor)}, then run ${INTENT} wallet status --wait-budget again`,
+          `intent: ${name} agent payments are still low after ${String(timeoutS)} s: only ${dollars(low.budgetRemaining?.amountMinor ?? 0)} is left, less than one purchase may cost (${dollars(advice.purchaseMinor)}); ${openAndTap({ page, connection })}, raise it to ${dollars(advice.maxMinor)}, then run ${INTENT} wallet status --wait-budget again`,
+        ),
+      );
+      return 1;
+    }
+    const unlimited = lastError === null ? seen?.budgetLimit === null && seen.budgetRemaining !== null ? seen.budgetRemaining : null : null;
+    if (unlimited !== null) {
+      // A budget left but no limit: Shop shows an amount, yet the gateway needs the limit as the hard stop.
+      line(
+        io.stderr,
+        printable(
+          `intent: ${name} shows ${moneyText(unlimited)} left for this connection after ${String(timeoutS)} s, but no limit on it, so the gateway does not count agent payments as on: ${openAndTap({ page, connection })}, set a limit of at most ${dollars(advice.maxMinor)} under Allow agent to pay for me, then run ${INTENT} wallet status --wait-budget again`,
         ),
       );
       return 1;
@@ -434,7 +515,9 @@ async function startLink(io: Io, config: Config, rail: WalletRail, session: Wall
     return 1;
   }
   const { replaced } = await savePendingGrant(config.dataDir, rail, key, started.pendingText);
-  if (replaced) line(io.stdout, `Replaced the ${name} sign-in that was pending: its code no longer works with this gateway`);
+  // Only what this process did: the earlier grant left the vault. Its code may still be redeemed by a --finish that
+  // already holds it, so nothing is said about the code itself (invariant 5).
+  if (replaced) line(io.stdout, `Replaced the ${name} sign-in that was pending: it is no longer pending here; the next --finish waits for the code below`);
   const { prompt } = started;
   const page = prompt.verificationUriComplete ?? prompt.verificationUri;
   line(
@@ -496,6 +579,7 @@ async function finishLink(io: Io, config: Config, rail: WalletRail): Promise<num
     return fail(`the pending sign-in code expired at ${isoSeconds(pending.expiresAt)}; nothing was sent to ${name}. ${startAgain} for a new one`);
   }
   let terminal = false;
+  let failed = false;
   try {
     const store = await openLinkStore(io, config);
     try {
@@ -519,9 +603,17 @@ async function finishLink(io: Io, config: Config, rail: WalletRail): Promise<num
     } finally {
       await store.close();
     }
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
-    if (terminal) await grant.discard();
-    else await grant.release();
+    const letGo = terminal ? grant.discard() : grant.release();
+    // A failure to let go of the grant never hides the error that stopped the finish: it is said, and that one thrown.
+    if (failed) {
+      await letGo.catch((letGoError: unknown) => {
+        line(io.stderr, printable(`intent: warning: the pending ${name} sign-in could not be ${terminal ? "deleted" : "put back"}: ${letGoError instanceof Error ? letGoError.message : String(letGoError)}`));
+      });
+    } else await letGo;
   }
   return 0;
 }
@@ -582,7 +674,7 @@ async function keepLink(
     throw error;
   }
   line(io.stdout, printable(`${name} wallet linked: tokens kept in the encrypted vault ${vaultPath(config.dataDir, rail)} (entry #${String(entry.seq)})`));
-  line(io.stdout, `Purchases are still handed off to the merchant's checkout for now: one-tap with ${name} is not yet wired to purchases`);
+  line(io.stdout, `One-tap with ${name} pays from the agent budget only while agent payments are on in the ${name} app and your policy allows one tap; otherwise purchases are handed off to ${name}'s checkout page`);
   if (!linked.refreshIssued) {
     const life = linked.expiresInS === null ? "" : ` (in about ${String(Math.max(1, Math.round(linked.expiresInS / 3600)))} h)`;
     line(io.stdout, `${name} issued no refresh token: when its access token expires${life}, run ${INTENT} wallet link ${rail} again`);
@@ -741,7 +833,7 @@ function printCheck(io: Io, name: string, check: WalletCheck, seq: number): void
   const label = check.complete ? "Not matched" : "Not matched among the orders returned";
   line(io.stdout, `${label}: ${String(check.unmatched.length)}, totalling ${usd(check.unmatchedTotalMinor)}${untotalled}`);
   for (const order of check.unmatched) {
-    const total = order.total === null ? "no total" : `${(order.total.amountMinor / 100).toFixed(2)} ${order.total.currency}`;
+    const total = order.total === null ? "no total" : amountText(order.total);
     const row = [order.createdAt ?? "no time", order.orderRef, total, order.merchantOrigin ?? "no merchant origin"];
     line(io.stdout, printable(`  ${row.join("  ")}`));
   }

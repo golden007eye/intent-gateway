@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openStore, type Store, type StoreFs } from "../store/index.ts";
 import { type FakeShop, startFakeShop } from "../wallet-shop-fake/index.ts";
-import { finishShopLink, openPendingShopLink, openWalletSession, ShopPendingError, startShopLink } from "./index.ts";
+import { connectShop, finishShopLink, openPendingShopLink, openWalletSession, ShopPendingError, startShopLink } from "./index.ts";
 
 let shop: FakeShop | undefined;
 let store: Store | undefined;
@@ -55,6 +55,61 @@ describe("startShopLink and finishShopLink", () => {
     };
     await expect(finishShopLink(session, pending, { ...where, sleep, now: () => now })).rejects.toThrow("ENOSPC");
     expect(shop.oauthRequests.map((q) => q.path)).toEqual(["/oauth/device"]);
+  });
+
+  it("attack: the --start device authorization's disclosure cannot be appended, so no device request leaves", async () => {
+    shop = await startFakeShop();
+    const fail = { on: false };
+    store = await failingStore(fail);
+    const session = openWalletSession(store);
+    fail.on = true;
+    await expect(startShopLink(session, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, clientId: shop.clientId, now: () => 0 })).rejects.toThrow("ENOSPC");
+    expect(shop.oauthRequests).toEqual([]);
+  });
+
+  it("attack: a token poll after a 503 cannot be appended, so only the polls already logged left", async () => {
+    shop = await startFakeShop({ faults: { deviceAnswers: ["unavailable", "ok"] } });
+    const fake = shop;
+    const fail = { on: false };
+    store = await failingStore(fail);
+    const session = openWalletSession(store);
+    const where = { mcpUrl: fake.mcpUrl, authUrl: fake.authUrl, clientId: fake.clientId };
+    let now = 0;
+    const started = await startShopLink(session, { ...where, now: () => now });
+    const sleep = (ms: number): Promise<void> => {
+      now += ms;
+      // The first poll got Shop's 503; the log fails before the next one.
+      if (fake.oauthRequests.length === 2) fail.on = true;
+      return Promise.resolve();
+    };
+    await expect(finishShopLink(session, openPendingShopLink(started.pendingText, where), { ...where, sleep, now: () => now })).rejects.toThrow("ENOSPC");
+    expect(fake.oauthRequests.map((q) => q.path)).toEqual(["/oauth/device", "/oauth/token"]);
+  });
+
+  it("attack: a --wait-budget get_account read cannot be appended, so it is never sent", async () => {
+    shop = await startFakeShop();
+    const fake = shop;
+    const fail = { on: false };
+    store = await failingStore(fail);
+    const session = openWalletSession(store);
+    const where = { mcpUrl: fake.mcpUrl, authUrl: fake.authUrl, clientId: fake.clientId };
+    let now = 0;
+    const sleep = (ms: number): Promise<void> => {
+      now += ms;
+      return Promise.resolve();
+    };
+    const started = await startShopLink(session, { ...where, now: () => now });
+    const { vaultText } = await finishShopLink(session, openPendingShopLink(started.pendingText, where), { ...where, sleep, now: () => now });
+    const wallet = connectShop(session, { ...where, vaultText });
+    // One read goes through while the log works; the next is stopped before it leaves.
+    await wallet.account();
+    const reads = (): number => fake.calls.filter((c) => c.tool === "get_account").length;
+    const before = reads();
+    const sent = fake.calls.length;
+    fail.on = true;
+    await expect(wallet.account()).rejects.toThrow("ENOSPC");
+    expect(reads()).toBe(before);
+    expect(fake.calls.length).toBe(sent);
   });
 
   it("a pending grant is opened only with the client, account server and resource it was made with", async () => {

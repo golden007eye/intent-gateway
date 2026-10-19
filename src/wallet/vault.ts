@@ -11,9 +11,10 @@
 // The key comes from Config.wallet.key (INTENT_WALLET_KEY_FILE, INTENT_WALLET_KEY, or a generated 0600 file in the
 // per-user config folder). Against malware running as the same user this is obfuscation, not protection: that
 // is a known risk (plan AC-X3). Neither the key nor the token ever appears in an error message.
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { constants, type Stats } from "node:fs";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { constants, readFileSync, readlinkSync, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { inspect } from "node:util";
 import { type WalletConfig, type WalletKeySource, WALLET_KEY_TEXT } from "../config/index.ts";
@@ -306,10 +307,13 @@ export async function deleteSecret(dataDir: string, rail: WalletRail): Promise<b
 // exactly as the tokens are (same key, same 0600 temporary file, fsync and rename, same directory checks, read
 // without following a link), as `<data>/wallet/<rail>-pending.enc` with the AAD "intent-wallet-v1|<rail>|pending".
 //
-// A `--finish` claims it first by renaming it to `<rail>-pending.<pid>.<hex>.claim`: rename() moves a file once, so
-// two processes never both hold one grant. A claim whose process is gone (Ctrl-C, a killed shell) is taken over the
-// same way by the next `--finish`; one whose process still runs is left to it. A claim naming this process's pid that
-// this process did not make belongs to a gone one (in a container every run is pid 1).
+// A `--finish` claims it first by renaming it to `<rail>-pending.<host>.<pid>.<claimed at, ms>.<hex>.claim`: rename()
+// moves a file once, so two processes never both hold one grant. `<host>` names the machine and pid namespace the
+// claim was made in (CLAIM_HOST), since a pid means nothing elsewhere: two containers sharing the data dir each run as
+// pid 1, and another host's pid may be alive here by chance. A claim is taken over the same way by the next
+// `--finish` when it was made in this host and its process is gone (Ctrl-C, a killed shell), or, from any host, once
+// it is older than PENDING_GRANT_MAX_MS: its grant has expired by then, so nobody can still be waiting on it. A
+// claim naming this process's pid in this host that this process did not make belongs to a gone one.
 
 /** `<data>/wallet/<rail>-pending.enc`. */
 export function pendingGrantPath(dataDir: string, rail: WalletRail): string {
@@ -317,7 +321,37 @@ export function pendingGrantPath(dataDir: string, rail: WalletRail): string {
 }
 
 const pendingAad = (rail: WalletRail): Buffer => Buffer.concat([MAGIC, Buffer.from(`intent-wallet-v1|${rail}|pending`, "utf8")]);
-const claimName = (rail: WalletRail): RegExp => new RegExp(`^${rail}-pending\\.([0-9]{1,10})\\.[0-9a-f]{16}\\.claim$`);
+const claimName = (rail: WalletRail): RegExp => new RegExp(`^${rail}-pending\\.([0-9a-f]{16})\\.([0-9]{1,10})\\.([0-9]{1,15})\\.[0-9a-f]{16}\\.claim$`);
+
+/**
+ * The longest a pending grant can count: the device flow's 10-minute cap on a sign-in code (MAX_WAIT_MS in the Shop
+ * adapter). A claim is made after its grant was issued, so a claim older than this holds an expired grant.
+ */
+export const PENDING_GRANT_MAX_MS = 10 * 60_000;
+
+/**
+ * This machine and pid namespace, as 16 hex digits: the host name, the kernel's boot id and the pid namespace (each
+ * where the system has it), digested. Two containers differ in their pid namespace even with the same host name.
+ */
+export const CLAIM_HOST: string = (() => {
+  const parts = [hostname()];
+  for (const read of [() => readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), () => readlinkSync("/proc/self/ns/pid")]) {
+    try {
+      parts.push(read());
+    } catch {
+      parts.push("");
+    }
+  }
+  return createHash("sha256").update(parts.join("\n"), "utf8").digest("hex").slice(0, 16);
+})();
+
+/** A claim file, as its name tells it. */
+interface Claim {
+  readonly path: string;
+  readonly host: string;
+  readonly pid: number;
+  readonly claimedAt: number;
+}
 
 /** A pending grant this process claimed: its text, and the two ways to let go of it. */
 export interface ClaimedGrant {
@@ -341,8 +375,8 @@ export async function savePendingGrant(dataDir: string, rail: WalletRail, key: W
   let replaced = (await fs.lstat(file).catch(missing)) !== null;
   await seal(dataDir, file, pendingAad(rail), key, text);
   let swept = false;
-  for (const { path, pid } of await claims(dataDir, rail)) {
-    if (!alive(path, pid) && (await unlinkIfThere(path))) swept = true;
+  for (const claim of await claims(dataDir, rail)) {
+    if (!held(claim) && (await unlinkIfThere(claim.path))) swept = true;
   }
   if (swept) await syncDir(dirname(file));
   replaced ||= swept;
@@ -359,14 +393,14 @@ export async function claimPendingGrant(dataDir: string, rail: WalletRail, key: 
   const dir = dirname(file);
   await checkOwnDir(dataDir, true);
   await checkOwnDir(dir, true);
-  const mine = join(dir, `${rail}-pending.${String(process.pid)}.${randomBytes(8).toString("hex")}.claim`);
+  const mine = join(dir, `${rail}-pending.${CLAIM_HOST}.${String(process.pid)}.${String(Date.now())}.${randomBytes(8).toString("hex")}.claim`);
   // The pending file first; the claims are listed only after that rename failed, so a claim made meanwhile is seen.
-  const held: { pid: number | null } = { pid: null };
+  const busy: { pid: number | null } = { pid: null };
   const candidates = async function* (): AsyncGenerator<string> {
     yield file;
-    for (const { path, pid } of await claims(dataDir, rail)) {
-      if (alive(path, pid)) held.pid ??= pid;
-      else yield path;
+    for (const claim of await claims(dataDir, rail)) {
+      if (held(claim)) busy.pid ??= claim.pid;
+      else yield claim.path;
     }
   };
   for await (const candidate of candidates()) {
@@ -388,7 +422,7 @@ export async function claimPendingGrant(dataDir: string, rail: WalletRail, key: 
     OWN_CLAIMS.add(mine);
     return { kind: "claimed", grant: claimed(text, mine, file) };
   }
-  return held.pid === null ? { kind: "none" } : { kind: "busy", pid: held.pid };
+  return busy.pid === null ? { kind: "none" } : { kind: "busy", pid: busy.pid };
 }
 
 function claimed(text: string, mine: string, file: string): ClaimedGrant {
@@ -397,10 +431,12 @@ function claimed(text: string, mine: string, file: string): ClaimedGrant {
     text,
     async release() {
       try {
-        // link() fails when a later --start has saved a newer grant: that one wins.
+        // link() fails when a later --start has saved a newer grant (EEXIST): that one wins. ENOENT: this claim was
+        // taken over (it outlived PENDING_GRANT_MAX_MS), so there is nothing left to put back.
         await fs.link(mine, file);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST" && code !== "ENOENT") throw error;
       }
       await unlinkIfThere(mine);
       OWN_CLAIMS.delete(mine);
@@ -414,8 +450,8 @@ function claimed(text: string, mine: string, file: string): ClaimedGrant {
   };
 }
 
-/** The claim files of `rail`, with the pid each names. */
-async function claims(dataDir: string, rail: WalletRail): Promise<{ path: string; pid: number }[]> {
+/** The claim files of `rail`, with the host, pid and claim time each names. */
+async function claims(dataDir: string, rail: WalletRail): Promise<Claim[]> {
   const dir = dirname(pendingGrantPath(dataDir, rail));
   await checkOwnDir(dataDir, true);
   await checkOwnDir(dir, true);
@@ -425,18 +461,25 @@ async function claims(dataDir: string, rail: WalletRail): Promise<{ path: string
   });
   const pattern = claimName(rail);
   return names.flatMap((name) => {
-    const pid = pattern.exec(name)?.[1];
-    return pid === undefined ? [] : [{ path: join(dir, name), pid: Number(pid) }];
+    const [, host, pid, claimedAt] = pattern.exec(name) ?? [];
+    return host === undefined || pid === undefined || claimedAt === undefined ? [] : [{ path: join(dir, name), host, pid: Number(pid), claimedAt: Number(claimedAt) }];
   });
 }
 
 /** The claim files this process holds now. */
 const OWN_CLAIMS = new Set<string>();
 
-/** Whether the claim at `path` is held by a running process (another user's counts as running). */
-function alive(path: string, pid: number): boolean {
-  // This pid with a claim this process did not make: a gone process had it (in a container every run is pid 1).
-  if (pid === process.pid) return OWN_CLAIMS.has(path);
+/**
+ * Whether a claim is still held: made within PENDING_GRANT_MAX_MS, and, when made in this host, by a running process
+ * (another user's counts as running). A claim from another host or pid namespace cannot be checked, so only its age
+ * frees it.
+ */
+function held(claim: Claim): boolean {
+  if (Date.now() - claim.claimedAt > PENDING_GRANT_MAX_MS) return false;
+  if (claim.host !== CLAIM_HOST) return true;
+  const { pid } = claim;
+  // This pid with a claim this process did not make: a gone process had it (a container restarted as pid 1).
+  if (pid === process.pid) return OWN_CLAIMS.has(claim.path);
   try {
     process.kill(pid, 0);
     return true;

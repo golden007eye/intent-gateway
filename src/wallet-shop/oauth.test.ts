@@ -11,7 +11,8 @@ import { type DeviceGrantPrompt, linkShop, openWalletSession, ShopLinkError } fr
 import { openStore, type Store, type StoreFs } from "../store/index.ts";
 import { runVerify } from "../verify/index.ts";
 import { FAKE_BUYER, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
-import { DEVICE_GRANT, parseShopCredentials, SHOP_SCOPE } from "./index.ts";
+import { PENDING_GRANT_MAX_MS } from "../wallet/index.ts";
+import { DEVICE_GRANT, MAX_WAIT_MS, parseShopCredentials, SHOP_SCOPE, startDeviceFlow } from "./index.ts";
 
 type Json = Record<string, unknown>;
 
@@ -194,5 +195,55 @@ describe("linkShop: the device flow through the disclosure core", () => {
     await expect(run.link()).rejects.toThrow("ENOSPC");
     expect(run.shop.oauthRequests).toEqual([]);
     expect(run.prompts).toEqual([]);
+  });
+});
+
+describe("startDeviceFlow with Shop's own account server (INTENT_SHOP_AUTH_URL unset)", () => {
+  /** A caller that answers the device authorization with these pages, as Shop would. */
+  const answering = (uri: string, complete?: string) => ({
+    call: () =>
+      Promise.resolve({
+        status: 200,
+        headers: [],
+        body: Buffer.from(
+          JSON.stringify({ device_code: "dc-0123456789", user_code: "ABCD-EFGH", verification_uri: uri, ...(complete === undefined ? {} : { verification_uri_complete: complete }), expires_in: 600 }),
+        ),
+      }),
+  });
+  const start = (uri: string, complete?: string, shopPagesOnly = true) =>
+    startDeviceFlow(answering(uri, complete), { clientId: "client", resource: "https://mcp.shop.com", now: () => 0, shopPagesOnly });
+
+  it("prints a page on shop.app or a subdomain of it", async () => {
+    expect((await start("https://shop.app/activate")).prompt.verificationUri).toBe("https://shop.app/activate");
+    const sub = await start("https://accounts.shop.app/activate", "https://accounts.shop.app/activate?user_code=ABCD-EFGH");
+    expect(sub.prompt.verificationUriComplete).toBe("https://accounts.shop.app/activate?user_code=ABCD-EFGH");
+  });
+
+  it("attack: a lookalike host, http, another port, credentials or a fragment fails the flow with a clear error; nothing is printed", async () => {
+    const bad = [
+      "https://shop.app.evil.example/activate",
+      "https://evilshop.app/activate",
+      "https://shop.apps/activate",
+      "https://shop.app./activate",
+      "https://shop.app@evil.example/activate",
+      "https://user@shop.app/activate",
+      "https://shop.app:8443/activate",
+      "https://shop.app/activate#x",
+      "https://xn--shp-qma.app/activate",
+      "http://shop.app/activate",
+    ];
+    // Credentials and plain http are refused for any server (isWebUrl); the rest by the shop.app rule, in its own words.
+    for (const uri of bad) await expect(start(uri), uri).rejects.toThrow(ShopLinkError);
+    await expect(start(bad[0] ?? "")).rejects.toThrow("Shop's device authorization named a page to approve on that is not https on shop.app, so it is not shown");
+    // The complete URL is held to the same rule.
+    await expect(start("https://shop.app/activate", "https://shop.app.evil.example/activate?user_code=ABCD-EFGH")).rejects.toThrow(ShopLinkError);
+  });
+
+  it("the vault frees a claim from another host only after the longest a code can count", () => {
+    expect(PENDING_GRANT_MAX_MS).toBe(MAX_WAIT_MS);
+  });
+
+  it("with INTENT_SHOP_AUTH_URL set (a test or proxy server), any https page is printed", async () => {
+    expect((await start("https://auth.example/activate", undefined, false)).prompt.verificationUri).toBe("https://auth.example/activate");
   });
 });

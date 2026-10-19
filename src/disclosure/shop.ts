@@ -90,6 +90,11 @@ function accountsOf(owner: DisclosedCloud | WalletSession, connection: Pick<Shop
   });
 }
 
+/** Whether `vaultText` holds a token connectShop can use (it falls back to the gateway's own client, as connectShop does). */
+export function shopVaultHasToken(vaultText: string): boolean {
+  return parseShopCredentials(vaultText, DEFAULT_SHOP_CLIENT_ID) !== null;
+}
+
 /** The client id the wallet in `vaultText` was linked with, or null when the vault names none (an older vault). */
 export function linkedShopClientId(vaultText: string): string | null {
   return parseShopCredentials(vaultText)?.clientId ?? null;
@@ -122,7 +127,14 @@ export interface LinkedShopVault {
  */
 export async function linkShop(owner: DisclosedCloud | WalletSession, link: ShopLink): Promise<LinkedShopVault> {
   const resource = new URL(link.mcpUrl ?? DEFAULT_SHOP_MCP_URL).origin;
-  const linked = await runDeviceFlow(accountsOf(owner, link), { clientId: link.clientId ?? DEFAULT_SHOP_CLIENT_ID, resource, show: link.show, sleep: link.sleep, now: link.now });
+  const linked = await runDeviceFlow(accountsOf(owner, link), {
+    clientId: link.clientId ?? DEFAULT_SHOP_CLIENT_ID,
+    resource,
+    show: link.show,
+    sleep: link.sleep,
+    now: link.now,
+    shopPagesOnly: link.authUrl === null,
+  });
   return vaultOf(linked);
 }
 
@@ -149,7 +161,7 @@ export interface StartedShopLink {
  */
 export async function startShopLink(owner: DisclosedCloud | WalletSession, link: ShopLinkWhere & { readonly now: () => number }): Promise<StartedShopLink> {
   const where = settingsOf(link);
-  const { grant, prompt } = await startDeviceFlow(accountsOf(owner, link), { clientId: where.clientId, resource: where.resource, now: link.now });
+  const { grant, prompt } = await startDeviceFlow(accountsOf(owner, link), { clientId: where.clientId, resource: where.resource, now: link.now, shopPagesOnly: link.authUrl === null });
   return { pendingText: deviceGrantText(grant, where.authUrl), prompt, expiresAt: grant.expiresAt };
 }
 

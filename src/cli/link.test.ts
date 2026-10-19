@@ -101,7 +101,8 @@ describe("intent wallet link shop", () => {
     expect(r.out).toContain(`check that it shows the code ${s.shop.userCode}:\n  ${s.shop.authUrl}activate\n`);
     expect(r.out).toContain("Shop wallet linked: tokens kept in the encrypted vault");
     expect(r.out).toContain("Shop budget left for the gateway: 50.00 USD");
-    expect(r.out).toContain("Purchases are still handed off to the merchant's checkout for now: one-tap with Shop is not yet wired to purchases");
+    expect(r.out).toContain("One-tap with Shop pays from the agent budget only while agent payments are on in the Shop app and your policy allows one tap; otherwise purchases are handed off to Shop's checkout page");
+    expect(r.out).not.toContain("not yet wired");
     expect(r.out).not.toContain("refresh token");
 
     const vault = await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"));

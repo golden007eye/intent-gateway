@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { readChain } from "../store/index.ts";
-import { loadSecret, pendingGrantPath, savePendingGrant, vaultPath, WalletKey } from "../wallet/index.ts";
+import { CLAIM_HOST, loadSecret, pendingGrantPath, savePendingGrant, saveSecret, vaultPath, WalletKey } from "../wallet/index.ts";
 import { SHOP_PUBLIC_CLIENT_ID } from "../disclosure/index.ts";
 import { FAKE_BUYER, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
 import { type Io, main } from "./index.ts";
@@ -222,10 +222,10 @@ describe("intent wallet link shop --start, then --finish", () => {
     expect(pendingFiles(s)).toEqual([]);
   });
 
-  it("a finish in a new process that got the pid of a killed one (pid 1 in every container run): takes the grant over", async () => {
+  it("a finish in a new process that got the pid of a killed one (a container restarted as pid 1): takes the grant over", async () => {
     const s = await setup();
     await s.run(START);
-    renameSync(pendingGrantPath(s.dir, "shop"), join(s.dir, "wallet", `shop-pending.${String(process.pid)}.0123456789abcdef.claim`));
+    renameSync(pendingGrantPath(s.dir, "shop"), join(s.dir, "wallet", `shop-pending.${CLAIM_HOST}.${String(process.pid)}.${String(Date.now())}.0123456789abcdef.claim`));
     const r = await s.run(FINISH);
     expect(r.code, r.err).toBe(0);
     expect(pendingFiles(s)).toEqual([]);
@@ -236,7 +236,9 @@ describe("intent wallet link shop --start, then --finish", () => {
     await s.run(START);
     const again = await s.run(START);
     expect(again.code).toBe(0);
-    expect(again.out).toMatch(/^Replaced the Shop sign-in that was pending: its code no longer works with this gateway\nOpen /);
+    // Only what this gateway did (invariant 5): the old code may still be redeemed by a --finish that holds it.
+    expect(again.out).toMatch(/^Replaced the Shop sign-in that was pending: it is no longer pending here; the next --finish waits for the code below\nOpen /);
+    expect(again.out).not.toContain("no longer works");
     expect(pendingFiles(s)).toEqual(["shop-pending.enc"]);
   });
 
@@ -275,7 +277,7 @@ describe("intent wallet link shop --start, then --finish", () => {
     // Above the largest pid Linux can give (2^22), so no process has it.
     const gone = 4_194_305;
     const file = pendingGrantPath(s.dir, "shop");
-    renameSync(file, join(s.dir, "wallet", `shop-pending.${String(gone)}.0123456789abcdef.claim`));
+    renameSync(file, join(s.dir, "wallet", `shop-pending.${CLAIM_HOST}.${String(gone)}.${String(Date.now())}.0123456789abcdef.claim`));
     const r = await s.run(FINISH);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("Shop wallet linked");
@@ -448,6 +450,75 @@ describe("agent payments on, but too little left for one purchase", () => {
   });
 });
 
+describe("one purchase is the smallest cap; a limit already at the suggestion waits for Shop's renewal", () => {
+  /** Weekly 10 with per-order 50 (the schema allows it): one purchase is at most $10, the suggestion $40. */
+  const WEEKLY_10 = "version: 1\napproval: passkey\nspend:\n  per_order_usd: 50\n  per_week_usd: 10\n";
+
+  async function linked(faults: FakeShopFaults, policy = WEEKLY_10): Promise<Setup> {
+    const s = await setup(faults);
+    mkdirSync(s.dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(s.dir, "policy.yaml"), policy);
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    return s;
+  }
+
+  it("$10 left is enough for one purchase under weekly 10 (the per-order cap of 50 is not the threshold)", async () => {
+    const s = await linked({ budgetLimitMinor: 4000, budgetMinor: 1000 });
+    expect((await s.run(["wallet", "status", "--wait-budget"])).out).toBe("Agent payments on: $40.00 per month, $10.00 left\n");
+  });
+
+  it("limit already at the suggestion but used up this period: wait for the renewal Shop names, never 'raise it to' the same amount", async () => {
+    const s = await linked({ budgetLimitMinor: 4000, budgetMinor: 500 });
+    const status = await s.run(["wallet", "status"]);
+    const wait = "Agent payments are on, but only $5 is left until Shop renews it at 2026-11-01T00:00:00Z; the limit is already at least the suggested $40, so wait for that renewal rather than raising it.\n";
+    expect(status.out).toContain(`Shop budget left for the gateway: 5.00 USD\n${wait}`);
+    expect(status.out).not.toContain("raise it to");
+    const late = await s.run(["wallet", "status", "--wait-budget", "--timeout", "5"]);
+    expect(late.code).toBe(1);
+    expect(late.out).toBe(wait);
+    expect(late.err).toBe(
+      "intent: Shop agent payments are still low after 5 s: only $5 is left until Shop renews it at 2026-11-01T00:00:00Z, less than one purchase may cost ($10); the limit is already at least $40, so wait for that renewal, then run intent wallet status --wait-budget again\n",
+    );
+    // Without renews_at, the period Shop names.
+    s.shop.faults.budgetRenewsAt = null;
+    expect((await s.run(["wallet", "status"])).out).toContain("only $5 is left until Shop renews it (per month); the limit is already at least the suggested $40");
+  });
+
+  it("a limit below the suggestion: still 'raise it to' the suggestion", async () => {
+    const s = await linked({ budgetLimitMinor: 3000, budgetMinor: 500 });
+    expect((await s.run(["wallet", "status"])).out).toContain("https://shop.app/account/connections\nAgent payments are on, but only $5 is left; raise it to $40.\n");
+  });
+
+  it("a per-day cap below per-order sets one purchase too", async () => {
+    const s = await linked({ budgetLimitMinor: 40_000, budgetMinor: 2500 }, "version: 1\napproval: passkey\nspend:\n  per_order_usd: 40\n  per_day_usd: 25\n");
+    expect((await s.run(["wallet", "status", "--wait-budget"])).out).toBe("Agent payments on: $400.00 per month, $25.00 left\n");
+  });
+});
+
+describe("wallet status with a policy that does not load", () => {
+  it("the account is read and its budget printed; the skipped check is blamed on the policy, never on Shop", async () => {
+    const s = await setup({ budgetLimitMinor: 1500, budgetMinor: 602 });
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    writeFileSync(join(s.dir, "policy.yaml"), "version: 1\napproval: none\n");
+    const r = await s.run(["wallet", "status"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("Shop budget left for the gateway: 6.02 USD\n");
+    expect(r.err).toMatch(/^intent: the Shop account was read, but the agent-payments check was skipped: the policy did not load: .+\n$/);
+    expect(r.err).not.toContain("could not be read");
+  });
+});
+
+describe("amounts in a currency's own minor unit", () => {
+  it("JPY has no minor unit, KWD has three digits; neither is divided by 100", async () => {
+    const s = await setup({ accountCurrency: "JPY", budgetLimitMinor: 15_000, budgetMinor: 1500 });
+    expect((await s.run(["wallet", "link", "shop"])).out).toContain("Shop budget left for the gateway: 1500 JPY\n");
+    expect((await s.run(["wallet", "status", "--wait-budget"])).out).toMatch(/^Agent payments on: 15000 JPY per month, 1500 JPY left\nNote: /);
+    s.shop.faults.accountCurrency = "KWD";
+    expect((await s.run(["wallet", "status"])).out).toContain("Shop budget left for the gateway: 1.500 KWD\n");
+    expect((await s.run(["wallet", "status", "--wait-budget"])).out).toMatch(/^Agent payments on: 15.000 KWD per month, 1.500 KWD left\nNote: /);
+  });
+});
+
 describe("intent wallet status --wait-budget", () => {
   const WAIT = ["wallet", "status", "--wait-budget"];
   const getAccounts = (s: Setup) => s.shop.calls.filter((c) => c.tool === "get_account").length;
@@ -568,6 +639,29 @@ describe("intent wallet status --wait-budget", () => {
     expect(r.code).toBe(1);
     expect(r.err).toContain("Shop answered that this connection can no longer read the account");
     expect(s.sleeps).toEqual([5000]);
+  });
+
+  it("a vault with no token: fails at once naming --start, with nothing sent and no waiting", async () => {
+    const s = await linked();
+    await saveSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"), '{"v":1}');
+    const before = s.shop.calls.length;
+    const r = await s.run(WAIT);
+    expect(r.code).toBe(1);
+    expect(r.err).toBe(
+      "intent: the Shop wallet vault holds no token, so there is no budget to read; nothing was sent to Shop. Run intent wallet unlink shop, then intent wallet link shop --start\n",
+    );
+    expect(s.shop.calls.length - before).toBe(0);
+    expect(s.sleeps).toEqual([]);
+  });
+
+  it("a budget left but no limit on it: the timeout says so, never 'no agent payments'", async () => {
+    const s = await linked({ budgetLimitMinor: 0, budgetMinor: 5000 });
+    const r = await s.run([...WAIT, "--timeout", "5"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toBe(
+      "intent: Shop shows $50.00 left for this connection after 5 s, but no limit on it, so the gateway does not count agent payments as on: open https://shop.app/account/connections, tap intent, set a limit of at most $400 under Allow agent to pay for me, then run intent wallet status --wait-budget again\n",
+    );
+    expect(r.err).not.toContain("no Shop agent payments");
   });
 
   it("no wallet linked: exit 1, nothing sent; a bad --timeout is refused", async () => {
