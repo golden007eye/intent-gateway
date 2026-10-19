@@ -13,10 +13,12 @@ export function nodeSupported(version: string): boolean {
   return major >= 26;
 }
 
+/** How to get a supported Node, with each tool the onboarding prompt detects. Homebrew's node@24 is keg-only: it is not on PATH until added. */
+export const NODE_FIX =
+  "Install Node 24 LTS: nvm install 24, fnm install 24, brew install node@24 (then put $(brew --prefix node@24)/bin first on PATH), " +
+  "or the installer at https://nodejs.org/en/download; then run it again from a new terminal.";
+
 /** The one line the gateway prints, then exits, when it runs on a Node outside SUPPORTED_NODE. */
 export function unsupportedNodeLine(version: string): string {
-  return (
-    `intent-gateway needs ${SUPPORTED_NODE}; this is Node ${version.replace(/^v/, "")}. ` +
-    "Upgrade with nvm install 24, brew upgrade node, or the installer at https://nodejs.org/en/download, then run it again."
-  );
+  return `intent-gateway needs ${SUPPORTED_NODE}; this is Node ${version.replace(/^v/, "")}. ${NODE_FIX}`;
 }

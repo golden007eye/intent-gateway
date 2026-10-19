@@ -47,7 +47,8 @@ describe("unsupportedNodeLine", () => {
     const text = unsupportedNodeLine("v22.17.1");
     expect(text).toBe(
       "intent-gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+; this is Node 22.17.1. " +
-        "Upgrade with nvm install 24, brew upgrade node, or the installer at https://nodejs.org/en/download, then run it again.",
+        "Install Node 24 LTS: nvm install 24, fnm install 24, brew install node@24 (then put $(brew --prefix node@24)/bin first on PATH), " +
+        "or the installer at https://nodejs.org/en/download; then run it again from a new terminal.",
     );
     expect(text).not.toContain("\n");
   });

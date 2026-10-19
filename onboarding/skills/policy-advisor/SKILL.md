@@ -1,77 +1,81 @@
 ---
 name: policy-advisor
-description: Sets the developer's Shop budget and writes their intent-gateway policy (spend limits, stores, completion mode) by asking plain questions one at a time and applying the answers only with `intent policy` commands. Use when the developer runs the intent onboarding, or asks to set or change their intent spend limits, Shop budget or policy.
+description: Shows the developer's intent-gateway policy in the gateway's panel, applies the default policy ($20 per order, $40 per 7 days) only when there is no policy file, and changes the policy only when the developer asks, showing each change as a diff first. Writes the policy only with `intent policy` commands. Use when the developer runs the intent onboarding, or asks to see or change their intent spend limits, stores, completion mode or Shop agent payments.
 ---
 
 # Policy advisor for intent-gateway 0.1.0-preview.5
 
-You help the developer decide how much their agent may spend through intent, and you write their gateway policy. Work in this order, one step at a time:
+You show the developer their gateway policy and change it only when they ask. Work in this order:
 
-1. the Shop budget,
-2. the gateway limits,
-3. the stores,
-4. the completion mode,
-5. the test run.
+1. read the policy,
+2. show it in the panel,
+3. change it only when the developer asks,
+4. the test run,
+5. a restart, only if the policy changed.
 
-Ask one plain question at a time and wait for the answer. Never decide for the developer. Why: these are the developer's spending rules, and each answer changes what the next question means.
+Do not narrate commands or paste their output: between developer actions, say only one short status line, in the onboarding's form when it runs you (`✓ <n>/9  <what happened>. Next: <what>.`). Each developer action is a block in your own reply: the bold **Your turn:** marker and a short label, one action in short lines, its link on its own line, and "Reply done" only when no command can see that the action is done. Say nothing after a block while the developer acts.
 
 ## Rules you never break
 
-- Write the policy only with the `intent policy` commands named below. Never edit `policy.yaml` or `policy.lock` by hand. Why: `intent policy show` reports a hand-edited file as not matching its lock, and only `intent policy add` checks that a change can only narrow the policy.
-- Never suggest an amount above the preview ceiling: $50 per order, $100 per rolling 7 days, and so at most $400 for a Shop budget. Why: Intent Cloud enforces that ceiling for the preview (US dollars only), and a policy can only narrow it.
+- Write the policy only with the `intent policy` commands named below, and remove it only as "Loosen a limit" says. Never edit `policy.yaml` or `policy.lock` by hand. Why: `intent policy show` reports a hand-edited file as not matching its lock.
+- The policy file is the developer's: change it only when they ask, and show the change first. Run `intent policy add <name>` without `--yes`: with no terminal it prints the change as a diff, writes nothing, and exits 2 with `not applied: stdin is not a terminal, so no one can confirm the change; re-run with --yes to apply it`. That exit and that line are the expected preview, not an error. Show the diff, ask, and run it again with `--yes` only when they agree. Why: `intent policy add` narrows the developer's current file, so a change they did not ask for takes away something they chose.
+- Never suggest an amount above the preview ceiling: $50 per order, $100 per rolling 7 days, and so at most $400 for Shop agent payments. Why: Intent Cloud enforces that ceiling for the preview (US dollars only), and a policy cannot go above it.
 - Never suggest `per-order-60`, `weekly-150` or `strict-default`. Why: the first two are above the ceiling, and `strict-default` sends no ZIP code, so the gateway blocks every search.
 - Run each command as `npx -y intent-gateway@0.1.0-preview.5 <command>`; where this file writes `intent <command>`, that is what it means. If `intent --version` already prints `0.1.0-preview.5`, `intent <command>` works as it is.
 
-## 1. The Shop budget (first, and the most important)
+## Shop agent payments
 
-Say this to the developer plainly, in your own words:
+Shop's agent payments are Shop's permission for the agent to pay at all, with an amount. It is not a second budget to plan: the gateway sets the amount from the policy, as 4 times its weekly limit ($160 with the default $40 a week; at most $400 for Shop agent payments when the policy sets no weekly limit). When the onboarding has already set it, do not ask about it again; discuss another amount only if the developer asks.
 
-> The budget you set in the Shop app is the only hard stop on spending. The gateway keeps your Shop token on this computer, and any program running as you, including an agent with a shell, can read it and pay Shop directly, without going through the gateway or through Intent Cloud. Only the Shop budget limits that.
+When you say what it is for, say it in one line: Shop says it enforces it itself, as a safety net, while the gateway policy does the day-to-day limiting. And in one plain sentence:
 
-If the developer has no Shop account yet:
+> It is the only stop an agent with shell access cannot get around: the gateway keeps your Shop token on this computer, and any program running as you can read it and pay Shop directly, without going through the gateway or through Intent Cloud.
 
-1. Ask them to create one in the Shop app (iOS or Android) or at https://shop.app, signing up with their own email or phone number.
-2. Ask them to add a payment card in the Shop app. They give the card to Shop, never to you or to the gateway.
-3. Wait until they say it is done. Never create the account or type the card details for them.
+## 1. Read the policy
 
-Then set the budget with them:
+Run `intent policy show`.
 
-- Suggest a budget of $160. That is 4 times the suggested weekly limit of $40.
-- The budget is at or below 4 times the weekly limit they choose in step 2, and never above $400 (4 times the $100 weekly ceiling). If they choose a lower weekly limit later, come back and lower the budget to match.
-- In the Shop app, they turn on "Allow agent to pay" for the intent connection and enter the budget. If the app lets them pick a period, they pick a month: the amounts here are for a month.
-- If the Shop app shows a currency other than US dollars, tell them that this preview's limits are in US dollars only. They may set the budget in their currency at no more than what $160 is worth to them today, and never more than what $400 is worth. A purchase priced in another currency may be refused.
-- If they cannot find "Allow agent to pay", tell them that one tap is not available for their account. Purchases then go to Shop's checkout page, where they pay by hand.
+- If it says `no policy file at`, there is no policy yet (the skill runs outside the onboarding): apply the default policy, $20 per order and $40 per 7 days, and say so in one line:
 
-Ask them to confirm the amount they entered. Check it with `intent wallet status` (it shows the budget Shop returns for the connection, once the wallet is linked).
+```console
+$ intent policy add per-order-20 --yes
+$ intent policy add weekly-40 --yes
+```
 
-## 2. The gateway limits
+- Otherwise the policy file is the developer's: never apply the defaults again, with or without `--yes`.
 
-Ask: "Shall I limit each purchase to $20 and each 7 days to $40? Every purchase still needs your passkey."
+## 2. Show it in the panel
 
-- If yes, run `intent policy add per-order-20` first without `--yes`. With no terminal it prints the change as a diff and writes nothing. Show the developer the diff. When they agree, run `intent policy add per-order-20 --yes`.
-- Do the same for the weekly limit: `intent policy add weekly-40`, show the diff, then `intent policy add weekly-40 --yes`.
-- If they want only one of the two limits, apply only that one.
-- If they want other amounts: the policy library offers these limits only. Without a policy limit, the ceiling ($50 per order, $100 per 7 days) still applies. If they also want a daily limit, `intent policy add daily-40` limits any 24 hours to $40.
+Start `intent panel` in the background; it keeps running. Read the address from its `panel: http://127.0.0.1:<port>/` line. The panel shows your rules; changes go through you, with the commands below. If the developer says nothing about the rules, or keeps them, go on to the test run. Show:
 
-## 3. The stores
+> **Your turn:** look at your rules (optional)
+>
+> Here are your rules. Keep them, or tell me what to change.
+>
+> http://127.0.0.1:<port>/#/policy
 
-Tell them: the agent may buy from any store Shop reaches.
+## 3. Change it only when the developer asks
 
-Ask: "Do you want to block some stores, or allow only a few?"
+Each change: run the command without `--yes`, show the diff, and run it with `--yes` only when they agree.
 
-- If no, nothing changes.
-- If yes, tell them plainly that no `intent policy` command writes your own store names yet. Note the stores they named in your reply so they keep them, and do not edit `policy.yaml`. Do not use `block-dropship`: it blocks two placeholder names only.
+- A daily limit too: `intent policy add daily-40` limits any 24 hours to $40, then `intent policy add daily-40 --yes`.
+- Always pay by hand on Shop's checkout page, never in one tap: `intent policy add handoff-only`, then `intent policy add handoff-only --yes`.
+- A tighter per-order or weekly limit: `intent policy add per-order-20` or `intent policy add weekly-40` if not applied yet, then the same with `--yes`. The policy library offers these limits only; without a policy limit, the ceiling ($50 per order, $100 per 7 days) still applies.
+- Stores: the agent may buy from any store Shop reaches. No `intent policy` command writes your own store names yet: note the stores they named in your reply so they keep them, and do not edit `policy.yaml`. Do not use `block-dropship`: it blocks two placeholder names only.
 
-## 4. The completion mode
+### Loosen a limit
 
-Ask: "When you approve a purchase, should the gateway complete it in one tap with your Shop budget, or should you always pay by hand on Shop's checkout page?"
+`intent policy add` only narrows the current file, so a looser policy starts from no file. Only when the developer asks to loosen or drop a limit:
 
-- One tap (the default): nothing changes. When one tap is not possible (no budget, or a store that refuses agents), the purchase goes to Shop's checkout page instead.
-- By hand only: run `intent policy add handoff-only` without `--yes`, show the diff, then run `intent policy add handoff-only --yes` when they agree.
+1. Tell them which limits they keep and which go, and ask before you remove anything.
+2. Remove the policy file and its lock: the paths are the `policy:` line of `intent policy show` and `policy.lock` beside it. With no file, the gateway uses the bundled `zip-only` policy.
+3. Add back only the limits they want, each as above: without `--yes`, the diff, then with `--yes`.
 
-## 5. The test run
+If the weekly limit changed, say in one line that they can change agent payments in Shop to 4 times the new weekly limit, where they turned it on.
 
-The cases files sit next to this skill, in `.claude/skills/policy-advisor/cases/`. Always run the first one; run each of the others only if you applied that policy:
+## 4. The test run
+
+The cases files sit next to this skill, in `.claude/skills/policy-advisor/cases/`. Always run the first one; run each of the others only if that policy is applied:
 
 ```console
 $ intent policy test .claude/skills/policy-advisor/cases/base.yaml
@@ -82,8 +86,14 @@ $ intent policy test .claude/skills/policy-advisor/cases/handoff-only.yaml
 
 Each must end with `0 failed`. If one fails, show the developer the `FAIL` line and run `intent policy show`; do not edit any file to make it pass.
 
-Then run `intent policy show` and tell the developer, in two or three lines:
+Then run `intent policy show` and say, in one or two lines: the limits now in the policy, and that every purchase through intent still needs their passkey.
 
-- the limits now in their policy, and their Shop budget;
-- that every purchase through intent still needs their passkey: the agent prepares the cart, and only they approve it;
-- that a running gateway reads its policy when it starts, so Claude Code must restart the `intent` server (quit and run `claude --continue`) before the policy applies.
+## 5. A restart, only if the policy changed
+
+A running gateway reads its policy when it starts. If nothing changed, say nothing about a restart. When the onboarding runs you, say nothing either: its restart before the first purchase picks up any change. Otherwise, if you applied, changed or removed anything in this skill, show:
+
+> **Your turn:** restart Claude Code
+>
+> Quit Claude Code. In a new terminal in this folder, run this and say "continue":
+>
+> `claude --continue`
