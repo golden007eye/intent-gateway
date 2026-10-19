@@ -10,23 +10,46 @@
 // only when the rail acknowledged both revocations (HTTP 200, RFC 7009). Revocation does not remove the connection in
 // the Shop app (S1 step 12), so the output always says to remove it there (invariant 5).
 // check (plan G12) asks the rail for recent orders, through the log, and says which ones no chained outcome names.
+// link --start / --finish split the link in two processes, for an agent's shell that shows output only when a command
+// ends; status --wait-budget reads the account through the log until Shop shows agent payments on.
 import { type Config, INTENT } from "../config/index.ts";
-import { connectShop, DEFAULT_SHOP_CLIENT_ID, type DeviceGrantPrompt, linkedShopClientId, linkShop, openWalletSession, ShopLinkError, type WalletSession } from "../disclosure/index.ts";
+import {
+  connectShop,
+  DEFAULT_SHOP_CLIENT_ID,
+  type DeviceGrantPrompt,
+  finishShopLink,
+  type LinkedShopVault,
+  linkedShopClientId,
+  linkShop,
+  openPendingShopLink,
+  openWalletSession,
+  type PendingShopLink,
+  ShopLinkError,
+  ShopPendingError,
+  SHOP_CONNECTIONS_URL,
+  SHOP_PUBLIC_CLIENT_ID,
+  ShopTransportError,
+  startShopLink,
+  type WalletSession,
+} from "../disclosure/index.ts";
 import { approvalQr, type OneTapOptions } from "../gateway/index.ts";
-import { openStore } from "../store/index.ts";
+import { openStore, type Store } from "../store/index.ts";
 import { printable, printableLines } from "../ui/index.ts";
 import {
   CHECK_CURRENCY,
   chainedOrderRefs,
   checkedEntry,
   checkOrders,
+  claimPendingGrant,
   deleteSecret,
+  type GrantClaim,
   describeKeySource,
   hasSecret,
   isWalletRail,
   loadSecret,
   loadWalletKey,
   openCheckoutVault,
+  savePendingGrant,
   saveSecret,
   vaultPath,
   type WalletAccount,
@@ -35,8 +58,12 @@ import {
   WALLET_RAILS,
   type WalletRail,
   walletKeyWarnings,
+  type WalletMoney,
+  WalletRailError,
   WalletVaultError,
+  type BudgetRenewal,
 } from "../wallet/index.ts";
+import { activePolicy } from "./setup.ts";
 import { CliError, type Io, line } from "./io.ts";
 import { parseSince } from "./log-flags.ts";
 import { leaseNotice } from "./waiting.ts";
@@ -44,6 +71,25 @@ import { leaseNotice } from "./waiting.ts";
 const RAIL_NAMES: Readonly<Record<WalletRail, string>> = { shop: "Shop" };
 /** Where the developer revokes the gateway's access by hand. */
 const RAIL_SETTING: Readonly<Record<WalletRail, string>> = { shop: "the Shop app: Account › Connections" };
+
+/** How the Shop app names a connection: Shop's public client shows as "Personal Agent" (S1), any other as "intent". */
+const connectionName = (clientId: string | null): string => (clientId === SHOP_PUBLIC_CLIENT_ID ? "Personal Agent" : "intent");
+
+/**
+ * Where the developer changes agent payments, from what this run knows: the connections page Shop named (printed only
+ * when it is https on shop.app), and the connection by the client recorded in the vault. `page` undefined: no
+ * answer from Shop yet, so S1's page; null: Shop named a page elsewhere, so none is printed.
+ */
+interface AgentPaymentsPlace {
+  readonly page: string | null | undefined;
+  readonly connection: string;
+}
+
+/** "open <page>, tap <connection>" (or "tap <connection>" without a page to print). */
+const openAndTap = (place: AgentPaymentsPlace): string => {
+  const page = place.page === undefined ? SHOP_CONNECTIONS_URL : place.page;
+  return `${page === null ? "" : `open ${page}, `}tap ${place.connection}`;
+};
 
 /** Exit 0 when every wallet is linked and opens or is not linked; 1 when a vault does not open. */
 export async function walletStatus(io: Io, config: Config): Promise<number> {
@@ -87,7 +133,12 @@ async function accountStatus(io: Io, config: Config, rail: WalletRail, vaultText
   try {
     warnClientMismatch(io, config, vaultText);
     const wallet = connectShop(openWalletSession(store), { ...shopWhere(config), vaultText, saveVaultText: vaultSaver(config.dataDir, rail, key) });
-    for (const text of accountLines(name, rail, await wallet.account())) line(io.stdout, text);
+    const account = await wallet.account();
+    for (const text of accountLines(name, rail, account)) line(io.stdout, text);
+    if (account.connected) {
+      const advice = await budgetAdvice(config);
+      if (agentPayments(account, advice) === "low") lowLines(io, account, advice, { page: account.manageUrl, connection: connectionName(linkedShopClientId(vaultText)) });
+    }
   } catch (error) {
     // The gateway's own words (vault, transport, disclosure, a fixed Shop label); never Shop's text or a token.
     line(io.stderr, printable(`intent: the ${name} account could not be read: ${error instanceof Error ? error.message : String(error)}`));
@@ -109,6 +160,178 @@ function accountLines(name: string, rail: WalletRail, account: WalletAccount): s
     return [`${name} budget: ${name} shows none for this connection, so one-tap is unavailable; turn on "Allow agent to pay" with a budget in the ${name} app`];
   }
   return [`${name} budget left for the gateway: ${(budget.amountMinor / 100).toFixed(2)} ${budget.currency}`];
+}
+
+/** How often `wallet status --wait-budget` reads the account, and the longest it waits by default (and at most). */
+export const BUDGET_POLL_MS = 5000;
+export const BUDGET_WAIT_MAX_S = 600;
+/** The longest pause between two reads after errors (each error doubles the pause, from BUDGET_POLL_MS). */
+const BUDGET_BACKOFF_MAX_MS = 60_000;
+/** The ceilings Intent Cloud enforces in the preview, in US dollars (docs/policy.md). */
+export const PREVIEW_WEEKLY_CEILING_USD = 100;
+export const PREVIEW_PER_ORDER_CEILING_USD = 50;
+/** The suggested Shop limit is at most this many weeks of the weekly cap. */
+const BUDGET_WEEKS = 4;
+const RENEWAL_WORDS: Readonly<Record<BudgetRenewal, string>> = { daily: "per day", weekly: "per week", monthly: "per month", yearly: "per year" };
+
+const moneyText = (money: WalletMoney): string => (money.currency === "USD" ? `$${(money.amountMinor / 100).toFixed(2)}` : `${(money.amountMinor / 100).toFixed(2)} ${money.currency}`);
+
+/**
+ * The largest Shop limit the gateway suggests (4 × the policy's weekly cap, the preview ceiling when lower or unset),
+ * and the least a budget must have left to pay one purchase (the policy's per-order cap, the ceiling likewise).
+ */
+interface BudgetAdvice {
+  readonly maxMinor: number;
+  readonly perOrderMinor: number;
+  readonly weeklyUsd: number;
+  readonly basis: string;
+}
+
+async function budgetAdvice(config: Config): Promise<BudgetAdvice> {
+  const { policy } = await activePolicy(config.policyPath);
+  const cap = policy.spend.per_week_usd;
+  const weeklyUsd = Math.min(cap ?? PREVIEW_WEEKLY_CEILING_USD, PREVIEW_WEEKLY_CEILING_USD);
+  const basis = cap !== undefined && cap < PREVIEW_WEEKLY_CEILING_USD ? "your policy's weekly cap" : "the weekly ceiling Intent Cloud enforces";
+  const perOrderUsd = Math.min(policy.spend.per_order_usd ?? PREVIEW_PER_ORDER_CEILING_USD, PREVIEW_PER_ORDER_CEILING_USD);
+  return { maxMinor: Math.round(BUDGET_WEEKS * weeklyUsd * 100), perOrderMinor: Math.round(perOrderUsd * 100), weeklyUsd, basis };
+}
+
+/**
+ * What Shop shows for agent payments: `off` (no budget with a limit), `low` (on, in US dollars, with less left than
+ * one purchase may cost), `on`. A budget in another currency is never compared with the policy's US-dollar limits:
+ * it counts as on.
+ */
+type AgentPayments = "off" | "low" | "on";
+
+function agentPayments(account: WalletAccount, advice: BudgetAdvice): AgentPayments {
+  const { budgetLimit: limit, budgetRemaining: left } = account;
+  if (limit === null || left === null) return "off";
+  return left.currency === "USD" && left.amountMinor < advice.perOrderMinor ? "low" : "on";
+}
+
+/**
+ * The low case in two lines: the connections page (as openAndTap picks it; none when Shop named one elsewhere), then
+ * how much is left and the suggested limit.
+ */
+function lowLines(io: Io, account: WalletAccount, advice: BudgetAdvice, place: AgentPaymentsPlace): void {
+  const page = place.page === undefined ? SHOP_CONNECTIONS_URL : place.page;
+  if (page !== null) line(io.stdout, printable(page));
+  line(io.stdout, `Agent payments are on, but only ${dollars(account.budgetRemaining?.amountMinor ?? 0)} is left; raise it to ${dollars(advice.maxMinor)}.`);
+}
+
+/**
+ * When Shop shows agent payments on (a budget with a limit): one line with the limit, its period as Shop names it
+ * and the amount left, plus a warning when the limit is above the advice, or a note when it is not in US dollars;
+ * true. When it is on but low: the low lines instead; true. False, printing nothing, when it is off.
+ */
+function agentPaymentsOn(io: Io, rail: WalletRail, account: WalletAccount, advice: BudgetAdvice, place: AgentPaymentsPlace): boolean {
+  const limit = account.budgetLimit;
+  const state = agentPayments(account, advice);
+  if (state === "off" || limit === null || account.budgetRemaining === null) return false;
+  if (state === "low") {
+    lowLines(io, account, advice, place);
+    return true;
+  }
+  const per = limit.renewal === null ? " limit" : ` ${RENEWAL_WORDS[limit.renewal]}`;
+  line(io.stdout, `Agent payments on: ${moneyText(limit.amount)}${per}, ${moneyText(account.budgetRemaining)} left`);
+  if (limit.amount.currency === "USD" && limit.amount.amountMinor > advice.maxMinor) {
+    line(
+      io.stderr,
+      `intent: warning: this limit is above ${moneyText({ amountMinor: advice.maxMinor, currency: "USD" })}, ${String(BUDGET_WEEKS)} × ${advice.basis} ($${String(advice.weeklyUsd)}); the ${RAIL_NAMES[rail]} budget is the only hard stop, so lower it: ${openAndTap(place)}`,
+    );
+  }
+  if (limit.amount.currency !== "USD") {
+    line(io.stdout, `Note: ${RAIL_NAMES[rail]} shows this budget in ${limit.amount.currency}; the gateway's limits are in USD, so it was not compared with them`);
+  }
+  return true;
+}
+
+/**
+ * `intent wallet status --wait-budget [--timeout <s>]`: reads the linked account (get_account, logged before each
+ * send, invariant 2) every 5 s, and every 10 s, 20 s, … up to a minute after errors, until Shop shows an agent budget
+ * with a limit, for at most `timeoutS` (600 by default and at most). Exit 0 with one line once it does, plus a
+ * warning when the limit is above 4 × the policy's weekly cap (or of the preview ceiling, whichever is lower);
+ * 1 on timeout, when no wallet is linked, or at once when Shop says the connection is gone or refuses the token.
+ */
+export async function walletWaitBudget(io: Io, config: Config, timeoutText: string | undefined): Promise<number> {
+  const rail: WalletRail = "shop";
+  const name = RAIL_NAMES[rail];
+  const timeoutS = timeoutText === undefined ? BUDGET_WAIT_MAX_S : Number(timeoutText);
+  if (!/^[0-9]+$/.test(timeoutText ?? "0") || !Number.isSafeInteger(timeoutS) || timeoutS < 1 || timeoutS > BUDGET_WAIT_MAX_S) {
+    throw new CliError(`--timeout takes whole seconds from 1 to ${String(BUDGET_WAIT_MAX_S)}`, 2);
+  }
+  if (!(await hasSecret(config.dataDir, rail))) {
+    line(io.stderr, `intent: no ${name} wallet is linked, so there is no budget to wait for; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail} --start`);
+    return 1;
+  }
+  warn(io, config);
+  const advice = await budgetAdvice(config);
+  const key = await loadWalletKey(config.wallet.key, { create: false });
+  if (key === null) throw new CliError(`the ${name} vault cannot be opened: its key file ${describeKeySource(config.wallet.key)} is missing; nothing was sent to ${name}`);
+  const vaultText = await loadSecret(config.dataDir, rail, key);
+  if (vaultText === null) throw new CliError(`no ${name} wallet is linked; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail} --start`);
+  const now = io.now ?? Date.now;
+  const sleep = io.sleep ?? delay;
+  const deadline = now() + timeoutS * 1000;
+  const relink = `run ${INTENT} wallet unlink ${rail}, then ${INTENT} wallet link ${rail} --start`;
+  const store = await openLinkStore(io, config);
+  try {
+    warnClientMismatch(io, config, vaultText);
+    const wallet = connectShop(openWalletSession(store), { ...shopWhere(config), vaultText, saveVaultText: vaultSaver(config.dataDir, rail, key) });
+    let pause = BUDGET_POLL_MS;
+    let page: string | null | undefined;
+    const connection = connectionName(linkedShopClientId(vaultText));
+    let lastError: string | null = null;
+    // The amount left while it is too low for one purchase, said once (the first time), then waited out.
+    let low: WalletAccount | null = null;
+    for (;;) {
+      try {
+        const account = await wallet.account();
+        lastError = null;
+        pause = BUDGET_POLL_MS;
+        page = account.manageUrl;
+        if (!account.connected) {
+          line(io.stderr, `intent: ${name} answered that this connection can no longer read the account (as when it is removed in the ${name} app); ${relink}`);
+          return 1;
+        }
+        const state = agentPayments(account, advice);
+        if (state === "on" && agentPaymentsOn(io, rail, account, advice, { page, connection })) return 0;
+        if (state === "low" && low === null) lowLines(io, account, advice, { page, connection });
+        low = state === "low" ? account : null;
+      } catch (error) {
+        // A refused token (refresh refused too): the link was revoked; waiting cannot change that.
+        if (error instanceof WalletRailError && error.httpStatus === 401) {
+          line(io.stderr, `intent: ${name} refused this gateway's token (the link was revoked or removed); ${relink}`);
+          return 1;
+        }
+        // Only Shop's own failures are waited out; a log that cannot be written stops the wait (invariant 2).
+        if (!(error instanceof WalletRailError) && !(error instanceof ShopTransportError)) throw error;
+        lastError = error.message;
+        pause = Math.min(pause * 2, BUDGET_BACKOFF_MAX_MS);
+      }
+      const left = deadline - now();
+      if (left <= 0) break;
+      await sleep(Math.min(pause, left));
+      if (now() >= deadline) break;
+    }
+    if (low !== null && lastError === null) {
+      line(
+        io.stderr,
+        printable(
+          `intent: ${name} agent payments are still low after ${String(timeoutS)} s: only ${dollars(low.budgetRemaining?.amountMinor ?? 0)} is left, less than one purchase may cost (${dollars(advice.perOrderMinor)}); ${openAndTap({ page, connection })}, raise it to ${dollars(advice.maxMinor)}, then run ${INTENT} wallet status --wait-budget again`,
+        ),
+      );
+      return 1;
+    }
+    const why = lastError === null ? `${name} shows no agent payments for this connection` : `the last read failed: ${lastError}`;
+    line(
+      io.stderr,
+      printable(`intent: no ${name} agent payments seen after ${String(timeoutS)} s (${why}): ${openAndTap({ page, connection })}, turn on Allow agent to pay for me, then run ${INTENT} wallet status --wait-budget again`),
+    );
+    return 1;
+  } finally {
+    await store.close();
+  }
 }
 
 const shopWhere = (config: Config): { mcpUrl: string | null; authUrl: string | null; clientId: string | null } => ({
@@ -137,6 +360,9 @@ const vaultSaver =
   (text: string): Promise<void> =>
     saveSecret(dataDir, rail, key, text);
 
+/** How `wallet link` runs: the whole device flow in one process, or its two halves (--start, then --finish). */
+export type LinkMode = "full" | "start" | "finish";
+
 /**
  * Links `rail` with Shop's device flow as the gateway's own client, or INTENT_SHOP_CLIENT_ID's: exit 0 once the
  * tokens are in the vault and the link is chained; 1 when the flow ends without tokens (the line says how to try
@@ -145,31 +371,32 @@ const vaultSaver =
  * A wallet already linked stays untouched until the new sign-in has succeeded; only then is it unlinked as `wallet
  * unlink` does (its token revoked by a logged send, a failed revocation warned about; its vault file deleted;
  * `wallet {action: "unlinked", revoked}` chained), before the new tokens are saved and the link chained.
+ *
+ * `start` sends the device authorization only (logged first), seals the pending grant in the wallet vault, prints
+ * one line (the page, the code, the expiry) and returns at once. `finish` claims that grant and polls with it, as
+ * `full` does after printing; every terminal answer (tokens, a refusal, an expiry) deletes the grant. Neither ever
+ * prints the device code: an agent's shell shows output only when a command ends, so the two halves let the
+ * developer see the code while the sign-in is still open.
  */
-export async function walletLink(io: Io, config: Config, rail: string): Promise<number> {
+export async function walletLink(io: Io, config: Config, rail: string, mode: LinkMode = "full"): Promise<number> {
   if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
-  const name = RAIL_NAMES[rail];
-  const clientId = config.wallet.shopClientId;
   warn(io, config);
+  if (mode === "finish") return finishLink(io, config, rail);
   // The key comes first, so a setup that cannot keep the tokens (the Docker image without a key secret) stops before
   // anything is sent.
   const key = await loadWalletKey(config.wallet.key, { create: true });
   if (key === null) throw new CliError(`the wallet key ${describeKeySource(config.wallet.key)} could not be created`);
-  const store = await openStore(config.dataDir, {
-    onWait: leaseNotice((text) => {
-      line(io.stderr, `intent: ${text}`);
-    }, io.now),
-  });
+  const name = RAIL_NAMES[rail];
+  const store = await openLinkStore(io, config);
   try {
     const session = openWalletSession(store);
+    if (mode === "start") return await startLink(io, config, rail, session, key);
     const relink = await hasSecret(config.dataDir, rail);
     if (relink) line(io.stdout, `${name} wallet already linked: it stays as it is unless this new link succeeds`);
-    const where = shopWhere(config);
     let linked;
     try {
       linked = await linkShop(session, {
-        ...where,
-        clientId,
+        ...shopWhere(config),
         show: (prompt) => {
           showPrompt(io, name, prompt);
         },
@@ -178,49 +405,203 @@ export async function walletLink(io: Io, config: Config, rail: string): Promise<
       });
     } catch (error) {
       if (!(error instanceof ShopLinkError)) throw error;
-      const kept = relink ? `; the earlier link is kept unchanged` : "";
-      if (error.code === "invalid_client") {
-        line(io.stderr, `intent: ${name} wallet not linked: ${refusedClient(config)}${kept}`);
-        return 1;
-      }
-      line(io.stderr, `intent: ${name} wallet not linked: ${error.message}${kept}; run ${INTENT} wallet link ${rail} to try again`);
+      notLinked(io, config, rail, error, relink, `${INTENT} wallet link ${rail}`);
       return 1;
     }
-    if (relink) {
-      // The new tokens are in hand: now end the earlier link, revoking first as `wallet unlink` does.
-      const revoked = await revoke(io, config, rail, session, { relinking: true });
-      await deleteSecret(config.dataDir, rail);
-      await store.append("wallet", { rail, action: "unlinked", revoked });
-      if (revoked) line(io.stdout, `${name} acknowledged the revocation of the earlier tokens (HTTP 200)`);
-      else line(io.stderr, `intent: warning: the earlier ${name} tokens were not both revoked; remove the earlier connection in ${RAIL_SETTING[rail]}`);
-    }
-    await saveSecret(config.dataDir, rail, key, linked.vaultText);
-    let entry;
-    try {
-      entry = await store.append("wallet", { rail, action: "linked", revoked: false });
-    } catch (error) {
-      // No link may exist that the chain does not record: the tokens go with the failed entry.
-      await deleteSecret(config.dataDir, rail);
-      line(io.stderr, `intent: the ${name} link could not be recorded in the chain, so its tokens were deleted from this machine; run ${INTENT} wallet link ${rail} again once the chain is writable`);
-      throw error;
-    }
-    line(io.stdout, printable(`${name} wallet linked: tokens kept in the encrypted vault ${vaultPath(config.dataDir, rail)} (entry #${String(entry.seq)})`));
-    line(io.stdout, `Purchases are still handed off to the merchant's checkout for now: one-tap with ${name} is not yet wired to purchases`);
-    if (!linked.refreshIssued) {
-      const life = linked.expiresInS === null ? "" : ` (in about ${String(Math.max(1, Math.round(linked.expiresInS / 3600)))} h)`;
-      line(io.stdout, `${name} issued no refresh token: when its access token expires${life}, run ${INTENT} wallet link ${rail} again`);
-    }
-    try {
-      const account = await connectShop(session, { ...where, vaultText: linked.vaultText, saveVaultText: vaultSaver(config.dataDir, rail, key) }).account();
-      for (const text of accountLines(name, rail, account)) line(io.stdout, text);
-    } catch (error) {
-      // The link is made; only the budget line is missing. The message is the gateway's own, never Shop's text.
-      line(io.stderr, printable(`intent: linked, but the ${name} budget could not be read: ${error instanceof Error ? error.message : String(error)}`));
-    }
+    await keepLink(io, config, rail, { store, session, key, linked, relink });
   } finally {
     await store.close();
   }
   return 0;
+}
+
+const openLinkStore = (io: Io, config: Config): Promise<Store> =>
+  openStore(config.dataDir, {
+    onWait: leaseNotice((text) => {
+      line(io.stderr, `intent: ${text}`);
+    }, io.now),
+  });
+
+/** The device authorization of `--start`, then the sealed pending grant and the one line to act on. */
+async function startLink(io: Io, config: Config, rail: WalletRail, session: WalletSession, key: WalletKey): Promise<number> {
+  const name = RAIL_NAMES[rail];
+  let started;
+  try {
+    started = await startShopLink(session, { ...shopWhere(config), now: io.now ?? Date.now });
+  } catch (error) {
+    if (!(error instanceof ShopLinkError)) throw error;
+    notLinked(io, config, rail, error, false, `${INTENT} wallet link ${rail} --start`);
+    return 1;
+  }
+  const { replaced } = await savePendingGrant(config.dataDir, rail, key, started.pendingText);
+  if (replaced) line(io.stdout, `Replaced the ${name} sign-in that was pending: its code no longer works with this gateway`);
+  const { prompt } = started;
+  const page = prompt.verificationUriComplete ?? prompt.verificationUri;
+  line(
+    io.stdout,
+    printable(`Open ${page} and approve the code ${prompt.userCode} in ${name} before ${isoSeconds(started.expiresAt)}, then run ${INTENT} wallet link ${rail} --finish`),
+  );
+  return 0;
+}
+
+/** An instant as `2026-10-18T14:05:00Z`. */
+const isoSeconds = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+/**
+ * `--finish`: claims the pending grant (so two finishes never both redeem it), checks it against the settings in
+ * effect, polls until Shop answers, and keeps the tokens as a full link does. The grant is deleted on every
+ * terminal answer and put back when the finish stops for any other reason (a log that cannot be written, a network
+ * failure), so the next --finish can go on with it.
+ */
+async function finishLink(io: Io, config: Config, rail: WalletRail): Promise<number> {
+  const name = RAIL_NAMES[rail];
+  const startAgain = `run ${INTENT} wallet link ${rail} --start`;
+  const fail = (text: string): number => {
+    line(io.stderr, printable(`intent: ${name} wallet not linked: ${text}`));
+    return 1;
+  };
+  const key = await loadWalletKey(config.wallet.key, { create: false });
+  if (key === null) return fail(`no ${name} sign-in is pending (no wallet key yet); ${startAgain} first`);
+  let claim: GrantClaim;
+  try {
+    claim = await claimPendingGrant(config.dataDir, rail, key);
+  } catch (error) {
+    if (!(error instanceof WalletVaultError)) throw error;
+    // Never the vault's own advice (unlink and link again): it is the pending sign-in that does not open.
+    return fail(`the pending ${name} sign-in does not open with the wallet key ${describeKeySource(config.wallet.key)} (${error.reason}), so it was deleted; ${startAgain} for a new one`);
+  }
+  if (claim.kind === "none") return fail(`no ${name} sign-in is pending; ${startAgain} first`);
+  if (claim.kind === "busy") return fail(`another ${INTENT} wallet link ${rail} --finish (pid ${String(claim.pid)}) is already waiting for this sign-in`);
+  const { grant } = claim;
+  const now = io.now ?? Date.now;
+  const where = shopWhere(config);
+  let pending: PendingShopLink;
+  try {
+    pending = openPendingShopLink(grant.text, where);
+  } catch (error) {
+    if (!(error instanceof ShopPendingError)) {
+      await grant.release();
+      throw error;
+    }
+    if (error.reason === "unreadable") {
+      await grant.discard();
+      return fail(`${error.message}, so it was deleted; nothing was sent to ${name}. ${startAgain} for a new one`);
+    }
+    // Nothing was sent; the grant stays, so restoring the settings lets --finish go on, and --start replaces it.
+    await grant.release();
+    return fail(`${error.message}; nothing was sent to ${name}. Restore that setting and run --finish again, or ${startAgain} to replace it`);
+  }
+  if (now() >= pending.expiresAt) {
+    await grant.discard();
+    return fail(`the pending sign-in code expired at ${isoSeconds(pending.expiresAt)}; nothing was sent to ${name}. ${startAgain} for a new one`);
+  }
+  let terminal = false;
+  try {
+    const store = await openLinkStore(io, config);
+    try {
+      const session = openWalletSession(store);
+      const relink = await hasSecret(config.dataDir, rail);
+      if (relink) line(io.stdout, `${name} wallet already linked: it stays as it is unless this new link succeeds`);
+      line(io.stdout, `Waiting for you to approve the code in ${name} (until ${isoSeconds(pending.expiresAt)}; if this stops early, run --finish again)…`);
+      let linked;
+      try {
+        linked = await finishShopLink(session, pending, { ...where, sleep: io.sleep ?? delay, now });
+      } catch (error) {
+        if (!(error instanceof ShopLinkError)) throw error;
+        terminal = true;
+        notLinked(io, config, rail, error, relink, `${INTENT} wallet link ${rail} --start`);
+        return 1;
+      }
+      // The device code is spent: whatever happens to the tokens now, it cannot be redeemed again.
+      terminal = true;
+      await grant.discard();
+      await keepLink(io, config, rail, { store, session, key, linked, relink, nextStep: true });
+    } finally {
+      await store.close();
+    }
+  } finally {
+    if (terminal) await grant.discard();
+    else await grant.release();
+  }
+  return 0;
+}
+
+/** Whole dollars as `$160`, others as `$49.36`. */
+const dollars = (minor: number): string => (minor % 100 === 0 ? `$${String(minor / 100)}` : `$${(minor / 100).toFixed(2)}`);
+
+/**
+ * After a link: agent payments already on, in the --wait-budget line; otherwise the two lines of the next step, the
+ * connections page from Shop's answer (only an https page on shop.app; S1's page when Shop names none), then what to
+ * tap, with the connection named by the client recorded in the vault and the suggested limit.
+ */
+async function nextStep(io: Io, config: Config, rail: WalletRail, account: WalletAccount, vaultText: string): Promise<void> {
+  const advice = await budgetAdvice(config);
+  const connection = connectionName(linkedShopClientId(vaultText));
+  if (agentPaymentsOn(io, rail, account, advice, { page: account.manageUrl, connection })) return;
+  // A page Shop names off shop.app is never printed: then only what to tap.
+  if (account.manageUrl !== null) line(io.stdout, printable(account.manageUrl));
+  line(io.stdout, printable(`Tap ${connection}, turn on Allow agent to pay for me, enter ${dollars(advice.maxMinor)}.`));
+}
+
+/** A flow that ended without tokens, in one line: the refused client named, or how to try again. */
+function notLinked(io: Io, config: Config, rail: WalletRail, error: ShopLinkError, relink: boolean, retry: string): void {
+  const name = RAIL_NAMES[rail];
+  const kept = relink ? `; the earlier link is kept unchanged` : "";
+  if (error.code === "invalid_client") line(io.stderr, `intent: ${name} wallet not linked: ${refusedClient(config)}${kept}`);
+  else line(io.stderr, `intent: ${name} wallet not linked: ${error.message}${kept}; run ${retry} to try again`);
+}
+
+/**
+ * The tokens are in hand: an earlier link is ended (revoked first, as `wallet unlink` does), the tokens saved, the
+ * link chained, and the budget read once through the log. `nextStep`: also say where Shop lets the buyer turn on
+ * agent payments, when Shop's answer names that page.
+ */
+async function keepLink(
+  io: Io,
+  config: Config,
+  rail: WalletRail,
+  link: { store: Store; session: WalletSession; key: WalletKey; linked: LinkedShopVault; relink: boolean; nextStep?: boolean },
+): Promise<void> {
+  const { store, session, key, linked, relink } = link;
+  const name = RAIL_NAMES[rail];
+  if (relink) {
+    const revoked = await revoke(io, config, rail, session, { relinking: true });
+    await deleteSecret(config.dataDir, rail);
+    await store.append("wallet", { rail, action: "unlinked", revoked });
+    if (revoked) line(io.stdout, `${name} acknowledged the revocation of the earlier tokens (HTTP 200)`);
+    else line(io.stderr, `intent: warning: the earlier ${name} tokens were not both revoked; remove the earlier connection in ${RAIL_SETTING[rail]}`);
+  }
+  await saveSecret(config.dataDir, rail, key, linked.vaultText);
+  let entry;
+  try {
+    entry = await store.append("wallet", { rail, action: "linked", revoked: false });
+  } catch (error) {
+    // No link may exist that the chain does not record: the tokens go with the failed entry.
+    await deleteSecret(config.dataDir, rail);
+    line(io.stderr, `intent: the ${name} link could not be recorded in the chain, so its tokens were deleted from this machine; run ${INTENT} wallet link ${rail} again once the chain is writable`);
+    throw error;
+  }
+  line(io.stdout, printable(`${name} wallet linked: tokens kept in the encrypted vault ${vaultPath(config.dataDir, rail)} (entry #${String(entry.seq)})`));
+  line(io.stdout, `Purchases are still handed off to the merchant's checkout for now: one-tap with ${name} is not yet wired to purchases`);
+  if (!linked.refreshIssued) {
+    const life = linked.expiresInS === null ? "" : ` (in about ${String(Math.max(1, Math.round(linked.expiresInS / 3600)))} h)`;
+    line(io.stdout, `${name} issued no refresh token: when its access token expires${life}, run ${INTENT} wallet link ${rail} again`);
+  }
+  try {
+    const account = await connectShop(session, { ...shopWhere(config), vaultText: linked.vaultText, saveVaultText: vaultSaver(config.dataDir, rail, key) }).account();
+    for (const text of accountLines(name, rail, account)) line(io.stdout, text);
+    if (link.nextStep === true && account.connected) {
+      try {
+        await nextStep(io, config, rail, account, linked.vaultText);
+      } catch (error) {
+        // The link is made and the budget read; only the suggestion is missing (the policy did not load).
+        line(io.stderr, printable(`intent: linked, but the next step could not be worked out: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
+  } catch (error) {
+    // The link is made; only the budget line is missing. The message is the gateway's own, never Shop's text.
+    line(io.stderr, printable(`intent: linked, but the ${name} budget could not be read: ${error instanceof Error ? error.message : String(error)}`));
+  }
 }
 
 /**

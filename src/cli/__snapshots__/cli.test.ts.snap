@@ -24,8 +24,8 @@ Commands:
   intent policy test <cases.yaml>   run test cases against the active policy
   intent approver list              approver pins and flagged passkeys
   intent approver accept            make a flagged passkey the approver (at a terminal)
-  intent wallet status              whether a Shop wallet is linked and its encrypted vault opens
-  intent wallet link|unlink shop    link your Shop account (one-tap, coming later), or revoke its token and delete it
+  intent wallet status              whether a Shop wallet is linked and its vault opens (--wait-budget: until agent payments are on)
+  intent wallet link|unlink shop    link your Shop account (from an agent's shell: --start, then --finish), or revoke and delete it
   intent wallet check shop          Shop orders that no purchase in the log names (--since 7d)
   intent demo [--http]              run against a local demo Intent Cloud (HTTP when typed in a terminal)
 

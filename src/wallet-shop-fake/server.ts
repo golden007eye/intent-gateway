@@ -160,6 +160,11 @@ export interface FakeShopFaults {
   twoBudgetInstruments?: boolean;
   /** get_account's budget left (minor units); null: no budget instrument (S1 step 3). FAKE_BUDGET_MINOR by default. */
   budgetMinor?: number | null;
+  /** get_account's budget limit (minor units; 15000 by default) and how often it renews ("monthly" by default). */
+  budgetLimitMinor?: number;
+  budgetRenewal?: string;
+  /** get_account's manage_connection link (S1: https://shop.app/account/connections by default); null: no such link. */
+  manageConnectionUrl?: string | null;
   /** get_account's top-level currency ("USD" by default). */
   accountCurrency?: string;
   /** The buyer removed the connection in the Shop app: get_account answers warnings and no account data (S1 12b). */
@@ -178,7 +183,7 @@ export interface FakeShopFaults {
   orderNumber?: string;
   /**
    * The token endpoint's answers to device-code polls, in order (the last one repeats): `ok` issues the tokens, the
-   * others are RFC 8628 errors. ["ok"] by default.
+   * others are RFC 8628 errors, and `unavailable` a proxy's HTTP 503 with an HTML body. ["ok"] by default.
    */
   deviceAnswers?: readonly DeviceAnswer[];
   /** The device authorization's `interval` (seconds; 5 by default) and `expires_in` (600 by default). */
@@ -225,7 +230,7 @@ export interface FakeOrder {
   readonly source?: "shopify" | "email";
 }
 
-export type DeviceAnswer = "ok" | "authorization_pending" | "slow_down" | "expired_token" | "access_denied";
+export type DeviceAnswer = "ok" | "authorization_pending" | "slow_down" | "expired_token" | "access_denied" | "unavailable";
 
 /** One request to the account server's token endpoints, as received. */
 export interface FakeOAuthRequest {
@@ -394,9 +399,11 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
     };
   }
 
-  const links = [
-    { type: "account", url: "https://shop.example/account", title: "Your Shop account" },
-    { type: "manage_connection", url: "https://shop.example/account/connections", title: "Manage connected apps" },
+  const links = (): Record<string, unknown>[] => [
+    { type: "account", url: "https://shop.app/account", title: "Your Shop account" },
+    ...(shop.faults.manageConnectionUrl === null
+      ? []
+      : [{ type: "manage_connection", url: shop.faults.manageConnectionUrl ?? "https://shop.app/account/connections", title: "Manage connected apps" }]),
   ];
 
   function account(): Record<string, unknown> {
@@ -405,7 +412,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         ucp: { version: UCP_VERSION },
         signed_in: true,
         buyer: { email: FAKE_BUYER.email },
-        links,
+        links: links(),
         messages: CONNECTION_GONE.map((code) => ({ type: "warning", code, content: errorText(`Could not read ${code} for this connection.`) })),
       };
     }
@@ -422,7 +429,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         instruments:
           budget === null
             ? []
-            : [{ handler_id: "shop_pay", type: "shop_pay", display: { limit: 15000, remaining_amount: budget, renewal_type: "monthly", renews_at: "2026-11-01T00:00:00Z" } }],
+            : [{ handler_id: "shop_pay", type: "shop_pay", display: { limit: shop.faults.budgetLimitMinor ?? 15000, remaining_amount: budget, renewal_type: shop.faults.budgetRenewal ?? "monthly", renews_at: "2026-11-01T00:00:00Z" } }],
         ...(shop.faults.spendRequestTool === true ? { card_number: FAKE_PAN } : {}),
       },
       selectable_instruments: [
@@ -443,7 +450,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         },
       ],
       preferred_instrument_id: CARD_ID,
-      links,
+      links: links(),
       messages: [],
       next: ["Show only returned budget amounts in the returned currency's minor units and any renewal details."],
     };
@@ -736,6 +743,11 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       }
       const answers = shop.faults.deviceAnswers ?? ["ok"];
       const answer = answers[Math.min(polls++, answers.length - 1)] ?? "ok";
+      if (answer === "unavailable") {
+        res.writeHead(503, { "content-type": "text/html" });
+        res.end("<html><body>Service Unavailable</body></html>");
+        return;
+      }
       if (answer !== "ok") {
         send(400, { error: answer, error_description: errorText(answer) });
         return;

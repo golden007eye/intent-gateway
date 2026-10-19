@@ -3,6 +3,7 @@
 export { CHECK_CURRENCY, checkedEntry, checkOrders, chainedOrderRefs, type WalletCheck } from "./check.ts";
 export {
   AddressFieldsRequiredError,
+  type BudgetRenewal,
   type CatalogHit,
   type CatalogQuery,
   type ChainEntryView,
@@ -37,12 +38,17 @@ export {
 export {
   CHECKOUT_ID_MAX_AGE_MS,
   checkoutVaultDir,
+  claimPendingGrant,
+  type ClaimedGrant,
   deleteSecret,
+  type GrantClaim,
   describeKeySource,
   hasSecret,
   loadSecret,
   loadWalletKey,
   openCheckoutVault,
+  pendingGrantPath,
+  savePendingGrant,
   saveSecret,
   vaultPath,
   WalletKey,

@@ -11,13 +11,18 @@ import {
   DEFAULT_SHOP_AUTH_URL,
   DEFAULT_SHOP_CLIENT_ID,
   DEFAULT_SHOP_MCP_URL,
+  type DeviceGrant,
   type DeviceGrantPrompt,
+  deviceGrantText,
+  parseDeviceGrant,
   parseShopCredentials,
+  pollDeviceGrant,
   runDeviceFlow,
   SHOP_ACCOUNTS_SECRET_PATHS,
   SHOP_OPAQUE_IDS,
   SHOP_SECRET_PATHS,
   shopCredentialsText,
+  startDeviceFlow,
 } from "../wallet-shop/index.ts";
 import type { DisclosedCloud } from "./disclosure.ts";
 import { createDisclosedWallet, type WalletSession } from "./wallet.ts";
@@ -118,5 +123,94 @@ export interface LinkedShopVault {
 export async function linkShop(owner: DisclosedCloud | WalletSession, link: ShopLink): Promise<LinkedShopVault> {
   const resource = new URL(link.mcpUrl ?? DEFAULT_SHOP_MCP_URL).origin;
   const linked = await runDeviceFlow(accountsOf(owner, link), { clientId: link.clientId ?? DEFAULT_SHOP_CLIENT_ID, resource, show: link.show, sleep: link.sleep, now: link.now });
-  return { vaultText: shopCredentialsText(linked.credentials), refreshIssued: linked.credentials.refreshToken !== null, expiresInS: linked.expiresInS };
+  return vaultOf(linked);
+}
+
+const vaultOf = (linked: Awaited<ReturnType<typeof pollDeviceGrant>>): LinkedShopVault => ({
+  vaultText: shopCredentialsText(linked.credentials),
+  refreshIssued: linked.credentials.refreshToken !== null,
+  expiresInS: linked.expiresInS,
+});
+
+/** Where a link is made: the same settings as ShopLink, without the printing and the waiting. */
+export type ShopLinkWhere = Pick<ShopLink, "mcpUrl" | "authUrl" | "clientId" | "timeoutMs">;
+
+/** What the first half of a link gives back: the pending grant's text (a credential: seal it, never print it) and what to show. */
+export interface StartedShopLink {
+  readonly pendingText: string;
+  readonly prompt: DeviceGrantPrompt;
+  /** When the code stops counting, in milliseconds since the epoch. */
+  readonly expiresAt: number;
+}
+
+/**
+ * The first half of linking (`intent wallet link shop --start`): the device authorization only, logged by the core of
+ * `owner` before it leaves, as linkShop sends it. Throws ShopLinkError when Shop refuses it.
+ */
+export async function startShopLink(owner: DisclosedCloud | WalletSession, link: ShopLinkWhere & { readonly now: () => number }): Promise<StartedShopLink> {
+  const where = settingsOf(link);
+  const { grant, prompt } = await startDeviceFlow(accountsOf(owner, link), { clientId: where.clientId, resource: where.resource, now: link.now });
+  return { pendingText: deviceGrantText(grant, where.authUrl), prompt, expiresAt: grant.expiresAt };
+}
+
+const PENDING_GRANT = new WeakMap<PendingShopLink, DeviceGrant>();
+
+/** A pending grant that matches the settings in effect, ready to finish. Its device code is readable only in this module. */
+export interface PendingShopLink {
+  readonly expiresAt: number;
+  readonly clientId: string;
+}
+
+/** The pending grant cannot be finished with the settings in effect. The message never holds the device code. */
+export class ShopPendingError extends Error {
+  override name = "ShopPendingError";
+  /** `unreadable`: no setting can make it a grant again; `mismatch`: it was made with other settings. */
+  readonly reason: "unreadable" | "mismatch";
+  constructor(reason: "unreadable" | "mismatch", message: string) {
+    super(message);
+    this.reason = reason;
+  }
+}
+
+/**
+ * The pending grant in `pendingText`, checked against the settings in effect: the same client (INTENT_SHOP_CLIENT_ID,
+ * or the gateway's own), the same account server (the device code goes back only to the server that issued it) and the
+ * same resource. Throws ShopPendingError otherwise: a grant made as another client is never polled as this one.
+ */
+export function openPendingShopLink(pendingText: string, link: ShopLinkWhere): PendingShopLink {
+  const parsed = parseDeviceGrant(pendingText);
+  if (parsed === null) throw new ShopPendingError("unreadable", "the pending Shop sign-in cannot be read");
+  const where = settingsOf(link);
+  const { grant } = parsed;
+  if (grant.clientId !== where.clientId) {
+    throw new ShopPendingError("mismatch", `the pending Shop sign-in was started as the client ${grant.clientId}, but the client in effect now is ${where.clientId}`);
+  }
+  if (parsed.authUrl !== where.authUrl || grant.resource !== where.resource) {
+    throw new ShopPendingError("mismatch", "the pending Shop sign-in was started with another INTENT_SHOP_AUTH_URL or INTENT_SHOP_MCP_URL than the ones in effect now");
+  }
+  const pending: PendingShopLink = Object.freeze({ expiresAt: grant.expiresAt, clientId: grant.clientId });
+  PENDING_GRANT.set(pending, grant);
+  return pending;
+}
+
+/**
+ * The second half (`--finish`): token polls with the pending grant until Shop answers, each logged by the core of
+ * `owner` before it leaves, with the device code digested. Throws ShopLinkError when the flow ends without tokens.
+ */
+export async function finishShopLink(
+  owner: DisclosedCloud | WalletSession,
+  pending: PendingShopLink,
+  link: ShopLinkWhere & { readonly sleep: (ms: number) => Promise<void>; readonly now: () => number },
+): Promise<LinkedShopVault> {
+  const grant = PENDING_GRANT.get(pending);
+  if (grant === undefined) throw new TypeError("not a pending Shop link from openPendingShopLink");
+  return vaultOf(await pollDeviceGrant(accountsOf(owner, link), grant, { sleep: link.sleep, now: link.now }));
+}
+
+function settingsOf(link: ShopLinkWhere): { clientId: string; authUrl: string; resource: string } {
+  return {
+    clientId: link.clientId ?? DEFAULT_SHOP_CLIENT_ID,
+    authUrl: link.authUrl ?? DEFAULT_SHOP_AUTH_URL,
+    resource: new URL(link.mcpUrl ?? DEFAULT_SHOP_MCP_URL).origin,
+  };
 }

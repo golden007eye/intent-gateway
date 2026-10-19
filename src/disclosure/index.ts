@@ -29,10 +29,24 @@ export {
   type WalletResult,
   type WalletSession,
 } from "./wallet.ts";
-export { connectShop, type LinkedShopVault, linkedShopClientId, linkShop, type ShopConnection, type ShopLink } from "./shop.ts";
+export {
+  connectShop,
+  finishShopLink,
+  type LinkedShopVault,
+  linkedShopClientId,
+  linkShop,
+  openPendingShopLink,
+  type PendingShopLink,
+  type ShopConnection,
+  type ShopLink,
+  type ShopLinkWhere,
+  ShopPendingError,
+  startShopLink,
+  type StartedShopLink,
+} from "./shop.ts";
 export { connectStorefront, STOREFRONT, type StorefrontPort } from "./storefront.ts";
 export type { StorefrontTransport } from "../storefront/index.ts";
-export { DEFAULT_SHOP_CLIENT_ID, type DeviceGrantPrompt, ShopLinkError, type ShopLinkFailure } from "../wallet-shop/index.ts";
+export { DEFAULT_SHOP_CLIENT_ID, type DeviceGrantPrompt, SHOP_CONNECTIONS_URL, SHOP_PUBLIC_CLIENT_ID, ShopLinkError, type ShopLinkFailure, ShopTransportError } from "../wallet-shop/index.ts";
 export {
   connectCloud,
   createDisclosedCloud,

@@ -78,8 +78,42 @@ const ERROR_LABELS: Readonly<Record<string, [ShopLinkFailure, string]>> = {
   invalid_request: ["refused", "Shop refused the request (invalid_request)"],
 };
 
+/**
+ * A device grant Shop issued and the developer has not approved yet: what a later token poll needs. The device code
+ * is a credential (whoever holds it can redeem the tokens once the developer approves), so a grant kept between
+ * processes is sealed like the tokens; it names nothing about the buyer.
+ */
+export interface DeviceGrant {
+  readonly deviceCode: string;
+  readonly clientId: string;
+  /** The protected resource the tokens are asked for (RFC 8707). */
+  readonly resource: string;
+  /** Shop's poll interval in seconds, clamped. */
+  readonly intervalS: number;
+  /** When the user code stops counting, in milliseconds since the epoch (at most MAX_WAIT_MS after the request). */
+  readonly expiresAt: number;
+}
+
+export interface DeviceStartOptions {
+  readonly clientId: string;
+  readonly resource: string;
+  readonly now: () => number;
+}
+
+export interface DevicePollOptions {
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly now: () => number;
+}
+
 /** Runs the device flow to the end: the device authorization, then token polls at Shop's interval until an answer. */
 export async function runDeviceFlow(accounts: ShopCaller, options: DeviceFlowOptions): Promise<LinkedShop> {
+  const { grant, prompt } = await startDeviceFlow(accounts, options);
+  options.show(prompt);
+  return pollDeviceGrant(accounts, grant, options);
+}
+
+/** The first half of the device flow: the device authorization (one disclosed send), giving the grant and what to show. */
+export async function startDeviceFlow(accounts: ShopCaller, options: DeviceStartOptions): Promise<{ grant: DeviceGrant; prompt: DeviceGrantPrompt }> {
   const started = options.now();
   const device = readForm(await accounts.call(DEVICE_AUTHORIZATION, { client_id: options.clientId, scope: SHOP_SCOPE, resource: options.resource }));
   if (device.status !== 200) throw failed(device.json, "Shop refused the device authorization");
@@ -92,25 +126,69 @@ export async function runDeviceFlow(accounts: ShopCaller, options: DeviceFlowOpt
   }
   const complete = isWebUrl(json.verification_uri_complete) ? json.verification_uri_complete : null;
   const expiresMs = Math.min(positive(json.expires_in) * 1000 || MAX_WAIT_MS, MAX_WAIT_MS);
-  let intervalS = clampInterval(positive(json.interval) || DEFAULT_INTERVAL_S);
-  options.show({ userCode, verificationUri: uri, verificationUriComplete: complete, expiresInS: Math.round(expiresMs / 1000) });
+  const intervalS = clampInterval(positive(json.interval) || DEFAULT_INTERVAL_S);
+  return {
+    grant: { deviceCode, clientId: options.clientId, resource: options.resource, intervalS, expiresAt: started + expiresMs },
+    prompt: { userCode, verificationUri: uri, verificationUriComplete: complete, expiresInS: Math.round(expiresMs / 1000) },
+  };
+}
 
-  const deadline = started + expiresMs;
+/**
+ * The second half: token polls with `grant` at its interval (slow_down adds 5 s) until Shop answers with tokens or
+ * an error, or the grant expires. No token request is sent once it has expired: Shop would only answer expired_token.
+ */
+export async function pollDeviceGrant(accounts: ShopCaller, grant: DeviceGrant, options: DevicePollOptions): Promise<LinkedShop> {
+  const deadline = grant.expiresAt;
+  let intervalS = clampInterval(grant.intervalS);
   for (;;) {
     // Never past the deadline, so the 10-minute cap holds whatever the interval.
     await options.sleep(Math.max(0, Math.min(intervalS * 1000, deadline - options.now())));
-    // No token request after the code expired: Shop would only answer expired_token.
     if (options.now() >= deadline) throw new ShopLinkError("expired", EXPIRED);
-    const answer = readForm(await accounts.call(TOKEN, { grant_type: DEVICE_GRANT, device_code: deviceCode, client_id: options.clientId }));
-    if (answer.status === 200) return tokens(answer.json, options.clientId, options.now());
+    const answer = readForm(await accounts.call(TOKEN, { grant_type: DEVICE_GRANT, device_code: grant.deviceCode, client_id: grant.clientId }));
+    if (answer.status === 200) return tokens(answer.json, grant.clientId, options.now());
     const code = answer.json.error;
     if (code === "authorization_pending") continue;
-    if (code === "slow_down") {
+    // slow_down, and a busy or failing server (429, 5xx) that names no error the gateway knows: the grant still
+    // works, so wait 5 s longer and ask again, never past the deadline.
+    const known = typeof code === "string" && Object.hasOwn(ERROR_LABELS, code);
+    if (code === "slow_down" || (!known && (answer.status === 429 || answer.status >= 500))) {
       intervalS = clampInterval(intervalS + SLOW_DOWN_S);
       continue;
     }
     throw failed(answer.json, "Shop refused the token request");
   }
+}
+
+/**
+ * A grant as kept between `wallet link shop --start` and `--finish`, with `authUrl`, the account server that issued
+ * it: the device code goes back to that server only. JSON, for the sealed pending file; never printed.
+ */
+export function deviceGrantText(grant: DeviceGrant, authUrl: string): string {
+  return JSON.stringify({
+    v: 1,
+    device_code: grant.deviceCode,
+    client_id: grant.clientId,
+    resource: grant.resource,
+    auth_url: authUrl,
+    interval: grant.intervalS,
+    expires_at: grant.expiresAt,
+  });
+}
+
+/** The grant in a pending file's text, or null when the text is not one. */
+export function parseDeviceGrant(text: string): { grant: DeviceGrant; authUrl: string } | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const json = record(value);
+  if (json?.v !== 1) return null;
+  const { device_code: deviceCode, client_id: clientId, resource, auth_url: authUrl, interval, expires_at: expiresAt } = json;
+  if (typeof deviceCode !== "string" || deviceCode === "" || typeof clientId !== "string" || clientId === "") return null;
+  if (typeof resource !== "string" || typeof authUrl !== "string" || positive(interval) === 0 || positive(expiresAt) === 0) return null;
+  return { grant: { deviceCode, clientId, resource, intervalS: interval as number, expiresAt: expiresAt as number }, authUrl };
 }
 
 /** A user code as RFC 8628 suggests one: short, letters, digits and `-`; anything else is not printed. */

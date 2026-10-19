@@ -19,7 +19,7 @@ import { pauseCommand, pauseDeps, resumeCommand, statusCommand } from "./pause.t
 import { pausedIn, pauseLocally, sendPause } from "../pause/index.ts";
 import { openStore } from "../store/index.ts";
 import { init } from "./init.ts";
-import { walletCheck, walletLink, walletStatus, walletUnlink } from "./wallet.ts";
+import { walletCheck, walletLink, walletStatus, walletUnlink, walletWaitBudget } from "./wallet.ts";
 import type { Demo } from "../demo/index.ts";
 import { activePolicy, cliConfig, PACKAGE_ROOT, startDemoFor, trustedKeys } from "./setup.ts";
 import { printable, printableLines } from "../ui/index.ts";
@@ -67,8 +67,8 @@ export const COMMANDS: Readonly<Record<string, Options>> = {
   "policy show": {},
   "approver list": {},
   "approver accept": {},
-  "wallet status": {},
-  "wallet link": {},
+  "wallet status": { "wait-budget": { type: "boolean" }, timeout: { type: "string" } },
+  "wallet link": { start: { type: "boolean" }, finish: { type: "boolean" } },
   "wallet unlink": {},
   "wallet check": { since: { type: "string" } },
 };
@@ -258,9 +258,12 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
     case "approver accept":
       return { code: await approverAccept(io, config.dataDir) };
     case "wallet status":
+      if (values["wait-budget"] === true) return { code: await walletWaitBudget(io, config, str("timeout")) };
+      if (values.timeout !== undefined) throw new CliError(`--timeout goes with --wait-budget; run ${INTENT} --help`, 2);
       return { code: await walletStatus(io, config) };
     case "wallet link":
-      return { code: await walletLink(io, config, arg(0)) };
+      if (values.start === true && values.finish === true) throw new CliError(`wallet link takes --start or --finish, not both; run ${INTENT} --help`, 2);
+      return { code: await walletLink(io, config, arg(0), values.start === true ? "start" : values.finish === true ? "finish" : "full") };
     case "wallet unlink":
       return { code: await walletUnlink(io, config, arg(0)) };
     case "wallet check":
