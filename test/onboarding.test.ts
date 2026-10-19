@@ -222,27 +222,36 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(code).toContain('PATH="$(brew --prefix node@24)/bin:$PATH" ');
     expect(fix).toMatch(/continue at step 1/);
     expect(fix).toContain("so the developer restarts only once");
-    // The one restart is in step 3, after `claude mcp add`, and says how to get `claude` back on the new Node.
-    const step3 = prompt.slice(prompt.indexOf("## Step 3"), prompt.indexOf("## Step 4"));
-    expect(prompt.indexOf("claude mcp add intent")).toBeLessThan(prompt.indexOf("## Step 3"));
-    expect(step3).toContain("> `claude --continue`");
-    expect(step3).toContain('If you switched Node, first say in one line: "If `claude` is not found in the new terminal, reinstall Claude Code with `npm i -g @anthropic-ai/claude-code`, or with its native installer."');
+    // `claude mcp add` runs without the switch: an npm-installed claude can drop off the PATH under nvm or fnm.
+    expect(fix).toContain("Run `claude mcp add` without it: with nvm or fnm, a `claude` installed with npm can drop off the PATH.");
+    // The one restart is in step 8, and says how to get `claude` back on the new Node.
+    const step8 = prompt.slice(prompt.indexOf("## Step 8"), prompt.indexOf("## Step 9"));
+    expect(step8).toContain("> `claude --continue`");
+    expect(step8).toContain('If you switched Node, first say in one line: "If `claude` is not found in the new terminal, reinstall Claude Code with `npm i -g @anthropic-ai/claude-code`, or with its native installer."');
+    expect(fix).toContain("until the developer restarts Claude Code (start of step 8)");
     expect(fix).not.toContain("claude --continue");
   });
 
-  it("the default policy is applied only when there is no policy file, before the one restart, so it is in force at the first purchase", () => {
+  it("the default policy is applied only when there is no policy file, and the one restart comes after the Shop link and the policy", () => {
     const prompt = read(PROMPT);
     const step3 = prompt.slice(prompt.indexOf("## Step 3"), prompt.indexOf("## Step 4"));
     expect(step3).toContain("Run `intent policy show`. Only if it says `no policy file at`, apply the default policy");
     expect(codeOf(step3)).toContain("$ intent policy add per-order-20 --yes\n$ intent policy add weekly-40 --yes\n");
     expect(step3).toContain("If a policy file exists, leave it as it is: it is the developer's.");
-    // Applied before the restart block, and the restart is the last developer action before any purchase.
-    expect(step3.indexOf("policy add weekly-40 --yes")).toBeLessThan(step3.indexOf("> **Your turn:**"));
     // The CLI says this exact line when there is no file (src/cli/policy.ts).
     expect(read("src/cli/policy.ts")).toContain("`no policy file at ${policyPath}: the gateway uses the bundled ${active.bundled} policy`");
-    // No restart in the purchase step: the policy is already in force.
-    const step8 = prompt.slice(prompt.indexOf("## Step 8"), prompt.indexOf("## Step 9"));
-    expect(step8).not.toContain("claude --continue");
+    // `intent serve` looks for the Shop wallet once, at start: the one restart comes after the Shop link (step 5) and
+    // the advisor (step 6), and before the first find_offers (attack: a restart before the link leaves the gateway without Shop).
+    const restart = prompt.indexOf("> **Your turn:** restart Claude Code");
+    expect([...prompt.matchAll(/^> \*\*Your turn:\*\* restart Claude Code$/gm)]).toHaveLength(1);
+    expect(restart).toBeGreaterThan(prompt.indexOf("intent wallet link shop --finish"));
+    expect(restart).toBeGreaterThan(prompt.indexOf("intent wallet status --wait-budget"));
+    expect(restart).toBeGreaterThan(prompt.indexOf("## Step 6"));
+    expect(restart).toBeGreaterThan(prompt.indexOf("## Step 8"));
+    expect(restart).toBeLessThan(prompt.indexOf("Call `find_offers`"));
+    expect(prompt).toContain("the gateway reads its policy and looks for the Shop wallet then. One restart now picks up the gateway, the policy, the Shop link");
+    // The advisor asks for no restart of its own during the onboarding.
+    expect(read(SKILL)).toContain("When the onboarding runs you, say nothing either: its restart before the first purchase picks up any change.");
   });
 
   it("sends nothing itself: no curl, wget or fetch, and no placeholder as a send target (attack: step markers must not come back)", () => {
@@ -351,16 +360,16 @@ describe("onboarding prompt and policy-advisor skill", () => {
     // The developer's actions, in order.
     const prompt = turns(read(PROMPT));
     expect(prompt.map((b) => b.label)).toEqual([
-      "restart Claude Code",
       "sign up and create a passkey",
       "approve the Shop link",
       "turn on agent payments",
+      "restart Claude Code",
       "say what to buy",
       "pick an offer",
       "approve with your passkey",
     ]);
     // Each detectable action is followed by the command that detects it, and asks for no done.
-    const [, , link, payments, , pick, approval] = prompt;
+    const [, link, payments, , , pick, approval] = prompt;
     expect(link?.after.join("\n")).toContain("intent wallet link shop --finish");
     expect(payments?.after.join("\n")).toContain("intent wallet status --wait-budget");
     expect(approval?.after.join("\n")).toContain("get_approval_status");
@@ -382,7 +391,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const own = turns(prompt).map((b) => b.label);
     const advisor = turns(read(SKILL)).map((b) => b.label);
     expect(advisor).toEqual(["look at your rules (optional)", "restart Claude Code"]);
-    const actions = [...own.slice(0, 4), advisor[0] ?? "", ...own.slice(4)];
+    const actions = [...own.slice(0, 3), advisor[0] ?? "", ...own.slice(3)];
     expect(list.split(", ")).toEqual(actions);
     expect(Number(count)).toBe(actions.length);
     // At most three lines, before step 1, and the agent's first reply.
@@ -412,20 +421,42 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(gateway).toContain('ship_to: { country: "US", postal_code: zip }');
   });
 
-  it("ends with one card: order, store and total from fields the tools return, then intent log and intent pause", () => {
+  it("polls get_approval_status only while the result says to, and relays any final result as it is", () => {
+    const prompt = read(PROMPT);
+    const step8 = prompt.slice(prompt.indexOf("## Step 8"), prompt.indexOf("## Step 9"));
+    expect(step8).toContain("Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again.");
+    expect(step8).toContain("Any other result is final: relay what it says, in one line, and no more.");
+    expect(step8).toContain("Never offer a link or a next step the result does not give; if it says to create a new cart, offer that.");
+    // Attack: one-tap states are not the only final ones (a hand-off is `approved`; rejected, expired, flagged end too).
+    expect(step8).not.toMatch(/until the purchase is settled|`ordered`, `failed` or `mismatch`/);
+    // The wording the gateway uses for "call again".
+    const gateway = read("src/gateway/gateway.ts");
+    expect(gateway).toContain('"Waiting for the buyer to approve with their passkey."');
+    expect(gateway).toContain("`Waiting for the user to click");
+    expect(gateway).toContain('"Call get_approval_status again until it says ordered, failed or mismatch."');
+    expect(gateway).toContain('"The buyer pays at the merchant checkout."');
+    expect(gateway).toContain("Create a new cart to hand the purchase off to the merchant's checkout.");
+  });
+
+  it("ends with one card from the text the tools return: ordered only when the result says so, then intent log and intent pause", () => {
     const prompt = read(PROMPT);
     const end = prompt.slice(prompt.indexOf("Setup is done."));
-    expect(end).toMatch(/> \*\*Done:\*\* order <order>, <store>, <total>\n>\n> `intent log` shows what the gateway sent\.\n>\n> `intent pause` stops every purchase that isn't paid yet\.\n$/);
-    expect(end).toContain("the order is `order_number` from `get_approval_status`, or `completion.order_ref` for a one-tap purchase");
-    expect(end).toContain("the store is `checkout.store` from `create_cart`; the total is `checkout.totals.total` with `checkout.currency` from `create_cart`");
-    // Those fields exist in the tool results (src/gateway).
-    const gateway = read("src/gateway/gateway.ts");
-    expect(gateway).toContain("readonly order_number?: string;");
-    expect(gateway).toContain("readonly completion?: CompletionView;");
-    expect(gateway).toContain("export interface SubmittedCheckoutView {\n  readonly store: string;");
-    expect(gateway).toContain("readonly totals: { readonly subtotal: number; readonly shipping: number; readonly tax: number; readonly total: number };");
-    expect(gateway).toContain("readonly checkout?: SubmittedCheckoutView;");
-    expect(read("src/gateway/complete.ts")).toContain("readonly order_ref?: string;");
+    expect(end).toMatch(/> \*\*Done:\*\* <outcome>, from <store>, total <total>\n>\n> `intent log` shows what the gateway sent\.\n>\n> `intent pause` stops every intent purchase not yet approved or paid\.\n$/);
+    // Invariant 5: ordered (and an order number) only from the result; a hand-off is a hand-off; anything else is not completed.
+    expect(end).toContain("`ordered`, with `order <number>` only when the `get_approval_status` result names one (`One-tap: ordered …, order <number>`, or \"placed the order (order <number>)\")");
+    expect(end).toContain("\"handed off to Shop's checkout\" when the result says the buyer pays at the checkout or was handed off");
+    expect(end).toContain("otherwise \"not completed\" and the reason the result gives. Never say paid or ordered unless the result says ordered.");
+    expect(end).toContain("the store and total: from the `create_cart` result's line `… from <store>, total <total> …`.");
+    // The text the tools render (src/mcp/tools.ts, src/gateway/gateway.ts), which is what the agent reads.
+    const tools = read("src/mcp/tools.ts");
+    expect(tools).toContain("[`One-tap: ${c.state}");
+    expect(tools).toContain('${c.order_ref === undefined ? "" : `, order ${c.order_ref}`}');
+    expect(tools).toContain("`Shop checkout: ${String(checkout.quantity)} × ${checkout.title} from ${checkout.store}, total ${minorText(checkout.totals.total, checkout.currency)} `");
+    expect(tools).toContain("from ${cart.merchant.name}, total ${totalText(cart.total, cart.total_kind)}.`");
+    expect(read("src/gateway/gateway.ts")).toContain('placed the order${order === undefined ? "" : ` (order ${order})`}');
+    // A Shop offer shows a price and no total, so the offer list shows the price.
+    expect(tools).toContain("shipping shown at checkout, in stock.");
+    expect(prompt).toContain("item, store and price, as the result writes them (a Shop offer shows no total: shipping is shown at checkout)");
   });
 
   it("covers the three outcomes of --finish and --wait-budget with the CLI's own lines", () => {
@@ -433,7 +464,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const step5 = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     const wallet = read("src/cli/wallet.ts");
     // --start: one line; the agent shows its link and code, then runs --finish at once.
-    expect(step5).toContain("`Open <link> and approve the code <CODE> in Shop before <time>, then run intent wallet link shop --finish`");
+    expect(step5).toContain("`Open <link> and approve the code <CODE> in Shop before <time>, then run <the --finish command>`, and exits; the command it names is the one you ran, with `--finish`.");
     expect(wallet).toContain("`Open ${page} and approve the code ${prompt.userCode} in ${name} before ${isoSeconds(started.expiresAt)}, then run ${INTENT} wallet link ${rail} --finish`");
     expect(step5).toContain("If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1.");
     // 1. Already on: the block is skipped.
@@ -446,7 +477,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(step5).toContain("- Agent payments are on but too little is left for one purchase: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`");
     expect(wallet).toContain("`Agent payments are on, but only ${dollars(account.budgetRemaining?.amountMinor ?? 0)} is left; raise it to ${dollars(advice.maxMinor)}.`");
     expect(step5).toContain("`intent wallet status --wait-budget` can print the same low lines when it starts; show them the same way");
-    expect(step5).toContain("For the last two, show the two lines `--finish` printed, word for word, and nothing else");
+    expect(step5).toContain("For the last two, show the last two lines `--finish` printed, word for word, and nothing else");
     // --wait-budget: success, too high, timeout.
     expect(step5).toContain("When it prints `Agent payments on: …`, say that line");
     expect(step5).toContain("any line it prints that starts `intent: warning: this limit is above`");
@@ -464,8 +495,14 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const prompt = read(PROMPT);
     const step5 = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     expect(step5).toContain("Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page");
-    expect(step5).toContain("> <the second line `--finish` printed>");
-    expect(step5).toContain("> <the first line `--finish` printed, as a clickable link>");
+    expect(step5).toContain("For the last two, show the last two lines `--finish` printed, word for word, and nothing else");
+    expect(step5).toContain("> <the last line `--finish` printed>");
+    expect(step5).toContain("> <the line before it, the Shop page, as a clickable link>");
+    // The Bash tool stops a command at 10 minutes: --wait-budget gets 540 s, so its own timeout line is printed.
+    const runs = [...step5.matchAll(/run `([^`]*--wait-budget[^`]*)`/g)].map((m) => m[1]);
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs.filter((c) => c !== "intent wallet status --wait-budget --timeout 540")).toEqual([]);
+    expect(step5).toContain("with a 10-minute timeout for the command");
     // The safety-net note comes once the budget is seen, not while the developer acts.
     const note = step5.indexOf("Shop says it enforces this amount itself, as a safety net; intent's policy does the day-to-day limiting.");
     expect(note).toBeGreaterThan(step5.indexOf("intent wallet status --wait-budget"));
@@ -497,7 +534,9 @@ describe("onboarding prompt and policy-advisor skill", () => {
       expect(changes.indexOf(`\`intent policy add ${m[1] ?? ""}\``), m[0]).toBeGreaterThanOrEqual(0);
       expect(changes.indexOf(`\`intent policy add ${m[1] ?? ""}\``), m[0]).toBeLessThan(m.index);
     }
-    expect(skill).toContain("Run `intent policy add <name>` without `--yes`: with no terminal it prints the change as a diff and writes nothing.");
+    // Without --yes and with no terminal, policy add exits 2 with this line: the expected preview, not an error.
+    expect(skill).toContain("exits 2 with `not applied: stdin is not a terminal, so no one can confirm the change; re-run with --yes to apply it`. That exit and that line are the expected preview, not an error.");
+    expect(read("src/cli/policy.ts")).toContain('"not applied: stdin is not a terminal, so no one can confirm the change; re-run with --yes to apply it", 2');
     // Loosening: the file and lock go, then only the wanted limits come back. No claim that a limit "stays".
     expect(changes).toContain("### Loosen a limit");
     expect(changes).toContain("Remove the policy file and its lock");
@@ -510,7 +549,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(skill).toContain("The panel shows your rules; changes go through you");
     expect(skill).not.toMatch(/read-only|only shows the policy/);
     // A restart only if the policy changed.
-    expect(skill).toContain("If you applied, changed or removed anything in this skill, show:");
+    expect(skill).toContain("Otherwise, if you applied, changed or removed anything in this skill, show:");
     expect(skill).toContain("If nothing changed, say nothing about a restart.");
   });
 

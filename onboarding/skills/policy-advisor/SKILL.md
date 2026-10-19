@@ -18,7 +18,7 @@ Do not narrate commands or paste their output: between developer actions, say on
 ## Rules you never break
 
 - Write the policy only with the `intent policy` commands named below, and remove it only as "Loosen a limit" says. Never edit `policy.yaml` or `policy.lock` by hand. Why: `intent policy show` reports a hand-edited file as not matching its lock.
-- The policy file is the developer's: change it only when they ask, and show the change first. Run `intent policy add <name>` without `--yes`: with no terminal it prints the change as a diff and writes nothing. Show the diff, and run it again with `--yes` only when they agree. Why: `intent policy add` narrows the developer's current file, so a change they did not ask for takes away something they chose.
+- The policy file is the developer's: change it only when they ask, and show the change first. Run `intent policy add <name>` without `--yes`: with no terminal it prints the change as a diff, writes nothing, and exits 2 with `not applied: stdin is not a terminal, so no one can confirm the change; re-run with --yes to apply it`. That exit and that line are the expected preview, not an error. Show the diff, ask, and run it again with `--yes` only when they agree. Why: `intent policy add` narrows the developer's current file, so a change they did not ask for takes away something they chose.
 - Never suggest an amount above the preview ceiling: $50 per order, $100 per rolling 7 days, and so at most $400 for Shop agent payments. Why: Intent Cloud enforces that ceiling for the preview (US dollars only), and a policy cannot go above it.
 - Never suggest `per-order-60`, `weekly-150` or `strict-default`. Why: the first two are above the ceiling, and `strict-default` sends no ZIP code, so the gateway blocks every search.
 - Run each command as `npx -y intent-gateway@0.1.0-preview.5 <command>`; where this file writes `intent <command>`, that is what it means. If `intent --version` already prints `0.1.0-preview.5`, `intent <command>` works as it is.
@@ -90,7 +90,7 @@ Then run `intent policy show` and say, in one or two lines: the limits now in th
 
 ## 5. A restart, only if the policy changed
 
-A running gateway reads its policy when it starts. If nothing changed, say nothing about a restart. If you applied, changed or removed anything in this skill, show:
+A running gateway reads its policy when it starts. If nothing changed, say nothing about a restart. When the onboarding runs you, say nothing either: its restart before the first purchase picks up any change. Otherwise, if you applied, changed or removed anything in this skill, show:
 
 > **Your turn:** restart Claude Code
 >
