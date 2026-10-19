@@ -19,18 +19,6 @@ const PROMPT = "onboarding/claude-code.md";
 const SKILL = "onboarding/skills/policy-advisor/SKILL.md";
 const FILES = [PROMPT, SKILL];
 
-/** Options the prompt names before they ship, as `<command> <option>`: `wallet link shop --start`/`--finish` and
- * `wallet status --wait-budget` come from the Shop link start/finish change, which merges first. Once the CLI has one,
- * a test below fails until it is removed here. Any other unknown command or option fails the test. */
-const PLANNED_OPTIONS: ReadonlySet<string> = new Set(["wallet link --start", "wallet link --finish", "wallet status --wait-budget"]);
-
-/** What to change when PLANNED_OPTIONS empties at rebase onto the Shop link start/finish change. */
-const AT_REBASE = [
-  "remove the shipped options from PLANNED_OPTIONS",
-  'replace the placeholder "Budget seen" line and the too-high warning in the prompt (step 5.4) and in the test "puts what the developer must see…" with the lines `wallet status --wait-budget` prints',
-  'check that `wallet link shop --finish` prints the two agent-payments lines (Shop page, then "Tap …") or the already-on line, as step 5.3 and the test "agent payments: …" assume',
-];
-
 /** The Intent Cloud preview ceiling, in US dollars: per order and per rolling 7 days. Shop agent payments are ≤ 4 weeks. */
 const CEILING = { perOrder: 50, perWeek: 100, budget: 400 };
 
@@ -94,9 +82,6 @@ function checkFlags(command: string, words: readonly string[]): string[] {
   return unknown;
 }
 
-/** Whether `reason` is an option on PLANNED_OPTIONS. */
-const planned = (reason: string): boolean => PLANNED_OPTIONS.has(reason.replace(/^unknown option (\S+) for (.+)$/, "$2 $1"));
-
 const named = FILES.flatMap((file) => codeOf(read(file)).flatMap(invocations).map((words) => ({ file, words })));
 
 describe("onboarding command check (the checker itself)", () => {
@@ -115,10 +100,11 @@ describe("onboarding command check (the checker itself)", () => {
     expect(problem(["wallet", "link", "shop"])).toBeNull();
   });
 
-  it("reports every unknown option, and a wallet link without its rail (attack: a typo behind a planned option)", () => {
-    expect(problems(["wallet", "link", "shop", "--start", "--yse"])).toEqual(["unknown option --start for wallet link", "unknown option --yse for wallet link"]);
-    expect(problems(["wallet", "link", "shop", "--start", "--yse"]).filter((r) => !planned(r))).toEqual(["unknown option --yse for wallet link"]);
-    expect(problems(["wallet", "link", "--finish"])).toEqual(["wallet link needs its rail, shop", "unknown option --finish for wallet link"]);
+  it("reports every unknown option, and a wallet link without its rail (attack: a typo behind a known option)", () => {
+    expect(problems(["wallet", "link", "shop", "--strat", "--yse"])).toEqual(["unknown option --strat for wallet link", "unknown option --yse for wallet link"]);
+    expect(problems(["wallet", "link", "shop", "--start", "--yse"])).toEqual(["unknown option --yse for wallet link"]);
+    expect(problems(["wallet", "link", "--finish"])).toEqual(["wallet link needs its rail, shop"]);
+    expect(problems(["wallet", "link", "--finsh"])).toEqual(["wallet link needs its rail, shop", "unknown option --finsh for wallet link"]);
     expect(problems(["wallet", "link", "shpo"])).toEqual(["wallet link needs its rail, shop"]);
   });
 });
@@ -138,19 +124,15 @@ describe("onboarding prompt and policy-advisor skill", () => {
 
   it("names only commands the CLI has, or the planned ones", () => {
     expect(named.length).toBeGreaterThan(10);
-    const bad = named.flatMap(({ file, words }) => problems(words).filter((reason) => !planned(reason)).map((reason) => `${file}: intent ${words.join(" ")}: ${reason}`));
+    const bad = named.flatMap(({ file, words }) => problems(words).map((reason) => `${file}: intent ${words.join(" ")}: ${reason}`));
     expect(bad).toEqual([]);
     // Every `wallet link` keeps its rail.
     expect(named.filter(({ words }) => words[0] === "wallet" && words[1] === "link" && words[2] !== "shop")).toEqual([]);
   });
 
-  it("lists as planned only options the CLI does not have yet", () => {
-    const shipped = [...PLANNED_OPTIONS].filter((p) => {
-      const [group = "", command = "", option = ""] = p.split(" ");
-      return Object.hasOwn(COMMANDS[`${group} ${command}`] ?? {}, option.replace(/^--/, ""));
-    });
-    expect(shipped, `the option has shipped; at rebase:\n- ${AT_REBASE.join("\n- ")}`).toEqual([]);
-    expect(problem(["wallet", "link", "shop", "--start"])).toBe("unknown option --start for wallet link");
+  it("names the Shop link and agent-payments options the CLI has", () => {
+    expect(Object.keys(COMMANDS["wallet link"] ?? {}).sort()).toEqual(["finish", "start"]);
+    expect(Object.keys(COMMANDS["wallet status"] ?? {}).sort()).toEqual(["timeout", "wait-budget"]);
   });
 
   it("uses the commands the onboarding needs", () => {
@@ -307,9 +289,8 @@ describe("onboarding prompt and policy-advisor skill", () => {
     );
     expect(prompt).toContain("Do not narrate commands or paste their output. Between developer actions, say only the status line:");
     expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names.");
-    expect(prompt).toContain("> Open this link and approve intent in Shop. The code is already filled in.");
-    expect(prompt).toContain("If it expired, go back to 1 and start again.");
-    expect(prompt).toContain('say its "Budget seen" line, any warning it prints that the amount is too high');
+    expect(prompt).toContain("> Open this link and approve intent in Shop.\n>\n> The code is already filled in if you use this link.\n");
+    expect(prompt).toContain("When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above`, and this note");
     expect(prompt).toContain("send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.");
     const shop = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     expect(codeOf(shop).filter((c) => /wallet link shop$/.test(c))).toEqual([]);
@@ -447,12 +428,36 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(read("src/gateway/complete.ts")).toContain("readonly order_ref?: string;");
   });
 
+  it("covers the three outcomes of --finish and --wait-budget with the CLI's own lines", () => {
+    const prompt = read(PROMPT);
+    const step5 = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
+    const wallet = read("src/cli/wallet.ts");
+    // --start: one line; the agent shows its link and code, then runs --finish at once.
+    expect(step5).toContain("`Open <link> and approve the code <CODE> in Shop before <time>, then run intent wallet link shop --finish`");
+    expect(wallet).toContain("`Open ${page} and approve the code ${prompt.userCode} in ${name} before ${isoSeconds(started.expiresAt)}, then run ${INTENT} wallet link ${rail} --finish`");
+    expect(step5).toContain("If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1.");
+    // 1. Already on: the block is skipped.
+    expect(step5).toContain("- `Agent payments on: …` (they are already on): skip the block below");
+    expect(wallet).toContain("`Agent payments on: ${moneyText(limit.amount)}${per}, ${moneyText(account.budgetRemaining)} left`");
+    // 2. Off: the Shop page, then what to tap.
+    expect(step5).toContain("- Agent payments are off: a Shop page, then `Tap …, turn on Allow agent to pay for me, enter $<amount>.`");
+    expect(wallet).toContain("`Tap ${connectionName(linkedShopClientId(vaultText))}, turn on Allow agent to pay for me, enter ${dollars(advice.maxMinor)}.`");
+    // 3. On but low: the Shop page, then raise it (wording to be confirmed with the CLI).
+    expect(step5).toContain("- Agent payments are on but too little is left: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`");
+    expect(step5).toContain("For the last two, show the two lines `--finish` printed, word for word, and nothing else");
+    // --wait-budget: success, too high, timeout.
+    expect(step5).toContain("When it prints `Agent payments on: …`, say that line");
+    expect(step5).toContain("any line it prints that starts `intent: warning: this limit is above`");
+    expect(wallet).toContain("`intent: warning: this limit is above ${moneyText({ amountMinor: advice.maxMinor, currency: \"USD\" })}");
+    expect(step5).toContain("If it prints a line that starts `intent: no Shop agent payments seen after`, say that line");
+    expect(wallet).toContain("`intent: no ${name} agent payments seen after ${String(timeoutS)} s");
+    expect(step5).not.toContain("INTENT_SHOP_CLIENT_ID");
+  });
+
   it("agent payments: Shop's permission to pay at all, the lines from --finish word for word, the note only after it is seen", () => {
     const prompt = read(PROMPT);
     const step5 = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     expect(step5).toContain("Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page");
-    expect(step5).toContain("`--finish` prints either a line that says agent payments are already on (then skip this block) or two lines");
-    expect(step5).toContain("Show those two lines, word for word, and nothing else:");
     expect(step5).toContain("> <the second line `--finish` printed>");
     expect(step5).toContain("> <the first line `--finish` printed, as a clickable link>");
     // The safety-net note comes once the budget is seen, not while the developer acts.
@@ -461,8 +466,10 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(step5).toContain("It is the only stop an agent with shell access can't get around");
     // Invariant 5: what Shop says, not what it does; the page, the label, the amount and its period come from the CLI.
     expect(step5).not.toMatch(/Shop enforces/);
-    expect(step5).not.toMatch(/https?:\/\/|\$\d|month|Allow agent to pay/);
-    // No amount to choose; "budget" appears only in the flag and the line the gateway prints (--wait-budget, "Budget seen").
+    // No page, amount or period of the prompt's own: those come from the CLI, quoted only as its output patterns.
+    expect(step5).not.toMatch(/https?:\/\/|\$\d|month/);
+    expect(step5.split("\n").filter((l) => l.includes("Allow agent to pay")).every((l) => l.includes("`Tap …, turn on Allow agent to pay for me, enter $<amount>.`"))).toBe(true);
+    // No amount to choose; "budget" appears only in the flag (--wait-budget).
     expect(step5).not.toMatch(/[Ss]uggest|(?<!-)\bbudget\b/);
     const skill = read(SKILL);
     expect(skill).toContain("When the onboarding has already set it, do not ask about it again; discuss another amount only if the developer asks.");

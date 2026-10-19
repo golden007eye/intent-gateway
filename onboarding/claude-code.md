@@ -102,20 +102,25 @@ This step is required: never skip it, also when the developer says they already 
 
 ## Step 5: link Shop and turn on agent payments
 
-1. Run `intent wallet link shop --start`. It prints a Shop link, a code and when they expire, then exits. Show:
+1. Run `intent wallet link shop --start`. It prints one line, `Open <link> and approve the code <CODE> in Shop before <time>, then run intent wallet link shop --finish`, and exits. Show the link and the code from that line:
 
 > **Your turn:** approve the Shop link
 >
-> Open this link and approve intent in Shop. The code is already filled in.
+> Open this link and approve intent in Shop.
 >
-> No Shop account yet? Create one there, and add a payment card in Shop.
+> The code is already filled in if you use this link.
 >
 > <the link, as a clickable link>
 >
 > <the code>
 
-2. Right away, run `intent wallet link shop --finish`. It waits until Shop says the link was approved, denied or expired, so give it a long timeout (10 minutes). If it expired, go back to 1 and start again. If it was denied, ask the developer whether to try again.
-3. Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page, where the developer pays by hand. When the link is approved, `--finish` prints either a line that says agent payments are already on (then skip this block) or two lines: a Shop page, then what to tap and the amount, which the gateway sets from the policy. Show those two lines, word for word, and nothing else:
+2. Right away, run `intent wallet link shop --finish`, with a long timeout (10 minutes): it waits for the approval. If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1. If Shop denied the link, ask the developer whether to try again. If the developer has no Shop account, they create one from that link or in the Shop app, and add a payment card in Shop.
+3. Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page, where the developer pays by hand. Once the link is approved, `--finish` prints one of three outcomes:
+   - `Agent payments on: …` (they are already on): skip the block below and go to the note in 4.
+   - Agent payments are off: a Shop page, then `Tap …, turn on Allow agent to pay for me, enter $<amount>.`, with the amount the gateway sets from the policy.
+   - Agent payments are on but too little is left: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`
+
+   For the last two, show the two lines `--finish` printed, word for word, and nothing else (when Shop names no page, it prints only the second line; leave the link line out):
 
 > **Your turn:** turn on agent payments
 >
@@ -123,11 +128,11 @@ This step is required: never skip it, also when the developer says they already 
 >
 > <the first line `--finish` printed, as a clickable link>
 
-4. Right away, run `intent wallet status --wait-budget`, with a long timeout (10 minutes). It sees the amount once Shop shows it. When it does, say its "Budget seen" line, any warning it prints that the amount is too high, and this note, in two short lines:
+4. Right away, run `intent wallet status --wait-budget`, with a long timeout (10 minutes; it waits at most 600 s). It waits until Shop shows agent payments on, with enough left for one order. When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above`, and this note, in two short lines:
    - "Shop says it enforces this amount itself, as a safety net; intent's policy does the day-to-day limiting."
    - "It is the only stop an agent with shell access can't get around: any program running as you can read the Shop token on this computer."
 
-   If the developer would rather not turn on agent payments, go on: every order then goes to Shop's checkout page.
+   If it prints a line that starts `intent: no Shop agent payments seen after`, say that line and ask whether to wait again; if yes, run `intent wallet status --wait-budget` again. If the developer would rather not turn on agent payments, go on: every order then goes to Shop's checkout page.
 
 ## Step 6: the policy
 
