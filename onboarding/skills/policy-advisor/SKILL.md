@@ -13,7 +13,7 @@ You show the developer their gateway policy and change it only when they ask. Wo
 4. the test run,
 5. a restart, only if the policy changed.
 
-Between developer actions, say only one short status line. Each developer action is a block in your own reply: a bold **Your turn** line, one numbered action, its link on its own line, and "Reply done" only when no command can see that the action is done.
+Do not narrate commands or paste their output: between developer actions, say only one short status line, in the onboarding's form when it runs you (`✓ <n>/9  <what happened>. Next: <what>.`). Each developer action is a block in your own reply: the bold **Your turn:** marker and a short label, one action in short lines, its link on its own line, and "Reply done" only when no command can see that the action is done. Say nothing after a block while the developer acts.
 
 ## Rules you never break
 
@@ -46,15 +46,13 @@ $ intent policy add weekly-40 --yes
 
 ## 2. Show it in the panel
 
-Start `intent panel` in the background; it keeps running. Read the address from its `panel: http://127.0.0.1:<port>/` line, and show:
+Start `intent panel` in the background; it keeps running. Read the address from its `panel: http://127.0.0.1:<port>/` line. The panel shows your rules; changes go through you, with the commands below. If the developer says nothing about the rules, or keeps them, go on to the test run. Show:
 
-> **Your turn**
+> **Your turn:** look at your rules (optional)
 >
-> 1. Here are your rules. Keep them, or tell me what to change. Looking is optional.
+> Here are your rules. Keep them, or tell me what to change.
 >
 > http://127.0.0.1:<port>/#/policy
-
-The panel shows your rules; changes go through you, with the commands below. If the developer says nothing about the rules, or keeps them, go on to the test run.
 
 ## 3. Change it only when the developer asks
 
@@ -92,12 +90,10 @@ Then run `intent policy show` and say, in one or two lines: the limits now in th
 
 ## 5. A restart, only if the policy changed
 
-A running gateway reads its policy when it starts. If you applied, changed or removed anything in this skill, show:
+A running gateway reads its policy when it starts. If nothing changed, say nothing about a restart. If you applied, changed or removed anything in this skill, show:
 
-> **Your turn**
+> **Your turn:** restart Claude Code
 >
-> 1. Quit Claude Code, then run this in a new terminal in this folder and say "continue":
+> Quit Claude Code. In a new terminal in this folder, run this and say "continue":
 >
 > `claude --continue`
-
-If nothing changed, say nothing about a restart.

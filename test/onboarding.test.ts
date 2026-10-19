@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { COMMANDS, COMMON } from "../src/cli/index.ts";
 import { loadPolicy, meet, type Policy, runCases } from "../src/policy/index.ts";
+import { FindOffersInput } from "../src/gateway/index.ts";
 import { SUPPORTED_NODE, nodeSupported } from "../src/runtime/index.ts";
 
 const repo = join(import.meta.dirname, "..");
@@ -243,7 +244,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const step3 = prompt.slice(prompt.indexOf("## Step 3"), prompt.indexOf("## Step 4"));
     expect(prompt.indexOf("claude mcp add intent")).toBeLessThan(prompt.indexOf("## Step 3"));
     expect(step3).toContain("> `claude --continue`");
-    expect(step3).toContain("If `claude` is not found there, reinstall Claude Code with `npm i -g @anthropic-ai/claude-code`, or with its native installer.");
+    expect(step3).toContain('If you switched Node, first say in one line: "If `claude` is not found in the new terminal, reinstall Claude Code with `npm i -g @anthropic-ai/claude-code`, or with its native installer."');
     expect(fix).not.toContain("claude --continue");
   });
 
@@ -254,7 +255,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(codeOf(step3)).toContain("$ intent policy add per-order-20 --yes\n$ intent policy add weekly-40 --yes\n");
     expect(step3).toContain("If a policy file exists, leave it as it is: it is the developer's.");
     // Applied before the restart block, and the restart is the last developer action before any purchase.
-    expect(step3.indexOf("policy add weekly-40 --yes")).toBeLessThan(step3.indexOf("> **Your turn**"));
+    expect(step3.indexOf("policy add weekly-40 --yes")).toBeLessThan(step3.indexOf("> **Your turn:**"));
     // The CLI says this exact line when there is no file (src/cli/policy.ts).
     expect(read("src/cli/policy.ts")).toContain("`no policy file at ${policyPath}: the gateway uses the bundled ${active.bundled} policy`");
     // No restart in the purchase step: the policy is already in force.
@@ -274,7 +275,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const placeholdersInCode = code.filter((c) => c !== "{{INTENT_INVITE}}").flatMap((c) => [...c.replaceAll("INTENT_CLOUD_URL={{INTENT_CLOUD_URL}}", "").matchAll(/\{\{[^}]*\}\}/g)].map((m) => m[0]));
     expect(placeholdersInCode).toEqual([]);
     expect(code.filter((c) => c.includes("INTENT_CLOUD_URL={{INTENT_CLOUD_URL}}")).length).toBeGreaterThan(0);
-    expect(prompt).not.toMatch(/marker|opt.?out/i);
+    expect(prompt).not.toMatch(/step.?marker|opt.?out|MARKER_URL/i);
     // Not in prose either: an agent may run a curl it reads anywhere.
     expect(prompt).not.toMatch(/\b(curl|wget)\b/);
     // What to do when stuck stays, in How to work, before any step.
@@ -289,102 +290,178 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const step4 = prompt.slice(prompt.indexOf("## Step 4"), prompt.indexOf("## Step 5"));
     expect(step4).toMatch(/^## Step 4: sign up and create the passkey/);
     expect(step4).toContain("This step is required: never skip it, also when the developer says they already have an account.");
-    expect(step4).toContain("create your passkey. If you already have an account, check on its account page that it has a passkey, and create one if it has none.");
-    expect(step4).toContain('Wait for "done": no command can see this step.');
-    expect(step4).toContain("The first purchase's approval (step 8) is where the passkey is really checked.");
+    // The branch is two short lines, never one long sentence.
+    expect(step4).toContain("> Sign up with your invited email and create a passkey.\n>\n> Already have an account? Check its account page shows a passkey.\n");
+    expect(step4).toContain('No command can see this step, so show this block and wait for "done".');
+    expect(step4).toContain("the first purchase's approval (step 8) is where it is really checked.");
     expect(prompt).toMatch(/^## Step 8: the first purchase/m);
     // The agent checks nothing itself: no command in this step, and the developer opens the page.
     expect(codeOf(step4).filter((c) => /\s/.test(c))).toEqual([]);
     expect(step4).toContain("Never open the page or fill it in for them.");
   });
 
-  it("puts what the developer must see, click or type in the reply, not only in command output", () => {
+  it("puts what the developer must see, click or type in the reply, and narrates nothing else", () => {
     const prompt = read(PROMPT);
     expect(prompt).toContain(
       "Anything the developer must see, click or type (a link, a code, a choice) goes in your own reply, written out in full, never only in a command's output.",
     );
-    expect(prompt).toContain("The code is already filled in if you use this link.");
+    expect(prompt).toContain("Do not narrate commands or paste their output. Between developer actions, say only the status line:");
+    expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names.");
+    expect(prompt).toContain("> Open this link and approve intent in Shop. The code is already filled in.");
     expect(prompt).toContain("If it expired, go back to 1 and start again.");
-    expect(prompt).toContain("go through it with the developer, in your reply");
-    expect(prompt).toContain("Put its last line in your reply.");
-    expect(prompt).toContain('Show its "Budget seen" line in your reply, and any warning it prints that the amount is too high.');
+    expect(prompt).toContain('say its "Budget seen" line, any warning it prints that the amount is too high');
     expect(prompt).toContain("send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.");
     const shop = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     expect(codeOf(shop).filter((c) => /wallet link shop$/.test(c))).toEqual([]);
     expect(shop).not.toContain("INTENT_SHOP_CLIENT_ID");
   });
 
-  /** Each **Your turn** block in `markdown`: its lines, and the text after it up to the next block or step. */
-  function turns(markdown: string): { block: string[]; after: string }[] {
+  const MARKER = "> **Your turn:** ";
+
+  /** Each **Your turn** block in `markdown`: its label, its lines, and the lines after it up to the next block or heading. */
+  function turns(markdown: string): { label: string; block: string[]; after: string[] }[] {
     const lines = markdown.split("\n");
-    const out: { block: string[]; after: string }[] = [];
+    const out: { label: string; block: string[]; after: string[] }[] = [];
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i] !== "> **Your turn**") continue;
+      if (!(lines[i] ?? "").startsWith("> **Your turn")) continue;
       let j = i;
       while (j < lines.length && (lines[j] ?? "").startsWith(">")) j++;
       let k = j;
-      while (k < lines.length && lines[k] !== "> **Your turn**" && !/^#{2,3} /.test(lines[k] ?? "")) k++;
-      out.push({ block: lines.slice(i, j), after: lines.slice(j, k).join("\n") });
+      while (k < lines.length && !(lines[k] ?? "").startsWith("> **Your turn") && !/^#{2,3} /.test(lines[k] ?? "")) k++;
+      out.push({ label: (lines[i] ?? "").startsWith(MARKER) ? (lines[i] ?? "").slice(MARKER.length) : "", block: lines.slice(i, j), after: lines.slice(j, k) });
     }
     return out;
   }
 
+  /** A line of a block that carries a link, a code or a command, not words: a placeholder, a URL or a code span. */
+  const carrier = (line: string): boolean => /^> (<.*>|\{\{[A-Z_]+\}\}|https?:\/\/\S+|`[^`]+`)$/.test(line);
+
   /** The commands that see a developer action by themselves. */
   const DETECTS = /--finish|--wait-budget|get_approval_status/;
 
-  it("every developer action is a **Your turn** block with one numbered action, and asks for done only when nothing can see it", () => {
+  it("every developer action is a labelled **Your turn** block: one action in short lines, no numbering, done only when nothing can see it", () => {
     for (const file of FILES) {
       const blocks = turns(read(file));
       expect(blocks.length, file).toBeGreaterThan(0);
-      for (const { block, after } of blocks) {
+      for (const { label, block, after } of blocks) {
         const text = block.join("\n");
-        expect(block.filter((l) => /^> *\d+\. /.test(l)), `${file}: one action in\n${text}`).toHaveLength(1);
-        expect(block.filter((l) => /^> *[-*] /.test(l)), `${file}: no list beside the action in\n${text}`).toEqual([]);
+        expect(label, `${file}: marker and label in\n${text}`).toMatch(/^[a-z][A-Za-z ()]+$/);
+        // No numbering and no list: a block holds one action (attack: "1. … 2. …" in one block).
+        expect(block.filter((l) => /^> *(\d+\.|[-*]) /.test(l)), `${file}: one action, unnumbered, in\n${text}`).toEqual([]);
+        // Words come first, then the links or codes; every words line is short.
+        const body = block.slice(1).filter((l) => l !== ">" && l !== "> Reply done");
+        const words = body.filter((l) => !carrier(l));
+        // The action is in words, or (agent payments) is a line the CLI printed, copied word for word.
+        expect(words.length > 0 || /^> <.*printed>$/.test(body[0] ?? ""), `${file}: an action in\n${text}`).toBe(true);
+        expect(words.length, `${file}: at most two short lines in\n${text}`).toBeLessThanOrEqual(2);
+        for (const l of words) expect(l.length, `${file}: short line: ${l}`).toBeLessThanOrEqual(90);
+        expect(body.findIndex((l) => carrier(l)) === -1 || body.slice(body.findIndex((l) => carrier(l))).every(carrier), `${file}: links after the words in\n${text}`).toBe(true);
+        // Lines are separated, so each shows on its own.
+        expect(block.every((l, n) => n === 0 || l === ">" || block[n - 1] === ">"), `${file}: a blank > between lines in\n${text}`).toBe(true);
         const asksDone = block.at(-1) === "> Reply done";
         expect(text.replace(/\n> Reply done$/, ""), `${file}: "Reply done" only as the last line`).not.toMatch(/Reply done/);
+        // Nothing after a block while the developer acts: the next line is an instruction or a heading, never prose.
+        const next = after.find((l) => l.trim() !== "");
+        if (next !== undefined) expect(next, `${file}: prose after\n${text}`).toMatch(/^(\d+\. |#{2,3} )/);
         // Attack: a block that asks for "done" while a command right after it would see the action.
-        if (asksDone) expect(after, `${file}: asks for done though a command detects it\n${text}`).not.toMatch(DETECTS);
+        if (asksDone) expect(after.join("\n"), `${file}: asks for done though a command detects it\n${text}`).not.toMatch(DETECTS);
       }
     }
-    // The developer's actions, in order: the one restart (after `claude mcp add` and the default policy), sign-up,
-    // the Shop link, agent payments, what to buy, which offer, the approval.
+    // The developer's actions, in order.
     const prompt = turns(read(PROMPT));
-    expect(prompt.map(({ block }) => block.find((l) => /^> 1\. /.test(l))?.slice(5).split(/[.:,]/)[0])).toEqual([
-      "Quit Claude Code",
-      "Open this page in your own browser",
-      "Open this link and approve intent in Shop",
-      "<the second line `--finish` printed>",
-      "Tell me one small thing you would like to buy",
-      "Pick one",
-      "Open the approval page",
+    expect(prompt.map((b) => b.label)).toEqual([
+      "restart Claude Code",
+      "sign up and create a passkey",
+      "approve the Shop link",
+      "turn on agent payments",
+      "say what to buy",
+      "pick an offer",
+      "approve with your passkey",
     ]);
     // Each detectable action is followed by the command that detects it, and asks for no done.
     const [, , link, payments, , pick, approval] = prompt;
-    expect(link?.after).toContain("intent wallet link shop --finish");
-    expect(payments?.after).toContain("intent wallet status --wait-budget");
-    expect(approval?.after).toContain("get_approval_status");
-    for (const t of [link, payments, approval]) expect(t?.block.at(-1)).not.toBe("> Reply done");
+    expect(link?.after.join("\n")).toContain("intent wallet link shop --finish");
+    expect(payments?.after.join("\n")).toContain("intent wallet status --wait-budget");
+    expect(approval?.after.join("\n")).toContain("get_approval_status");
+    for (const b of [link, payments, approval]) expect(b?.block.at(-1)).not.toBe("> Reply done");
     // The developer picks the offer; create_cart is for that one (src/mcp/tools.ts: "the offer the user picked").
-    expect(pick?.after).toContain("Call `create_cart` for the offer they picked, with its `offer_handle`.");
+    expect(pick?.after.join("\n")).toContain("Call `create_cart` for the offer they picked, with its `offer_handle`.");
     expect(read(PROMPT)).not.toMatch(/cheapest/);
     expect(read("src/mcp/tools.ts")).toContain("Prepare a cart for the offer the user picked");
     // Only the sign-up asks for done in the whole prompt.
     expect([...read(PROMPT).matchAll(/^> Reply done$/gm)]).toHaveLength(1);
   });
 
-  it("agent payments: Shop's permission to pay at all, the lines from --finish word for word, Shop says it enforces it", () => {
+  it("the opening names the developer's actions: their number and labels match the **Your turn** blocks", () => {
+    const prompt = read(PROMPT);
+    const opening = /^> (Setting up intent: .*)$/m.exec(prompt)?.[1] ?? "";
+    expect(opening).toMatch(/^Setting up intent: about 10 minutes\. You'll do (\d+) things: (.+)\.$/);
+    const [, count = "", list = ""] = /You'll do (\d+) things: (.+)\.$/.exec(opening) ?? [];
+    // The prompt's blocks, with the advisor's one look at the rules (step 6) in its place; its restart only follows a change.
+    const own = turns(prompt).map((b) => b.label);
+    const advisor = turns(read(SKILL)).map((b) => b.label);
+    expect(advisor).toEqual(["look at your rules (optional)", "restart Claude Code"]);
+    const actions = [...own.slice(0, 4), advisor[0] ?? "", ...own.slice(4)];
+    expect(list.split(", ")).toEqual(actions);
+    expect(Number(count)).toBe(actions.length);
+    // At most three lines, before step 1, and the agent's first reply.
+    expect(prompt.indexOf("Your first reply is this opening, and nothing else:")).toBeLessThan(prompt.indexOf("## Step 1"));
+    expect(opening.length).toBeLessThanOrEqual(3 * 100);
+  });
+
+  it("every status line has one form and one mark, and its total is the number of steps", () => {
+    const prompt = read(PROMPT);
+    const steps = [...prompt.matchAll(/^## Step (\d+):/gm)].length;
+    expect(prompt).toContain(`say only the status line: \`✓ <n>/${String(steps)}  <what happened>. Next: <what>.\` Here \`<n>\` is the step just finished and ${String(steps)} is the number of steps.`);
+    expect(read(SKILL)).toContain(`(\`✓ <n>/${String(steps)}  <what happened>. Next: <what>.\`)`);
+    // One mark: no other check mark or status form anywhere.
+    for (const file of FILES) expect([...read(file).matchAll(/[✓✔☑✅]/g)].length, file).toBe(1);
+  });
+
+  it("the purchase asks for what find_offers takes: a US ZIP and a budget, promising no other country", () => {
+    const prompt = read(PROMPT);
+    const step8 = prompt.slice(prompt.indexOf("## Step 8"), prompt.indexOf("## Step 9"));
+    expect(step8).toContain("> Add your 5-digit US ZIP code: this preview ships to US addresses only.");
+    expect(step8).toContain("with `zip` and `budget_usd` as they gave them");
+    expect(step8).not.toMatch(/postcode|Canada|Australia|\bCA\b|\bAU\b/);
+    // What the gateway takes today: the find_offers fields, a 5-digit ZIP, and ship_to US.
+    expect(Object.keys(FindOffersInput.shape).sort()).toEqual(["budget_usd", "category", "must_haves", "product", "zip"]);
+    const gateway = read("src/gateway/gateway.ts");
+    expect(gateway).toContain("const US_ZIP = /^[0-9]{5}$/;");
+    expect(gateway).toContain('ship_to: { country: "US", postal_code: zip }');
+  });
+
+  it("ends with one card: order, store and total from fields the tools return, then intent log and intent pause", () => {
+    const prompt = read(PROMPT);
+    const end = prompt.slice(prompt.indexOf("Setup is done."));
+    expect(end).toMatch(/> \*\*Done:\*\* order <order>, <store>, <total>\n>\n> `intent log` shows what the gateway sent\.\n>\n> `intent pause` stops every purchase that isn't paid yet\.\n$/);
+    expect(end).toContain("the order is `order_number` from `get_approval_status`, or `completion.order_ref` for a one-tap purchase");
+    expect(end).toContain("the store is `checkout.store` from `create_cart`; the total is `checkout.totals.total` with `checkout.currency` from `create_cart`");
+    // Those fields exist in the tool results (src/gateway).
+    const gateway = read("src/gateway/gateway.ts");
+    expect(gateway).toContain("readonly order_number?: string;");
+    expect(gateway).toContain("readonly completion?: CompletionView;");
+    expect(gateway).toContain("export interface SubmittedCheckoutView {\n  readonly store: string;");
+    expect(gateway).toContain("readonly totals: { readonly subtotal: number; readonly shipping: number; readonly tax: number; readonly total: number };");
+    expect(gateway).toContain("readonly checkout?: SubmittedCheckoutView;");
+    expect(read("src/gateway/complete.ts")).toContain("readonly order_ref?: string;");
+  });
+
+  it("agent payments: Shop's permission to pay at all, the lines from --finish word for word, the note only after it is seen", () => {
     const prompt = read(PROMPT);
     const step5 = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
-    expect(step5).toContain("This is Shop's permission for the agent to pay at all: without it no purchase completes in one tap, and every order goes to Shop's checkout page");
+    expect(step5).toContain("Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page");
     expect(step5).toContain("`--finish` prints either a line that says agent payments are already on (then skip this block) or two lines");
     expect(step5).toContain("Show those two lines, word for word, and nothing else:");
-    expect(step5).toContain("> 1. <the second line `--finish` printed>");
+    expect(step5).toContain("> <the second line `--finish` printed>");
     expect(step5).toContain("> <the first line `--finish` printed, as a clickable link>");
+    // The safety-net note comes once the budget is seen, not while the developer acts.
+    const note = step5.indexOf("Shop says it enforces this amount itself, as a safety net; intent's policy does the day-to-day limiting.");
+    expect(note).toBeGreaterThan(step5.indexOf("intent wallet status --wait-budget"));
+    expect(step5).toContain("It is the only stop an agent with shell access can't get around");
     // Invariant 5: what Shop says, not what it does; the page, the label, the amount and its period come from the CLI.
-    expect(step5).toContain("Shop says it enforces this amount itself, as a safety net, while intent's policy does the day-to-day limiting.");
     expect(step5).not.toMatch(/Shop enforces/);
     expect(step5).not.toMatch(/https?:\/\/|\$\d|month|Allow agent to pay/);
-    expect(step5).toContain("it is the only stop an agent with shell access cannot get around");
     // No amount to choose; "budget" appears only in the flag and the line the gateway prints (--wait-budget, "Budget seen").
     expect(step5).not.toMatch(/[Ss]uggest|(?<!-)\bbudget\b/);
     const skill = read(SKILL);
@@ -415,7 +492,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(skill).not.toMatch(/a limit already applied stays|can only narrow, so/);
     // The panel shows the rules; changes go through the agent (the panel's one write is Pause).
     expect(skill).toContain("Start `intent panel` in the background");
-    expect(skill).toContain("> 1. Here are your rules. Keep them, or tell me what to change. Looking is optional.");
+    expect(skill).toContain("> **Your turn:** look at your rules (optional)\n>\n> Here are your rules. Keep them, or tell me what to change.\n");
     expect(skill).toContain("> http://127.0.0.1:<port>/#/policy");
     expect(skill).toContain("The panel shows your rules; changes go through you");
     expect(skill).not.toMatch(/read-only|only shows the policy/);
