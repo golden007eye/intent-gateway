@@ -12,7 +12,7 @@ export {
   type ShopCredentials,
   shopCredentialsText,
 } from "./adapter.ts";
-export { STORE_DOMAIN } from "./project.ts";
+export { SHOP_CONNECTIONS_URL, STORE_DOMAIN } from "./project.ts";
 export {
   type DeviceGrant,
   type DeviceGrantPrompt,
