@@ -33,8 +33,8 @@ ${pad("policy add <name> [--yes]")}narrow the policy with a library policy (show
 ${pad("policy test <cases.yaml>")}run test cases against the active policy
 ${pad("approver list")}approver pins and flagged passkeys
 ${pad("approver accept")}make a flagged passkey the approver (at a terminal)
-${pad("wallet status")}whether a Shop wallet is linked and its encrypted vault opens
-${pad("wallet link|unlink shop")}link your Shop account (one-tap, coming later), or revoke its token and delete it
+${pad("wallet status")}whether a Shop wallet is linked and its vault opens (--wait-budget: until agent payments are on)
+${pad("wallet link|unlink shop")}link your Shop account (from an agent's shell: --start, then --finish), or revoke and delete it
 ${pad("wallet check shop")}Shop orders that no purchase in the log names (--since 7d)
 ${pad("demo [--http]")}run against a local demo Intent Cloud (HTTP when typed in a terminal)
 

@@ -23,6 +23,11 @@ export const DEFAULT_SHOP_AUTH_URL = "https://accounts.shop.app/";
  * Shop's public client for a shopper's own agent, is used only when INTENT_SHOP_CLIENT_ID names it.
  */
 export const DEFAULT_SHOP_CLIENT_ID = "https://gateway.intentai.shop/shop-client.json";
+/**
+ * Shop's public device-flow client, for a shopper's own agent (S1). Never used by itself: only when
+ * INTENT_SHOP_CLIENT_ID names it. A connection made with it shows in the Shop app as "Personal Agent".
+ */
+export const SHOP_PUBLIC_CLIENT_ID = "5c733ab2-1903-400a-891e-7ba20c09e2a3";
 /** The only Shop tools the gateway calls (plan G7a; search_catalog since G5). Any other tool Shop advertises, a spend request included, is never called. */
 export const SHOP_TOOLS = ["get_account", "create_checkout", "complete_checkout", "get_checkout", "search_orders", "search_catalog"] as const;
 export type ShopTool = (typeof SHOP_TOOLS)[number];

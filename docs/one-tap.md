@@ -21,11 +21,36 @@ Read the [known risks](threat-model.md#known-risks) before you link an account. 
 $ export INTENT_SHOP_CLIENT_ID=<a client id Shop accepts>
 $ export INTENT_WALLET_KEY_FILE=/path/outside/the/data/dir/wallet-key
 $ intent init                  # makes the account key; offers "Pay in one tap with Shop?" at a terminal
-$ intent wallet link shop      # or link it directly
+$ intent wallet link shop      # or link it directly (from an agent's shell: --start, then --finish; below)
 $ intent wallet status         # linked, the encrypted vault opens, and the budget Shop shows
 ```
 
 In the Shop app, turn on "Allow agent to pay" with a budget for the connection. One tap pays from that agent budget only, never from your Shop Pay card. When the budget does not cover a checkout, the purchase goes to Shop's checkout page instead (a hand-off), if your policy allows it.
+
+### Linking from an agent's shell
+
+An agent's shell (Claude Code's Bash tool, for one) shows a command's output only once the command ends, so a link that waits for your approval would hide its code until it gave up. Link in two steps there instead:
+
+```console
+$ intent wallet link shop --start
+Open https://…/activate?user_code=ABCD-EFGH and approve the code ABCD-EFGH in Shop before 2026-10-18T12:10:00Z, then run intent wallet link shop --finish
+$ intent wallet link shop --finish
+$ intent wallet status --wait-budget
+Agent payments on: $40.00 per week, $40.00 left
+```
+
+`--start` sends the device authorization (logged first, like every request), prints that one line and exits. It keeps the pending sign-in, which holds Shop's device code, sealed in the wallet vault like the tokens (`<data dir>/wallet/shop-pending.enc`, mode 0600); the device code is never printed. Running `--start` again replaces it and says so. `--finish` waits for your approval with the same rules as the one-step link (Shop's interval, 5 s more after each `slow_down`, never past the code's expiry, which is 10 minutes at most) and keeps the tokens as it does. Approved, declined, expired or refused, it deletes the pending sign-in. With none pending, or an expired one, it prints one line naming `--start` and sends nothing. A busy Shop (HTTP 429 or 5xx with no error code) is asked again 5 s later. If `--finish` stops before Shop answers (Ctrl-C, a killed shell, a log that cannot be written), run it again: it goes on with the same code. Only one `--finish` at a time can hold a pending sign-in. A sign-in started as another client, or with another `INTENT_SHOP_AUTH_URL` or `INTENT_SHOP_MCP_URL`, is not finished: restore the setting, or `--start` again.
+
+After `--finish` links the wallet, it reads the account once (through the log). When agent payments are already on, it prints the `--wait-budget` line below. Otherwise it prints the next step in two lines: Shop's connections page, then what to do there:
+
+```console
+https://shop.app/account/connections
+Tap intent, turn on Allow agent to pay for me, enter $160.
+```
+
+The page is the one Shop's answer names, printed only when it is an https page on shop.app (S1's `https://shop.app/account/connections` when Shop names none); a page anywhere else is not printed, only the second line. The connection is "Personal Agent" when the wallet was linked as Shop's public client, and "intent" otherwise. The amount is 4 × your policy's weekly cap, at most $400 (4 × the $100 weekly ceiling, also used when the policy sets no weekly cap): $160 with `weekly-40`.
+
+`intent wallet status --wait-budget` then reads the account through the log every 5 seconds (longer after errors, up to a minute), for 10 minutes or `--timeout <s>`, until Shop shows an agent budget with a limit. It prints `Agent payments on: <limit> <period>, <amount> left` with the period as Shop names it, and exits 0. Above 4 × your policy's weekly cap (or of the $100 weekly ceiling, whichever is lower), it adds a warning line: the Shop budget is the only hard stop. It stops at once, exit 1, when Shop says the connection is gone or refuses the token, and on timeout prints one line saying what to turn on.
 
 `intent init` makes the gateway's account key once, `<data dir>/account-key.json` ([ADR-0022](adr/0022-account-key.md)). There is one per developer: every submitted checkout carries its public half, and your first passkey approval pins it to you. To replace it today, move `account-key.json` aside and run `intent init` again.
 
@@ -84,6 +109,7 @@ Shop's terms limit use to "personal, individual shopping use only, unless separa
 | File | What it is |
 |---|---|
 | `<data dir>/wallet/shop.enc` | The Shop token, AES-256-GCM, mode 600. |
+| `<data dir>/wallet/shop-pending.enc` | Only between `intent wallet link shop --start` and `--finish`: the pending sign-in (Shop's device code, the client, the resource, the poll interval and the expiry), sealed the same way. Deleted when Shop answers or the code expires. |
 | `<data dir>/wallet/shop-checkouts/` | Each checkout id Shop issued for a purchase, sealed the same way, so a restarted gateway can read a checkout it may have completed. Deleted when the purchase ends. |
 | The wallet key | From `INTENT_WALLET_KEY_FILE` (refused inside the data dir), else `INTENT_WALLET_KEY`, else a generated 600 file in your config folder. |
 | `<data dir>/account-key.json` | The account key: an Ed25519 key `intent init` makes once, mode 600, never replaced ([ADR-0022](adr/0022-account-key.md)). Only its public half is ever sent. |

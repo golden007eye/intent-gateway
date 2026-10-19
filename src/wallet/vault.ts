@@ -301,6 +301,160 @@ export async function deleteSecret(dataDir: string, rail: WalletRail): Promise<b
   return true;
 }
 
+// The pending sign-in (`intent wallet link <rail> --start`, then `--finish`): a device grant the developer has not
+// approved yet. Whoever holds its device code can redeem the tokens once the developer approves, so it is sealed
+// exactly as the tokens are (same key, same 0600 temporary file, fsync and rename, same directory checks, read
+// without following a link), as `<data>/wallet/<rail>-pending.enc` with the AAD "intent-wallet-v1|<rail>|pending".
+//
+// A `--finish` claims it first by renaming it to `<rail>-pending.<pid>.<hex>.claim`: rename() moves a file once, so
+// two processes never both hold one grant. A claim whose process is gone (Ctrl-C, a killed shell) is taken over the
+// same way by the next `--finish`; one whose process still runs is left to it. A claim naming this process's pid that
+// this process did not make belongs to a gone one (in a container every run is pid 1).
+
+/** `<data>/wallet/<rail>-pending.enc`. */
+export function pendingGrantPath(dataDir: string, rail: WalletRail): string {
+  return join(dataDir, "wallet", `${rail}-pending.enc`);
+}
+
+const pendingAad = (rail: WalletRail): Buffer => Buffer.concat([MAGIC, Buffer.from(`intent-wallet-v1|${rail}|pending`, "utf8")]);
+const claimName = (rail: WalletRail): RegExp => new RegExp(`^${rail}-pending\\.([0-9]{1,10})\\.[0-9a-f]{16}\\.claim$`);
+
+/** A pending grant this process claimed: its text, and the two ways to let go of it. */
+export interface ClaimedGrant {
+  readonly text: string;
+  /** Puts it back as the pending grant (a newer one, from a later --start, wins), for a finish that ended early. */
+  release(): Promise<void>;
+  /** Deletes it: the sign-in ended (tokens, a refusal, an expiry). */
+  discard(): Promise<void>;
+}
+
+export type GrantClaim = { readonly kind: "claimed"; readonly grant: ClaimedGrant } | { readonly kind: "none" } | { readonly kind: "busy"; readonly pid: number };
+
+/**
+ * Seals `text` as `rail`'s pending grant, replacing any earlier one in one step, and deletes the claims of processes
+ * that are gone. `replaced` is true when an earlier pending grant or such a claim was there.
+ */
+export async function savePendingGrant(dataDir: string, rail: WalletRail, key: WalletKey, text: string): Promise<{ replaced: boolean }> {
+  const file = pendingGrantPath(dataDir, rail);
+  await checkOwnDir(dataDir, true);
+  await checkOwnDir(dirname(file), true);
+  let replaced = (await fs.lstat(file).catch(missing)) !== null;
+  await seal(dataDir, file, pendingAad(rail), key, text);
+  let swept = false;
+  for (const { path, pid } of await claims(dataDir, rail)) {
+    if (!alive(path, pid) && (await unlinkIfThere(path))) swept = true;
+  }
+  if (swept) await syncDir(dirname(file));
+  replaced ||= swept;
+  return { replaced };
+}
+
+/**
+ * Claims `rail`'s pending grant for this process: the pending file, else a claim whose process is gone. "busy" names
+ * the process that holds the only claim left; "none" means there is nothing to finish. A claimed file that does not
+ * open is deleted, and the WalletVaultError thrown.
+ */
+export async function claimPendingGrant(dataDir: string, rail: WalletRail, key: WalletKey): Promise<GrantClaim> {
+  const file = pendingGrantPath(dataDir, rail);
+  const dir = dirname(file);
+  await checkOwnDir(dataDir, true);
+  await checkOwnDir(dir, true);
+  const mine = join(dir, `${rail}-pending.${String(process.pid)}.${randomBytes(8).toString("hex")}.claim`);
+  // The pending file first; the claims are listed only after that rename failed, so a claim made meanwhile is seen.
+  const held: { pid: number | null } = { pid: null };
+  const candidates = async function* (): AsyncGenerator<string> {
+    yield file;
+    for (const { path, pid } of await claims(dataDir, rail)) {
+      if (alive(path, pid)) held.pid ??= pid;
+      else yield path;
+    }
+  };
+  for await (const candidate of candidates()) {
+    try {
+      await fs.rename(candidate, mine);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    await syncDir(dir);
+    let text: string | null;
+    try {
+      text = await unseal(dataDir, mine, pendingAad(rail), key);
+    } catch (error) {
+      await unlinkIfThere(mine);
+      throw error;
+    }
+    if (text === null) continue;
+    OWN_CLAIMS.add(mine);
+    return { kind: "claimed", grant: claimed(text, mine, file) };
+  }
+  return held.pid === null ? { kind: "none" } : { kind: "busy", pid: held.pid };
+}
+
+function claimed(text: string, mine: string, file: string): ClaimedGrant {
+  const dir = dirname(file);
+  return {
+    text,
+    async release() {
+      try {
+        // link() fails when a later --start has saved a newer grant: that one wins.
+        await fs.link(mine, file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      await unlinkIfThere(mine);
+      OWN_CLAIMS.delete(mine);
+      await syncDir(dir);
+    },
+    async discard() {
+      await unlinkIfThere(mine);
+      OWN_CLAIMS.delete(mine);
+      await syncDir(dir);
+    },
+  };
+}
+
+/** The claim files of `rail`, with the pid each names. */
+async function claims(dataDir: string, rail: WalletRail): Promise<{ path: string; pid: number }[]> {
+  const dir = dirname(pendingGrantPath(dataDir, rail));
+  await checkOwnDir(dataDir, true);
+  await checkOwnDir(dir, true);
+  const names = await fs.readdir(dir).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [] as string[];
+    throw error;
+  });
+  const pattern = claimName(rail);
+  return names.flatMap((name) => {
+    const pid = pattern.exec(name)?.[1];
+    return pid === undefined ? [] : [{ path: join(dir, name), pid: Number(pid) }];
+  });
+}
+
+/** The claim files this process holds now. */
+const OWN_CLAIMS = new Set<string>();
+
+/** Whether the claim at `path` is held by a running process (another user's counts as running). */
+function alive(path: string, pid: number): boolean {
+  // This pid with a claim this process did not make: a gone process had it (in a container every run is pid 1).
+  if (pid === process.pid) return OWN_CLAIMS.has(path);
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function unlinkIfThere(path: string): Promise<boolean> {
+  try {
+    await fs.unlink(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 function missing(error: unknown): null {
   if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
   throw error;

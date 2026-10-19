@@ -13,7 +13,21 @@ export {
   shopCredentialsText,
 } from "./adapter.ts";
 export { STORE_DOMAIN } from "./project.ts";
-export { type DeviceGrantPrompt, DEVICE_GRANT, type LinkedShop, MAX_WAIT_MS, runDeviceFlow, SHOP_SCOPE, ShopLinkError, type ShopLinkFailure } from "./oauth.ts";
+export {
+  type DeviceGrant,
+  type DeviceGrantPrompt,
+  deviceGrantText,
+  DEVICE_GRANT,
+  type LinkedShop,
+  MAX_WAIT_MS,
+  parseDeviceGrant,
+  pollDeviceGrant,
+  runDeviceFlow,
+  SHOP_SCOPE,
+  ShopLinkError,
+  type ShopLinkFailure,
+  startDeviceFlow,
+} from "./oauth.ts";
 export {
   CLIENT_NAME,
   createShopAccountsTransport,
@@ -21,6 +35,7 @@ export {
   DEFAULT_SHOP_AUTH_URL,
   DEFAULT_SHOP_CLIENT_ID,
   DEFAULT_SHOP_MCP_URL,
+  SHOP_PUBLIC_CLIENT_ID,
   DEVICE_AUTHORIZATION,
   MCP_PROTOCOL,
   REVOKE,
