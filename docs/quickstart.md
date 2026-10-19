@@ -2,7 +2,7 @@
 
 This runs the [demo](demo.md) end to end: an agent finds offers, prepares a Shop checkout, you approve it, the demo Shop pays it in one tap, and you check what was sent. It needs no invite, no account and no config. Nothing can be bought. Real purchases need an invite; see [One-tap purchases](one-tap.md).
 
-You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+ and an MCP client. Claude Code is the example. Odd-numbered releases such as Node 25 are not supported; [Docker](#with-docker) needs no Node.
+You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+ and an MCP client. Claude Code is the example. Node 23 and 25 are not supported; [Docker](#with-docker) needs no Node.
 
 ## 1. Connect your agent
 

@@ -18,7 +18,7 @@
 
 The demo runs the whole flow on your machine with no setup: a demo Intent Cloud on `127.0.0.1` with a sample catalog and the published test keys, and a local confirm page that stands in for the passkey step. Every tool result says `DEMO: test keys, sample catalog, nothing can be bought.`
 
-You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+ and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way. Odd-numbered releases such as Node 25 are not supported; [Docker](#with-docker) needs no Node.
+You need Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+ and [Claude Code](https://claude.com/claude-code). Any MCP client works the same way. Node 23 and 25 are not supported; [Docker](#with-docker) needs no Node.
 
 **1 · Add the demo gateway to Claude Code:**
 

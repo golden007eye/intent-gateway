@@ -4,13 +4,11 @@ Intent Cloud serves it from the try link and fills in the placeholders per invit
   {{INTENT_INVITE}}        the invite token of this try link; passed to no gateway command
   {{INTENT_CLOUD_URL}}     the Intent Cloud host for this lane; today it equals the gateway's default host
   {{INTENT_SIGNUP_URL}}    the invite-gated sign-up page where the developer creates the passkey
-`intent pause` and `intent resume` are planned commands; test/onboarding.test.ts lists them as pending.
 -->
-
 
 # Set up intent with Claude Code
 
-You are setting up intent-gateway for the developer you are talking to. The gateway lets you find products and prepare carts; the developer approves every purchase with their passkey, and Shop pays within the amount the developer allows there. This prompt was served for invite `{{INTENT_INVITE}}`. Never pass that invite to any command.
+You are setting up intent-gateway for the developer you are talking to. The gateway lets you find products and prepare carts; the developer approves every purchase with their passkey, and Shop pays only when the developer allows agent payments there. This prompt was served for invite `{{INTENT_INVITE}}`. Never pass that invite to any command.
 
 How to work:
 
@@ -30,7 +28,7 @@ $ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} npx -y intent-gateway@0.1.0-preview.5 <c
 
 ## Step 1: check Node and the folder
 
-1. Run `node --version`. The gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+. Odd-numbered releases such as Node 25 are not supported. If this Node is outside that range, follow "Get a supported Node" below, then come back to this step.
+1. Run `node --version`. The gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+. Node 23 and 25 are not supported. If this Node is outside that range, follow "Get a supported Node" below, then come back to this step.
 2. Run `pwd`. You must be in a project folder that the developer chose, not their home folder or `/`. If you are not, ask them to open Claude Code in a project folder and paste this prompt again. Why: step 6 installs a skill into this project's `.claude/skills/`, and nothing is installed globally.
 
 ### Get a supported Node
@@ -42,10 +40,14 @@ $ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} npx -y intent-gateway@0.1.0-preview.5 <c
 2. Show the developer the command for it and ask before you install anything. If they say no, stop here.
    - nvm: `. "${NVM_DIR:-$HOME/.nvm}/nvm.sh" && nvm install 24 && nvm alias default 24`
    - fnm: `fnm install 24 && fnm default 24`
-   - Homebrew: `brew install node@24`. Brew does not put node@24 on the PATH, so also ask before adding it to their shell profile: `echo "export PATH=\"$(brew --prefix node@24)/bin:\$PATH\"" >> ~/.zshrc` (`~/.bashrc` if their shell is bash).
+   - Homebrew: `brew install node@24`. Brew does not put node@24 on the PATH, so also ask before adding it to their shell profile, once: `grep -qs 'node@24/bin' ~/.zshrc || echo "export PATH=\"$(brew --prefix node@24)/bin:\$PATH\"" >> ~/.zshrc`. If their shell is bash, use `~/.bash_profile` on macOS (Terminal starts a login shell) or `~/.bashrc` on Linux in both places.
    - None of them: ask the developer to install Node 24 LTS from https://nodejs.org and say when it is done.
-3. Ask the developer to quit Claude Code, open a new terminal in this folder, check that `node --version` there shows the new Node, run `claude --continue` and say "continue". Why: each command you run may start a fresh shell, so a Node switched there does not reach your next command, and Claude Code starts the gateway (step 2) with `npx` on its own PATH. Starting Claude Code from a terminal where the new Node is active fixes both.
-4. Run `node --version` again and continue at step 1.
+3. Each command you run may start a fresh shell, so until the developer restarts Claude Code (end of step 3), start every command that runs Node with the switch for the tool you used:
+   - nvm: `. "${NVM_DIR:-$HOME/.nvm}/nvm.sh" && nvm use 24 >/dev/null && `
+   - fnm: `eval "$(fnm env)" && fnm use 24 >/dev/null && `
+   - Homebrew: `PATH="$(brew --prefix node@24)/bin:$PATH" `
+   - the installer: nothing; if `node --version` still shows the old Node, show the restart block from step 3 now.
+4. Run `node --version` with that switch and continue at step 1. The restart at the end of step 3 makes the new Node the one Claude Code and the gateway use, so the developer restarts only once.
 
 ## Step 2: install the gateway
 
@@ -58,9 +60,27 @@ $ claude mcp add intent -e INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} -- npx -y inten
 
 If Claude Code already has an MCP server named `intent` (for example a connector added in the developer's Claude account), ask the developer before you add this one under another name, such as `intent-gateway`, so you never pick the wrong one.
 
-## Step 3: first run
+## Step 3: first run, the default policy and the restart
 
-Run `intent init`. It checks the setup, makes the gateway's account key, and prints the line that connects an agent; you already ran that line in step 2. If it mentions Shop, that is step 5.
+1. Run `intent init`. It checks the setup, makes the gateway's account key, and prints the line that connects an agent; you already ran that line in step 2. If it mentions Shop, that is step 5.
+2. Run `intent policy show`. Only if it says `no policy file at`, apply the default policy, $20 per order and $40 per 7 days:
+
+```console
+$ intent policy add per-order-20 --yes
+$ intent policy add weekly-40 --yes
+```
+
+   If a policy file exists, leave it as it is: it is the developer's. Step 6 shows the rules either way.
+3. Claude Code starts the gateway only when Claude Code starts, and the gateway reads its policy then. One restart now picks up the gateway, the policy and, if you switched it in step 1, the new Node. Show:
+
+> **Your turn**
+>
+> 1. Quit Claude Code, then run this in a new terminal in this folder and say "continue":
+>
+> `claude --continue`
+
+   If you switched Node in step 1, add this line to the block: "If `claude` is not found there, reinstall Claude Code with `npm i -g @anthropic-ai/claude-code`, or with its native installer."
+4. After "continue": check that you have the `intent` tools (`find_offers`, `create_cart`, `get_approval_status`) and that `node --version` is in the range of step 1. If not, show the block again.
 
 ## Step 4: sign up and create the passkey
 
@@ -89,15 +109,15 @@ Wait for "done": no command can see this step. Every purchase needs this passkey
 > <the code>
 
 2. Right away, run `intent wallet link shop --finish`. It waits until Shop says the link was approved, denied or expired, so give it a long timeout (10 minutes). If it expired, go back to 1 and start again. If it was denied, ask the developer whether to try again.
-3. Turn on agent payments in Shop. This is Shop's permission for the agent to pay at all: without it no purchase completes in one tap, and every order goes to Shop's checkout page, where the developer pays by hand. The amount is set for them: 4 times the weekly limit of the default policy (step 6 applies $40 a week), so $160 a month. Show:
+3. Turn on agent payments in Shop. This is Shop's permission for the agent to pay at all: without it no purchase completes in one tap, and every order goes to Shop's checkout page, where the developer pays by hand. When the link is approved, `--finish` prints either a line that says agent payments are already on (then skip this block) or two lines: a Shop page, then what to tap and the amount, which the gateway sets from the policy. Show those two lines, word for word, and nothing else:
 
 > **Your turn**
 >
-> 1. Turn on agent payments in Shop: open this page, tap the intent connection, turn on "Allow agent to pay for me" and enter $160 monthly.
+> 1. <the second line `--finish` printed>
 >
-> https://shop.app/account/connections
+> <the first line `--finish` printed, as a clickable link>
 
-   Then say, in one line: Shop enforces this amount itself, as a safety net, while intent's policy does the day-to-day limiting. And in one plain sentence: it is the only stop an agent with shell access cannot get around, because any program running as them can read the Shop token on this computer.
+   Then say, in one line: Shop says it enforces this amount itself, as a safety net, while intent's policy does the day-to-day limiting. And in one plain sentence: it is the only stop an agent with shell access cannot get around, because any program running as them can read the Shop token on this computer.
 4. Right away, run `intent wallet status --wait-budget`, with a long timeout (10 minutes). It sees the amount once Shop shows it. Show its "Budget seen" line in your reply, and any warning it prints that the amount is too high. If the developer would rather not turn on agent payments, go on: every order then goes to Shop's checkout page.
 
 ## Step 6: the policy
@@ -112,7 +132,7 @@ $ mkdir -p .claude/skills
 $ cp -R "$tmp/package/onboarding/skills/policy-advisor" .claude/skills/
 ```
 
-Then run the skill `policy-advisor`. If it is not listed yet, read `.claude/skills/policy-advisor/SKILL.md` and follow it. It applies the default rules at once, shows them in the gateway's panel, changes them only when the developer asks, and ends with `intent policy test`.
+Then run the skill `policy-advisor`. If it is not listed yet, read `.claude/skills/policy-advisor/SKILL.md` and follow it. It shows the rules in the gateway's panel, changes them only when the developer asks, and ends with `intent policy test`. Only if a rule changed does Claude Code need a second restart, and the skill shows that block.
 
 ## Step 7: Pause
 
@@ -120,25 +140,23 @@ Tell the developer these two lines, exactly:
 
 > intent pause stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.
 
-If `intent --help` does not list `pause` yet, add that the command arrives in a later release, and that turning off agent payments in Shop works today.
+Then add, in one line, that turning off agent payments in Shop is that hard stop.
 
 ## Step 8: the first purchase
 
-1. Check that you have the `intent` tools (`find_offers`, `create_cart`, `get_approval_status`). If not, Claude Code has not started the gateway yet: it starts MCP servers only when it starts, and the gateway reads its policy then. Show:
+1. Show:
 
 > **Your turn**
 >
-> 1. Quit Claude Code, then run this in this folder and say "continue":
->
-> `claude --continue`
+> 1. Tell me one small thing you would like to buy, under $20, and the 5-digit ZIP code to ship it to.
 
-2. Show:
+2. Call `find_offers` with what they said. List the top 2 or 3 offers briefly, numbered, one line each (item, store, total), then show:
 
 > **Your turn**
 >
-> 1. Tell me one small thing to buy, under $20, and the 5-digit ZIP code to ship it to.
+> 1. Pick one: reply with its number.
 
-3. Call `find_offers` with what they said. Call `create_cart` for the cheapest offer that matches it and fits the policy, and say in one line which one you picked. They see the item and total before they approve, and can decline there.
+3. Call `create_cart` for the offer they picked, with its `offer_handle`.
 4. Show:
 
 > **Your turn**

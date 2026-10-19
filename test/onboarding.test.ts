@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { COMMANDS, COMMON } from "../src/cli/index.ts";
 import { loadPolicy, meet, type Policy, runCases } from "../src/policy/index.ts";
-import { SUPPORTED_NODE } from "../src/runtime/index.ts";
+import { SUPPORTED_NODE, nodeSupported } from "../src/runtime/index.ts";
 
 const repo = join(import.meta.dirname, "..");
 const read = (path: string): string => readFileSync(join(repo, path), "utf8");
@@ -18,13 +18,17 @@ const PROMPT = "onboarding/claude-code.md";
 const SKILL = "onboarding/skills/policy-advisor/SKILL.md";
 const FILES = [PROMPT, SKILL];
 
-/** Commands the prompt names before they ship (G8: Pause). Any other unknown command fails the test. */
-const PLANNED: ReadonlySet<string> = new Set(["pause", "resume"]);
-
-/** Options the prompt names before they ship: `wallet link shop --start`/`--finish` and `wallet status --wait-budget`
- * come from the Shop link start/finish change, which merges first. Once the CLI has one, the test below fails until it
- * is removed here. */
+/** Options the prompt names before they ship, as `<command> <option>`: `wallet link shop --start`/`--finish` and
+ * `wallet status --wait-budget` come from the Shop link start/finish change, which merges first. Once the CLI has one,
+ * a test below fails until it is removed here. Any other unknown command or option fails the test. */
 const PLANNED_OPTIONS: ReadonlySet<string> = new Set(["wallet link --start", "wallet link --finish", "wallet status --wait-budget"]);
+
+/** What to change when PLANNED_OPTIONS empties at rebase onto the Shop link start/finish change. */
+const AT_REBASE = [
+  "remove the shipped options from PLANNED_OPTIONS",
+  'replace the placeholder "Budget seen" line and the too-high warning in the prompt (step 5.4) and in the test "puts what the developer must see…" with the lines `wallet status --wait-budget` prints',
+  'check that `wallet link shop --finish` prints the two agent-payments lines (Shop page, then "Tap …") or the already-on line, as step 5.3 and the test "agent payments: …" assume',
+];
 
 /** The Intent Cloud preview ceiling, in US dollars: per order and per rolling 7 days. Shop agent payments are ≤ 4 weeks. */
 const CEILING = { perOrder: 50, perWeek: 100, budget: 400 };
@@ -53,31 +57,44 @@ export function invocations(code: string): string[][] {
 
 const GROUPS = new Set(Object.keys(COMMANDS).filter((c) => c.includes(" ")).map((c) => c.split(" ")[0] ?? ""));
 
-/** Why `words` is not a command the CLI takes, or null when it is. */
-export function problem(words: readonly string[]): string | null {
+/** Every reason `words` is not a command the CLI takes: an unknown command, a missing argument, each unknown option. */
+export function problems(words: readonly string[]): string[] {
   const positionals = words.filter((w) => !w.startsWith("-"));
   const [first, second] = positionals;
-  if (first === undefined) return words.every((w) => w === "--version" || w === "--help") ? null : checkFlags("serve", words);
+  if (first === undefined) return words.every((w) => w === "--version" || w === "--help") ? [] : checkFlags("serve", words);
   if (GROUPS.has(first)) {
     // "the `intent policy` commands" names the group, which exists.
-    if (second === undefined) return null;
+    if (second === undefined) return [];
     const command = `${first} ${second}`;
-    return Object.hasOwn(COMMANDS, command) ? checkFlags(command, words) : `unknown command "${command}"`;
+    if (!Object.hasOwn(COMMANDS, command)) return [`unknown command "${command}"`];
+    // `wallet link` and `wallet unlink` take the rail: `shop` is the only one.
+    const rail = command === "wallet link" || command === "wallet unlink" ? positionals[2] : "shop";
+    return [...(rail === "shop" ? [] : [`${command} needs its rail, shop`]), ...checkFlags(command, words)];
   }
-  return Object.hasOwn(COMMANDS, first) ? checkFlags(first, words) : `unknown command "${first}"`;
+  return Object.hasOwn(COMMANDS, first) ? checkFlags(first, words) : [`unknown command "${first}"`];
 }
 
-function checkFlags(command: string, words: readonly string[]): string | null {
+/** problems(), as one line, or null when there are none. */
+export function problem(words: readonly string[]): string | null {
+  const found = problems(words);
+  return found.length === 0 ? null : found.join("; ");
+}
+
+function checkFlags(command: string, words: readonly string[]): string[] {
   const options = { ...COMMON, ...COMMANDS[command] };
+  const unknown: string[] = [];
   for (const word of words.filter((w) => w.startsWith("-"))) {
     if (word === "--version" || word === "--help") continue;
     const known = word.startsWith("--")
       ? Object.hasOwn(options, word.slice(2).split("=")[0] ?? "")
       : Object.values(options).some((o) => o.short === word.slice(1));
-    if (!known) return `unknown option ${word} for ${command}`;
+    if (!known) unknown.push(`unknown option ${word} for ${command}`);
   }
-  return null;
+  return unknown;
 }
+
+/** Whether `reason` is an option on PLANNED_OPTIONS. */
+const planned = (reason: string): boolean => PLANNED_OPTIONS.has(reason.replace(/^unknown option (\S+) for (.+)$/, "$2 $1"));
 
 const named = FILES.flatMap((file) => codeOf(read(file)).flatMap(invocations).map((words) => ({ file, words })));
 
@@ -96,6 +113,13 @@ describe("onboarding command check (the checker itself)", () => {
     expect(problem(["policy", "add", "per-order-20", "-y"])).toBeNull();
     expect(problem(["wallet", "link", "shop"])).toBeNull();
   });
+
+  it("reports every unknown option, and a wallet link without its rail (attack: a typo behind a planned option)", () => {
+    expect(problems(["wallet", "link", "shop", "--start", "--yse"])).toEqual(["unknown option --start for wallet link", "unknown option --yse for wallet link"]);
+    expect(problems(["wallet", "link", "shop", "--start", "--yse"]).filter((r) => !planned(r))).toEqual(["unknown option --yse for wallet link"]);
+    expect(problems(["wallet", "link", "--finish"])).toEqual(["wallet link needs its rail, shop", "unknown option --finish for wallet link"]);
+    expect(problems(["wallet", "link", "shpo"])).toEqual(["wallet link needs its rail, shop"]);
+  });
 });
 
 describe("onboarding prompt and policy-advisor skill", () => {
@@ -113,11 +137,10 @@ describe("onboarding prompt and policy-advisor skill", () => {
 
   it("names only commands the CLI has, or the planned ones", () => {
     expect(named.length).toBeGreaterThan(10);
-    const unknown = named.map(({ file, words }) => ({ file, words, why: problem(words) })).filter((n) => n.why !== null);
-    const notPlanned = unknown.filter(
-      (n) => !(n.words.length === 1 && PLANNED.has(n.words[0] ?? "")) && !PLANNED_OPTIONS.has((n.why ?? "").replace(/^unknown option (\S+) for (.+)$/, "$2 $1")),
-    );
-    expect(notPlanned.map((n) => `${n.file}: intent ${n.words.join(" ")}: ${n.why ?? ""}`)).toEqual([]);
+    const bad = named.flatMap(({ file, words }) => problems(words).filter((reason) => !planned(reason)).map((reason) => `${file}: intent ${words.join(" ")}: ${reason}`));
+    expect(bad).toEqual([]);
+    // Every `wallet link` keeps its rail.
+    expect(named.filter(({ words }) => words[0] === "wallet" && words[1] === "link" && words[2] !== "shop")).toEqual([]);
   });
 
   it("lists as planned only options the CLI does not have yet", () => {
@@ -125,7 +148,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
       const [group = "", command = "", option = ""] = p.split(" ");
       return Object.hasOwn(COMMANDS[`${group} ${command}`] ?? {}, option.replace(/^--/, ""));
     });
-    expect(shipped, "the option has shipped: remove it from PLANNED_OPTIONS").toEqual([]);
+    expect(shipped, `the option has shipped; at rebase:\n- ${AT_REBASE.join("\n- ")}`).toEqual([]);
     expect(problem(["wallet", "link", "shop", "--start"])).toBe("unknown option --start for wallet link");
   });
 
@@ -142,7 +165,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
 
   it("every library policy the skill adds stays within the ceiling", () => {
     const added = named.filter(({ words }) => words[0] === "policy" && words[1] === "add").map(({ words }) => words[2] ?? "")
-      .filter((name) => name !== "");
+      .filter((name) => name !== "" && !name.startsWith("<"));
     expect(new Set(added)).toEqual(new Set(["per-order-20", "weekly-40", "daily-40", "handoff-only"]));
     for (const name of added) {
       const { spend } = loadPolicy(read(`policies/${name}/policy.yaml`));
@@ -184,28 +207,59 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain(SUPPORTED_NODE);
     // Attack: the old wording, which left out Node 22, must not come back beside the right one.
     expect(prompt).not.toMatch(/Node 24 at 24\.15|must be Node 2[46]/);
-    // Every Node release the prompt names is a line SUPPORTED_NODE names, or the odd one it refuses (25).
+    // Every Node release the prompt names is a line SUPPORTED_NODE names, or one nodeSupported refuses (23, 25); it
+    // claims no refusal the code does not make (Node 27 is accepted).
     const majors = new Set([...prompt.matchAll(/\bNode (\d+)/g)].map((m) => m[1]));
-    expect([...majors].filter((m) => !["22", "24", "25", "26"].includes(m ?? ""))).toEqual([]);
+    expect([...majors].filter((m) => !["22", "23", "24", "25", "26"].includes(m ?? ""))).toEqual([]);
+    expect(prompt).toContain("Node 23 and 25 are not supported.");
+    expect(nodeSupported("23.11.0") || nodeSupported("25.9.0")).toBe(false);
+    expect(prompt).not.toMatch(/[Oo]dd-numbered/);
   });
 
-  it("gives a fix path for an unsupported Node, not a stop: nvm, fnm, Homebrew or nodejs.org, asked first, then a restart", () => {
+  it("gives a fix path for an unsupported Node, not a stop: nvm, fnm, Homebrew or nodejs.org, asked first, one restart", () => {
     const prompt = read(PROMPT);
     const fix = prompt.slice(prompt.indexOf("### Get a supported Node"), prompt.indexOf("## Step 2"));
+    const code = codeOf(fix);
     // nvm is a shell function: found by its script, not by `command -v nvm`.
-    expect(codeOf(fix)).toContain('test -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh"');
-    expect(codeOf(fix)).toContain("command -v fnm");
-    expect(codeOf(fix)).toContain("command -v brew");
-    expect(codeOf(fix)).toContain('. "${NVM_DIR:-$HOME/.nvm}/nvm.sh" && nvm install 24 && nvm alias default 24');
-    expect(codeOf(fix)).toContain("fnm install 24 && fnm default 24");
-    expect(codeOf(fix)).toContain("brew install node@24");
-    // node@24 is keg-only; brew --prefix gives /opt/homebrew on Apple Silicon and /usr/local on Intel.
-    expect(fix).toContain("$(brew --prefix node@24)/bin");
+    expect(code).toContain('test -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh"');
+    expect(code).toContain("command -v fnm");
+    expect(code).toContain("command -v brew");
+    expect(code).toContain('. "${NVM_DIR:-$HOME/.nvm}/nvm.sh" && nvm install 24 && nvm alias default 24');
+    expect(code).toContain("fnm install 24 && fnm default 24");
+    expect(code).toContain("brew install node@24");
+    // node@24 is keg-only; brew --prefix gives /opt/homebrew on Apple Silicon and /usr/local on Intel. Appended once.
+    expect(code).toContain(`grep -qs 'node@24/bin' ~/.zshrc || echo "export PATH=\\"$(brew --prefix node@24)/bin:\\$PATH\\"" >> ~/.zshrc`);
+    expect(fix).toContain("use `~/.bash_profile` on macOS (Terminal starts a login shell) or `~/.bashrc` on Linux");
     expect(fix).not.toMatch(/\/opt\/homebrew|\/usr\/local/);
     expect(fix).toContain("https://nodejs.org");
     expect(fix).toMatch(/ask before you install anything/);
-    expect(fix).toContain("claude --continue");
+    // Each command may be a fresh shell: until the one restart, every Node command carries the switch.
+    expect(code).toContain('. "${NVM_DIR:-$HOME/.nvm}/nvm.sh" && nvm use 24 >/dev/null && ');
+    expect(code).toContain('eval "$(fnm env)" && fnm use 24 >/dev/null && ');
+    expect(code).toContain('PATH="$(brew --prefix node@24)/bin:$PATH" ');
     expect(fix).toMatch(/continue at step 1/);
+    expect(fix).toContain("so the developer restarts only once");
+    // The one restart is in step 3, after `claude mcp add`, and says how to get `claude` back on the new Node.
+    const step3 = prompt.slice(prompt.indexOf("## Step 3"), prompt.indexOf("## Step 4"));
+    expect(prompt.indexOf("claude mcp add intent")).toBeLessThan(prompt.indexOf("## Step 3"));
+    expect(step3).toContain("> `claude --continue`");
+    expect(step3).toContain("If `claude` is not found there, reinstall Claude Code with `npm i -g @anthropic-ai/claude-code`, or with its native installer.");
+    expect(fix).not.toContain("claude --continue");
+  });
+
+  it("the default policy is applied only when there is no policy file, before the one restart, so it is in force at the first purchase", () => {
+    const prompt = read(PROMPT);
+    const step3 = prompt.slice(prompt.indexOf("## Step 3"), prompt.indexOf("## Step 4"));
+    expect(step3).toContain("Run `intent policy show`. Only if it says `no policy file at`, apply the default policy");
+    expect(codeOf(step3)).toContain("$ intent policy add per-order-20 --yes\n$ intent policy add weekly-40 --yes\n");
+    expect(step3).toContain("If a policy file exists, leave it as it is: it is the developer's.");
+    // Applied before the restart block, and the restart is the last developer action before any purchase.
+    expect(step3.indexOf("policy add weekly-40 --yes")).toBeLessThan(step3.indexOf("> **Your turn**"));
+    // The CLI says this exact line when there is no file (src/cli/policy.ts).
+    expect(read("src/cli/policy.ts")).toContain("`no policy file at ${policyPath}: the gateway uses the bundled ${active.bundled} policy`");
+    // No restart in the purchase step: the policy is already in force.
+    const step8 = prompt.slice(prompt.indexOf("## Step 8"), prompt.indexOf("## Step 9"));
+    expect(step8).not.toContain("claude --continue");
   });
 
   it("sends nothing itself: no curl, wget or fetch, and no placeholder as a send target (attack: step markers must not come back)", () => {
@@ -292,52 +346,82 @@ describe("onboarding prompt and policy-advisor skill", () => {
         if (asksDone) expect(after, `${file}: asks for done though a command detects it\n${text}`).not.toMatch(DETECTS);
       }
     }
-    // The target list: sign-up, the Shop link, agent payments, (a restart Claude Code needs), what to buy, the approval.
+    // The developer's actions, in order: the one restart (after `claude mcp add` and the default policy), sign-up,
+    // the Shop link, agent payments, what to buy, which offer, the approval.
     const prompt = turns(read(PROMPT));
     expect(prompt.map(({ block }) => block.find((l) => /^> 1\. /.test(l))?.slice(5).split(/[.:,]/)[0])).toEqual([
+      "Quit Claude Code",
       "Open this page in your own browser",
       "Open this link and approve intent in Shop",
-      "Turn on agent payments in Shop",
-      "Quit Claude Code",
-      "Tell me one small thing to buy",
+      "<the second line `--finish` printed>",
+      "Tell me one small thing you would like to buy",
+      "Pick one",
       "Open the approval page",
     ]);
     // Each detectable action is followed by the command that detects it, and asks for no done.
-    const [, link, payments, , , approval] = prompt;
+    const [, , link, payments, , pick, approval] = prompt;
     expect(link?.after).toContain("intent wallet link shop --finish");
     expect(payments?.after).toContain("intent wallet status --wait-budget");
     expect(approval?.after).toContain("get_approval_status");
     for (const t of [link, payments, approval]) expect(t?.block.at(-1)).not.toBe("> Reply done");
+    // The developer picks the offer; create_cart is for that one (src/mcp/tools.ts: "the offer the user picked").
+    expect(pick?.after).toContain("Call `create_cart` for the offer they picked, with its `offer_handle`.");
+    expect(read(PROMPT)).not.toMatch(/cheapest/);
+    expect(read("src/mcp/tools.ts")).toContain("Prepare a cart for the offer the user picked");
     // Only the sign-up asks for done in the whole prompt.
     expect([...read(PROMPT).matchAll(/^> Reply done$/gm)]).toHaveLength(1);
   });
 
-  it("agent payments: Shop's permission to pay at all, the amount set from the policy, one safety-net line, no amount to choose", () => {
+  it("agent payments: Shop's permission to pay at all, the lines from --finish word for word, Shop says it enforces it", () => {
     const prompt = read(PROMPT);
     const step5 = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     expect(step5).toContain("This is Shop's permission for the agent to pay at all: without it no purchase completes in one tap, and every order goes to Shop's checkout page");
-    expect(step5).toContain("4 times the weekly limit of the default policy (step 6 applies $40 a week), so $160 a month");
-    expect(step5).toContain('turn on "Allow agent to pay for me" and enter $160 monthly.');
-    expect(step5).toContain("Shop enforces this amount itself, as a safety net, while intent's policy does the day-to-day limiting.");
+    expect(step5).toContain("`--finish` prints either a line that says agent payments are already on (then skip this block) or two lines");
+    expect(step5).toContain("Show those two lines, word for word, and nothing else:");
+    expect(step5).toContain("> 1. <the second line `--finish` printed>");
+    expect(step5).toContain("> <the first line `--finish` printed, as a clickable link>");
+    // Invariant 5: what Shop says, not what it does; the page, the label, the amount and its period come from the CLI.
+    expect(step5).toContain("Shop says it enforces this amount itself, as a safety net, while intent's policy does the day-to-day limiting.");
+    expect(step5).not.toMatch(/Shop enforces/);
+    expect(step5).not.toMatch(/https?:\/\/|\$\d|month|Allow agent to pay/);
     expect(step5).toContain("it is the only stop an agent with shell access cannot get around");
     // No amount to choose; "budget" appears only in the flag and the line the gateway prints (--wait-budget, "Budget seen").
     expect(step5).not.toMatch(/[Ss]uggest|(?<!-)\bbudget\b/);
     const skill = read(SKILL);
-    expect(skill).toContain("State the amount and ask \"OK?\"; discuss another amount only if the developer asks.");
-    expect(skill).toContain("as 4 times its weekly limit, so $160 a month with the default $40 a week");
-    expect(skill).not.toMatch(/[Ss]uggest a budget|set the budget with/);
+    expect(skill).toContain("When the onboarding has already set it, do not ask about it again; discuss another amount only if the developer asks.");
+    expect(skill).toContain("Shop says it enforces it itself");
+    expect(skill).not.toMatch(/Shop enforces|"OK\?"|[Ss]uggest a budget|set the budget with/);
   });
 
-  it("the advisor applies the default policy at once and shows it in the panel, read-only", () => {
+  it("the advisor never re-applies the defaults to the developer's file, shows each change as a diff first, and loosens honestly", () => {
     const skill = read(SKILL);
     const code = codeOf(skill);
+    const read1 = skill.slice(skill.indexOf("## 1. Read the policy"), skill.indexOf("## 2."));
+    // The defaults only when there is no file.
+    expect(read1).toContain("If it says `no policy file at`, there is no policy yet");
     expect(code).toContain("$ intent policy add per-order-20 --yes\n$ intent policy add weekly-40 --yes\n");
+    expect(read1).toContain("Otherwise the policy file is the developer's: never apply the defaults again, with or without `--yes`.");
+    // Attack: no `--yes` outside that no-file case, unless the same command without `--yes` (the diff) comes first.
+    const changes = skill.slice(skill.indexOf("## 3."), skill.indexOf("## 4."));
+    for (const m of changes.matchAll(/`intent policy add (\S+) --yes`/g)) {
+      expect(changes.indexOf(`\`intent policy add ${m[1] ?? ""}\``), m[0]).toBeGreaterThanOrEqual(0);
+      expect(changes.indexOf(`\`intent policy add ${m[1] ?? ""}\``), m[0]).toBeLessThan(m.index);
+    }
+    expect(skill).toContain("Run `intent policy add <name>` without `--yes`: with no terminal it prints the change as a diff and writes nothing.");
+    // Loosening: the file and lock go, then only the wanted limits come back. No claim that a limit "stays".
+    expect(changes).toContain("### Loosen a limit");
+    expect(changes).toContain("Remove the policy file and its lock");
+    expect(changes).toContain("ask before you remove anything");
+    expect(skill).not.toMatch(/a limit already applied stays|can only narrow, so/);
+    // The panel shows the rules; changes go through the agent (the panel's one write is Pause).
     expect(skill).toContain("Start `intent panel` in the background");
-    expect(skill).toContain("> 1. Here are your default rules. Keep them, or tell me what to change. Looking is optional.");
+    expect(skill).toContain("> 1. Here are your rules. Keep them, or tell me what to change. Looking is optional.");
     expect(skill).toContain("> http://127.0.0.1:<port>/#/policy");
-    expect(skill).toContain("The panel only shows the policy: changes go through you");
-    // The default is what the prompt's amount assumes: 4 × $40 = $160.
-    expect(read(PROMPT)).toContain("step 6 applies $40 a week");
+    expect(skill).toContain("The panel shows your rules; changes go through you");
+    expect(skill).not.toMatch(/read-only|only shows the policy/);
+    // A restart only if the policy changed.
+    expect(skill).toContain("If you applied, changed or removed anything in this skill, show:");
+    expect(skill).toContain("If nothing changed, say nothing about a restart.");
   });
 
   it("the steps are numbered 1 to 9 in order, and every step it points to exists", () => {
@@ -355,10 +439,13 @@ describe("onboarding prompt and policy-advisor skill", () => {
     // Exactly the three the platform fills in per invite, and no other {{…}}.
     const placeholders = new Set([...prompt.matchAll(/\{\{[^}]*\}\}/g)].map((m) => m[0]));
     expect(placeholders).toEqual(new Set(["{{INTENT_INVITE}}", "{{INTENT_CLOUD_URL}}", "{{INTENT_SIGNUP_URL}}"]));
+    // pause and resume ship (COMMANDS): no hedge that they might not.
+    expect(Object.hasOwn(COMMANDS, "pause") && Object.hasOwn(COMMANDS, "resume")).toBe(true);
+    expect(prompt).not.toMatch(/does not list `pause` yet|planned commands/);
     expect(read(SKILL)).not.toMatch(/\{\{/);
     // The only URLs written out are public pages; every Intent Cloud address is a placeholder.
     const urls = [...prompt.matchAll(/https?:\/\/[^\s)`",]+/g)].map((m) => m[0]);
-    expect(new Set(urls)).toEqual(new Set(["https://nodejs.org", "https://shop.app/account/connections"]));
+    expect(new Set(urls)).toEqual(new Set(["https://nodejs.org"]));
   });
 
   it("the skill says Shop agent payments are the only stop an agent with a shell cannot get around, and why", () => {
