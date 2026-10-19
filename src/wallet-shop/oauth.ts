@@ -9,7 +9,7 @@
 //   sent by the gateway, so never in a disclosure) and are handed to `show` to print.
 // - Shop's error texts (`error_description`) are never read: only the RFC error codes, each mapped to a fixed label.
 // - The scope asks for no email: `openid personal_agent`, the least Shop documents for an agent (invariant 3).
-import { record } from "./project.ts";
+import { record, SHOP_APP_HOST } from "./project.ts";
 import { DEVICE_AUTHORIZATION, TOKEN, type WireResponse } from "./rpc.ts";
 import type { ShopCaller, ShopCredentials } from "./adapter.ts";
 
@@ -59,6 +59,8 @@ export interface DeviceFlowOptions {
   readonly show: (prompt: DeviceGrantPrompt) => void;
   readonly sleep: (ms: number) => Promise<void>;
   readonly now: () => number;
+  /** See DeviceStartOptions.shopPagesOnly. */
+  readonly shopPagesOnly?: boolean;
 }
 
 /** The linked tokens, plus how long the access token lives (seconds; null when Shop does not say). */
@@ -98,6 +100,11 @@ export interface DeviceStartOptions {
   readonly clientId: string;
   readonly resource: string;
   readonly now: () => number;
+  /**
+   * True when the gateway talks to Shop's own account server (INTENT_SHOP_AUTH_URL unset): the page to approve on is
+   * printed only when it is https on shop.app or a subdomain of it (isShopPage); any other page fails the flow.
+   */
+  readonly shopPagesOnly?: boolean;
 }
 
 export interface DevicePollOptions {
@@ -125,6 +132,10 @@ export async function startDeviceFlow(accounts: ShopCaller, options: DeviceStart
     throw new ShopLinkError("unreadable", "Shop's device authorization answer has no usable device code, user code or verification URL");
   }
   const complete = isWebUrl(json.verification_uri_complete) ? json.verification_uri_complete : null;
+  // A page off shop.app would send the developer to approve a Shop sign-in somewhere else: never printed.
+  if (options.shopPagesOnly === true && (!isShopPage(uri) || (complete !== null && !isShopPage(complete)))) {
+    throw new ShopLinkError("unreadable", `Shop's device authorization named a page to approve on that is not https on ${SHOP_APP_HOST}, so it is not shown`);
+  }
   const expiresMs = Math.min(positive(json.expires_in) * 1000 || MAX_WAIT_MS, MAX_WAIT_MS);
   const intervalS = clampInterval(positive(json.interval) || DEFAULT_INTERVAL_S);
   return {
@@ -243,6 +254,22 @@ function readForm(response: WireResponse): { status: number; json: Record<string
 
 function positive(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * A page on Shop's own site: https, on shop.app or a subdomain of it, on the default port, with no credentials or
+ * fragment, as strict as the connections page check (project.ts) except that a query is allowed: the complete URL
+ * carries the user code in it.
+ */
+function isShopPage(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  const host = url.hostname;
+  return url.protocol === "https:" && (host === SHOP_APP_HOST || host.endsWith(`.${SHOP_APP_HOST}`)) && url.port === "" && url.username === "" && url.password === "" && url.hash === "";
 }
 
 /** An https URL (http only on a loopback host, the fake Shop's), with no credentials in it. */

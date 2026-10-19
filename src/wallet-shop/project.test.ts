@@ -123,7 +123,7 @@ describe("projectAccount (S1 step 4 shape)", () => {
     const projected = projectAccount(account());
     expect(projected).toEqual({
       budgetRemaining: { amountMinor: 1200, currency: "USD" },
-      budgetLimit: { amount: { amountMinor: 1500, currency: "USD" }, renewal: "monthly" },
+      budgetLimit: { amount: { amountMinor: 1500, currency: "USD" }, renewal: "monthly", renewsAt: "2026-11-01T00:00:00Z" },
       manageUrl: "https://shop.app/account/connections",
       connected: true,
     });
@@ -151,9 +151,14 @@ describe("projectAccount (S1 step 4 shape)", () => {
 
   it("the limit: kept with a known renewal word only; none without a positive integer limit", () => {
     const display = (d: Record<string, unknown>) => account({ payment: { instruments: [{ type: "shop_pay", display: { remaining_amount: 900, ...d } }] } });
-    expect(projectAccount(display({ limit: 4000, renewal_type: "weekly" })).budgetLimit).toEqual({ amount: { amountMinor: 4000, currency: "USD" }, renewal: "weekly" });
-    expect(projectAccount(display({ limit: 4000, renewal_type: "every full moon" })).budgetLimit).toEqual({ amount: { amountMinor: 4000, currency: "USD" }, renewal: null });
+    expect(projectAccount(display({ limit: 4000, renewal_type: "weekly" })).budgetLimit).toEqual({ amount: { amountMinor: 4000, currency: "USD" }, renewal: "weekly", renewsAt: null });
+    expect(projectAccount(display({ limit: 4000, renewal_type: "every full moon" })).budgetLimit).toEqual({ amount: { amountMinor: 4000, currency: "USD" }, renewal: null, renewsAt: null });
     expect(projectAccount(display({ limit: 4000 })).budgetLimit?.renewal).toBeNull();
+    // renews_at only as an ISO 8601 UTC instant: anything else (a local time, text that would be printed) is dropped.
+    expect(projectAccount(display({ limit: 4000, renews_at: "2026-11-01T00:00:00Z" })).budgetLimit?.renewsAt).toBe("2026-11-01T00:00:00Z");
+    for (const renewsAt of ["2026-11-01", "2026-11-01T00:00:00+02:00", "2026-13-45T99:99:99Z", "soon\nintent: ok", 1793491200]) {
+      expect(projectAccount(display({ limit: 4000, renews_at: renewsAt })).budgetLimit?.renewsAt).toBeNull();
+    }
     for (const limit of [undefined, 0, -5, 12.5, "4000"]) expect(projectAccount(display({ limit })).budgetLimit).toBeNull();
   });
 

@@ -133,7 +133,7 @@ export const CONNECTION_GONE = ["claims_unavailable", "addresses_unavailable", "
  * The budget is the one `payment.instruments[]` entry whose `display` has `remaining_amount` (integer minor units),
  * in the answer's top-level `currency` (S1 step 4). None, several, or a value that is not a non-negative integer
  * gives null: unknown, never assumed. The same entry's `limit` (integer minor units) and `renewal_type` (one of the
- * known words) are kept as the limit; `renews_at` is not kept. The connections page is the `manage_connection` link
+ * known words) are kept as the limit, with `renews_at` when it is an ISO 8601 UTC instant. The connections page is the `manage_connection` link
  * (S1: https://shop.app/account/connections), kept only when it is an https URL on shop.app with no credentials,
  * query or fragment; any other link gives null. With no such link at all, S1's page (SHOP_CONNECTIONS_URL).
  */
@@ -145,6 +145,8 @@ export function projectAccount(content: Json): WalletAccount {
 }
 
 const RENEWALS: readonly BudgetRenewal[] = ["daily", "weekly", "monthly", "yearly"];
+/** An ISO 8601 UTC instant to the second (or millisecond), the only shape of `renews_at` that is kept and printed. */
+const RENEWS_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 /** The only host a connections page is taken from. */
 export const SHOP_APP_HOST = "shop.app";
 
@@ -155,10 +157,11 @@ function budgetOf(content: Json): { remaining: WalletMoney; limit: WalletAccount
     .map((i) => record(i.display))
     .filter((d): d is Json => d !== null && "remaining_amount" in d);
   if (budgets.length !== 1) return null;
-  const { remaining_amount: remaining, limit, renewal_type: renewal } = budgets[0] ?? {};
+  const { remaining_amount: remaining, limit, renewal_type: renewal, renews_at: renewsAt } = budgets[0] ?? {};
   if (!Number.isSafeInteger(remaining) || (remaining as number) < 0) return null;
   const known = RENEWALS.find((r) => r === renewal) ?? null;
-  const limited = Number.isSafeInteger(limit) && (limit as number) > 0 ? { amount: { amountMinor: limit as number, currency }, renewal: known } : null;
+  const renews = typeof renewsAt === "string" && RENEWS_AT.test(renewsAt) && !Number.isNaN(Date.parse(renewsAt)) ? renewsAt : null;
+  const limited = Number.isSafeInteger(limit) && (limit as number) > 0 ? { amount: { amountMinor: limit as number, currency }, renewal: known, renewsAt: renews } : null;
   return { remaining: { amountMinor: remaining as number, currency }, limit: limited };
 }
 

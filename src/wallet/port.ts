@@ -61,9 +61,10 @@ export interface WalletAccount {
   readonly budgetRemaining: WalletMoney | null;
   /**
    * The budget's limit, in the same currency, and how often it renews as the rail names it (`monthly`, `weekly`,
-   * `daily`, `yearly`; null for any other word or none): null when the rail shows no budget or no limit.
+   * `daily`, `yearly`; null for any other word or none), and when it next renews (an ISO 8601 UTC instant as the rail
+   * gives it; null when it gives none): null when the rail shows no budget or no limit.
    */
-  readonly budgetLimit: { readonly amount: WalletMoney; readonly renewal: BudgetRenewal | null } | null;
+  readonly budgetLimit: { readonly amount: WalletMoney; readonly renewal: BudgetRenewal | null; readonly renewsAt: string | null } | null;
   /** The rail's own page where the buyer manages this connection (Shop: an https URL on shop.app), or null. */
   readonly manageUrl: string | null;
   readonly connected: boolean;
