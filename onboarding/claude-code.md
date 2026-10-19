@@ -118,9 +118,9 @@ This step is required: never skip it, also when the developer says they already 
 3. Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page, where the developer pays by hand. Once the link is approved, `--finish` prints one of three outcomes:
    - `Agent payments on: …` (they are already on): skip the block below and go to the note in 4.
    - Agent payments are off: a Shop page, then `Tap …, turn on Allow agent to pay for me, enter $<amount>.`, with the amount the gateway sets from the policy.
-   - Agent payments are on but too little is left: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`
+   - Agent payments are on but too little is left for one purchase: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`
 
-   For the last two, show the two lines `--finish` printed, word for word, and nothing else (when Shop names no page, it prints only the second line; leave the link line out):
+   For the last two, show the two lines `--finish` printed, word for word, and nothing else (when Shop names no page, it prints only the second line; leave the link line out). `intent wallet status --wait-budget` can print the same low lines when it starts; show them the same way:
 
 > **Your turn:** turn on agent payments
 >
@@ -128,11 +128,11 @@ This step is required: never skip it, also when the developer says they already 
 >
 > <the first line `--finish` printed, as a clickable link>
 
-4. Right away, run `intent wallet status --wait-budget`, with a long timeout (10 minutes; it waits at most 600 s). It waits until Shop shows agent payments on, with enough left for one order. When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above`, and this note, in two short lines:
+4. Right away, run `intent wallet status --wait-budget`, with a long timeout (10 minutes; it waits at most 600 s). It waits until Shop shows agent payments on, with at least one purchase's limit left. When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (an amount in another currency), and this note, in two short lines:
    - "Shop says it enforces this amount itself, as a safety net; intent's policy does the day-to-day limiting."
    - "It is the only stop an agent with shell access can't get around: any program running as you can read the Shop token on this computer."
 
-   If it prints a line that starts `intent: no Shop agent payments seen after`, say that line and ask whether to wait again; if yes, run `intent wallet status --wait-budget` again. If the developer would rather not turn on agent payments, go on: every order then goes to Shop's checkout page.
+   If it prints a line that starts `intent: no Shop agent payments seen after` or `intent: Shop agent payments are still low after`, say that line and ask whether to wait again; if yes, run `intent wallet status --wait-budget` again. If the developer would rather not turn on agent payments, go on: every order then goes to Shop's checkout page.
 
 ## Step 6: the policy
 

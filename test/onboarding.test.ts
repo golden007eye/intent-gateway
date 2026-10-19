@@ -290,7 +290,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain("Do not narrate commands or paste their output. Between developer actions, say only the status line:");
     expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names.");
     expect(prompt).toContain("> Open this link and approve intent in Shop.\n>\n> The code is already filled in if you use this link.\n");
-    expect(prompt).toContain("When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above`, and this note");
+    expect(prompt).toContain("When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (an amount in another currency), and this note");
     expect(prompt).toContain("send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.");
     const shop = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     expect(codeOf(shop).filter((c) => /wallet link shop$/.test(c))).toEqual([]);
@@ -441,16 +441,22 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(wallet).toContain("`Agent payments on: ${moneyText(limit.amount)}${per}, ${moneyText(account.budgetRemaining)} left`");
     // 2. Off: the Shop page, then what to tap.
     expect(step5).toContain("- Agent payments are off: a Shop page, then `Tap …, turn on Allow agent to pay for me, enter $<amount>.`");
-    expect(wallet).toContain("`Tap ${connectionName(linkedShopClientId(vaultText))}, turn on Allow agent to pay for me, enter ${dollars(advice.maxMinor)}.`");
-    // 3. On but low: the Shop page, then raise it (wording to be confirmed with the CLI).
-    expect(step5).toContain("- Agent payments are on but too little is left: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`");
+    expect(wallet).toContain("`Tap ${connection}, turn on Allow agent to pay for me, enter ${dollars(advice.maxMinor)}.`");
+    // 3. On but low: the Shop page, then raise it; --wait-budget may print the same lines when it starts.
+    expect(step5).toContain("- Agent payments are on but too little is left for one purchase: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`");
+    expect(wallet).toContain("`Agent payments are on, but only ${dollars(account.budgetRemaining?.amountMinor ?? 0)} is left; raise it to ${dollars(advice.maxMinor)}.`");
+    expect(step5).toContain("`intent wallet status --wait-budget` can print the same low lines when it starts; show them the same way");
     expect(step5).toContain("For the last two, show the two lines `--finish` printed, word for word, and nothing else");
     // --wait-budget: success, too high, timeout.
     expect(step5).toContain("When it prints `Agent payments on: …`, say that line");
     expect(step5).toContain("any line it prints that starts `intent: warning: this limit is above`");
     expect(wallet).toContain("`intent: warning: this limit is above ${moneyText({ amountMinor: advice.maxMinor, currency: \"USD\" })}");
-    expect(step5).toContain("If it prints a line that starts `intent: no Shop agent payments seen after`, say that line");
+    expect(step5).toContain("If it prints a line that starts `intent: no Shop agent payments seen after` or `intent: Shop agent payments are still low after`, say that line");
     expect(wallet).toContain("`intent: no ${name} agent payments seen after ${String(timeoutS)} s");
+    expect(wallet).toContain("`intent: ${name} agent payments are still low after ${String(timeoutS)} s");
+    // Another currency: the success line plus a Note line, which the agent passes on.
+    expect(step5).toContain("or `Note:` (an amount in another currency)");
+    expect(wallet).toContain("`Note: ${RAIL_NAMES[rail]} shows this budget in ${limit.amount.currency};");
     expect(step5).not.toContain("INTENT_SHOP_CLIENT_ID");
   });
 
