@@ -18,7 +18,7 @@ export interface TestGateway {
 }
 
 /** The search the fake catalogue answers with running shoes. */
-export const SHOES = { category: "running-shoes", budget_usd: 200, zip: "94103" } as const;
+export const SHOES = { category: "running-shoes", budget: 200, country: "US", postcode: "94103" } as const;
 
 export async function startTestGateway(options: { log?: (line: string) => void } = {}): Promise<TestGateway> {
   const fake = await startFakeCloud({});

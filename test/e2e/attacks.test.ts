@@ -62,7 +62,7 @@ async function gateway(): Promise<{ gateway: Gateway; dataDir: string }> {
   return { gateway: started, dataDir };
 }
 
-const SEARCH = { category: "running-shoes", budget_usd: 200, zip: "94103" };
+const SEARCH = { category: "running-shoes", budget: 200, country: "US", postcode: "94103" };
 
 /** find_offers → create_cart for `title`; returns the approval handle (still pending). */
 async function pending(g: Gateway, title: string): Promise<string> {

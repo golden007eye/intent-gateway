@@ -3,33 +3,26 @@
 // and step 7 for a v4 snapshot against the CheckoutRequest the gateway sent. Pure.
 import { createHash } from "node:crypto";
 import { canonicalize } from "../jcs/index.ts";
-import { type AccountKey, type AnySnapshot, type CheckoutRequest, type CheckoutTotals, type CurrencyCeiling, SnapshotV4 } from "./schemas.ts";
+import { coarsen } from "../shipto/index.ts";
+import { type AccountKey, type AnySnapshot, type CheckoutRequest, type CheckoutTotals, type CurrencyCeiling, ShipToCountry, SnapshotV4 } from "./schemas.ts";
 
 /** The currencies a 1.7.0 currency table may list: ISO 4217 minor unit 2 (Appendix A "Currency table and ceiling"). */
 export const TWO_DECIMAL_CURRENCIES = ["AUD", "CAD", "CHF", "CZK", "DKK", "EUR", "GBP", "HKD", "MXN", "NOK", "NZD", "PLN", "SEK", "SGD", "USD"] as const;
 
-/** The countries 1.7.0 ships to; any other is refused locally (Intent Cloud would answer 400). */
-export const COARSE_COUNTRIES = ["US", "CA", "AU"] as const;
-export type CoarseCountry = (typeof COARSE_COUNTRIES)[number];
-
-const COARSE_RULE: Readonly<Record<CoarseCountry, { take: number; pattern: RegExp }>> = {
-  US: { take: 5, pattern: /^[0-9]{5}$/ },
-  CA: { take: 3, pattern: /^[A-Z][0-9][A-Z]$/ },
-  AU: { take: 4, pattern: /^[0-9]{4}$/ },
-};
+/**
+ * The countries this contract ships to, read from its `ship_to.country` enum (ShipToCountry); any other is refused
+ * locally (Intent Cloud would answer 400). Widening that enum is all a later contract needs: src/shipto has the rules.
+ */
+export const COARSE_COUNTRIES: readonly ShipToCountry[] = ShipToCountry.options;
+export type CoarseCountry = ShipToCountry;
 
 /**
- * `coarse(country, code)` of Appendix A: spaces and `-` removed, upper-cased, then the first 5 (US), 3 (CA) or 4 (AU)
- * characters, which must match the country's pattern; null when there is no coarse code (another country included).
- * AU takes "all 4": a longer code has no coarse form.
+ * `coarse(country, code)` of Appendix A: spaces and `-` removed, upper-cased, then the first 5 (US), 3 (CA) or all 4
+ * (AU) characters, which must match the country's pattern; null when there is no coarse code, and for a country this
+ * contract does not ship to. The rules themselves are src/shipto's, which knows more countries than the contract.
  */
 export function coarsePostcode(country: string, code: string): string | null {
-  const rule = (COARSE_RULE as Readonly<Record<string, { take: number; pattern: RegExp }>>)[country];
-  if (rule === undefined) return null;
-  const folded = code.replace(/[\s-]/g, "").toUpperCase();
-  if (country === "AU" && folded.length !== 4) return null;
-  const coarse = folded.slice(0, rule.take);
-  return rule.pattern.test(coarse) ? coarse : null;
+  return (COARSE_COUNTRIES as readonly string[]).includes(country) ? coarsen(country, code) : null;
 }
 
 /** `"ct-"` + the first 16 hex characters of SHA-256(JCS(currencies)): the currency table's version. */

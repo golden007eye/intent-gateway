@@ -108,9 +108,9 @@ This step is required: never skip it, also when the developer says they already 
 2. Right away, run `intent wallet link shop --finish`, with a long timeout (10 minutes): it waits for the approval. If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1. If Shop denied the link, ask the developer whether to try again. If the developer has no Shop account, they create one from that link or in the Shop app, and add a payment card in Shop.
 3. Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page, where the developer pays by hand. Once the link is approved, `--finish` prints one of four outcomes:
    - `Agent payments on: …` (they are already on): skip the block below and go to the note in 4.
-   - Agent payments are on and the limit is high enough, but this period's amount is spent: one line that starts `Agent payments are on, but only $<left> is left until Shop renews it` and ends `so wait for that renewal rather than raising it.` There is nothing to raise: say that line as a one-line status, not a **Your turn** block, and add in one line that until Shop renews it, purchases are handed off to Shop's checkout page. Then skip 4 and go to step 6. `intent wallet status` and `intent wallet status --wait-budget` can print the same line; say it the same way.
-   - Agent payments are off: a Shop page, then `Tap …, turn on Allow agent to pay for me, enter $<amount>.`, with the amount the gateway sets from the policy.
-   - Agent payments are on but too little is left for one purchase: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`
+   - Agent payments are on and the limit is high enough, but this period's amount is spent: one line that starts `Agent payments are on, but only <left> is left until Shop renews it` and ends `so wait for that renewal rather than raising it.` There is nothing to raise: say that line as a one-line status, not a **Your turn** block, and add in one line that until Shop renews it, purchases are handed off to Shop's checkout page. Then skip 4 and go to step 6. `intent wallet status` and `intent wallet status --wait-budget` can print the same line; say it the same way.
+   - Agent payments are off: a Shop page, then `Tap …, turn on Allow agent to pay for me, enter <amount>.`, with the amount it prints: the gateway sets it from the policy, in the Shop account's currency, so never say another.
+   - Agent payments are on but too little is left for one purchase: a Shop page, then `Agent payments are on, but only <left> is left; raise it to <amount>.`
 
    For the last two, show the last two lines `--finish` printed, word for word, and nothing else (when Shop names no page, it prints only the second line; leave the link line out). `intent wallet status --wait-budget` can print the same low lines when it starts; show them the same way:
 
@@ -120,7 +120,7 @@ This step is required: never skip it, also when the developer says they already 
 >
 > <the line before it, the Shop page, as a clickable link>
 
-4. Right away, run `intent wallet status --wait-budget --timeout 540`, with a 10-minute timeout for the command (540 s leaves time for `npx` to start, so its own timeout line is printed before the command is stopped). It waits until Shop shows agent payments on, with at least one purchase's limit left. When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (an amount in another currency), and this note, in two short lines:
+4. Right away, run `intent wallet status --wait-budget --timeout 540`, with a 10-minute timeout for the command (540 s leaves time for `npx` to start, so its own timeout line is printed before the command is stopped). It waits until Shop shows agent payments on, with at least one purchase's limit left. When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (why it names no amount), and this note, in two short lines:
    - "Shop says it enforces this amount itself, as a safety net; intent's policy does the day-to-day limiting."
    - "It is the only stop an agent with shell access can't get around: any program running as you can read the Shop token on this computer."
 
@@ -158,15 +158,15 @@ Then add, in one line, that turning off agent payments in Shop is that hard stop
 >
 > `claude --continue`
 
-2. After "continue": check that you have the `intent` tools (`find_offers`, `create_cart`, `get_approval_status`) and that `node --version` is in the range of step 1. If not, show the block again. This preview ships to US addresses only, and `find_offers` takes a 5-digit US ZIP code and a budget in US dollars. Show:
+2. After "continue": check that you have the `intent` tools (`find_offers`, `create_cart`, `get_approval_status`) and that `node --version` is in the range of step 1. If not, show the block again. `find_offers` takes a country, a postcode and a budget in that country's currency. Show:
 
 > **Your turn:** say what to buy
 >
-> Tell me one small thing to buy, and the most you'll spend (under $20).
+> Tell me one small thing to buy, and the most you'll spend (under $20 in the US).
 >
-> Add your 5-digit US ZIP code: this preview ships to US addresses only.
+> Where should it ship? Country and postcode.
 
-3. Call `find_offers` with what they said, with `zip` and `budget_usd` as they gave them. List the top 2 or 3 offers, numbered, one short line each: item, store and price, as the result writes them (a Shop offer shows no total: shipping is shown at checkout). Then show:
+3. Call `find_offers` with what they said, with `country` (its two-letter code), `postcode` and `budget` as they gave them. If it refuses the country, say its line as it is. List the top 2 or 3 offers, numbered, one short line each: item, store and price, as the result writes them (a Shop offer shows no total: shipping is shown at checkout). Then show:
 
 > **Your turn:** pick an offer
 >

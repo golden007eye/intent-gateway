@@ -11,6 +11,7 @@ export {
   type CheckoutControls,
   DEFAULT_CURRENCIES,
   DEFAULT_QUOTAS,
+  LIVE_CURRENCIES,
   type FakeCloud,
   type FakeCloudOptions,
   MAX_BODY_BYTES,

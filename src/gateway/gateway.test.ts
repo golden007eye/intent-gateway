@@ -36,7 +36,7 @@ vi.setConfig({ testTimeout: 30_000 });
 const T0 = Date.parse("2026-10-15T12:00:00Z");
 const DAY_MS = 86_400_000;
 const BASE_POLICY = "version: 1\napproval: passkey\n";
-const SHOES = { category: "running-shoes", budget_usd: 200, zip: "94103" };
+const SHOES = { category: "running-shoes", budget: 200, country: "US", postcode: "94103" };
 const OPS = ["search", "createCart", "createApproval", "getApproval"] as const;
 
 interface Harness {
@@ -321,21 +321,39 @@ describe("findOffers readiness", () => {
     const result = await h.gateway.findOffers({});
     expect(result.status).toBe("needs_details");
     if (result.status !== "needs_details") return;
-    expect(result.missing.map((m) => m.field)).toEqual(["product_or_category", "budget_usd", "zip"]);
+    expect(result.missing.map((m) => m.field)).toEqual(["product_or_category", "budget", "ship_to"]);
+    expect(result.message).toBe("Ask the user only for: What should I look for: an exact product, or a kind of product? What is the most you want to spend? Where should it ship? Country and postcode.");
     expect(result.summary).toBe("Sent: nothing / Blocked: nothing");
     expect(h.totalSends()).toBe(0);
   });
 
-  it("asks only for what is missing: a ZIP and a budget are never guessed", async () => {
+  it("asks only for what is missing: a country, a postcode and a budget are never guessed", async () => {
     const h = await setup();
-    const noZip = await h.gateway.findOffers({ category: "running-shoes", budget_usd: 100 });
-    expect(noZip.status === "needs_details" && noZip.missing.map((m) => m.field)).toEqual(["zip"]);
-    const noBudget = await h.gateway.findOffers({ product: "Trail Runner 3", zip: "94103" });
-    expect(noBudget.status === "needs_details" && noBudget.missing.map((m) => m.field)).toEqual(["budget_usd"]);
-    const badZip = await h.gateway.findOffers({ category: "running-shoes", budget_usd: 100, zip: "SW1A 1AA" });
-    expect(badZip.status === "needs_details" && badZip.missing.map((m) => m.field)).toEqual(["zip"]);
-    const blanks = await h.gateway.findOffers({ category: " ", budget_usd: 0, zip: "9410" });
-    expect(blanks.status === "needs_details" && blanks.missing.map((m) => m.field)).toEqual(["product_or_category", "budget_usd", "zip"]);
+    const noShipTo = await h.gateway.findOffers({ category: "running-shoes", budget: 100 });
+    expect(noShipTo.status === "needs_details" && noShipTo.missing.map((m) => m.field)).toEqual(["ship_to"]);
+    const noCountry = await h.gateway.findOffers({ category: "running-shoes", budget: 100, postcode: "94103" });
+    expect(noCountry.status === "needs_details" && noCountry.missing.map((m) => m.ask)).toEqual(["Where should it ship? Country and postcode."]);
+    const named = await h.gateway.findOffers({ category: "running-shoes", budget: 100, country: "Canada", postcode: "K1A 0B1" });
+    expect(named.status === "needs_details" && named.missing.map((m) => m.field)).toEqual(["ship_to"]);
+    const noPostcode = await h.gateway.findOffers({ category: "running-shoes", budget: 100, country: "us" });
+    expect(noPostcode.status === "needs_details" && noPostcode.missing.map((m) => m.ask)).toEqual(["Which postcode in the US should it ship to? Give a 5-digit ZIP code, such as 94107."]);
+    const noBudget = await h.gateway.findOffers({ product: "Trail Runner 3", country: "US", postcode: "94103" });
+    expect(noBudget.status === "needs_details" && noBudget.missing.map((m) => m.ask)).toEqual(["What is the most you want to spend, in US dollars?"]);
+    const badZip = await h.gateway.findOffers({ category: "running-shoes", budget: 100, country: "US", postcode: "SW1A 1AA" });
+    expect(badZip.status === "needs_details" && badZip.missing.map((m) => m.ask)).toEqual(["That postcode does not look right for the US: give a 5-digit ZIP code, such as 94107."]);
+    const blanks = await h.gateway.findOffers({ category: " ", budget: 0, country: "US", postcode: "9410" });
+    expect(blanks.status === "needs_details" && blanks.missing.map((m) => m.field)).toEqual(["product_or_category", "budget", "postcode"]);
+    expect(h.totalSends()).toBe(0);
+  });
+
+  it("outside the US with no linked Shop wallet: refused in one line, nothing sent (Intent Cloud's search takes a US ZIP only)", async () => {
+    const h = await setup();
+    const result = await h.gateway.findOffers({ ...SHOES, country: "CA", postcode: "K1A 0B1" });
+    expect(result).toMatchObject({
+      status: "refused",
+      message: "Not sent: searching for Canada needs a linked Shop wallet (`intent wallet link shop`); without one, intent searches the US only.",
+      summary: "Sent: nothing / Blocked: nothing",
+    });
     expect(h.totalSends()).toBe(0);
   });
 
@@ -371,7 +389,7 @@ describe("findOffers readiness", () => {
 describe("policy", () => {
   it("a blocked merchant's offers are hidden, and no cart can be made for them", async () => {
     const h = await setup({ policy: `${BASE_POLICY}merchants:\n  block: [dropship.example]\n` });
-    const result = offersOf(await h.gateway.findOffers({ category: "home", budget_usd: 50, zip: "94103" }));
+    const result = offersOf(await h.gateway.findOffers({ category: "home", budget: 50, country: "US", postcode: "94103" }));
     expect(result.offers).toEqual([]);
     expect(result.hidden).toBe(1);
     expect(result.message).toContain("merchants.block");
@@ -389,7 +407,7 @@ describe("policy", () => {
 
   it("a blocked category stops the search before it is sent, with a block entry", async () => {
     const h = await setup({ policy: `${BASE_POLICY}categories:\n  block: [electronics]\n` });
-    const result = await h.gateway.findOffers({ category: "Electronics/Headphones", budget_usd: 300, zip: "94103" });
+    const result = await h.gateway.findOffers({ category: "Electronics/Headphones", budget: 300, country: "US", postcode: "94103" });
     expect(result.status).toBe("blocked");
     expect(result.summary).toBe("Sent: nothing / Blocked: categories.block at category");
     expect(h.sends.search).toBe(0);
@@ -398,7 +416,7 @@ describe("policy", () => {
 
   describe("attack: a product-only search must not get around categories.block (the no-electronics seed)", () => {
     const NO_ELECTRONICS = readFileSync(new URL("../../policies/no-electronics/policy.yaml", import.meta.url), "utf8");
-    const HEADPHONES = { product: "Studio Headphones", budget_usd: 200, zip: "94103" };
+    const HEADPHONES = { product: "Studio Headphones", budget: 200, country: "US", postcode: "94103" };
 
     it("a product-only search is not sent: the agent is asked for the category", async () => {
       const h = await setup({ policy: NO_ELECTRONICS });
@@ -439,7 +457,7 @@ describe("policy", () => {
 
   it("the Cloud baseline holds under a policy that names nothing: an excluded category is never searched", async () => {
     const h = await setup();
-    const result = await h.gateway.findOffers({ category: "health", budget_usd: 50, zip: "94103" });
+    const result = await h.gateway.findOffers({ category: "health", budget: 50, country: "US", postcode: "94103" });
     expect(result.status).toBe("blocked");
     expect(h.sends.search).toBe(0);
   });
@@ -542,7 +560,7 @@ describe("createCart snapshot checks", () => {
         cart_request: {
           offer_handle: bodies(h, "observed").find((o) => o.endpoint === "searchCatalog") === undefined ? "" : (JSON.parse(Buffer.from(String(bodies(h, "disclosure").find((d) => d.endpoint === "createCart")?.body_b64), "base64").toString("utf8")) as { offer_handle: string }).offer_handle,
           quantity: 2,
-          ship_to: { country: "US", postal_code: SHOES.zip },
+          ship_to: { country: "US", postal_code: SHOES.postcode },
           completer_keyid: view?.snapshot.v === 3 ? view.snapshot.completer_keyid : "v1",
           completion_accepts: ["handoff"],
         },
@@ -637,7 +655,7 @@ describe("invariant 3: buyer identity in a tool input is never sent", () => {
     ["a card number in the product", { ...SHOES, product: "shoes, pay with 4111 1111 1111 1111" }],
     ["an email in the category", { ...SHOES, category: "jane.doe@mail.example" }],
     ["a street address in a must-have", { ...SHOES, must_haves: ["deliver to 1600 Pennsylvania Ave"] }],
-    ["a phone number in the ZIP", { ...SHOES, zip: "(415) 555-2671" }],
+    ["a phone number in the postcode", { ...SHOES, postcode: "(415) 555-2671" }],
     ["a name under an extra key", { ...SHOES, buyer_name: "Jane Doe" }],
     ["a shipping address object", { ...SHOES, shipping_address: { line1: "1 Infinite Loop" } }],
     ["a card split over a list", { ...SHOES, must_haves: ["4111", "1111", "1111", "1111"] }],
@@ -965,7 +983,7 @@ describe("observations: an `observed` entry after each acknowledged answer, neve
 
   it("a policy block keeps the value it held back (never sent); an identity block never does", async () => {
     const h = await setup();
-    expect((await h.gateway.findOffers({ category: "alcohol", budget_usd: 50, zip: "94103" })).status).toBe("blocked");
+    expect((await h.gateway.findOffers({ category: "alcohol", budget: 50, country: "US", postcode: "94103" })).status).toBe("blocked");
     expect(h.sends.search).toBe(0);
     expect(bodies(h, "block").at(-1)).toEqual({
       endpoint: "searchCatalog",
@@ -979,7 +997,7 @@ describe("observations: an `observed` entry after each acknowledged answer, neve
 
   it("attack: a blocked search never keeps the free-text product, where a name cannot be detected", async () => {
     const h = await setup();
-    const result = await h.gateway.findOffers({ category: "alcohol", product: "a gift for Jane Q Doe", budget_usd: 50, zip: "94103" });
+    const result = await h.gateway.findOffers({ category: "alcohol", product: "a gift for Jane Q Doe", budget: 50, country: "US", postcode: "94103" });
     expect(result.status).toBe("blocked");
     expect(h.sends.search).toBe(0);
     expect(bodies(h, "block").at(-1)?.held).toEqual({ category: "alcohol" });
@@ -1127,7 +1145,7 @@ describe("contract 1.6.x: completer key, local checks before any approval reques
     expect(await keyFiles(h)).toEqual([keyid]);
     if (process.platform !== "win32") expect((await fsp.stat(join(h.completerKeys.dir, `${keyid}.key`))).mode & 0o777).toBe(0o600);
     const snapshot = h.fake.inspect(result.approval_handle)?.snapshot;
-    expect(snapshot).toMatchObject({ v: 3, completer_keyid: keyid, completion_mode: "handoff", ship_to: { postal_code: SHOES.zip } });
+    expect(snapshot).toMatchObject({ v: 3, completer_keyid: keyid, completion_mode: "handoff", ship_to: { postal_code: SHOES.postcode } });
     const logged = bodies(h, "disclosure").find((d) => d.endpoint === "createCart");
     const sent = JSON.parse(Buffer.from(String(logged?.body_b64), "base64").toString("utf8")) as Record<string, unknown>;
     expect(sent).toMatchObject({ completer_keyid: keyid, completion_accepts: ["handoff"] });

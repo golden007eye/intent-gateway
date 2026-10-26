@@ -13,6 +13,7 @@ import { readChain } from "../store/index.ts";
 import { CLAIM_HOST, loadSecret, pendingGrantPath, savePendingGrant, saveSecret, vaultPath, WalletKey } from "../wallet/index.ts";
 import { SHOP_PUBLIC_CLIENT_ID } from "../disclosure/index.ts";
 import { FAKE_BUYER, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
+import { type FakeCloud, LIVE_CURRENCIES, freePort, startFakeCloud } from "../cloud-fake/index.ts";
 import { type Io, main } from "./index.ts";
 
 interface Result {
@@ -38,21 +39,29 @@ interface Setup {
 }
 
 let shop: FakeShop | undefined;
+// Intent Cloud's meta, for the ceilings the agent-payments amount is worked out from (its live table).
+let cloud: FakeCloud | undefined;
 afterEach(async () => {
   await shop?.close();
+  await cloud?.close();
   shop = undefined;
+  cloud = undefined;
 });
 
 async function setup(faults: FakeShopFaults = {}, clientId?: string): Promise<Setup> {
   const fake = await startFakeShop({ faults, ...(clientId === undefined ? {} : { clientId }) });
   shop = fake;
+  const clock = { now: Date.UTC(2026, 9, 18, 12, 0, 0) };
+  cloud = await startFakeCloud({ currencies: LIVE_CURRENCIES, now: () => clock.now });
   const root = mkdtempSync(join(tmpdir(), "wallet-link-steps-"));
   const dir = join(root, "data");
   const keyBytes = randomBytes(32);
   const keyFile = join(root, "wallet.key");
   writeFileSync(keyFile, `${keyBytes.toString("base64")}\n`, { mode: 0o600 });
-  const env = { INTENT_DATA_DIR: dir, INTENT_WALLET_KEY_FILE: keyFile, INTENT_SHOP_CLIENT_ID: fake.clientId, INTENT_SHOP_AUTH_URL: fake.authUrl, INTENT_SHOP_MCP_URL: fake.mcpUrl };
-  const clock = { now: Date.UTC(2026, 9, 18, 12, 0, 0) };
+  const env = { INTENT_DATA_DIR: dir, INTENT_WALLET_KEY_FILE: keyFile, INTENT_SHOP_CLIENT_ID: fake.clientId, INTENT_SHOP_AUTH_URL: fake.authUrl, INTENT_SHOP_MCP_URL: fake.mcpUrl, INTENT_CLOUD_URL: cloud.url };
+  // The fake's published test root, trusted for its loopback host only.
+  const trustKeys = join(root, "keys.json");
+  writeFileSync(trustKeys, JSON.stringify({ rootKeys: [cloud.keys.rootPin] }));
   const sleeps: number[] = [];
   return {
     dir,
@@ -77,7 +86,7 @@ async function setup(faults: FakeShopFaults = {}, clientId?: string): Promise<Se
           await options.onSleep?.(ms);
         },
       };
-      const { code } = await main(argv, io);
+      const { code } = await main([...argv, "--trust-keys", trustKeys], io);
       return { code, out: out.join(""), err: err.join("") };
     },
   };
@@ -441,12 +450,35 @@ describe("agent payments on, but too little left for one purchase", () => {
     expect((await s.run(["wallet", "status", "--wait-budget"])).out).toBe("Agent payments on: $150.00 per month, $50.00 left\n");
   });
 
-  it("a budget in another currency is never compared with the USD limits: the success line and one note", async () => {
-    const s = await withPolicy({ accountCurrency: "CAD", budgetMinor: 100 }, DEFAULTS);
+  it("a budget in CAD is compared with the caps put in CAD by Intent Cloud's ceilings: 4 × CAD 56 = CAD 224", async () => {
+    const s = await withPolicy({ accountCurrency: "CAD", budgetMinor: 600 }, DEFAULTS);
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    const r = await s.run(["wallet", "status"]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("Shop budget left for the gateway: 6.00 CAD\nhttps://shop.app/account/connections\nAgent payments are on, but only CAD 6.00 is left; raise it to CAD 224.\n");
+    // Enough for one purchase (CAD 28 per order): on, and a limit above CAD 224 is warned about.
+    s.shop.faults.budgetMinor = 5000;
+    s.shop.faults.budgetLimitMinor = 30_000;
+    const on = await s.run(["wallet", "status", "--wait-budget"]);
+    expect(on.out).toBe("Agent payments on: CAD 300.00 per month, CAD 50.00 left\n");
+    expect(on.err).toBe("intent: warning: this limit is above CAD 224.00, 4 × your policy's weekly cap (CAD 56); the Shop budget is the only hard stop, so lower it: open https://shop.app/account/connections, tap intent\n");
+  });
+
+  it("a budget in a currency Intent Cloud's table does not list: the success line and one note, no amount", async () => {
+    const s = await withPolicy({ accountCurrency: "NZD", budgetMinor: 100 }, DEFAULTS);
     expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
     const r = await s.run(["wallet", "status", "--wait-budget"]);
     expect(r.code).toBe(0);
-    expect(r.out).toBe("Agent payments on: 150.00 CAD per month, 1.00 CAD left\nNote: Shop shows this budget in CAD; the gateway's limits are in USD, so it was not compared with them\n");
+    expect(r.out).toBe("Agent payments on: NZD 150.00 per month, NZD 1.00 left\nNote: Shop shows this budget in NZD, which the currency table Intent Cloud returns does not list, so the gateway suggests no amount\n");
+  });
+
+  it("Intent Cloud's meta cannot be read: one line saying so, never a guessed amount", async () => {
+    const s = await withPolicy({ budgetMinor: 100 }, DEFAULTS);
+    expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
+    // A port nothing listens on: the connection is refused.
+    const r = await s.run(["wallet", "status"], { env: { ...s.env, INTENT_CLOUD_URL: `http://127.0.0.1:${String(await freePort())}` } });
+    expect(r.out).toMatch(/\nNote: the ceilings Intent Cloud returns could not be read from http:\/\/127\.0\.0\.1:\d+ \(.+\), so the gateway suggests no amount\n$/);
+    expect(r.out).not.toContain("raise it to");
   });
 });
 
@@ -512,10 +544,10 @@ describe("amounts in a currency's own minor unit", () => {
   it("JPY has no minor unit, KWD has three digits; neither is divided by 100", async () => {
     const s = await setup({ accountCurrency: "JPY", budgetLimitMinor: 15_000, budgetMinor: 1500 });
     expect((await s.run(["wallet", "link", "shop"])).out).toContain("Shop budget left for the gateway: 1500 JPY\n");
-    expect((await s.run(["wallet", "status", "--wait-budget"])).out).toMatch(/^Agent payments on: 15000 JPY per month, 1500 JPY left\nNote: /);
+    expect((await s.run(["wallet", "status", "--wait-budget"])).out).toMatch(/^Agent payments on: JPY 15000 per month, JPY 1500 left\nNote: /);
     s.shop.faults.accountCurrency = "KWD";
     expect((await s.run(["wallet", "status"])).out).toContain("Shop budget left for the gateway: 1.500 KWD\n");
-    expect((await s.run(["wallet", "status", "--wait-budget"])).out).toMatch(/^Agent payments on: 15.000 KWD per month, 1.500 KWD left\nNote: /);
+    expect((await s.run(["wallet", "status", "--wait-budget"])).out).toMatch(/^Agent payments on: KWD 15.000 per month, KWD 1.500 left\nNote: /);
   });
 });
 
@@ -547,8 +579,9 @@ describe("intent wallet status --wait-budget", () => {
     expect(s.sleeps).toEqual([5000, 5000]);
     // Each read Shop received has its disclosure, and its response, in the chain.
     expect(loggedAccounts(s)).toBe(getAccounts(s));
+    // (Intent Cloud's meta and key statement, read for the ceilings, are answered by a receipt instead.)
     const kinds = chain(s).map((e) => e.kind);
-    expect(kinds.filter((k) => k === "response")).toHaveLength(kinds.filter((k) => k === "disclosure").length);
+    expect(kinds.filter((k) => k === "response")).toHaveLength(chain(s).filter((e) => e.kind === "disclosure" && typeof e.body.destination === "string" && e.body.destination !== "intent_cloud").length);
   });
 
   it("another period is named as Shop names it, never assumed monthly", async () => {

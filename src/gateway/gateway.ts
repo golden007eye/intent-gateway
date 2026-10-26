@@ -2,9 +2,13 @@
 // the policy (invariant 1), the identity refusal (invariant 3) and the approval gate (invariant 4) meet; every call
 // to Intent Cloud goes through the disclosed cloud, which logs before it sends (invariant 2).
 //
-// - Readiness: a search needs a product or category, a budget and a US ZIP. Missing ones are listed back for the
-//   agent to ask about; the gateway never guesses one and calls nothing. Under a policy that blocks categories, the
-//   category is required too: offers carry none of their own, so it is the only category the policy can check.
+// - Readiness: a search needs a product or category, a budget and a country and postcode. Missing ones are listed back
+//   for the agent to ask about; the gateway never guesses one and calls nothing. Under a policy that blocks
+//   categories, the category is required too: offers carry none of their own, so it is the only category the policy
+//   can check. The postcode is coarsened at once (src/shipto): only {country, coarse} is held, sent or remembered.
+// - Countries: a search ships to a country of the contract whose currency is in Intent Cloud's currency table
+//   (shipsTo), in that currency; outside the US only through a linked Shop wallet. The policy's USD caps are scaled to
+//   the currency by the table's ceilings (policy's capsIn), and count only orders in that currency.
 // - Identity: every tool input is scanned with findIdentity before any request is built. A finding writes a `block`
 //   entry (kinds and paths, never values) and nothing is sent.
 // - Policy: each outbound request is mapped onto the policy module's own types and evaluated (which applies
@@ -37,7 +41,7 @@ import {
   type Cart,
   type CheckoutRequest,
   COARSE_COUNTRIES,
-  coarsePostcode,
+  type CoarseCountry,
   continueUrlAllowed,
   type CurrencyTable,
   currencyTableVersion,
@@ -76,7 +80,8 @@ import {
 } from "../disclosure/index.ts";
 import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
-import { CLOUD_BASELINE, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
+import { capsIn, CLOUD_BASELINE, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
+import { coarsen, currencyFor, currencyWords, namesText, shipCountry } from "../shipto/index.ts";
 import { isPausedAnswer, noteSubmitAnswer, pausedIn, pauseState, refuseForPause } from "../pause/index.ts";
 import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
 import { createShopProvider, filterOffers, newOfferHandle, type SearchOffer, type SearchProvider, searchProviders } from "../search/index.ts";
@@ -234,8 +239,19 @@ export const FindOffersInput = z.strictObject({
     .max(8)
     .optional()
     .describe("Features the user said the product must have, in their words."),
-  budget_usd: z.number().optional().describe("The most the user said they will spend, in US dollars. Never guess it."),
-  zip: z.string().optional().describe("The 5-digit US ZIP code the user said to ship to. Never guess it."),
+  budget: z
+    .number()
+    .optional()
+    .describe(
+      "The most the user said they will spend, in the currency of the ship-to country: USD for the US, CAD for Canada, " +
+        "AUD for Australia. Never guess it.",
+    ),
+  country: z
+    .string()
+    .max(60)
+    .optional()
+    .describe("The ship-to country as an ISO 3166 alpha-2 code (US, CA, AU), from what the user said. Never guess it."),
+  postcode: z.string().max(40).optional().describe("The postcode (ZIP code in the US) the user said to ship to. Never guess it."),
 });
 export type FindOffersInput = z.input<typeof FindOffersInput>;
 
@@ -254,7 +270,7 @@ export type ApprovalStatusInput = z.input<typeof ApprovalStatusInput>;
 
 /** A detail a search needs that the agent did not give. The agent asks the user for it; the gateway never guesses. */
 export interface MissingDetail {
-  readonly field: "product_or_category" | "category" | "budget_usd" | "zip";
+  readonly field: "product_or_category" | "category" | "budget" | "ship_to" | "postcode";
   readonly ask: string;
 }
 
@@ -374,7 +390,13 @@ interface RememberedOffer {
   readonly offer: CloudOffer;
   /** The category the search asked for ("" for a product-only search): offers carry none of their own. */
   readonly category: string;
-  readonly zip: string;
+  readonly shipTo: ShipTo;
+}
+
+/** Where a search ships to, as the gateway holds it: the country and the coarse postcode, never the full one. */
+interface ShipTo {
+  readonly country: CoarseCountry;
+  readonly coarse: string;
 }
 
 /**
@@ -385,11 +407,12 @@ interface LocalOffer {
   readonly offer: SearchOffer;
   readonly quantity: number;
   readonly category: string;
-  readonly zip: string;
+  readonly shipTo: ShipTo;
+  /** The search's currency: the ship-to country's. */
+  readonly currency: string;
 }
 
 const MAX_REMEMBERED_OFFERS = 500;
-const US_ZIP = /^[0-9]{5}$/;
 /** The contract's completion mode for each policy mode. */
 const CONTRACT_MODE: Readonly<Record<PolicyCompletionMode, CloudCompletionMode>> = { handoff: "handoff", one_tap: "shop_agent" };
 
@@ -431,6 +454,39 @@ export function createGateway(options: GatewayOptions): Gateway {
   function started(): KeySet {
     if (keySet === null) throw new GatewayNotStartedError("the gateway has not started: call start() first");
     return keySet;
+  }
+
+  /** Intent Cloud's ceilings per currency, which scale the policy's USD caps (policy's capsIn); null with no valid table. */
+  const ceilings = (): CurrencyTable["currencies"] | null => currencyTable?.currencies ?? null;
+
+  /**
+   * The countries a search may ship to now: the contract's (COARSE_COUNTRIES, its ship_to enum) whose currency is in
+   * Intent Cloud's currency table. With no valid table, the US only: the policy's caps cannot be put in another currency.
+   */
+  function shipsTo(): CoarseCountry[] {
+    return COARSE_COUNTRIES.filter((c) => {
+      const currency = currencyOf(c);
+      return currency === "USD" ? currencyTable === null || currencyTable.currencies.USD !== undefined : currency !== undefined && currencyTable?.currencies[currency] !== undefined;
+    });
+  }
+
+  /** The currency of a search to `country` (src/shipto's currencyFor over the table Intent Cloud sent). */
+  const currencyOf = (country: string): string | undefined => currencyFor(country, currencyTable);
+
+  /** Why a search cannot ship to `country` (upper-cased), in one line for the agent, or null when it can. */
+  function countryRefusal(country: string): string | null {
+    const accepted = shipsTo();
+    if ((accepted as readonly string[]).includes(country)) return null;
+    const rules = shipCountry(country);
+    const currency = currencyOf(country);
+    if ((COARSE_COUNTRIES as readonly string[]).includes(country) && rules !== undefined && currency !== undefined) {
+      return currencyTable === null
+        ? `Not sent: the meta Intent Cloud returns holds no valid currency table, so the gateway cannot put its limits in ${currency} for ${rules.name}. Restart the gateway.`
+        : `Not sent: the currency table Intent Cloud returns (${currencyTable.version}) does not list ${currency}, so intent cannot ship to ${rules.name} for now.`;
+    }
+    if (accepted.length === 0) return "Not sent: the currency table Intent Cloud returns lists none of the currencies intent ships in, so no search can be made now.";
+    const soon = rules === undefined ? "" : `; ${rules.name} is coming soon`;
+    return `Not sent: intent ships to ${namesText(accepted)} for now${soon}.`;
   }
 
   const head = (): number => store.entries().at(-1)?.seq ?? -1;
@@ -690,19 +746,43 @@ export function createGateway(options: GatewayOptions): Gateway {
         ask: "What kind of product is it (for example running-shoes)? The gateway policy blocks some categories, so a search must name one.",
       });
     }
-    const budget = input.budget_usd;
+    // The country first: one the gateway cannot ship to is refused before anything else is asked.
+    // Anything but a two-letter code (a country's name, say) is asked for again, as the ship-to.
+    const named = blankToUndefined(input.country)?.toUpperCase();
+    const country = named !== undefined && /^[A-Z]{2}$/.test(named) ? named : undefined;
+    const refusal = country === undefined ? null : countryRefusal(country);
+    if (refusal !== null) return { status: "refused", message: refusal, summary: summary(fromSeq) };
+    const place = country === undefined ? undefined : shipCountry(country);
+    // shipsTo admitted the country, so its currency is in the table.
+    const currency = place === undefined ? undefined : currencyOf(place.code);
+    const budget = input.budget;
     if (budget === undefined || !Number.isFinite(budget) || budget <= 0) {
-      missing.push({ field: "budget_usd", ask: "What is the most you want to spend, in US dollars?" });
+      missing.push({ field: "budget", ask: `What is the most you want to spend${place === undefined ? "" : `, in ${currencyWords(currency ?? place.currency)}`}?` });
     }
-    const zip = input.zip?.trim();
-    if (zip === undefined || !US_ZIP.test(zip)) {
-      missing.push({ field: "zip", ask: "Which 5-digit US ZIP code should it ship to?" });
+    // The full postcode is coarsened here and goes no further: not into the log, a request or a remembered offer.
+    const full = blankToUndefined(input.postcode);
+    const coarse = place === undefined || full === undefined ? null : coarsen(place.code, full);
+    if (place === undefined) {
+      missing.push({ field: "ship_to", ask: "Where should it ship? Country and postcode." });
+    } else if (full === undefined) {
+      missing.push({ field: "postcode", ask: `Which postcode in ${place.name} should it ship to? Give ${place.format}.` });
+    } else if (coarse === null) {
+      missing.push({ field: "postcode", ask: `That postcode does not look right for ${place.name}: give ${place.format}.` });
     }
-    if (missing.length > 0 || budget === undefined || zip === undefined) {
+    if (missing.length > 0 || budget === undefined || place === undefined || coarse === null || currency === undefined) {
       return {
         status: "needs_details",
         missing,
         message: `Ask the user only for: ${missing.map((m) => m.ask).join(" ")}`,
+        summary: summary(fromSeq),
+      };
+    }
+    const shipTo: ShipTo = { country: place.code as CoarseCountry, coarse };
+    // Outside the US the search runs only against Shop: Intent Cloud's catalog search takes a US ZIP only.
+    if (shipTo.country !== "US" && providers.length === 0) {
+      return {
+        status: "refused",
+        message: `Not sent: searching for ${place.name} needs a linked Shop wallet (\`${INTENT} wallet link shop\`); without one, intent searches the US only.`,
         summary: summary(fromSeq),
       };
     }
@@ -715,7 +795,8 @@ export function createGateway(options: GatewayOptions): Gateway {
         ...(category === undefined ? {} : { category }),
         ...(mustHaves === undefined ? {} : { must_haves: mustHaves }),
         budget_usd: budget,
-        ship_to_zip: zip,
+        ship_to_zip: coarse,
+        ship_to_country: shipTo.country,
       },
       [],
       now(),
@@ -725,7 +806,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       ...(product === undefined ? {} : { product }),
       ...(mustHaves === undefined ? {} : { must_haves: mustHaves }),
       budget_max: { amount_minor: Math.round(budget * 100), currency: "USD" },
-      ship_to: { country: "US", postal_code: zip },
+      ship_to: { country: "US", postal_code: coarse },
     };
     if (!decision.send) {
       return block(
@@ -738,13 +819,13 @@ export function createGateway(options: GatewayOptions): Gateway {
         // Structured values only: never the free-text product, whose words findIdentity cannot vet (a name is free text).
         {
           ...(category === undefined ? {} : { category }),
-          ...(decision.blocked.some((b) => b.path === "ship_to_zip") ? { zip } : {}),
+          ...(decision.blocked.some((b) => b.path === "ship_to_zip") ? { country: shipTo.country, postcode: coarse } : {}),
         },
       );
     }
 
     // A linked Shop wallet: the search runs here, against Shop, and Intent Cloud is sent nothing (G5).
-    if (providers.length > 0) return localSearch({ product, category, mustHaves: mustHaves ?? [], budget, zip }, fromSeq);
+    if (providers.length > 0) return localSearch({ product, category, mustHaves: mustHaves ?? [], budget, shipTo, currency }, fromSeq);
 
     const keys = await currentKeys(fromSeq);
     if (!keys.ok) return keys.refused;
@@ -758,7 +839,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       if (verdict.send) kept.push(offer);
       else for (const b of verdict.blocked) hiddenBy.add(b.rule);
     }
-    for (const offer of kept) remember(offer.offer_handle, { offer, category: category ?? "", zip });
+    for (const offer of kept) remember(offer.offer_handle, { offer, category: category ?? "", shipTo });
     const hidden = sent.body.offers.length - kept.length;
     await store.append("observed", observeSearch(sent.seq, sent.body, hidden));
     // Rule names only (e.g. merchants.block), never the merchant, category or price that matched it.
@@ -786,10 +867,11 @@ export function createGateway(options: GatewayOptions): Gateway {
    * policy filter and the excluded categories, all here. Each offer kept gets a new opaque handle.
    */
   async function localSearch(
-    asked: { product: string | undefined; category: string | undefined; mustHaves: readonly string[]; budget: number; zip: string },
+    asked: { product: string | undefined; category: string | undefined; mustHaves: readonly string[]; budget: number; shipTo: ShipTo; currency: string },
     fromSeq: number,
   ): Promise<FindOffersResult> {
-    const budget = { amountMinor: Math.round(asked.budget * 100), currency: "USD" };
+    const { currency, shipTo } = asked;
+    const budget = { amountMinor: Math.round(asked.budget * 100), currency };
     let found: SearchOffer[];
     try {
       found = await searchProviders(providers, {
@@ -797,8 +879,9 @@ export function createGateway(options: GatewayOptions): Gateway {
         ...(asked.category === undefined ? {} : { category: asked.category }),
         mustHaves: asked.mustHaves,
         budget,
-        country: "US",
-        postcode: asked.zip,
+        country: shipTo.country,
+        currency,
+        postcode: shipTo.coarse,
       });
     } catch (error) {
       return { status: providerFailure(error), message: searchFailureMessage(error), summary: summary(fromSeq) };
@@ -806,12 +889,14 @@ export function createGateway(options: GatewayOptions): Gateway {
     const filtered = filterOffers(policy, found, {
       ...(asked.category === undefined ? {} : { category: asked.category }),
       budget,
+      currency,
+      ceilings: ceilings(),
       history: spendHistory(store.entries(), now()),
       now: now(),
     });
     const shown = filtered.kept.map((offer): ShopOfferView => {
       const handle = newOfferHandle();
-      keep(localOffers, handle, { offer, quantity: 1, category: asked.category ?? "", zip: asked.zip });
+      keep(localOffers, handle, { offer, quantity: 1, category: asked.category ?? "", shipTo, currency });
       return shopOfferView(handle, offer);
     });
     const { hidden } = filtered;
@@ -857,7 +942,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     // The policy on the offer as searched, with the spend so far from the chain.
     const domain = known.offer.merchant.domain;
     const before = spendCheck(policyOffer(domain, known.category, known.offer.price, known.offer.shipping, quantity));
-    const request: Omit<CloudCartRequest, "completer_keyid" | "completion_accepts"> = { offer_handle: known.offer.offer_handle, quantity, ship_to: { country: "US", postal_code: known.zip } };
+    const request: Omit<CloudCartRequest, "completer_keyid" | "completion_accepts"> = { offer_handle: known.offer.offer_handle, quantity, ship_to: { country: "US", postal_code: known.shipTo.coarse } };
     if (before.length > 0) {
       return block("createCart", inputFields(request), before.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
         `Not sent: the gateway policy refuses this cart (${before.map((b) => b.reason).join("; ")}).`,
@@ -1040,7 +1125,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   function spendCheck(offer: PolicyOffer, mode?: CloudCompletionMode, chain: readonly Entry[] = store.entries()) {
     const at = now();
     const completion = mode === undefined ? {} : { completion_mode: policyMode(mode) };
-    return evaluate(policy, { kind: "cart", offer, ...completion }, spendHistory(chain, at), at).blocked;
+    return evaluate(policy, { kind: "cart", offer, ...completion }, spendHistory(chain, at), at, ceilings()).blocked;
   }
 
   /**
@@ -1072,11 +1157,12 @@ export function createGateway(options: GatewayOptions): Gateway {
     const refuse = (blocked: string, message: string, status: Refused["status"] = "refused", held: Readonly<Record<string, unknown>> = {}): Promise<Refused> =>
       block(endpoint, ["checkout"], [blocked], fromSeq, status, message, held);
 
-    // The policy on the offer as searched (its price, in USD: the policy's caps are in USD and never converted).
-    if (offer.price.currency !== "USD") {
-      return refuse(`currency ${offer.price.currency}`, `Not sent: the offer is priced in ${offer.price.currency}; the gateway policy's limits are in USD and the gateway never converts.`);
+    // The policy on the offer as searched, in the search's currency (the caps scaled to it; prices never converted).
+    const { currency: searched } = local;
+    if (offer.price.currency !== searched) {
+      return refuse(`currency ${offer.price.currency}`, `Not sent: the offer is priced in ${offer.price.currency}, not the ${searched} the search was in; the gateway never converts.`);
     }
-    const before = spendCheck({ merchant: offer.storeDomain, category: local.category, price_usd: offer.price.amountMinor / 100, quantity });
+    const before = spendCheck({ merchant: offer.storeDomain, category: local.category, price_usd: offer.price.amountMinor / 100, quantity, currency: searched });
     if (before.length > 0) {
       return block(endpoint, ["checkout"], before.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
         `Not sent: the gateway policy refuses this purchase (${before.map((b) => b.reason).join("; ")}).`, { title: offer.title, quantity });
@@ -1101,7 +1187,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const purchase = `pc_${randomBytes(12).toString("base64url")}`;
     let created: WalletCheckout;
     try {
-      created = await wallet.createCheckout({ purchase, storeDomain: offer.storeDomain, lines: [{ variantRef: offer.variantRef, quantity }], shipToPostalCode: local.zip });
+      created = await wallet.createCheckout({ purchase, storeDomain: offer.storeDomain, lines: [{ variantRef: offer.variantRef, quantity }], shipToPostalCode: local.shipTo.coarse });
     } catch (error) {
       return { status: providerFailure(error), message: checkoutFailureMessage(error), summary: summary(fromSeq) };
     }
@@ -1114,8 +1200,9 @@ export function createGateway(options: GatewayOptions): Gateway {
       return { status: providerFailure(error), message: checkoutFailureMessage(error), summary: summary(fromSeq) };
     }
 
-    // 2. The checkout must be the offer, in a currency Intent Cloud supports, shipping to the ZIP the user gave.
-    const problem = shopCheckoutProblem(checkout, created, offer, quantity, local.zip, table);
+    // 2. The checkout must be the offer, in the search's currency (one Intent Cloud supports), shipping to the country
+    //    and coarse postcode the user gave.
+    const problem = shopCheckoutProblem(checkout, created, offer, quantity, local, table);
     if (problem !== null) {
       await forget(checkout);
       return refuse(problem.rule, `Not sent: ${problem.words}. Nothing was submitted for approval and nothing was bought.`, "refused",
@@ -1159,7 +1246,7 @@ export function createGateway(options: GatewayOptions): Gateway {
           : "Shop asks the buyer to finish this checkout, and gave no checkout page on the store's own hosts to hand off to";
       return refuse("completion: none", `Not sent: ${why}.`, "blocked");
     }
-    const spend = spendCheck({ merchant: offer.storeDomain, category: local.category, price_usd: totals.total / 100 / quantity, quantity }, mode);
+    const spend = spendCheck({ merchant: offer.storeDomain, category: local.category, price_usd: totals.total / 100 / quantity, quantity, currency }, mode);
     if (spend.length > 0) {
       await forget(checkout);
       return block(endpoint, ["checkout"], spend.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
@@ -1187,7 +1274,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         quantity,
         currency,
         totals: { subtotal: totals.subtotal, shipping: totals.shipping, tax: totals.tax, total: totals.total },
-        ship_to: { country: area.country as "US" | "CA" | "AU", postal_code: area.postalCodeCoarse },
+        ship_to: { country: area.country as CoarseCountry, postal_code: area.postalCodeCoarse },
         ...(continueUrl === undefined ? {} : { continue_url: continueUrl }),
       },
       completion_mode: mode,
@@ -1247,7 +1334,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     }
     const approvalUrl = (options.demo?.confirmBaseUrl ?? confirmOrigin) + created.approval_link_path;
     const mode = s.completion_mode;
-    const reserved = { merchant: s.myshopify_domain, category: "", price_usd: s.totals.total / 100 / s.quantity, quantity: s.quantity };
+    const reserved = { merchant: s.myshopify_domain, category: "", price_usd: s.totals.total / 100 / s.quantity, quantity: s.quantity, currency: s.currency };
     try {
       await store.appendUnless(
         "approval_pending",
@@ -1256,6 +1343,8 @@ export function createGateway(options: GatewayOptions): Gateway {
           approval_url: approvalUrl,
           snapshot_hash: created.snapshot_hash,
           total_minor: s.totals.total,
+          // The spend history counts it in this currency only (an entry without one is a USD cart).
+          currency: s.currency,
           expires_at: s.expires_at,
           completion_mode: mode,
           completer_keyid: request.completer_keyid,
@@ -1292,7 +1381,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         (options.demo === undefined
           ? `Ask the buyer to open ${approvalUrl} (or scan the QR code) and approve ${total} with their passkey; ${how}. ` +
             `The page shows check code ${created.check_code}. Then call get_approval_status.`
-          : `Demo: ask the user to open the approval link ${approvalUrl} and click "${approveLabel(s.totals.total)}" ` +
+          : `Demo: ask the user to open the approval link ${approvalUrl} and click "${approveLabel(s.totals.total, s.currency)}" ` +
             `(enter the code shown in the gateway's terminal); ${how}. The page shows check code ${created.check_code}. ` +
             "Then call get_approval_status."),
       summary: summary(fromSeq),
@@ -1338,7 +1427,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         status.state === "pending"
           ? options.demo === undefined
             ? "Waiting for the buyer to approve with their passkey."
-            : `Waiting for the user to click "${approveLabel(bodyOf(pending).total_minor)}" on the approval link (with the code shown in the gateway's terminal).`
+            : `Waiting for the user to click "${approveLabel(bodyOf(pending).total_minor, bodyOf(pending).currency)}" on the approval link (with the code shown in the gateway's terminal).`
           : status.state === "rejected"
             ? "The buyer rejected this purchase."
             : "This approval expired. Create a new cart to try again.";
@@ -1428,7 +1517,9 @@ export function createGateway(options: GatewayOptions): Gateway {
       signer = undefined;
     }
     const met = meet(policy, CLOUD_BASELINE);
-    const cap = met.spend.per_order_usd;
+    // The per-order cap in the approved currency; one that cannot be put in it (no table) lets nothing through.
+    const approvedCurrency = proof.snapshot.v === 4 ? proof.snapshot.currency : "USD";
+    const cap = met.spend.per_order_usd === undefined ? null : (capsIn(met.spend, approvedCurrency, ceilings())?.per_order_usd ?? 0);
     const oneTap = options.oneTap;
     return advanceCompletion(
       {
@@ -1441,12 +1532,15 @@ export function createGateway(options: GatewayOptions): Gateway {
           // This purchase counted once: its own approval and pending entries left out, then evaluated as a new cart.
           const others = chain.filter((e) => !((e.kind === "approval" || e.kind === "approval_pending") && bodyOf(e).handle === handle));
           const s = proof.snapshot;
-          const offer = s.v === 4 ? policyOffer(s.myshopify_domain, "", { amount_minor: s.totals.total }, null, s.quantity) : policyOffer(s.merchant.domain, "", s.total, null, s.quantity);
+          const offer =
+            s.v === 4
+              ? policyOffer(s.myshopify_domain, "", { amount_minor: s.totals.total }, null, s.quantity, s.currency)
+              : policyOffer(s.merchant.domain, "", s.total, null, s.quantity);
           return spendCheck(offer, "shop_agent", others).some(
             (b) => b.rule.startsWith("spend.") || b.rule === "history_invalid",
           );
         },
-        perOrderCapMinor: cap === undefined ? null : Math.round(cap * 100),
+        perOrderCapMinor: cap,
         signer,
         keys,
         now,
@@ -1641,9 +1735,10 @@ function policyOffer(
   price: { amount_minor: number },
   shipping: { amount_minor: number } | null,
   quantity: number,
+  currency = "USD",
 ): PolicyOffer {
   const totalMinor = shipping === null ? price.amount_minor : price.amount_minor * quantity + shipping.amount_minor;
-  return { merchant, category, price_usd: totalMinor / 100 / quantity, quantity };
+  return { merchant, category, price_usd: totalMinor / 100 / quantity, quantity, ...(currency === "USD" ? {} : { currency }) };
 }
 
 /** What the agent is told when the developer's pause stops a step here. */
@@ -1793,9 +1888,9 @@ function refusalWords(reason: string | undefined): string {
   return words === undefined ? "" : ` ${words}`;
 }
 
-function approveLabel(totalMinor: unknown): string {
+function approveLabel(totalMinor: unknown, currency: unknown = "USD"): string {
   if (typeof totalMinor !== "number" || !Number.isSafeInteger(totalMinor) || totalMinor < 0) return "Approve with demo passkey";
-  return `Approve $${Math.floor(totalMinor / 100).toLocaleString("en-US")}.${String(totalMinor % 100).padStart(2, "0")} with demo passkey`;
+  return `Approve ${formatMinor(totalMinor, typeof currency === "string" ? currency : "USD")} with demo passkey`;
 }
 
 function bodyOf(entry: Entry): Record<string, unknown> {
@@ -1856,7 +1951,7 @@ function shopCheckoutProblem(
   created: WalletCheckout,
   offer: SearchOffer,
   quantity: number,
-  zip: string,
+  searched: { readonly shipTo: ShipTo; readonly currency: string },
   table: CurrencyTable,
 ): { rule: string; words: string } | null {
   // The checkout read back is the one created, at the store the offer named: the store a checkout actually lives at is
@@ -1874,19 +1969,25 @@ function shopCheckoutProblem(
   if (table.currencies[total.currency] === undefined) {
     return { rule: `currency_unsupported: ${total.currency} (${table.version})`, words: `Shop's checkout is in ${total.currency}, which the currency table Intent Cloud returns (${table.version}) does not list` };
   }
-  // The policy's limits are in USD and are compared in the checkout's own currency only: never converted.
-  if (total.currency !== "USD") return { rule: `currency: ${total.currency}`, words: `Shop's checkout is in ${total.currency}; the gateway policy's limits are in USD and the gateway never converts` };
+  // The policy's limits were put in the search's currency, and an amount is never converted.
+  if (total.currency !== searched.currency) {
+    return { rule: `currency: ${total.currency}`, words: `Shop's checkout is in ${total.currency}, not the ${searched.currency} the search was in; the gateway never converts` };
+  }
   const totals = checkout.totals ?? null;
   if (totals === null || !totalsAddUp(totals) || totals.total !== total.amountMinor) {
     return { rule: "checkout: totals", words: "Shop's checkout totals do not add up to its total (a discount or a fee the gateway does not submit)" };
   }
   const area = checkout.shipToArea ?? null;
   if (area === null || !(COARSE_COUNTRIES as readonly string[]).includes(area.country)) {
-    return { rule: "checkout: ship_to", words: "Shop's checkout ships to no single destination in the US, Canada or Australia" };
+    return { rule: "checkout: ship_to", words: `Shop's checkout ships to no single destination in ${namesText(COARSE_COUNTRIES)}` };
   }
-  // The coarse postcode only leaves the gateway; it must be the one the user gave for the search.
-  if (area.country !== "US" || coarsePostcode("US", zip) !== area.postalCodeCoarse) {
-    return { rule: "checkout: ship_to differs", words: "Shop's saved address ships to another ZIP than the one given for the search; set the preferred address in the Shop app, or search with its ZIP" };
+  // Only the country and the coarse postcode leave the gateway; both must be the ones the user gave for the search.
+  const { shipTo } = searched;
+  if (area.country !== shipTo.country || area.postalCodeCoarse !== shipTo.coarse) {
+    return {
+      rule: "checkout: ship_to differs",
+      words: "Shop's saved address ships to another country or postcode area than the one given for the search; set the preferred address in the Shop app, or search with its postcode",
+    };
   }
   return null;
 }

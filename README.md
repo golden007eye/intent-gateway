@@ -98,7 +98,9 @@ What happens in one purchase:
 - **Approval.** You check the item, total and check code on the confirm page and approve with your passkey.
 - **Payment.** One tap pays from the Shop budget at once. When one tap cannot pay (the store refuses agent payment, or the budget is too low), the purchase goes to Shop's checkout page instead, and that hand-off needs a second approval: a new cart, approved again, then you pay on Shop's page.
 
-**Limits in the preview.** Intent Cloud enforces a ceiling of $50 per order and $100 per week, in US dollars only. Suggested caps for your policy are $20 per order and $40 per week (`intent policy add per-order-20`, `intent policy add weekly-40`). Your policy can only lower the ceiling, never raise it.
+**Limits in the preview.** Intent Cloud enforces a ceiling of $50 per order and $100 per week, and one for each other currency it lists. Suggested caps for your policy are $20 per order and $40 per week (`intent policy add per-order-20`, `intent policy add weekly-40`). Your policy can only lower the ceiling, never raise it.
+
+**Where it ships.** The US, Canada and Australia, each in its own currency. Outside the US, search needs the linked Shop wallet. Your policy stays in US dollars, and the gateway scales each limit by Intent Cloud's ceilings: $20 is CAD 28 or AUD 30. The UK, Ireland and the euro countries are coming soon. Shop agent payments outside the US are not yet checked, so a first order there may go to Shop's checkout page instead.
 
 **The Shop budget is the only hard stop.** Any program running as you, your agent included, can read the Shop token and pay Shop directly, around the passkey, your policy, the ceiling and Pause. Keep the budget small; turning it off in the Shop app stops every agent payment.
 
@@ -126,18 +128,18 @@ The pause holds on your machine at once, then goes to Intent Cloud through the d
 - It does not store or forward the buyer's name, postal address or card. Shop holds them in the buyer's Shop account; on a hand-off the buyer enters or confirms them on Shop's checkout page.
 - It holds no money: no custody, no crypto wallet. With one tap, the gateway sends no payment details; Shop charges the account's agent budget.
 - It cannot buy without a person. Every purchase needs one passkey-signed Approval, and a policy that turns approval off is rejected at load time.
-- It does not convert currencies. In the preview, purchases are in US dollars only.
+- It does not convert currencies. A purchase is in the ship-to country's currency, and its limits are scaled, never its prices.
 
 ## Gateway policy and policy library
 
-A gateway policy is a YAML file that decides what may leave the gateway and how much may be spent. It can only narrow the rules Intent Cloud enforces, never loosen them, including the preview ceiling of $50 per order and $100 per week. With no policy file, the bundled `zip-only` policy applies: the only ship-to detail that leaves is a 5-digit ZIP.
+A gateway policy is a YAML file that decides what may leave the gateway and how much may be spent. It can only narrow the rules Intent Cloud enforces, never loosen them, including the preview ceiling of $50 per order and $100 per week. With no policy file, the bundled `zip-only` policy applies: the only ship-to detail that leaves is the country and a coarse postcode (in the US, the 5-digit ZIP).
 
 ```yaml
 # policy.yaml · can only narrow the rules Intent Cloud enforces
 version: 1
 approval: passkey          # required; anything else is rejected
 share:
-  ship_to: postcode_only   # a 5-digit ZIP, never a street or name
+  ship_to: postcode_only   # a coarse postcode (a 5-digit ZIP), never a street or name
 spend:
   per_order_usd: 20        # suggested for the preview
   per_week_usd: 40

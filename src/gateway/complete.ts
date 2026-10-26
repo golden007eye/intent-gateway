@@ -4,8 +4,9 @@
 //
 // Steps, each chained before its outside effect (record before effect):
 // 1. Preconditions: the policy allows one_tap, a wallet is usable, `now < S.expires_at`.
-// 2. Account: effective per-order cap = min(policy per_order_usd, the wallet's budget left, in USD); A above it is
-//    refused. A budget the wallet does not show (or not in USD), or a connection the buyer removed in the wallet's
+// 2. Account: effective per-order cap = min(policy per_order_usd put in the approved currency, the wallet's budget
+//    left in it); A above it is refused. A budget the wallet does not show (or in another currency), or a connection
+//    the buyer removed in the wallet's
 //    app, is refused too: never assumed (S1).
 // 3. Store pair and quote: the store is the myshopify domain the v3 snapshot signed (none: refused, store_unknown).
 //    The store pair check (Appendix G, 1.6.1) runs first: `GET <merchant_origin>/meta.json` must name that domain, or
@@ -79,7 +80,7 @@ export interface CompletionContext {
   readonly overCap?: (chain: readonly Entry[]) => boolean;
   /** Whether the policy, met with Intent Cloud's baseline, allows one_tap. */
   readonly oneTapAllowed: boolean;
-  /** The policy's per-order cap in cents, or null when it sets none. */
+  /** The policy's per-order cap in the approved currency's minor units, or null when it sets none. */
   readonly perOrderCapMinor: number | null;
   /** The approval's completer key: every Intent Cloud call of the completion is signed with it (R1). */
   readonly signer: Session | undefined;
@@ -565,9 +566,8 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     const budget = account.budgetRemaining;
     // No budget shown, or not in the approved currency: one tap never assumes one, and never converts.
     if (budget === null || budget.currency !== approvedTotal.currency) return refuse("budget_unknown");
-    // The policy's per-order cap is in USD: it caps a USD purchase only, and a v4 purchase in another currency was
-    // refused before it was submitted.
-    const cap = approvedTotal.currency === "USD" ? (ctx.perOrderCapMinor ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
+    // The policy's per-order cap, already put in the approved currency by the gateway (scaled by Intent Cloud's ceilings).
+    const cap = ctx.perOrderCapMinor ?? Number.POSITIVE_INFINITY;
     if (totalMinor > Math.min(budget.amountMinor, cap)) return refuse("budget");
     const storeDomain = pairedStore;
     if (storeDomain === null) return refuse("store_unknown");

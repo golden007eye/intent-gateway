@@ -9,8 +9,9 @@ export interface SearchMoney {
 }
 
 /**
- * One search in the gateway's terms. `postcode` is the coarse code (a US 5-digit ZIP today): providers that do not
- * need it never send it (the Shop provider sends the country and the currency only).
+ * One search in the gateway's terms. `postcode` is the coarse code (src/shipto: for the US, the 5-digit ZIP), never
+ * the full one: providers that do not need it never send it (the Shop provider sends the country and the currency
+ * only).
  */
 export interface SearchQuery {
   /** The exact product the user named, if any. */
@@ -22,6 +23,8 @@ export interface SearchQuery {
   readonly budget: SearchMoney | null;
   /** ISO 3166-1 alpha-2, upper case. */
   readonly country: string;
+  /** ISO 4217: the ship-to country's currency, which prices and the budget are in. */
+  readonly currency: string;
   readonly postcode: string | null;
 }
 

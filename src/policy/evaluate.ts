@@ -1,6 +1,7 @@
 // Decides whether one outbound request may leave the gateway under a policy. The input types are the policy's
 // own small view of a request; the gateway maps the contract's request and offer types onto them.
-import { CLOUD_BASELINE, categoryBlocked, type CompletionMode, meet, merchantMatches, normalizeMerchant, type Policy } from "./policy.ts";
+import { isCoarse } from "../shipto/index.ts";
+import { CLOUD_BASELINE, categoryBlocked, type CompletionMode, meet, merchantMatches, normalizeMerchant, type Policy, type Spend } from "./policy.ts";
 
 /** A search the agent asks the gateway to send to Intent Cloud. */
 export interface SearchRequest {
@@ -8,17 +9,24 @@ export interface SearchRequest {
   readonly category?: string;
   readonly must_haves?: readonly string[];
   readonly budget_usd?: number;
+  /** The coarse postcode the search would send (policy v1's name: for the US, the 5-digit ZIP). */
   readonly ship_to_zip?: string;
+  /** ISO 3166-1 alpha-2 of `ship_to_zip`; absent means US. */
+  readonly ship_to_country?: string;
   /** Past purchases or searches offered as context. Policy v1 never shares them. */
   readonly history?: readonly unknown[];
 }
 
-/** The offer a cart would be created for. */
+/**
+ * The offer a cart would be created for. `price_usd` is the unit price in whole units of `currency` (policy v1's
+ * name; absent `currency` means USD): a price in Canadian dollars is checked against the caps in CAD.
+ */
 export interface Offer {
   readonly merchant: string;
   readonly category: string;
   readonly price_usd: number;
   readonly quantity: number;
+  readonly currency?: string;
 }
 
 export interface CartRequest {
@@ -30,10 +38,21 @@ export interface CartRequest {
 
 export type Outbound = SearchRequest | CartRequest;
 
-/** A purchase the gateway already approved: its time (ms since epoch) and its total. */
+/** A purchase the gateway already approved: its time (ms since epoch) and its total, in `currency` (absent: USD). */
 export interface Purchase {
   readonly at: number;
   readonly total_usd: number;
+  readonly currency?: string;
+}
+
+/** Intent Cloud's ceilings per currency (its currency table), in minor units: what the caps scale by. */
+export type Ceilings = Readonly<Record<string, { readonly order: number; readonly week: number }>>;
+
+/** The policy's caps in one currency's minor units; absent where the policy sets none. */
+export interface CapsMinor {
+  readonly per_order_usd?: number;
+  readonly per_day_usd?: number;
+  readonly per_week_usd?: number;
 }
 
 /** One refusal: the outbound field at fault, the policy rule that refused it, and why. */
@@ -57,8 +76,39 @@ const US_ZIP = /^\d{5}$/;
 // first rounded to a millionth of a dollar so float noise (0.07 × 100 = 7.000000000000001) does not add a cent.
 const cents = (usd: number): number => Math.ceil(Math.round(usd * 1e6) / 1e4);
 
-function spentWithin(history: readonly Purchase[], now: number, windowMs: number): number {
-  return history.filter((p) => p.at > now - windowMs).reduce((sum, p) => sum + cents(p.total_usd), 0);
+/** Spend counts only purchases in the same currency, as Intent Cloud counts its week. */
+function spentWithin(history: readonly Purchase[], now: number, windowMs: number, currency: string): number {
+  return history.filter((p) => p.at > now - windowMs && (p.currency ?? "USD") === currency).reduce((sum, p) => sum + cents(p.total_usd), 0);
+}
+
+/**
+ * The policy's caps (whole USD) in `currency`'s minor units: each USD cap × (the currency's ceiling / the USD ceiling),
+ * the order ceilings for per_order and per_day and the week ceilings for per_week, floored to a whole minor unit. USD
+ * caps need no table. Null when they cannot be scaled: no table, or one without USD or the currency, or a USD ceiling
+ * of zero.
+ */
+export function capsIn(spend: Spend, currency: string, ceilings: Ceilings | null): CapsMinor | null {
+  const usd = ceilings?.USD;
+  const own = currency === "USD" ? undefined : ceilings?.[currency];
+  if (currency !== "USD" && (usd === undefined || own === undefined || usd.order <= 0 || usd.week <= 0)) return null;
+  const caps: { -readonly [K in keyof CapsMinor]: number } = {};
+  for (const key of ["per_order_usd", "per_day_usd", "per_week_usd"] as const) {
+    const cap = spend[key];
+    if (cap === undefined) continue;
+    if (usd === undefined || own === undefined) {
+      caps[key] = cap * 100;
+      continue;
+    }
+    const [num, den] = key === "per_week_usd" ? [own.week, usd.week] : [own.order, usd.order];
+    caps[key] = Number((BigInt(cap) * 100n * BigInt(num)) / BigInt(den));
+  }
+  return caps;
+}
+
+/** A cap for a sentence: `$20` in USD, `CAD 28` (or `CAD 28.50`) otherwise. */
+export function capText(minor: number, currency: string): string {
+  const amount = minor % 100 === 0 ? String(minor / 100) : (minor / 100).toFixed(2);
+  return currency === "USD" ? `$${amount}` : `${currency} ${amount}`;
 }
 
 /** Bad history would turn the daily and weekly caps off, so any malformed entry refuses the request. */
@@ -70,8 +120,14 @@ function checkHistory(history: readonly Purchase[], out: Blocked[]): void {
   history.forEach((p: unknown, i) => {
     const entry = typeof p === "object" && p !== null ? (p as Partial<Record<keyof Purchase, unknown>>) : {};
     const { at, total_usd: total } = entry;
+    const { currency } = entry;
     const valid =
-      typeof at === "number" && Number.isFinite(at) && typeof total === "number" && Number.isFinite(total) && total >= 0;
+      typeof at === "number" &&
+      Number.isFinite(at) &&
+      typeof total === "number" &&
+      Number.isFinite(total) &&
+      total >= 0 &&
+      (currency === undefined || (typeof currency === "string" && /^[A-Z]{3}$/.test(currency)));
     if (!valid) {
       out.push({
         path: `purchase_history[${String(i)}]`,
@@ -87,10 +143,12 @@ function checkSearch(p: Policy, s: SearchRequest, out: Blocked[]): void {
     out.push({ path: "category", rule: "categories.block", reason: `category "${s.category}" is blocked` });
   }
   if (s.ship_to_zip !== undefined) {
+    const country = s.ship_to_country ?? "US";
     if (p.share.ship_to === "none") {
       out.push({ path: "ship_to_zip", rule: "share.ship_to", reason: "the policy shares no ship-to postcode" });
-    } else if (!US_ZIP.test(s.ship_to_zip)) {
-      out.push({ path: "ship_to_zip", rule: "share.ship_to", reason: "only a 5-digit US ZIP may be shared" });
+    } else if (country === "US" ? !US_ZIP.test(s.ship_to_zip) : !isCoarse(country, s.ship_to_zip)) {
+      const reason = country === "US" ? "only a 5-digit US ZIP may be shared" : `only the coarse part of a ${country} postcode may be shared`;
+      out.push({ path: "ship_to_zip", rule: "share.ship_to", reason });
     }
   }
   if (s.history !== undefined && s.history.length > 0) {
@@ -110,7 +168,7 @@ function checkCompletion(p: Policy, mode: CompletionMode | undefined, out: Block
   }
 }
 
-function checkCart(p: Policy, o: Offer, history: readonly Purchase[], now: number, out: Blocked[]): void {
+function checkCart(p: Policy, o: Offer, history: readonly Purchase[], now: number, ceilings: Ceilings | null, out: Blocked[]): void {
   if (normalizeMerchant(o.merchant) === undefined) {
     out.push({ path: "offer.merchant", rule: "offer.merchant", reason: `merchant "${o.merchant}" is not a hostname` });
   } else {
@@ -132,31 +190,42 @@ function checkCart(p: Policy, o: Offer, history: readonly Purchase[], now: numbe
     return;
   }
   const total = cents(o.price_usd * (Number.isSafeInteger(o.quantity) && o.quantity > 0 ? o.quantity : 1));
+  const currency = o.currency ?? "USD";
+  const scaled = capsIn(p.spend, currency, ceilings);
+  if (scaled === null) {
+    // Caps that cannot be put in this currency are never skipped: the cart is refused.
+    if (Object.keys(p.spend).length > 0) {
+      out.push({ path: "offer.currency", rule: "spend.currency", reason: `the limits cannot be put in ${currency}: the currency table Intent Cloud returns does not list it` });
+    }
+    return;
+  }
   const caps = [
     ["per_order_usd", 0, "per order"],
     ["per_day_usd", DAY_MS, "per day"],
     ["per_week_usd", WEEK_MS, "per week"],
   ] as const;
   for (const [key, windowMs, label] of caps) {
-    const cap = p.spend[key];
+    const cap = scaled[key];
     if (cap === undefined) continue;
-    const spent = windowMs === 0 ? 0 : spentWithin(history, now, windowMs);
-    if (spent + total > cap * 100) {
-      out.push({ path: "offer.price_usd", rule: `spend.${key}`, reason: `over the $${String(cap)} ${label} limit` });
+    const spent = windowMs === 0 ? 0 : spentWithin(history, now, windowMs, currency);
+    if (spent + total > cap) {
+      out.push({ path: "offer.price_usd", rule: `spend.${key}`, reason: `over the ${capText(cap, currency)} ${label} limit` });
     }
   }
 }
 
 /**
  * Applies the policy, met with Intent Cloud's baseline, to one outbound request. `history` holds earlier
- * purchases for the daily (24 h) and weekly (7 × 24 h) limits, counted back from `now`; a malformed entry
- * refuses the request (`history_invalid`) rather than being skipped.
+ * purchases for the daily (24 h) and weekly (7 × 24 h) limits, counted back from `now` in the cart's currency; a
+ * malformed entry refuses the request (`history_invalid`) rather than being skipped. `ceilings` (Intent Cloud's
+ * currency table) scales the USD caps for a cart in another currency (capsIn); without it such a cart is refused.
  */
 export function evaluate(
   policy: Policy,
   outbound: Outbound,
   history: readonly Purchase[],
   now: number = Date.now(),
+  ceilings: Ceilings | null = null,
 ): Decision {
   const effective = meet(policy, CLOUD_BASELINE);
   const blocked: Blocked[] = [];
@@ -165,7 +234,7 @@ export function evaluate(
   const purchases = blocked.length === 0 ? history : [];
   if (outbound.kind === "search") checkSearch(effective, outbound, blocked);
   else {
-    checkCart(effective, outbound.offer, purchases, now, blocked);
+    checkCart(effective, outbound.offer, purchases, now, ceilings, blocked);
     checkCompletion(effective, outbound.completion_mode, blocked);
   }
   return { send: blocked.length === 0, blocked };

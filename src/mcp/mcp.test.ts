@@ -124,7 +124,7 @@ describe("tools (AC-R1)", () => {
 
     // Spelled out independently of the conversion, so a change to either side shows here.
     const find = byName.get("find_offers") as unknown as { properties: Record<string, unknown>; additionalProperties: boolean; required?: string[] };
-    expect(Object.keys(find.properties).sort()).toEqual(["budget_usd", "category", "must_haves", "product", "zip"]);
+    expect(Object.keys(find.properties).sort()).toEqual(["budget", "category", "country", "must_haves", "postcode", "product"]);
     expect(find.additionalProperties).toBe(false);
     expect(find.required ?? []).toEqual([]);
     const cart = byName.get("create_cart") as unknown as { properties: Record<string, { pattern?: string }>; required: string[] };
@@ -136,13 +136,15 @@ describe("tools (AC-R1)", () => {
     expect(status.properties.approval_handle?.pattern).toBe((z.toJSONSchema(ApprovalHandle) as { pattern: string }).pattern);
   });
 
-  it("the descriptions tell an agent the rules: only what the user said, no guessed ZIP or budget, US only, passkey", async () => {
+  it("the descriptions tell an agent the rules: only what the user said, no guessed country, postcode or budget, where it ships, passkey", async () => {
     const client = await connect((await serve()).url);
     const text = (await client.listTools()).tools.map((t) => t.description ?? "").join(" ");
     expect(text).toContain("Pass only what the user said");
-    expect(text).toContain("Never guess a ZIP code or a budget");
+    expect(text).toContain("Never guess a country, a postcode or a budget");
+    expect(text).toContain("their budget in the currency of the ship-to country");
     expect(text).toContain("ask the user only for those");
-    expect(text).toContain("US delivery only");
+    expect(text).toContain("Ships to the US, Canada and Australia; outside the US only with a linked Shop wallet.");
+    expect(text).not.toContain("US delivery only");
     expect(text).toContain("needs a person to approve it with a passkey");
   });
 
@@ -188,7 +190,7 @@ describe("tools (AC-R1)", () => {
     const client = await connect((await serve()).url);
     const text = textOf(await client.callTool({ name: "find_offers", arguments: { category: "running-shoes" } }));
     expect(text).toContain("Ask the user only for:");
-    expect(text).toContain("ZIP");
+    expect(text).toContain("Where should it ship? Country and postcode.");
     expect(text).toMatch(/\n\nSent: nothing \/ Blocked: nothing$/);
   });
 

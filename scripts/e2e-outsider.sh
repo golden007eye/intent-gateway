@@ -633,7 +633,7 @@ scenario_d() {
   grep -Eq '^called: .*find_offers' "$REPORT" && agent="the agent called find_offers"
   # The same request straight to the gateway, so the gateway's own block is checked whatever the agent chose.
   local direct="$LOGS/d-direct.txt"
-  helper mcp-call "$GW_URL" - find_offers '{"category":"alcohol","product":"red wine","budget_usd":40,"zip":"94103"}' >"$direct" 2>&1 || true
+  helper mcp-call "$GW_URL" - find_offers '{"category":"alcohol","product":"red wine","budget":40,"country":"US","postcode":"94103"}' >"$direct" 2>&1 || true
   t_log >"$after" 2>&1
   [ "$(sent_rows "$after")" = "$n0" ] || { WHY="a find_offers for alcohol was sent; see $after and $direct"; return 1; }
   must_match "$after" 'blocked .*nothing was sent' "log shows the alcohol search blocked" || return 1
@@ -676,7 +676,7 @@ scenario_f_kill() {
     helper spin-kill "$chain" "$pid" 30000 >"$out" 2>&1 &
     local spinner=$!
     sleep 0.3
-    helper mcp-call "$GW_URL" - find_offers '{"category":"stickers","budget_usd":20,"zip":"94107"}' >"$LOGS/f-kill-$attempt-call.txt" 2>&1 || true
+    helper mcp-call "$GW_URL" - find_offers '{"category":"stickers","budget":20,"country":"US","postcode":"94107"}' >"$LOGS/f-kill-$attempt-call.txt" 2>&1 || true
     local rc=0
     wait "$spinner" || rc=$?
     stop_gateway
@@ -922,7 +922,7 @@ scenario_s() {
   must_match "$f" 'key statement: signed by cloud-root-1' "doctor: the key statement verifies against the pinned root" || return 1
   must_match "$f" '^doctor: ok' "doctor against staging" || return 1
   f="$LOGS/s-offers.txt"
-  sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget_usd\":$STAGING_BUDGET,\"zip\":\"$STAGING_ZIP\"}" >"$f" 2>&1 ||
+  sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget\":$STAGING_BUDGET,\"country\":\"US\",\"postcode\":\"$STAGING_ZIP\"}" >"$f" 2>&1 ||
     { WHY="find_offers failed; see $f"; return 1; }
   must_match "$f" 'offer_handle: of_' "staging returned offers" || return 1
   must_match "$f" 'searchCatalog .*receipt verified' "the search's receipt verified" || return 1
@@ -941,9 +941,9 @@ scenario_s() {
   must_match "$f" 'Waiting for the buyer to approve with their passkey' "the cart is still pending" || return 1
   # The refusals: each is refused in the gateway, and nothing more is disclosed.
   n0="$(sg_disclosures s-before)"
-  sg_call find_offers "{\"category\":\"alcohol\",\"product\":\"red wine\",\"budget_usd\":40,\"zip\":\"$STAGING_ZIP\"}" >"$LOGS/s-alcohol.txt" 2>&1 || true
+  sg_call find_offers "{\"category\":\"alcohol\",\"product\":\"red wine\",\"budget\":40,\"country\":\"US\",\"postcode\":\"$STAGING_ZIP\"}" >"$LOGS/s-alcohol.txt" 2>&1 || true
   must_match "$LOGS/s-alcohol.txt" 'Sent: nothing / Blocked: categories\.block' "an alcohol search is blocked by the policy" || return 1
-  sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget_usd\":$STAGING_BUDGET,\"zip\":\"$STAGING_ZIP\",\"email\":\"buyer@example.com\"}" >"$LOGS/s-identity.txt" 2>&1 || true
+  sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget\":$STAGING_BUDGET,\"country\":\"US\",\"postcode\":\"$STAGING_ZIP\",\"email\":\"buyer@example.com\"}" >"$LOGS/s-identity.txt" 2>&1 || true
   must_match "$LOGS/s-identity.txt" 'Sent: nothing / Blocked: .*\$\.email' "a search carrying an email is blocked (invariant 3)" || return 1
   sg_call create_cart '{"offer_handle":"of_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}' >"$LOGS/s-foreign-offer.txt" 2>&1 || true
   must_match "$LOGS/s-foreign-offer.txt" 'did not come from a search through this gateway' "a cart for an offer this gateway never saw is refused" || return 1

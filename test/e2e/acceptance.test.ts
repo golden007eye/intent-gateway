@@ -34,7 +34,7 @@ describe("E2: a purchase from search to verify, on the built package", () => {
     );
     const gateway = await startGateway(main, { cloudUrl: fake.url, keys, dataDir });
     try {
-      const offers = await gateway.call("find_offers", { category: "running-shoes", budget_usd: 200, zip: "94103" });
+      const offers = await gateway.call("find_offers", { category: "running-shoes", budget: 200, country: "US", postcode: "94103" });
       expect(offers).toMatch(/^1 offer\. 1 more hidden by the gateway policy \(merchants\.block\)\./);
       expect(offers).not.toContain("Trail Runner 3");
       expect(offers).toMatch(/\nSent: searchCatalog \(.*ship_to\.postal_code.*; receipt verified\) \/ Blocked: 1 offer \(merchants\.block\)$/);

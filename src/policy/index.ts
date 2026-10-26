@@ -18,8 +18,12 @@ export {
   type Spend,
 } from "./policy.ts";
 export {
+  capsIn,
+  capText,
   evaluate,
   type Blocked,
+  type CapsMinor,
+  type Ceilings,
   type CartRequest,
   type Decision,
   type Offer,

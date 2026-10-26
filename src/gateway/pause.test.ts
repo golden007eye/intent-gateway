@@ -19,7 +19,7 @@ import { createGateway, type Gateway } from "./index.ts";
 vi.setConfig({ testTimeout: 30_000 });
 
 const T0 = Date.parse("2026-10-18T12:00:00Z");
-const SHOES = { category: "running-shoes", budget_usd: 200, zip: "94103" };
+const SHOES = { category: "running-shoes", budget: 200, country: "US", postcode: "94103" };
 
 /** A local account key stub for tests only: `intent init` makes the real one. */
 function testKey(): AccountKey & { x: string } {
