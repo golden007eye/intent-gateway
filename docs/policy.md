@@ -13,7 +13,7 @@ share:
   ship_to: postcode_only
 ```
 
-At most a 5-digit ZIP leaves the gateway as the ship-to location: a search through Shop sends only the country, and a submitted checkout carries the country and the coarse postcode (for the US, the 5-digit ZIP). Everything else is the baseline below. `intent policy show` prints the policy in force and where it came from.
+At most the country and a coarse postcode leave the gateway as the ship-to location: a search through Shop sends only the country, and a submitted checkout carries the country and the coarse postcode (for the US, the 5-digit ZIP; for Canada, the first 3 characters; for Australia, the 4-digit postcode). The gateway coarsens the postcode as soon as `find_offers` gets it, and keeps or logs only the coarse part. Everything else is the baseline below. `intent policy show` prints the policy in force and where it came from.
 
 The policy file is `<data dir>/policy.yaml` (on Linux `~/.local/share/intent-gateway/policy.yaml`), or `<data dir>/demo/policy.yaml` in demo mode. Set `INTENT_POLICY` to use another path. A running gateway reads its policy at start; restart it after a change.
 
@@ -25,7 +25,7 @@ Every key except `version` and `approval` is optional. Any other key is refused.
 version: 1                    # required; must be 1
 approval: passkey             # required; the only legal value
 share:
-  ship_to: postcode_only      # postcode_only (a 5-digit ZIP) or none (no ship-to at all)
+  ship_to: postcode_only      # postcode_only (a coarse postcode) or none (no ship-to at all)
   history: false              # false is the only legal value
 spend:                        # whole US dollars, each optional
   per_order_usd: 60           # price × quantity of one cart
@@ -43,7 +43,21 @@ completion: [handoff]         # handoff, one_tap, or both (the default)
 
 Offers carry no category of their own, so the gateway checks each offer and cart against the category of the search that found it. When `categories.block` lists anything, a search must therefore name a category. A search for a product alone is not sent; `find_offers` asks the agent for the category.
 
-The **baseline** is the loosest policy the gateway will run, and every loaded policy is combined with it: passkey approval, at most 3 items per cart, a 5-digit US ZIP as the only ship-to detail, the categories excluded under the rules Intent Cloud enforces (health and medical; alcohol, tobacco, cannabis, adult and weapons; gift cards, crypto, subscriptions and digital goods), and both completion modes. In the preview, Intent Cloud also enforces a ceiling of $50 per order and $100 per week, in US dollars only; a policy limit above it changes nothing, since a checkout over the ceiling is refused at submit. The suggested caps are $20 per order and $40 per week: `intent policy add per-order-20` and `intent policy add weekly-40` ([Policy library](policy-library.md)). Spend limits are in US dollars and are never converted: a checkout in another currency is refused.
+The **baseline** is the loosest policy the gateway will run, and every loaded policy is combined with it: passkey approval, at most 3 items per cart, a coarse postcode as the only ship-to detail, the categories excluded under the rules Intent Cloud enforces (health and medical; alcohol, tobacco, cannabis, adult and weapons; gift cards, crypto, subscriptions and digital goods), and both completion modes. In the preview, Intent Cloud also enforces a ceiling of $50 per order and $100 per week, and one for each other currency it lists; a policy limit above it changes nothing, since a checkout over the ceiling is refused at submit. The suggested caps are $20 per order and $40 per week: `intent policy add per-order-20` and `intent policy add weekly-40` ([Policy library](policy-library.md)).
+
+### Limits outside the US
+
+Spend limits are written in whole US dollars. A purchase is in the ship-to country's currency, and its price is never converted: instead the gateway puts each limit in that currency with the ceilings Intent Cloud returns in `GET /v1/meta`. For currency C, a limit is the USD limit × (C's ceiling / the USD ceiling), with the per-order ceilings for `per_order_usd` and `per_day_usd` and the weekly ceilings for `per_week_usd`, rounded down to a whole cent. With today's ceilings the suggested $20 and $40 are:
+
+| Ships to | Per order | Per week |
+|---|---|---|
+| the US | $20 | $40 |
+| Canada | CAD 28 | CAD 56 |
+| Australia | AUD 30 | AUD 60 |
+
+Each currency has its own daily and weekly window: the limits count only purchases in the same currency, the way Intent Cloud enforces its weekly ceiling. So the limits add up across currencies: with `weekly-40`, $40 in US dollars and CAD 56 in Canadian dollars can both be spent in the same week. When the meta Intent Cloud returns holds no valid currency table, or no usable ceiling for the currency, a search in it is refused with one line, and a purchase in it is never let through with no limit. A ceiling is not usable when its ratio to the US-dollar one, per order or per week, is below 0.25 or above 4 (today's are 0.8 to 1.5): a table must not be able to widen your limits without bound.
+
+The gateway has the coarse-postcode rules for the UK (the outward code: `SW1A 1AA` is `SW1A`), Ireland (the Eircode's routing key: `D02`) and the euro countries Germany, France, the Netherlands, Spain, Italy, Belgium, Austria, Portugal and Finland (the first two digits: `10115` is `10`). It ships there once a later contract version adds them; until then a search there is refused: `intent ships to the US, Canada and Australia for now; the UK is coming soon.`
 
 ### Completion modes
 
@@ -63,7 +77,7 @@ A policy file is read strictly, so it cannot mean one thing to the gateway and a
 | Refused | Why |
 |---|---|
 | `approval:` anything but `passkey`, or missing | Purchase approval cannot be turned off (invariant 4). |
-| `share.ship_to` other than `postcode_only` or `none`; `share.history: true` | Nothing beyond a ZIP can be shared. |
+| `share.ship_to` other than `postcode_only` or `none`; `share.history: true` | Nothing beyond a coarse postcode can be shared. |
 | `quantity.max` above 3; a spend limit that is zero, negative or not a whole number | It would loosen, or read as "no limit". |
 | `categories.allow` | A policy can only block categories. |
 | A `completion` mode other than `handoff` or `one_tap`, or a list of more than two | An unknown mode could be read as "any way at all". |
@@ -105,7 +119,7 @@ $ intent policy test cases.yaml --policy other.yaml
   expect: {send: false, blocked: [spend.per_order_usd]}
 ```
 
-An `outbound` is a `search` (`category`, `must_haves`, `budget_usd`, `ship_to_zip`) or a `cart` (`offer` with `merchant`, `category`, `price_usd`, `quantity`; beside it an optional `completion_mode`, `handoff` when absent). A case may add `now` and a `history` of earlier purchases (`{at, total_usd}`) for the daily and weekly limits. `blocked` lists the rules expected to refuse it. The command prints `ok` or `FAIL` per case and exits 0 only when all pass.
+An `outbound` is a `search` (`category`, `must_haves`, `budget_usd`, `ship_to_zip`, the coarse postcode, and `ship_to_country`, US when absent) or a `cart` (`offer` with `merchant`, `category`, `price_usd`, `quantity`; beside it an optional `completion_mode`, `handoff` when absent). A case may add `now` and a `history` of earlier purchases (`{at, total_usd}`) for the daily and weekly limits. `blocked` lists the rules expected to refuse it. The command prints `ok` or `FAIL` per case and exits 0 only when all pass.
 
 ## What a policy cannot do
 

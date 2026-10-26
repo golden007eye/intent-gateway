@@ -7,7 +7,10 @@
 // ignored: an order with no outcome entry is unmatched, whatever else the chain says.
 import { CHECKED_KEYS, type WalletOrder, type WalletRail } from "./port.ts";
 
-/** The only currency the gateway spends in (US delivery only): totals in another currency are counted, never summed. */
+/**
+ * The currency of the `checked` entry's one total (`unmatched_total_minor`, kept as it was). Totals are summed per
+ * currency (`unmatchedTotals`), never across currencies.
+ */
 export const CHECK_CURRENCY = "USD";
 const OUTCOME_DEPTH = 4;
 
@@ -32,9 +35,11 @@ export interface WalletCheck {
   readonly orders: readonly WalletOrder[];
   /** The orders in the period that no outcome entry names, oldest first. */
   readonly unmatched: readonly WalletOrder[];
-  /** The sum of the unmatched orders' totals in CHECK_CURRENCY, in minor units. */
+  /** The sum of the unmatched orders' totals in CHECK_CURRENCY, in minor units (the chain entry's total). */
   readonly unmatchedTotalMinor: number;
-  /** Unmatched orders whose total is missing or in another currency, so not in unmatchedTotalMinor. */
+  /** The sums of the unmatched orders' totals per currency, in minor units, by currency code in order. */
+  readonly unmatchedTotals: Readonly<Record<string, number>>;
+  /** Unmatched orders with no total, so in no sum. */
   readonly unmatchedUntotalled: number;
   /** False when the rail reported more orders than it returned. */
   readonly complete: boolean;
@@ -47,13 +52,16 @@ export function checkOrders(reported: { readonly orders: readonly WalletOrder[];
     .filter((o) => o.createdAt === null || Date.parse(o.createdAt) >= from)
     .toSorted((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
   const unmatched = orders.filter((o) => !chained.has(o.orderRef));
-  const totalled = unmatched.filter((o) => o.total?.currency === CHECK_CURRENCY);
+  const sums: Record<string, number> = {};
+  for (const o of unmatched) if (o.total !== null) sums[o.total.currency] = (sums[o.total.currency] ?? 0) + o.total.amountMinor;
+  const unmatchedTotals = Object.fromEntries(Object.keys(sums).sort().map((c) => [c, sums[c] ?? 0]));
   return {
     since: since.toISOString(),
     orders,
     unmatched,
-    unmatchedTotalMinor: totalled.reduce((sum, o) => sum + (o.total?.amountMinor ?? 0), 0),
-    unmatchedUntotalled: unmatched.length - totalled.length,
+    unmatchedTotalMinor: sums[CHECK_CURRENCY] ?? 0,
+    unmatchedTotals,
+    unmatchedUntotalled: unmatched.filter((o) => o.total === null).length,
     complete: reported.complete,
   };
 }

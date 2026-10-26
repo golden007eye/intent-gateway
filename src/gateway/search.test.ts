@@ -21,7 +21,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const T0 = Date.parse("2026-10-18T12:00:00Z");
 const BASE_POLICY = "version: 1\napproval: passkey\n";
-const STICKERS = { category: "stickers", budget_usd: 50, zip: "94107" };
+const STICKERS = { category: "stickers", budget: 50, country: "US", postcode: "94107" };
 
 interface Harness {
   gateway: Gateway;
@@ -105,7 +105,7 @@ describe("find_offers with a linked Shop wallet", () => {
     expect(h.shop.searches[0]).toEqual({
       catalog: { query: "stickers", context: { address_country: "US", currency: "USD" }, filters: { price: { max: 5000 }, ships_to: { country: "US" } }, pagination: { limit: 10 } },
     });
-    expect(JSON.stringify(h.shop.searches)).not.toContain(STICKERS.zip);
+    expect(JSON.stringify(h.shop.searches)).not.toContain(STICKERS.postcode);
     expect(result.summary).toMatch(/^Sent: Shop search_catalog \(/);
     expect(result.summary).not.toContain("searchCatalog (");
     expect(result.message).toContain("nothing was sent to Intent Cloud");
@@ -187,7 +187,7 @@ describe("find_offers with a linked Shop wallet", () => {
 describe("find_offers without the search seam", () => {
   it("keeps Intent Cloud's catalog when the wallet does not search in the gateway", async () => {
     const h = await setup({ searchInGateway: false });
-    const result = await h.gateway.findOffers({ category: "running-shoes", budget_usd: 200, zip: "94107" });
+    const result = await h.gateway.findOffers({ category: "running-shoes", budget: 200, country: "US", postcode: "94107" });
     expect(result.status).toBe("offers");
     expect(h.cloudSearches()).toBe(1);
     expect(h.shop.searches).toEqual([]);

@@ -33,7 +33,7 @@ export function nextSteps(options: NextStepsOptions = {}): string[] {
   return [
     DEMO_BANNER,
     ...(add === null ? ["Add the demo gateway to Claude Code with the claude mcp add line above."] : ["Add the demo gateway to Claude Code:", `  ${add}`]),
-    "Then ask your agent to find something to buy (for example stickers to ZIP 94107, under $20).",
+    "Then ask your agent to find something to buy (for example stickers to ZIP 94107 in the US, under $20).",
     "When it prepares a cart, open the approval link, enter the demo code and click \"Approve $… with demo passkey\",",
     "then ask the agent to check the approval status.",
     ...(confirm === undefined ? [] : confirmLines(confirm)),

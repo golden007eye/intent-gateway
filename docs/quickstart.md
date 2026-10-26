@@ -19,7 +19,7 @@ Claude Code starts the gateway over stdio when it needs it. The gateway starts a
 Start `claude` and ask:
 
 ```text
-> Find stickers to ZIP 94107, under $20, and prepare a cart for the cheapest.
+> Find stickers to ZIP 94107 in the US, under $20, and prepare a cart for the cheapest.
 ```
 
 1. The agent calls `find_offers`. The gateway searches the demo Shop itself; nothing is sent to Intent Cloud for the search. Each result ends with what the gateway sent (field names, never values) and what it blocked.

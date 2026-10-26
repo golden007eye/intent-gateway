@@ -1,6 +1,6 @@
 # ADR-0024: Contract 1.7.0: the gateway submits the Shop checkout before the passkey
 
-Status: accepted · 2026-10-18 · Amends ADR-0019 (where a one-tap checkout is created), ADR-0020 (contract version); relates to ADR-0021 (search seam), ADR-0022 (account key)
+Status: accepted · 2026-10-18 · Amends ADR-0019 (where a one-tap checkout is created), ADR-0020 (contract version); relates to ADR-0021 (search seam), ADR-0022 (account key) · amended by [ADR-0025](0025-buyers-outside-the-us.md) (a checkout in the search country's currency, with the caps scaled to it)
 
 ## Context
 
@@ -34,3 +34,7 @@ Contract 1.7.0 (final, `SHA256SUMS` sha256 `dad42cb2…ff5a`; reviewed as the dr
 - `account_key_other_buyer` (403: the account key belongs to the first buyer who approved with it) and the per-IP checkout quota (429 `checkouts`) are each one clear line; the gateway never resubmits by itself.
 - A `completing` redemption answered 409 `one_tap_off` is a refusal before payment, like the ceilings: no `complete_checkout`.
 - A local pause (ADR-0023) stops the submit path before anything is sent; A 409 `paused` that Intent Cloud returns on a submit or at `completing` is chained as G8's `refused` entry (`source: intent_cloud`).
+
+## Amendment: buyers outside the US (ADR-0025)
+
+The submit no longer requires USD. The checkout must be in the currency of the search's country (one the currency table lists), and the policy's caps are put in that currency by the table's ceilings (`capsIn`), never its prices converted. The destination must be in the search's country, and its coarse postcode must be the search's coarse code; the gateway coarsens the postcode `find_offers` is given at once, so there is no ZIP to compare with.

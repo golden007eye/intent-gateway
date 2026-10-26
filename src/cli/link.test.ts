@@ -14,6 +14,7 @@ import { DEFAULT_SHOP_CLIENT_ID, type DisclosedCloud, openWalletSession } from "
 import { openStore, readChain } from "../store/index.ts";
 import { loadSecret, saveSecret, vaultPath, WalletKey } from "../wallet/index.ts";
 import { FAKE_BUYER, type FakeShop, type FakeShopFaults, startFakeShop } from "../wallet-shop-fake/index.ts";
+import { type FakeCloud, LIVE_CURRENCIES, startFakeCloud } from "../cloud-fake/index.ts";
 import { hostConnect } from "./connect.ts";
 import { type Io, main } from "./index.ts";
 import { oneTapFor } from "./wallet.ts";
@@ -33,15 +34,24 @@ interface Setup {
 }
 
 let shop: FakeShop | undefined;
+// Intent Cloud's meta, for the ceilings `intent wallet` reads when Shop shows a budget: never the real host.
+let cloud: FakeCloud | undefined;
 afterEach(async () => {
   await shop?.close();
+  await cloud?.close();
   shop = undefined;
+  cloud = undefined;
 });
 
 async function setup(faults: FakeShopFaults = {}, clientId?: string): Promise<Setup> {
   const fake = await startFakeShop({ faults, ...(clientId === undefined ? {} : { clientId }) });
   shop = fake;
+  await cloud?.close();
+  cloud = await startFakeCloud({ currencies: LIVE_CURRENCIES });
+  const meta = cloud;
   const root = mkdtempSync(join(tmpdir(), "wallet-link-"));
+  const trustKeys = join(root, "keys.json");
+  writeFileSync(trustKeys, JSON.stringify({ rootKeys: [meta.keys.rootPin] }));
   const dir = join(root, "data");
   const keyBytes = randomBytes(32);
   const keyFile = join(root, "wallet.key");
@@ -64,15 +74,18 @@ async function setup(faults: FakeShopFaults = {}, clientId?: string): Promise<Se
       const stdin = new PassThrough();
       if (options.input !== undefined) stdin.end(options.input);
       const tty = options.tty === true;
+      // `intent wallet` commands reach the fake Intent Cloud for its ceilings, and `intent verify` checks what they
+      // chained against its key; the others keep the env as given.
+      const wallet = argv[0] === "wallet" || argv[0] === "verify";
       const io: Io = {
-        env: options.env ?? env,
+        env: wallet ? { ...(options.env ?? env), INTENT_CLOUD_URL: meta.url } : (options.env ?? env),
         stdin,
         stdout: { write: (t: string) => out.push(t) },
         stderr: { write: (t: string) => err.push(t) },
         isTTY: { stdin: tty, stdout: tty },
         sleep: () => Promise.resolve(),
       };
-      const { code } = await main(argv, io);
+      const { code } = await main(wallet ? [...argv, "--trust-keys", trustKeys] : argv, io);
       return { code, out: out.join(""), err: err.join("") };
     },
   };
@@ -103,7 +116,7 @@ describe("intent wallet link shop", () => {
     expect(r.out).toContain("Running this from an agent's shell? Stop it and use intent wallet link shop --start, then --finish, so the link shows before the wait.\n");
     expect(r.out).toContain("Shop wallet linked: tokens kept in the encrypted vault");
     expect(r.out).toContain("Shop agent payments left for the gateway: 50.00 USD");
-    expect(r.out).toContain("One-tap with Shop pays from the agent budget only while agent payments are on in the Shop app and your policy allows one tap; otherwise purchases are handed off to Shop's checkout page");
+    expect(r.out).toContain("One-tap with Shop pays through agent payments only while they are on in the Shop app and your policy allows one tap; otherwise purchases are handed off to Shop's checkout page");
     expect(r.out).not.toContain("not yet wired");
     expect(r.out).not.toContain("refresh token");
 

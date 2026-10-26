@@ -432,12 +432,19 @@ export const CheckoutTotals = z.strictObject({
 export type CheckoutTotals = z.infer<typeof CheckoutTotals>;
 
 const COARSE = /^(?:[0-9]{5}|[A-Z][0-9][A-Z]|[0-9]{4})$/;
+/**
+ * The countries a submitted checkout may ship to (the spec's `ship_to.country` enum). The one list: COARSE_COUNTRIES
+ * and the gateway's accepted countries are read from it.
+ */
+export const ShipToCountry = z.enum(["US", "CA", "AU"]);
+export type ShipToCountry = z.infer<typeof ShipToCountry>;
+
 /** The destination as country and coarse postcode only (Appendix A "Coarse postcodes"). */
-export const CoarseShipTo = z.strictObject({ country: z.enum(["US", "CA", "AU"]), postal_code: z.string().regex(COARSE) });
+export const CoarseShipTo = z.strictObject({ country: ShipToCountry, postal_code: z.string().regex(COARSE) });
 export type CoarseShipTo = z.infer<typeof CoarseShipTo>;
 
 /** The v4 snapshot's ship-to: the request's country and coarse postcode. */
-export const SnapshotShipTo = z.strictObject({ country: z.enum(["US", "CA", "AU"]), postal_code_coarse: z.string().regex(COARSE) });
+export const SnapshotShipTo = z.strictObject({ country: ShipToCountry, postal_code_coarse: z.string().regex(COARSE) });
 export type SnapshotShipTo = z.infer<typeof SnapshotShipTo>;
 
 /**

@@ -102,3 +102,4 @@ nav:
       - "ADR-0021: The search seam": adr/0021-search-seam.md
       - "ADR-0022: Account key": adr/0022-account-key.md
       - "ADR-0024: Submit the Shop checkout (1.7.0)": adr/0024-submit-shop-checkout.md
+      - "ADR-0025: Buyers outside the US": adr/0025-buyers-outside-the-us.md

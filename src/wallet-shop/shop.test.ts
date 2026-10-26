@@ -129,6 +129,7 @@ describe("the wire: MCP 2026-07-28, stateless, tools on the allow-list only", ()
       budgetLimit: { amount: { amountMinor: 15000, currency: "USD" }, renewal: "monthly", renewsAt: "2026-11-01T00:00:00Z" },
       manageUrl: "https://shop.app/account/connections",
       connected: true,
+      currency: "USD",
     });
     expect(JSON.stringify(account)).not.toContain("4111");
     // Even asked directly, the transport refuses the tool before anything is logged or sent.
@@ -528,12 +529,12 @@ describe("unlink and a connection removed in the Shop app (S1 steps 12, 12b)", (
 
   it("the connection removed in the app: the token answers, the account reads as not connected with no budget", async () => {
     const { wallet } = await setup({ connectionRemoved: true });
-    expect(await wallet.account()).toEqual({ budgetRemaining: null, budgetLimit: null, manageUrl: "https://shop.app/account/connections", connected: false });
+    expect(await wallet.account()).toEqual({ budgetRemaining: null, budgetLimit: null, manageUrl: "https://shop.app/account/connections", connected: false, currency: null });
   });
 
   it("no budget for the connection (S1 step 3), or another currency: the budget is unknown (null) or kept with its currency", async () => {
     let h = await setup({ budgetMinor: null });
-    expect(await h.wallet.account()).toEqual({ budgetRemaining: null, budgetLimit: null, manageUrl: "https://shop.app/account/connections", connected: true });
+    expect(await h.wallet.account()).toEqual({ budgetRemaining: null, budgetLimit: null, manageUrl: "https://shop.app/account/connections", connected: true, currency: "USD" });
     await store.close();
     await shop.close();
     h = await setup({ accountCurrency: "CAD", budgetMinor: 700 });
@@ -542,6 +543,7 @@ describe("unlink and a connection removed in the Shop app (S1 steps 12, 12b)", (
       budgetLimit: { amount: { amountMinor: 15000, currency: "CAD" }, renewal: "monthly", renewsAt: "2026-11-01T00:00:00Z" },
       manageUrl: "https://shop.app/account/connections",
       connected: true,
+      currency: "CAD",
     });
   });
 });

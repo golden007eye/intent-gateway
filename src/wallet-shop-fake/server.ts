@@ -167,8 +167,15 @@ export interface FakeShopFaults {
   budgetRenewsAt?: string | null;
   /** get_account's manage_connection link (S1: https://shop.app/account/connections by default); null: no such link. */
   manageConnectionUrl?: string | null;
-  /** get_account's top-level currency ("USD" by default). */
+  /** get_account's top-level currency (the region's, else "USD", by default). */
   accountCurrency?: string;
+  /**
+   * A buyer outside the US: the saved address's country and postcode, and the currency of the catalog's prices, of
+   * every checkout and of the account. Default the US buyer (FAKE_BUYER, USD).
+   */
+  region?: { readonly country: string; readonly postalCode: string; readonly currency: string };
+  /** Every checkout is in this currency, whatever the region's (a store that prices checkouts in another one). */
+  checkoutCurrency?: string;
   /** The buyer removed the connection in the Shop app: get_account answers warnings and no account data (S1 12b). */
   connectionRemoved?: boolean;
   /** The revocation endpoint's status (200 by default). */
@@ -395,8 +402,8 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       extended_address: "Apt 4",
       address_locality: FAKE_BUYER.city,
       address_region: "CA",
-      address_country: "US",
-      postal_code: FAKE_BUYER.zip,
+      address_country: shop.faults.region?.country ?? "US",
+      postal_code: shop.faults.region?.postalCode ?? FAKE_BUYER.zip,
       phone_number: FAKE_BUYER.phone,
     };
   }
@@ -426,7 +433,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       picture: { type: "image", url: FAKE_PICTURE_URL },
       addresses: [{ type: "shipping_address", id: FAKE_ADDRESS_ID, ...address() }],
       preferred_address_id: FAKE_ADDRESS_ID,
-      currency: shop.faults.accountCurrency ?? "USD",
+      currency: shop.faults.accountCurrency ?? shop.faults.region?.currency ?? "USD",
       payment: {
         instruments:
           budget === null
@@ -492,7 +499,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
     return {
       ucp: { version: UCP_VERSION },
       id: c.id,
-      currency: "USD",
+      currency: shop.faults.checkoutCurrency ?? shop.faults.region?.currency ?? "USD",
       // Shop echoes the buyer, though the gateway sent no buyer.
       buyer: {
         email: FAKE_BUYER.email,
@@ -608,6 +615,11 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
         })
           .map((p): Record<string, unknown> & { variants: Record<string, unknown>[] } => ({ ...p, variants: (p.variants as Record<string, unknown>[]).filter((v) => typeof max !== "number" || ((v.price as { amount: number }).amount <= max)) }))
           .filter((p) => p.variants.length > 0)
+          .map((p): Record<string, unknown> & { variants: Record<string, unknown>[] } => {
+            const currency = shop.faults.region?.currency;
+            if (currency === undefined) return p;
+            return { ...p, variants: p.variants.map((v) => ({ ...v, price: { ...(v.price as Record<string, unknown>), currency } })) };
+          })
           .map((p) => (shop.faults.identityEverywhere === true ? { ...p, title: `${String(p.title)} for ${FAKE_BUYER.email}`, ...identity() } : p));
         return result({ ucp: { version: UCP_VERSION }, products, pagination: { has_next_page: false }, ...identity() });
       }

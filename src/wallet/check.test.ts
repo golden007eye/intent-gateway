@@ -50,7 +50,7 @@ describe("checkOrders", () => {
     expect(check.orders.map((o) => o.orderRef)).toEqual(["gid://shopify/Order/2", "gid://shopify/Order/3"]);
   });
 
-  it("counts an unmatched order with no total or another currency, and leaves it out of the USD sum", () => {
+  it("sums unmatched totals per currency, never across them; an order with no total is in no sum", () => {
     const check = checkOrders(
       { orders: [order(1, "2026-10-11T00:00:00.000Z", null), order(2, "2026-10-11T00:00:00.000Z", 700, "CAD"), order(3, "2026-10-11T00:00:00.000Z", 500)], complete: false },
       new Set(),
@@ -58,7 +58,8 @@ describe("checkOrders", () => {
     );
     expect(check.unmatched).toHaveLength(3);
     expect(check.unmatchedTotalMinor).toBe(500);
-    expect(check.unmatchedUntotalled).toBe(2);
+    expect(check.unmatchedTotals).toEqual({ CAD: 700, USD: 500 });
+    expect(check.unmatchedUntotalled).toBe(1);
     expect(check.complete).toBe(false);
   });
 });

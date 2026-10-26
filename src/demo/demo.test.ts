@@ -37,7 +37,7 @@ import { CONFIRM_CSP, type Demo, DEMO_BANNER, demoDataDir, demoTrustKeys, MAX_WR
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
-const SHOES = { category: "running-shoes", budget_usd: 200, zip: "94103" };
+const SHOES = { category: "running-shoes", budget: 200, country: "US", postcode: "94103" };
 const POLICY = "version: 1\napproval: passkey\n";
 
 let cleanup: (() => Promise<void>)[] = [];
@@ -200,7 +200,7 @@ describe("demo flow", () => {
       expect(result.content[0]).toEqual({ type: "text", text: DEMO_BANNER });
       return texts(result).join("\n");
     };
-    const offers = await call("find_offers", { category: "stickers", budget_usd: 20, zip: "94107" });
+    const offers = await call("find_offers", { category: "stickers", budget: 20, country: "US", postcode: "94107" });
     const offer = /offer_handle: (\S+)/.exec(offers)?.[1] ?? "";
     const cart = await call("create_cart", { offer_handle: offer });
     const link = /Approval link: (\S+)/.exec(cart)?.[1] ?? "";
@@ -254,7 +254,7 @@ describe("the sample catalog through the demo gateway", () => {
       { product: "stainless water bottle around 1 liter" },
       { category: "drinkware", product: "Stainless Steel Water Bottle", must_haves: ["1L"] },
     ]) {
-      const found = await gateway.findOffers({ ...asked, budget_usd: 40, zip: "10001" });
+      const found = await gateway.findOffers({ ...asked, budget: 40, country: "US", postcode: "10001" });
       expect(found.status, JSON.stringify(asked)).toBe("offers");
       if (found.status !== "offers") continue;
       expect(found.offers.length, JSON.stringify(asked)).toBeGreaterThanOrEqual(2);
@@ -266,14 +266,14 @@ describe("the sample catalog through the demo gateway", () => {
   it("each everyday category a developer tries first finds something", async () => {
     const { gateway } = await started();
     for (const category of ["running shoes", "headphones", "coffee", "backpacks", "phone accessories", "books", "toys", "home", "office supplies", "camping", "pet supplies", "beauty", "gifts"]) {
-      const found = await gateway.findOffers({ category, budget_usd: 200, zip: "10001" });
+      const found = await gateway.findOffers({ category, budget: 200, country: "US", postcode: "10001" });
       expect(found.status === "offers" ? found.offers.length : 0, category).toBeGreaterThan(0);
     }
   });
 
   it("a search that finds nothing still returns 0 offers, and says what the demo catalog has", async () => {
     const { demo, gateway } = await started();
-    const found = await gateway.findOffers({ category: "lawnmowers", budget_usd: 400, zip: "10001" });
+    const found = await gateway.findOffers({ category: "lawnmowers", budget: 400, country: "US", postcode: "10001" });
     expect(found.status).toBe("offers");
     if (found.status !== "offers") return;
     expect(found.offers).toEqual([]);
@@ -283,16 +283,16 @@ describe("the sample catalog through the demo gateway", () => {
 
   it("an excluded category is refused by the baseline before it is sent, and never returned by the demo Intent Cloud", async () => {
     const { demo, gateway } = await started();
-    const blocked = await gateway.findOffers({ category: "alcohol", product: "red wine", budget_usd: 50, zip: "10001" });
+    const blocked = await gateway.findOffers({ category: "alcohol", product: "red wine", budget: 50, country: "US", postcode: "10001" });
     expect(blocked.status).toBe("blocked");
     expect(blocked.summary).toBe("Sent: nothing / Blocked: categories.block at category");
     // Attack: a product-only search for it is sent (the policy names no category block), but the demo Intent Cloud,
     // like Intent Cloud, never returns an item in an excluded category.
     for (const product of ["Cabernet Sauvignon", "Vitamin D3 Gummies", "Premium Cigars", "Store Gift Card", "Folding Hunting Knife"]) {
-      const found = await gateway.findOffers({ product, budget_usd: 100, zip: "10001" });
+      const found = await gateway.findOffers({ product, budget: 100, country: "US", postcode: "10001" });
       expect(found.status === "offers" ? found.offers.map((o) => o.title) : [], product).not.toContain(product);
     }
-    const none = await gateway.findOffers({ product: "Cabernet Sauvignon", budget_usd: 100, zip: "10001" });
+    const none = await gateway.findOffers({ product: "Cabernet Sauvignon", budget: 100, country: "US", postcode: "10001" });
     expect(none.message).toContain(demo.catalogNote);
   });
 
@@ -300,7 +300,7 @@ describe("the sample catalog through the demo gateway", () => {
     const demo = await demoAt(await tmpData());
     const { gateway } = await gatewayOver(demo, { dir: await tmpData(), demoMode: false });
     await gateway.start();
-    const found = await gateway.findOffers({ category: "lawnmowers", budget_usd: 400, zip: "10001" });
+    const found = await gateway.findOffers({ category: "lawnmowers", budget: 400, country: "US", postcode: "10001" });
     expect(found.message).toBe("0 offers.");
   });
 });

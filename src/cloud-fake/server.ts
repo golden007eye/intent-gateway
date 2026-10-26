@@ -100,8 +100,25 @@ export const SUMS_1_6_1 = "bc035ee36b0a8fe54e1b87919c8de215c508ab5369d8254fdcdec
 const isV16 = (version: ServedVersion): boolean => version !== "1.5.0";
 /** A version whose carts get v3 snapshots and the myshopify pair: 1.6.1, and 1.7.0, whose carts keep 1.6.1's rules. */
 const isV3 = (version: ServedVersion): boolean => version === "1.6.1" || version === "1.7.0";
-/** Intent Cloud's default currency table (1.7.0): USD only, $500 an order, $1,000 a buyer's rolling week. */
-export const DEFAULT_CURRENCIES: Readonly<Record<string, CurrencyCeiling>> = Object.freeze({ USD: { order: 50_000, week: 100_000 } });
+/**
+ * The fake's default currency table (1.7.0): $500 an order and $1,000 a buyer's rolling week, and the other currencies
+ * in Intent Cloud's own proportions (CAD 7:5, GBP 4:5, EUR 1:1, AUD 3:2 of USD).
+ */
+export const DEFAULT_CURRENCIES: Readonly<Record<string, CurrencyCeiling>> = Object.freeze({
+  USD: { order: 50_000, week: 100_000 },
+  CAD: { order: 70_000, week: 140_000 },
+  GBP: { order: 40_000, week: 80_000 },
+  EUR: { order: 50_000, week: 100_000 },
+  AUD: { order: 75_000, week: 150_000 },
+});
+/** Intent Cloud's currency table as it is today (minor units), for tests that need its exact ceilings. */
+export const LIVE_CURRENCIES: Readonly<Record<string, CurrencyCeiling>> = Object.freeze({
+  USD: { order: 5000, week: 10_000 },
+  CAD: { order: 7000, week: 14_000 },
+  GBP: { order: 4000, week: 8000 },
+  EUR: { order: 5000, week: 10_000 },
+  AUD: { order: 7500, week: 15_000 },
+});
 const WEEK = 7 * 86_400;
 /**
  * The fake's category keywords for `category_excluded` (1.7.0: best effort, on the title's words), one or two per
@@ -171,7 +188,7 @@ export interface FakeCloudOptions {
    * `shop_agent` checkout is then refused `one_tap_off`. `checkouts.setOneTap` changes it later.
    */
   oneTap?: boolean;
-  /** 1.7.0: the currency table's ceilings per currency. Default DEFAULT_CURRENCIES (USD only). */
+  /** 1.7.0: the currency table's ceilings per currency. Default DEFAULT_CURRENCIES. */
   currencies?: Readonly<Record<string, CurrencyCeiling>>;
 }
 

@@ -29,10 +29,11 @@ export function spendHistory(chain: readonly Entry[], now: number): Purchase[] {
     approved.add(body.handle);
     if (typeof body.handle === "string" && chargedNothing(chain, body.handle)) continue;
     const snapshot = asBody(asBody(body.proof).snapshot);
-    // A v4 snapshot (contract 1.7.0) signs `totals.total` in `currency`; the policy's caps are in USD and never
-    // converted, so a v4 total in another currency is not a USD amount (NaN: history_invalid, fail closed).
-    const total = snapshot.v === 4 ? (snapshot.currency === "USD" ? asBody(snapshot.totals).total : Number.NaN) : asBody(snapshot.total).amount_minor;
-    purchases.push({ at: Date.parse(entry.ts), total_usd: typeof total === "number" ? total / 100 : Number.NaN });
+    // A v4 snapshot (contract 1.7.0) signs `totals.total` in `currency`, and counts against the caps in that currency
+    // only (never converted); v1 to v3 totals are USD.
+    const total = snapshot.v === 4 ? asBody(snapshot.totals).total : asBody(snapshot.total).amount_minor;
+    const currency = snapshot.v === 4 ? snapshot.currency : "USD";
+    purchases.push({ at: Date.parse(entry.ts), total_usd: typeof total === "number" ? total / 100 : Number.NaN, ...currencyOf(currency) });
   }
   for (const entry of chain) {
     if (entry.kind !== "approval_pending") continue;
@@ -42,9 +43,16 @@ export function spendHistory(chain: readonly Entry[], now: number): Purchase[] {
     if (expires <= now) continue;
     const total = body.total_minor;
     const valid = typeof total === "number" && Number.isFinite(expires);
-    purchases.push({ at: Date.parse(entry.ts), total_usd: valid ? total / 100 : Number.NaN });
+    // `currency` from contract 1.7.0 submits; an entry written before it is a USD cart.
+    purchases.push({ at: Date.parse(entry.ts), total_usd: valid ? total / 100 : Number.NaN, ...currencyOf(body.currency ?? "USD") });
   }
   return purchases;
+}
+
+/** A purchase's currency: USD is left implicit; anything that is not a string makes the purchase invalid (`evaluate`). */
+function currencyOf(value: unknown): { currency?: string } {
+  if (value === "USD") return {};
+  return { currency: typeof value === "string" ? value : "" };
 }
 
 /** What one tool call disclosed, read from the chain entries it appended. Field names only, never values. */

@@ -27,10 +27,10 @@ export function createShopProvider(wallet: Pick<WalletAdapter, "searchCatalog">)
     name: "shop",
     async search(query) {
       if (wallet.searchCatalog === undefined) return [];
-      const currency = query.budget?.currency ?? "USD";
+      const { currency } = query;
       const catalogQuery: CatalogQuery = {
         text: queryText(query),
-        maxPriceMinor: query.budget === null ? null : query.budget.amountMinor,
+        maxPriceMinor: query.budget === null || query.budget.currency !== currency ? null : query.budget.amountMinor,
         currency,
         country: query.country,
         limit: SHOP_SEARCH_LIMIT,

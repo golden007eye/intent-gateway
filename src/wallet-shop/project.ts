@@ -141,7 +141,8 @@ export function projectAccount(content: Json): WalletAccount {
   const warnings = list(content.messages).map((m) => m.code);
   const connected = !warnings.some((code) => (CONNECTION_GONE as readonly unknown[]).includes(code));
   const budget = connected ? budgetOf(content) : null;
-  return { budgetRemaining: budget?.remaining ?? null, budgetLimit: budget?.limit ?? null, manageUrl: manageUrlOf(content), connected };
+  const currency = connected && typeof content.currency === "string" && /^[A-Z]{3}$/.test(content.currency) ? content.currency : null;
+  return { budgetRemaining: budget?.remaining ?? null, budgetLimit: budget?.limit ?? null, manageUrl: manageUrlOf(content), connected, currency };
 }
 
 const RENEWALS: readonly BudgetRenewal[] = ["daily", "weekly", "monthly", "yearly"];

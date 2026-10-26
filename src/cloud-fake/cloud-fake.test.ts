@@ -36,6 +36,7 @@ import {
   type CatalogItem,
   CONFIRM_ORIGIN,
   DEFAULT_CATALOG,
+  DEFAULT_CURRENCIES,
   type FakeCloud,
   type FakeCloudOptions,
   SoftPasskey,
@@ -287,7 +288,7 @@ describe("GET /v1/meta", () => {
     const meta = Meta.parse(json);
     const source = /sha256 of `SHA256SUMS`: `([0-9a-f]{64})`/.exec(readFileSync(join(repo, "contract", "SOURCE.md"), "utf8"));
     expect(meta).toMatchObject({ contract_version: "1.7.0", contract_sums_sha256: source?.[1] });
-    expect(meta.currency_table?.currencies).toEqual({ USD: { order: 50_000, week: 100_000 } });
+    expect(meta.currency_table?.currencies).toEqual(DEFAULT_CURRENCIES);
   });
 
   it("with Intent-Contract-Version: 1.6.1 reports the frozen 1.6.1 sums and no currency table", async () => {

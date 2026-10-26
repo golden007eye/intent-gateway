@@ -138,8 +138,8 @@ function freezePolicy(p: {
   });
 }
 
-/** Intent Cloud's rules as a policy: the loosest policy the gateway will run. US-only delivery is enforced by
- * `evaluate`, which accepts only a 5-digit US ZIP as the ship-to postcode. */
+/** Intent Cloud's rules as a policy: the loosest policy the gateway will run. `evaluate` lets only a coarse postcode
+ * leave as the ship-to (for the US, a 5-digit ZIP). */
 export const CLOUD_BASELINE: Policy = freezePolicy({
   ship_to: "postcode_only",
   spend: {},

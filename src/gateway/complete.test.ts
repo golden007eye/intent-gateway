@@ -31,7 +31,7 @@ vi.setConfig({ testTimeout: 60_000 });
 
 const T0 = Date.parse("2026-10-15T12:00:00Z");
 const BASE_POLICY = "version: 1\napproval: passkey\n";
-const SEARCH = { category: "stickers", budget_usd: 100, zip: FAKE_BUYER.zip };
+const SEARCH = { category: "stickers", budget: 100, country: "US", postcode: FAKE_BUYER.zip };
 const usd = (amount_minor: number) => ({ amount_minor, currency: "USD" as const });
 const STOREFRONT_HOST = new URL(FAKE_STOREFRONT).host;
 const sticker = (priceMinor = 500, myshopify: string | null = FAKE_STORE): CatalogItem => ({

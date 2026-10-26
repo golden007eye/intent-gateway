@@ -7,7 +7,7 @@ import { createShopProvider, excludedGroup, type FilterContext, filterOffers, MA
 
 const T0 = Date.parse("2026-10-18T12:00:00Z");
 const POLICY = loadPolicy("version: 1\napproval: passkey\n");
-const QUERY: SearchQuery = { category: "stickers", mustHaves: ["holographic"], budget: { amountMinor: 2000, currency: "USD" }, country: "US", postcode: "94107" };
+const QUERY: SearchQuery = { category: "stickers", mustHaves: ["holographic"], budget: { amountMinor: 2000, currency: "USD" }, country: "US", currency: "USD", postcode: "94107" };
 
 const hit = (over: Partial<CatalogHit> = {}): CatalogHit => ({
   storeDomain: "sticker-store.myshopify.com",
@@ -25,7 +25,7 @@ const hit = (over: Partial<CatalogHit> = {}): CatalogHit => ({
   ...over,
 });
 const offer = (over: Partial<SearchOffer> = {}): SearchOffer => ({ ...hit(), provider: "shop", availability: "in_stock", ...over });
-const context: FilterContext = { category: "stickers", budget: { amountMinor: 2000, currency: "USD" }, history: [], now: T0 };
+const context: FilterContext = { category: "stickers", budget: { amountMinor: 2000, currency: "USD" }, currency: "USD", ceilings: null, history: [], now: T0 };
 
 describe("the Shop provider", () => {
   it("sends the text, country and currency (never the postcode) and returns available variants only", async () => {

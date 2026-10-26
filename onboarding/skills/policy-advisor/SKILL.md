@@ -19,13 +19,13 @@ Do not narrate commands or paste their output: between developer actions, say on
 
 - Write the policy only with the `intent policy` commands named below, and remove it only as "Loosen a limit" says. Never edit `policy.yaml` or `policy.lock` by hand. Why: `intent policy show` reports a hand-edited file as not matching its lock.
 - The policy file is the developer's: change it only when they ask, and show the change first. Run `intent policy add <name>` without `--yes`: with no terminal it prints the change as a diff, writes nothing, and exits 2 with `not applied: stdin is not a terminal, so no one can confirm the change; re-run with --yes to apply it`. That exit and that line are the expected preview, not an error. Show the diff, ask, and run it again with `--yes` only when they agree. Why: `intent policy add` narrows the developer's current file, so a change they did not ask for takes away something they chose.
-- Never suggest an amount above the preview ceiling: $50 per order, $100 per rolling 7 days, and so at most $400 for Shop agent payments. Why: Intent Cloud enforces that ceiling for the preview (US dollars only), and a policy cannot go above it.
+- Never suggest an amount above the preview ceiling: $50 per order, $100 per rolling 7 days, and so at most $400 for Shop agent payments. Why: Intent Cloud enforces that ceiling for the preview, and a policy cannot go above it. The policy is in US dollars; outside the US the gateway scales each limit by Intent Cloud's ceiling for that currency (CAD 28 for $20 in Canada), so name an amount in another currency only as `intent wallet status` prints it.
 - Never suggest `per-order-60`, `weekly-150` or `strict-default`. Why: the first two are above the ceiling, and `strict-default` sends no ZIP code, so the gateway blocks every search.
 - Run each command as `npx -y intent-gateway@0.1.0-preview.5 <command>`; where this file writes `intent <command>`, that is what it means. If `intent --version` already prints `0.1.0-preview.5`, `intent <command>` works as it is.
 
 ## Shop agent payments
 
-Shop's agent payments are Shop's permission for the agent to pay at all, with an amount. It is not a second budget to plan: the gateway sets the amount from the policy, as 4 times its weekly limit ($160 with the default $40 a week; at most $400 for Shop agent payments when the policy sets no weekly limit). When the onboarding has already set it, do not ask about it again; discuss another amount only if the developer asks.
+Shop's agent payments are Shop's permission for the agent to pay at all, with an amount. It is not a second budget to plan: the gateway sets the amount from the policy, as 4 times its weekly limit, in the Shop account's currency: say only the amount `intent wallet status` prints. When the onboarding has already set it, do not ask about it again; discuss another amount only if the developer asks.
 
 When you say what it is for, say it in one line: Shop says it enforces it itself, as a safety net, while the gateway policy does the day-to-day limiting. And in one plain sentence:
 
