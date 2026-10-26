@@ -17,6 +17,7 @@ import {
   checkApprover,
   type KeySet,
   type PinnedRootKey,
+  readSentCheckout,
   type ReceiptResponse,
   type SentRequest,
   verifyApprovalProof,
@@ -638,6 +639,20 @@ function cloudOutcomeProblem(
   return null;
 }
 
+/**
+ * The observed order of a v4 purchase as its gateway recorded it. A purchase submitted under contract 1.7.0 recorded
+ * the adapter's already-coarse code as `ship_to_postal_code` (1.7.0's coarse() kept a coarse US, CA or AU code as
+ * it was); under 1.7.1's strict coarse() that code has no coarse form, so it is read as the recorded coarse code it is.
+ * A 1.7.1 purchase records `ship_to_postal_code_coarse` itself and is read as it stands.
+ */
+function observedAsRecorded(observed: Readonly<Record<string, unknown>>, handle: string, before: readonly Entry[]): Record<string, unknown> {
+  const pending = before.findLast((e) => e.kind === "approval_pending" && record(e.body).handle === handle);
+  const sent = pending === undefined ? null : readSentCheckout(record(pending.body).sent);
+  if (sent?.contract_version !== "1.7.0" || !("ship_to_postal_code" in observed) || "ship_to_postal_code_coarse" in observed) return { ...observed };
+  const { ship_to_postal_code: code, ...rest } = observed;
+  return { ...rest, ship_to_postal_code_coarse: code };
+}
+
 function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: BindableApprovalProof["snapshot"], before: readonly Entry[]): string | null {
   if (entry.state_shown !== entry.state) return `shows ${entry.state_shown}, but records ${entry.state}`;
   if (entry.source === "gateway_precheck" && entry.state !== "failed") return "names the gateway's precheck for a state other than failed";
@@ -648,7 +663,7 @@ function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: BindableApprova
     let rerun: unknown;
     try {
       const context = { ...inputs.context, mode: String(inputs.context.mode), ship_to_optional: inputs.context.ship_to_optional };
-      rerun = snapshot.v === 4 ? bindingV2(snapshot, inputs.observed, context) : bindingV1(snapshot, inputs.observed, context);
+      rerun = snapshot.v === 4 ? bindingV2(snapshot, observedAsRecorded(inputs.observed, entry.handle, before), context) : bindingV1(snapshot, inputs.observed, context);
     } catch {
       return "holds binding inputs with an unknown mode";
     }

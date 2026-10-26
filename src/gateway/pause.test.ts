@@ -136,7 +136,7 @@ describe("pause at the gateway", () => {
     const disclosed = kinds.lastIndexOf("disclosure");
     expect(kinds.slice(disclosed)).toEqual(["disclosure", "receipt", "pause_sent"]);
     expect(ofKind(h, "disclosure").at(-1)).toMatchObject({ endpoint: "pause", path: "/v1/pause" });
-    expect(ofKind(h, "receipt").at(-1)).toMatchObject({ status: 200, verified: true, contract_version: "1.7.0" });
+    expect(ofKind(h, "receipt").at(-1)).toMatchObject({ status: 200, verified: true, contract_version: "1.7.1" });
 
     // The developer resumes locally (after the passkey resume), but Intent Cloud was never resumed: the next submit
     // answers `paused`, which is chained as Intent Cloud's refusal and pauses here again.

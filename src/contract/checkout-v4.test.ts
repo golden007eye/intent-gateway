@@ -70,16 +70,7 @@ describe("a4: snapshot v4", () => {
     expect(continueUrlAllowed(c.continue_url, urls)).toBe(c.allowed);
   });
 
-  // The one case where this candidate tree's vector predates the strict coarse() of Intent Cloud's security review: an
-  // Eircode's unique identifier never holds a B, so "T12 AB34" is no whole Eircode and has no coarse form. The case
-  // fails here as soon as the vendored vector changes, so the exception is removed with the re-vendoring.
-  const BEFORE_STRICT: Readonly<Record<string, string | null>> = { 'IE "T12 AB34"': null };
-  it.each((a4.coarse as Obj[]).map((c) => [`${c.country as string} ${JSON.stringify(c.postal_code)}`, c] as const))("coarse %s", (name, c) => {
-    if (Object.hasOwn(BEFORE_STRICT, name)) {
-      expect(c.coarse, "the vector now agrees: drop BEFORE_STRICT").toBe("T12");
-      expect(coarsePostcode(c.country as string, c.postal_code as string)).toBe(BEFORE_STRICT[name]);
-      return;
-    }
+  it.each((a4.coarse as Obj[]).map((c) => [`${c.country as string} ${JSON.stringify(c.postal_code)}`, c] as const))("coarse %s", (_, c) => {
     expect(coarsePostcode(c.country as string, c.postal_code as string)).toBe(c.coarse);
   });
 

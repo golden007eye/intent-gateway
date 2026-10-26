@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureAccountKey } from "../account/index.ts";
-import { DEFAULT_COUNTRIES, type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
+import { DEFAULT_COUNTRIES, DEFAULT_CURRENCIES, type FakeCloud, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
 import { connectCloud, connectShop, connectStorefront, type DisclosedCloud } from "../disclosure/index.ts";
 import { loadPolicy } from "../policy/index.ts";
 import { findIdentity } from "../privacy/index.ts";
@@ -23,7 +23,7 @@ import { RefusalCode } from "../contract/index.ts";
 import { pauseLocally } from "../pause/index.ts";
 import { buildEvidence, packText } from "../evidence/index.ts";
 import { buildModel } from "../panel/index.ts";
-import { runVerify } from "../verify/index.ts";
+import { formatReport, runVerify } from "../verify/index.ts";
 import { type ApprovalStatusResult, type CreateCartResult, createGateway, type Gateway } from "./index.ts";
 import { REFUSAL_CODE_WORDS } from "./gateway.ts";
 
@@ -41,6 +41,8 @@ interface Harness {
   storefront: FakeStorefront;
   passkey: SoftPasskey;
   dir: string;
+  /** What the gateway said on the terminal (logger.warn). */
+  warnings: string[];
 }
 
 let cleanup: (() => Promise<void>)[] = [];
@@ -50,7 +52,13 @@ afterEach(async () => {
 });
 
 async function setup(
-  options: { faults?: FakeShopFaults; policy?: string; currencies?: Record<string, { order: number; week: number }>; countries?: Record<string, string> } = {},
+  options: {
+    faults?: FakeShopFaults;
+    policy?: string;
+    currencies?: Record<string, { order: number; week: number }>;
+    countries?: Record<string, string>;
+    tableFault?: "no_countries" | "wrong_version";
+  } = {},
 ): Promise<Harness> {
   const now = (): number => T0;
   const fake = await startFakeCloud({
@@ -59,6 +67,8 @@ async function setup(
     ...(options.currencies === undefined ? {} : { currencies: options.currencies }),
     ...(options.countries === undefined ? {} : { countries: options.countries }),
   });
+  if (options.tableFault !== undefined) fake.checkouts.setTableFault(options.tableFault);
+  const warnings: string[] = [];
   const shop = await startFakeShop(options.faults === undefined ? {} : { faults: options.faults });
   cleanup.push(() => fake.close(), () => shop.close());
   const dir = join(await fsp.mkdtemp(join(tmpdir(), "checkout-v4-")), "data");
@@ -86,13 +96,13 @@ async function setup(
       policy: loadPolicy(policy),
       pinnedRootKeys: [fake.keys.rootPin],
       now,
-      logger: { warn: () => undefined },
+      logger: { warn: (line: string) => void warnings.push(line) },
     });
     await gateway.start();
     return gateway;
   };
   const gateway = await make(options.policy ?? BASE_POLICY, session);
-  return { gateway, store, fake, shop, storefront, passkey: new SoftPasskey(), dir };
+  return { gateway, store, fake, shop, storefront, passkey: new SoftPasskey(), dir, warnings };
 }
 
 async function cart(h: Harness): Promise<CreateCartResult> {
@@ -111,6 +121,16 @@ const status = (h: Harness, handle: string): Promise<ApprovalStatusResult> => h.
 const body = (e: Entry): Record<string, unknown> => e.body as Record<string, unknown>;
 const disclosures = (h: Harness): Record<string, unknown>[] => h.store.entries().filter((e) => e.kind === "disclosure").map(body);
 const sentBody = (d: Record<string, unknown>): string => (typeof d.body_b64 === "string" ? Buffer.from(d.body_b64, "base64").toString("utf8") : "");
+/** The decoded bodies sent for one endpoint. */
+const sentBodies = (h: Harness, endpoint: string): string[] => disclosures(h).filter((d) => d.endpoint === endpoint).map(sentBody);
+/** Every body sent (decoded) and every other chain entry, as text. */
+const scanned = (h: Harness): string =>
+  [...disclosures(h).map(sentBody), ...h.store.entries().filter((e) => e.kind !== "disclosure").map((e) => JSON.stringify(e.body))].join("\n");
+/**
+ * Text with its long tokens (hashes, signatures, keys, handles: 16 characters or more of base64 or hex) removed, so a
+ * search for a short postcode part cannot match random text by chance.
+ */
+const withoutRandom = (text: string): string => text.replace(/[A-Za-z0-9_+/=-]{16,}/g, "");
 const completes = (h: Harness): number => disclosures(h).filter((d) => d.endpoint === "complete_checkout").length;
 
 describe("create_cart with a linked Shop wallet: the 1.7.1 submit", () => {
@@ -420,42 +440,46 @@ describe("create_cart with a linked Shop wallet: the 1.7.1 submit", () => {
     expect(h.store.entries().some((e) => e.kind === "refused" && body(e).step === "report_outcome" && body(e).source === "intent_cloud")).toBe(true);
   });
 
-  it("a 409 ceiling at the completing report is a refusal before payment: no complete_checkout, a clear line", async () => {
-    const h = await setup();
-    const result = await submitted(h);
+  /** The developer's line for a completing report refused with `code`, as get_approval_status gives it. */
+  const line = (code: string, words: string): string =>
+    `Approved: the buyer's pinned passkey signed this purchase, and the gateway verified and logged the proof. The gateway did not send the purchase to Shop (redeem_refused:${code}): no complete_checkout was sent. ${words} Nothing was bought. Create a new cart to hand the purchase off to the merchant's checkout.`;
+  // 1.7.1: Intent Cloud checks the ceilings and the country map again at the completing report, and refuses with 409.
+  // Each code is final and one clear line, and nothing is paid.
+  it.each([
+    ["ceiling_order", line("ceiling_order", "Intent Cloud answered that this order is above its per-order ceiling for the currency."), (h: Harness) => { h.fake.checkouts.setCurrencies({ ...DEFAULT_CURRENCIES, GBP: { order: 100, week: 100_000 } }); }],
+    ["ceiling_week", line("ceiling_week", "Intent Cloud answered that this order would pass the buyer's weekly ceiling for the currency."), (h: Harness) => { h.fake.checkouts.setCurrencies({ ...DEFAULT_CURRENCIES, GBP: { order: 100_000, week: 100 } }); }],
+    [
+      "currency_unsupported",
+      line("currency_unsupported", "Intent Cloud answered that it does not support this checkout's currency for its ship-to country (the countries it ships to may have changed since the search)."),
+      (h: Harness) => { h.fake.checkouts.setCountries(Object.fromEntries(Object.entries(DEFAULT_COUNTRIES).filter(([c]) => c !== "GB"))); },
+    ],
+  ] as const)("a 409 %s at the completing report is final: a clear line, no complete_checkout, no second report", async (code, words, change) => {
+    const h = await setup({ faults: { region: UK }, policy: DEFAULTS });
+    const found = await h.gateway.findOffers({ category: "stickers", budget: 25, country: "GB", postcode: UK.postalCode });
+    if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
+    const result = await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
+    if (result.status !== "approval_needed") throw new Error(result.message);
     expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey).status).toBe(200);
-    h.fake.checkouts.setCurrencies({ USD: { order: 100, week: 100000 } });
+    change(h);
     const done = await status(h, result.approval_handle);
     if (done.status !== "approved") throw new Error(done.message);
-    expect(done.completion).toMatchObject({ state: "failed", reason: "redeem_refused:ceiling_order" });
-    expect(done.message).toContain("per-order ceiling");
-    expect(completes(h)).toBe(0);
-  });
-
-  it("attack: a country left out of the served map after the passkey: the completing report is refused 403, nothing paid, a clear line", async () => {
-    // The US, so the approval status reads back: the kill switch leaves a country out of the served map.
-    const h = await setup();
-    const result = await submitted(h);
-    expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey).status).toBe(200);
-    h.fake.checkouts.setCountries(Object.fromEntries(Object.entries(DEFAULT_COUNTRIES).filter(([c]) => c !== "US")));
-    const done = await status(h, result.approval_handle);
-    if (done.status !== "approved") throw new Error(done.message);
-    expect(done.completion).toMatchObject({ state: "failed", source: "gateway_precheck" });
-    expect(done.message).toMatch(/Intent Cloud (returns a refusal to redeem|answered that it does not support)/);
+    expect(done.completion).toMatchObject({ state: "failed", source: "gateway_precheck", reason: `redeem_refused:${code}` });
+    expect(done.message).toBe(words);
     expect(done.message).toContain("Nothing was bought.");
     expect(completes(h)).toBe(0);
-    // Refused for good: a later call sends no completing report again.
     const reportsBefore = disclosures(h).filter((d) => d.endpoint === "reportOutcome").length;
     await status(h, result.approval_handle);
     expect(disclosures(h).filter((d) => d.endpoint === "reportOutcome").length).toBe(reportsBefore);
   });
 
-  it("a country left out of the served map before the passkey: the confirm page refuses 403 currency_unsupported, the approval stays pending", async () => {
-    // The US, so the approval status reads back: the kill switch leaves a country out of the served map.
-    const h = await setup();
-    const result = await submitted(h);
-    h.fake.checkouts.setCountries(Object.fromEntries(Object.entries(DEFAULT_COUNTRIES).filter(([c]) => c !== "US")));
-    expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey)).toMatchObject({ status: 403, reason: "currency_unsupported" });
+  it("a country left out of the served map before the passkey: the confirm page refuses 409 currency_unsupported, the approval stays pending", async () => {
+    const h = await setup({ faults: { region: UK }, policy: DEFAULTS });
+    const found = await h.gateway.findOffers({ category: "stickers", budget: 25, country: "GB", postcode: UK.postalCode });
+    if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
+    const result = await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
+    if (result.status !== "approval_needed") throw new Error(result.message);
+    h.fake.checkouts.setCountries(Object.fromEntries(Object.entries(DEFAULT_COUNTRIES).filter(([c]) => c !== "GB")));
+    expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey)).toMatchObject({ status: 409, reason: "currency_unsupported" });
     expect(await status(h, result.approval_handle)).toMatchObject({ status: "pending" });
     expect(completes(h)).toBe(0);
   });
@@ -548,14 +572,94 @@ describe("buyers outside the US: Canada, Australia, the UK, Ireland and the euro
     // Intent Cloud keeps the gateway's ordered as its report (Appendix G R5), the total in the approved currency.
     expect(h.fake.inspect(result.approval_handle)?.outcome).toMatchObject({ state: "reported", reported: { state: "ordered", final_total: { amount_minor: 899, currency } } });
     // The full postcode is in no chain entry: binding-v2 ran on it in memory, the chain keeps its coarse form.
-    // (Signatures, digests and receipts are left out: random text may hold a run of digits by chance. AU's full
-    // postcode is its coarse one.)
-    const chained = h.store.entries().filter((e) => e.kind !== "disclosure" && e.kind !== "receipt" && e.kind !== "keys").map((e) => JSON.stringify(e.body)).join("\n");
-    if (region.country !== "AU") for (const full of [region.postalCode, region.postalCode.replace(/ /g, "")]) expect(chained).not.toContain(full);
+    // Every body sent (Shop and Intent Cloud, reportOutcome included) and every other chain entry. AU's full postcode
+    // is its coarse one.
+    const seen = scanned(h);
+    expect(sentBodies(h, "reportOutcome").length).toBeGreaterThanOrEqual(2);
+    if (region.country !== "AU") for (const full of [region.postalCode, region.postalCode.replace(/ /g, "")]) expect(seen).not.toContain(full);
     expect(verifyChain(h.store.entries()).ok).toBe(true);
     const report = await runVerify({ dataDir: h.dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(T0), skipSupplyChain: true });
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);
     expect(report.exitCode).toBe(0);
+  });
+
+  it("attack (invariant 3): a US ZIP+4 one tap reaches ordered, and the full code is in no send, chain entry, pack, panel or verify output", async () => {
+    const h = await setup({ faults: { shipToZip: "94107-1234" }, policy: DEFAULTS });
+    const found = await h.gateway.findOffers({ ...STICKERS, budget: 20, postcode: "94107-1234" });
+    if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
+    const result = await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
+    if (result.status !== "approval_needed") throw new Error(`${result.status}: ${result.message}`);
+    expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey).status).toBe(200);
+    const done = await status(h, result.approval_handle);
+    if (done.status !== "approved") throw new Error(`${done.status}: ${done.message}`);
+    expect(done.completion).toMatchObject({ state: "ordered", source: "shop_api" });
+    // binding-v2 matched on the full code, in memory; the chain records only its coarse form.
+    const ordered = h.store.entries().findLast((e) => e.kind === "outcome" && body(e).state === "ordered");
+    expect(body(ordered as Entry)).toMatchObject({ local_binding: { result: "ok", checks: { ship_to: "match" } } });
+    expect((body(ordered as Entry).binding_inputs as { observed: unknown }).observed).toMatchObject({ ship_to_country: "US", ship_to_postal_code_coarse: "94107" });
+    const report = await runVerify({ dataDir: h.dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(T0), skipSupplyChain: true });
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    const reports = sentBodies(h, "reportOutcome");
+    expect(reports.length).toBeGreaterThanOrEqual(2);
+    const outputs = [
+      ...reports,
+      scanned(h),
+      packText(buildEvidence(h.store.entries(), result.approval_handle, [h.fake.keys.rootPin])),
+      JSON.stringify(buildModel({ items: h.store.entries(), now: T0, mode: "real", intent: "intent", policy: null, verify: null, timeZone: "UTC" })),
+      formatReport(report),
+      JSON.stringify(report),
+      JSON.stringify([found, result, done]),
+    ].map(withoutRandom);
+    for (const out of outputs) for (const part of ["94107-1234", "941071234", "1234"]) expect(out).not.toContain(part);
+  });
+
+  it("a Canadian one tap chained under contract 1.7.0 (observed code already coarse) still verifies; the same record under 1.7.1 does not", async () => {
+    const h = await setup({ faults: { region: CANADA }, policy: DEFAULTS });
+    const found = await h.gateway.findOffers({ category: "stickers", budget: 25, country: "CA", postcode: CANADA.postalCode });
+    if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
+    const result = await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
+    if (result.status !== "approval_needed") throw new Error(result.message);
+    expect(h.fake.approveWithPasskey(result.approval_handle, h.passkey).status).toBe(200);
+    const done = await status(h, result.approval_handle);
+    if (done.status !== "approved") throw new Error(done.message);
+    expect(done.completion).toMatchObject({ state: "ordered" });
+    // The chain as a 1.7.0 gateway wrote it: `sent` names 1.7.0, and binding_inputs holds the coarse code as
+    // ship_to_postal_code (1.7.0's coarse() kept "K1A" as it was).
+    const oldWay = (version: string) => (e: Entry): unknown => {
+      const b = body(e);
+      if (e.kind === "approval_pending") return { ...b, sent: { ...(b.sent as object), contract_version: version } };
+      const inputs = b.binding_inputs as { observed: Record<string, unknown>; context: unknown } | undefined;
+      if (e.kind !== "outcome" || inputs === undefined) return b;
+      const { ship_to_postal_code_coarse: coarse, ...rest } = inputs.observed;
+      return { ...b, binding_inputs: { ...inputs, observed: { ...rest, ship_to_postal_code: coarse } } };
+    };
+    const rewritten = async (version: string): Promise<string> => {
+      const dir = join(await fsp.mkdtemp(join(tmpdir(), "checkout-v4-old-")), "data");
+      await fsp.cp(h.dir, dir, { recursive: true, filter: (src) => !src.endsWith("audit.jsonl") && !src.endsWith("audit.lock") });
+      const store = await openStore(dir, { clock: () => T0 });
+      for (const e of h.store.entries()) await store.append(e.kind, oldWay(version)(e));
+      await store.close();
+      return dir;
+    };
+    expect(h.store.entries().some((e) => e.kind === "outcome" && (body(e).binding_inputs as { observed?: object } | undefined)?.observed !== undefined)).toBe(true);
+    const old = await runVerify({ dataDir: await rewritten("1.7.0"), pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(T0), skipSupplyChain: true });
+    expect(old.checks.filter((c) => !c.ok)).toEqual([]);
+    // Attack: the same already-coarse record claimed under 1.7.1 is re-run with strict coarse() and fails.
+    const claimed = await runVerify({ dataDir: await rewritten("1.7.1"), pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(T0), skipSupplyChain: true });
+    expect(JSON.stringify(claimed.checks.filter((c) => !c.ok))).toContain("holds a local binding other than its recorded inputs give");
+  });
+
+  it.each(["no_countries", "wrong_version"] as const)("attack: a meta table with %s is not used: a US search is refused, nothing is sent, and start says so once", async (fault) => {
+    const h = await setup({ tableFault: fault });
+    const result = await h.gateway.findOffers(STICKERS);
+    expect(result).toMatchObject({
+      status: "refused",
+      message: "Not sent: the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; try again later or update intent.",
+    });
+    expect(disclosures(h).filter((d) => d.endpoint === "search_catalog" || d.endpoint === "searchCatalog")).toHaveLength(0);
+    expect(h.warnings).toEqual([
+      "intent-gateway: the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; try again later or update intent.",
+    ]);
   });
 
   // The per-order cap at payment (after the passkey) in CAD and AUD at the lowest level: payment-cap.test.ts.

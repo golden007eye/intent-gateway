@@ -480,7 +480,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   function countryRefusal(country: string): string | null {
     const accepted = shipsTo();
     if ((accepted as readonly string[]).includes(country)) return null;
-    if (currencyTable === null) return "Not sent: the meta Intent Cloud returns holds no valid currency table, so the gateway cannot put its limits in any currency. Restart the gateway.";
+    if (currencyTable === null) return NO_CURRENCY_TABLE;
     if (accepted.length === 0) return "Not sent: the currency table Intent Cloud returns lists no country intent ships to, so no search can be made now.";
     const rules = shipCountry(country);
     const currency = currencyOf(country);
@@ -650,6 +650,8 @@ export function createGateway(options: GatewayOptions): Gateway {
     // {currencies, countries}; otherwise it is not used (a search or a submit then refuses, naming why).
     const table = meta.body.currency_table;
     currencyTable = usableCurrencyTable(table) ? table : null;
+    // Said once on the terminal too, so the developer learns of it before the first search.
+    if (currencyTable === null) logger.warn(`intent-gateway: ${NO_TABLE_AT_START}`);
 
     const statement = await cloud.keyStatement();
     if (!statement.ok) throw new GatewayStartError(`Intent Cloud key statement failed with status ${String(statement.status)}`);
@@ -1174,7 +1176,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (wallet === null) return refuse("wallet: none", "Not sent: no usable Shop wallet is linked, so the gateway cannot prepare this Shop checkout.", "error");
     const table = currencyTable;
     if (table === null) {
-      return refuse("currency_table: none", "Not sent: the meta Intent Cloud returns holds no valid currency table, so the gateway cannot check the checkout's currency. Restart the gateway.", "error");
+      return refuse("currency_table: none", NO_CURRENCY_TABLE, "error");
     }
     let account: AccountKeyPort;
     try {
@@ -1866,13 +1868,17 @@ function completionWords(c: CompletionView): string {
 const SHOP_ERROR_CODES: ReadonlySet<string> = new Set(["checkout_completion_ineligible", "invalid_checkout_id"]);
 
 /** What the developer can do about a one-tap refusal the gateway made before paying (complete.ts reasons). */
+/** Why nothing ships when the currency table at start is missing or does not check (contract 1.7.1). */
+const NO_TABLE_AT_START = "the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; try again later or update intent.";
+const NO_CURRENCY_TABLE = `Not sent: ${NO_TABLE_AT_START}`;
+
 const REFUSAL_WORDS: Readonly<Record<string, string>> = {
   budget_unknown: 'Shop shows no budget for this connection: turn on "Allow agent to pay" with a budget in the Shop app.',
   no_budget_instrument: 'Shop offered no agent payments to pay this checkout with, and the gateway never pays with the card: turn on "Allow agent to pay" with a budget in the Shop app.',
   wallet_disconnected: "Shop answered that this connection can no longer read the account (as when it is removed in the Shop app): run intent wallet unlink shop, then intent wallet link shop.",
   create_unconfirmed: "Shop gave no usable answer to the checkout request, and the gateway never sends it twice.",
-  // A refusal of the completing report that names no code the contract lists (a 403 the vendored spec does not list).
-  redeem_refused: "Intent Cloud returns a refusal to redeem this approval before payment, so the gateway paid nothing. Nothing was bought.",
+  // A refusal of the completing report that names no code the gateway knows.
+  redeem_refused: "Intent Cloud returns a refusal for this purchase before it was paid, so nothing was bought. Ask the agent to search again for a new purchase.",
 };
 
 /**

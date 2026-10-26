@@ -145,14 +145,14 @@ export const Money = z.strictObject({
 export type Money = z.infer<typeof Money>;
 
 /**
- * An outcome's or a report's `final_total` (1.7.1, Appendix G): integer minor units in any two-decimal ISO 4217
- * currency. Binding check 5 compares it only in the snapshot's currency.
+ * Money in any two-decimal ISO 4217 currency (1.7.1): an outcome's or a report's `final_total` (Appendix G) and an
+ * approval's `display.total`. Binding check 5 compares it only in the snapshot's currency.
  */
-export const OutcomeMoney = z.strictObject({
+export const TwoDecimalMoney = z.strictObject({
   amount_minor: z.int().min(0).max(MAX_SAFE),
   currency: z.enum(["AUD", "CAD", "CHF", "CZK", "DKK", "EUR", "GBP", "HKD", "MXN", "NOK", "NZD", "PLN", "SEK", "SGD", "USD"]),
 });
-export type OutcomeMoney = z.infer<typeof OutcomeMoney>;
+export type TwoDecimalMoney = z.infer<typeof TwoDecimalMoney>;
 
 /** A US destination; a non-US one is refused by the schema. */
 export const ShipTo = z.strictObject({
@@ -581,7 +581,7 @@ export type ApprovalCreated = z.infer<typeof ApprovalCreated>;
 export const ApprovalDisplay = z.strictObject({
   merchant: z.string().min(1).max(80),
   title: z.string().min(1).max(120),
-  total: Money,
+  total: TwoDecimalMoney,
   image_url: ImageUrl.optional(),
 });
 export type ApprovalDisplay = z.infer<typeof ApprovalDisplay>;
@@ -711,7 +711,7 @@ export const OutcomeReported = z.strictObject({
   state: z.enum(["completing", "indeterminate", "ordered", "mismatch", "failed"]),
   source: z.enum(["shop_api", "gateway_precheck"]),
   order_ref: OrderRef.optional(),
-  final_total: OutcomeMoney.optional(),
+  final_total: TwoDecimalMoney.optional(),
   binding: Binding.optional(),
 });
 export type OutcomeReported = z.infer<typeof OutcomeReported>;
@@ -731,7 +731,7 @@ export const Outcome = z
     source: OutcomeSource,
     assurance: z.enum(["verified", "reported"]),
     order_ref: OrderRef.optional(),
-    final_total: OutcomeMoney.optional(),
+    final_total: TwoDecimalMoney.optional(),
     binding: Binding.optional(),
     observed_at: Timestamp,
     reported: OutcomeReported.optional(),
@@ -791,7 +791,7 @@ export const OutcomeReport = z
     source: z.enum(["shop_api", "gateway_precheck"]),
     checkout_ref_hash: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(),
     order_ref: OrderRef.optional(),
-    final_total: OutcomeMoney.optional(),
+    final_total: TwoDecimalMoney.optional(),
     binding: Binding.optional(),
     observed_at: Timestamp,
   })
@@ -885,7 +885,7 @@ export const SCHEMAS = {
   Error: ErrorBody,
   RateLimited,
   Money,
-  OutcomeMoney,
+  TwoDecimalMoney,
   ShipTo,
   Merchant,
   Item,

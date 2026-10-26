@@ -40,6 +40,7 @@ import {
   DEFAULT_CATALOG,
   DEFAULT_COUNTRIES,
   DEFAULT_CURRENCIES,
+  LIVE_CURRENCIES,
   type FakeCloud,
   type FakeCloudOptions,
   SoftPasskey,
@@ -303,6 +304,14 @@ describe("GET /v1/meta", () => {
     const table = Meta.parse(json).currency_table;
     expect(Object.keys(table?.countries ?? {}).sort()).toEqual(["AT", "BE", "DE", "ES", "FI", "FR", "IE", "IT", "NL", "PT", "US"]);
     expect(usableCurrencyTable(table)).toBe(true);
+  });
+
+  it("with Intent Cloud's live ceilings, serves exactly its tables: ct-9fd2a7de9ddcf8e2 to 1.7.1, ct-a5ec7a18fbcbdda7 to 1.7.0", async () => {
+    const cloud = await start({ currencies: LIVE_CURRENCIES });
+    const table = async (version: string) =>
+      Meta.parse((await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": version } })).json).currency_table;
+    expect(await table("1.7.1")).toMatchObject({ version: "ct-9fd2a7de9ddcf8e2", currencies: LIVE_CURRENCIES, countries: DEFAULT_COUNTRIES });
+    expect(await table("1.7.0")).toEqual({ version: "ct-a5ec7a18fbcbdda7", currencies: { USD: { order: 5000, week: 10_000 } } });
   });
 
   it("with Intent-Contract-Version: 1.7.0 reports the frozen 1.7.0 sums and the USD row only, without countries", async () => {

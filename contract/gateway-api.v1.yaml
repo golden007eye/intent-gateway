@@ -739,11 +739,13 @@ components:
         currency:
           type: string
           const: USD
-    OutcomeMoney:
+    TwoDecimalMoney:
       description: |
-        An outcome's or a report's `final_total` (Appendix G): Money in any two-decimal ISO 4217
-        currency (1.7.1). Up to 1.7.0 it was `Money`, USD only, and a 1.6.x or 1.7.0 report in another
-        currency is still 400. Binding check 5 compares it only in the snapshot's currency.
+        Money in any two-decimal ISO 4217 currency (1.7.1): an outcome's or a report's `final_total`
+        (Appendix G) and an approval's `display.total`, so a v4 approval in CAD, GBP, EUR or AUD reads
+        back. Up to 1.7.0 these were `Money`, USD only: a 1.6.x or 1.7.0 report in another currency is
+        still 400, and a 1.7.0 approval is USD only. Binding check 5 compares only in the snapshot's
+        currency.
       type: object
       additionalProperties: false
       required: [amount_minor, currency]
@@ -1134,7 +1136,7 @@ components:
           minLength: 1
           maxLength: 120
         total:
-          $ref: "#/components/schemas/Money"
+          $ref: "#/components/schemas/TwoDecimalMoney"
         image_url:
           $ref: "#/components/schemas/ImageUrl"
     ApprovalStatus:
@@ -1469,7 +1471,7 @@ components:
         order_ref:
           $ref: "#/components/schemas/OrderRef"
         final_total:
-          $ref: "#/components/schemas/OutcomeMoney"
+          $ref: "#/components/schemas/TwoDecimalMoney"
         binding:
           $ref: "#/components/schemas/Binding"
     Outcome:
@@ -1544,7 +1546,7 @@ components:
         order_ref:
           $ref: "#/components/schemas/OrderRef"
         final_total:
-          $ref: "#/components/schemas/OutcomeMoney"
+          $ref: "#/components/schemas/TwoDecimalMoney"
         binding:
           $ref: "#/components/schemas/Binding"
         observed_at:
@@ -1632,7 +1634,7 @@ components:
         order_ref:
           $ref: "#/components/schemas/OrderRef"
         final_total:
-          $ref: "#/components/schemas/OutcomeMoney"
+          $ref: "#/components/schemas/TwoDecimalMoney"
         binding:
           $ref: "#/components/schemas/Binding"
         observed_at:
@@ -1726,7 +1728,8 @@ components:
         may total over a rolling 7 days, in that currency's minor units. There is no conversion: each
         currency is summed on its own. A ceiling of 0 refuses every checkout in that currency. 1.7.1
         adds `countries`: the currency a checkout to each ship-to country must be in, listing only the
-        countries whose currency is in `currencies` (a country not listed is refused). `version` is
+        countries whose currency is in `currencies` (a country not listed is refused). A 1.7.0 caller
+        gets the USD row only (1.7.0 is USD only), and no table without one. `version` is
         `"ct-"` + the first 16 hex characters of `SHA-256(JCS({currencies, countries}))` in 1.7.1, and of
         `SHA-256(JCS(currencies))` in 1.7.0 (no `countries`), so it changes whenever a value does.
       type: object

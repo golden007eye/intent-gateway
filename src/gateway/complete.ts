@@ -252,7 +252,7 @@ function reportsOf(entries: readonly Entry[], handle: string): LoggedReport[] {
 }
 
 /** The answers that refuse a report for good (Appendix G R1–R4); 401, 429 and 5xx leave it open, to retry. */
-const REFUSING = new Set([400, 403, 404, 409, 410]);
+const REFUSING = new Set([400, 404, 409, 410]);
 
 /** A report with this id that Intent Cloud accepted (201, receipt verified, not discarded); refused for good; or neither yet. */
 function reportFate(reports: readonly LoggedReport[], reportId: unknown): "accepted" | "refused" | "open" {
@@ -436,8 +436,8 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
 
   /** Sends one report; the answer is in the chain (receipt) for later calls to read. False when it was not accepted. */
   /**
-   * The refusal code (contract 1.7.x Error.code) of the last report Intent Cloud refused with 409, or with 403 (1.7.1:
-   * `currency_unsupported` when the country map changed since the approval), if any.
+   * The refusal code (contract 1.7.x Error.code) of the last report Intent Cloud refused with 409, if any: a pause, one
+   * tap off, a ceiling, or (1.7.1) `currency_unsupported` when the country map changed since the approval.
    */
   const refused: { code: string | null } = { code: null };
 
@@ -445,7 +445,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     const head = store.entries().at(-1)?.seq ?? -1;
     try {
       const result = await ctx.cloud.reportOutcome(handle, report as OutcomeReport, ctx.signer);
-      if (!result.ok && (result.status === 409 || result.status === 403) && result.body !== null && "code" in result.body && typeof result.body.code === "string") refused.code = result.body.code;
+      if (!result.ok && result.status === 409 && result.body !== null && "code" in result.body && typeof result.body.code === "string") refused.code = result.body.code;
       if (isPausedAnswer(result)) await pausedReport(head);
       return result.ok && result.status === 201 && asBody(result.body).accepted === true;
     } catch (error) {
@@ -682,7 +682,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     const attempted = attemptsOf(store.entries(), handle).length > 0;
     // Refused before acceptance: a local outcome only (Appendix G precheck step 3), and nothing was sent to the wallet.
     if (fate === "refused" && !attempted) {
-      // A 409 or 403 at the completing report (a ceiling, a pause, or 1.7.1's country map) refuses before anything is paid: no
+      // A 409 at the completing report (a ceiling, a pause, one tap off, or 1.7.1's country map) refuses before anything is paid: no
       // complete_checkout is ever sent for it. Its code names why, for the developer.
       await local({ state: "failed", source: "gateway_precheck", reason: refused.code === null ? "redeem_refused" : `redeem_refused:${refused.code}` });
       return finish(completion);

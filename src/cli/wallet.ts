@@ -277,7 +277,7 @@ async function readCeilings(io: Io, config: Config, store: Store): Promise<Ceili
     if (!verifyStatement(statement.body, pins, new Date(now())).ok) return unread("its key statement does not verify against the pinned root key");
     await store.append("keys", { statement: statement.body });
     const table = meta.body.currency_table;
-    if (!usableCurrencyTable(table)) return unread("its meta holds no valid currency table");
+    if (!usableCurrencyTable(table)) return unread("its answer has no currency table intent can check; update intent if this goes on");
     return table.currencies;
   } catch (error) {
     // The disclosure log's own failures stop the command (invariant 2); a host that cannot be reached is said.

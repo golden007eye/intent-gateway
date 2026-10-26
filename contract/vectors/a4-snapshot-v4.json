@@ -931,6 +931,11 @@
     },
     {
       "country": "US",
+      "postal_code": "941101",
+      "coarse": null
+    },
+    {
+      "country": "US",
       "postal_code": "9411",
       "coarse": null
     },
@@ -951,6 +956,11 @@
     },
     {
       "country": "CA",
+      "postal_code": "K1A",
+      "coarse": null
+    },
+    {
+      "country": "CA",
       "postal_code": "11A 0B1",
       "coarse": null
     },
@@ -967,6 +977,11 @@
     {
       "country": "AU",
       "postal_code": "200",
+      "coarse": null
+    },
+    {
+      "country": "AU",
+      "postal_code": "20001",
       "coarse": null
     },
     {
@@ -1021,12 +1036,32 @@
     },
     {
       "country": "GB",
+      "postal_code": "SW1A1A",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "SW1AXYZ",
+      "coarse": null
+    },
+    {
+      "country": "GB",
       "postal_code": "1AA 1AA",
       "coarse": null
     },
     {
       "country": "GB",
       "postal_code": "SW1AB 1AA",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "ſW1A 1AA",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "ﬆ 1 1AA",
       "coarse": null
     },
     {
@@ -1046,12 +1081,22 @@
     },
     {
       "country": "IE",
-      "postal_code": "T12 AB34",
+      "postal_code": "T12 AC34",
       "coarse": "T12"
     },
     {
       "country": "IE",
-      "postal_code": "B12 AB34",
+      "postal_code": "T12 AB34",
+      "coarse": null
+    },
+    {
+      "country": "IE",
+      "postal_code": "B12 AC34",
+      "coarse": null
+    },
+    {
+      "country": "IE",
+      "postal_code": "D6W",
       "coarse": null
     },
     {
@@ -1068,6 +1113,16 @@
       "country": "DE",
       "postal_code": " 80331",
       "coarse": "80"
+    },
+    {
+      "country": "DE",
+      "postal_code": "10",
+      "coarse": null
+    },
+    {
+      "country": "DE",
+      "postal_code": "10 garbage",
+      "coarse": null
     },
     {
       "country": "DE",
@@ -1100,6 +1155,11 @@
       "coarse": "10"
     },
     {
+      "country": "NL",
+      "postal_code": "1012",
+      "coarse": null
+    },
+    {
       "country": "ES",
       "postal_code": "28013",
       "coarse": "28"
@@ -1130,6 +1190,11 @@
       "coarse": "10"
     },
     {
+      "country": "BE",
+      "postal_code": "10000",
+      "coarse": null
+    },
+    {
       "country": "AT",
       "postal_code": "1010",
       "coarse": "10"
@@ -1148,6 +1213,11 @@
       "country": "PT",
       "postal_code": "1100 148",
       "coarse": "11"
+    },
+    {
+      "country": "PT",
+      "postal_code": "1100",
+      "coarse": null
     },
     {
       "country": "FI",

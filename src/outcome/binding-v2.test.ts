@@ -14,9 +14,9 @@ const O6 = parseIntegerJson(readFileSync(join(import.meta.dirname, "..", "..", "
 const snapshot = SnapshotV4.parse(O6.snapshot);
 
 describe("vector o6: binding-v2, every case", () => {
-  it("holds the 32 contract cases: 13 to the US, 19 to other countries (1.7.1)", () => {
-    expect(O6.cases.length).toBe(32);
-    expect(O6.cases.filter((c) => c.input.snapshot !== undefined)).toHaveLength(19);
+  it("holds the 38 contract cases: 14 on the US snapshot, 24 with their own (1.7.1: other countries)", () => {
+    expect(O6.cases.length).toBe(38);
+    expect(O6.cases.filter((c) => c.input.snapshot !== undefined)).toHaveLength(24);
   });
 
   // A case's own snapshot (1.7.1: another country) when it has one, else the vector's US snapshot.

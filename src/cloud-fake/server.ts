@@ -60,7 +60,7 @@ import {
   type SnapshotV3,
   type WebAuthnAssertion,
 } from "../contract/index.ts";
-import { PAUSE_CONTRACT_VERSION, PauseRequest, pauseSigningBytes } from "../contract/index.ts";
+import { PauseRequest, pauseSigningBytes } from "../contract/index.ts";
 import { canonicalize, nonIntegerToken, sha256Hex } from "../jcs/index.ts";
 import { bindingResult, bindingV2 } from "../outcome/index.ts";
 import { contentDigest, createNonceCache, verifyRequest } from "../signing/index.ts";
@@ -100,6 +100,8 @@ export const SUMS_1_6_0 = "b75b771e3ae299d74a53f450574af6fab8e63d6bcca2b42aa9570
 export const SUMS_1_6_1 = "bc035ee36b0a8fe54e1b87919c8de215c508ab5369d8254fdcdecf18c23710d8";
 /** The frozen 1.7.0 `SHA256SUMS` sha256 (contract/SOURCE.md), which a 1.7.0 request is answered with. */
 export const SUMS_1_7_0 = "dad42cb22c35fc68948d5a69517ed3db08ba28786f1c81886fb8f334fbbfff5a";
+/** The versions `POST /v1/pause` answers (Appendix H): 1.7.0 and 1.7.1, each with its own header back. */
+const isPauseVersion = (header: string | string[] | undefined): header is "1.7.0" | "1.7.1" => header === "1.7.0" || header === "1.7.1";
 /** A 1.7.x version: submitted checkouts, the currency table, the pause. */
 const isV17 = (version: ServedVersion): boolean => version === "1.7.0" || version === "1.7.1";
 /** The ship-to countries 1.7.0 accepts; 1.7.1 accepts its whole ship_to enum. */
@@ -243,13 +245,15 @@ export interface CheckoutControls {
   setCurrencies(currencies: Readonly<Record<string, CurrencyCeiling>>): void;
   /** Replaces the configured country → currency map (1.7.1); Meta serves those whose currency is in the table. */
   setCountries(countries: Readonly<Record<string, string>>): void;
+  /** A broken 1.7.1 table on Meta, for attack tests: no `countries`, or a version that is not its hash; null serves it right. */
+  setTableFault(fault: "no_countries" | "wrong_version" | null): void;
   /** The account key thumbprints pinned so far (at each first passkey approval of a v4 snapshot). */
   pinned(): readonly string[];
 }
 
 /** What a confirm-page or merchant action did. `status` is what the confirm page or merchant would answer. */
 export interface Outcome {
-  status: 200 | 400 | 403 | 404 | 409 | 410;
+  status: 200 | 400 | 404 | 409 | 410;
   state?: ApprovalState;
   reason?: string;
   /** handoff: the merchant checkout the confirm page redirects to. */
@@ -531,6 +535,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
   };
   let currencies: Readonly<Record<string, CurrencyCeiling>> = options.currencies ?? DEFAULT_CURRENCIES;
   let configuredCountries: Readonly<Record<string, string>> = options.countries ?? DEFAULT_COUNTRIES;
+  let tableFault: "no_countries" | "wrong_version" | null = null;
   let paused = false;
   let blockedStores: ReadonlySet<string> = new Set();
   const pinnedKeys = new Set<string>();
@@ -859,8 +864,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     version === "1.7.1" ? { ...currencies } : Object.fromEntries(Object.entries(currencies).filter(([c]) => c === "USD"));
   /** Meta's currency table in the caller's form: 1.7.1 with `countries`, 1.7.0 the USD row without. */
   const servedTable = (version: ServedVersion): { version: string; currencies: Record<string, CurrencyCeiling>; countries?: Record<string, string> } => {
-    const table = version === "1.7.1" ? { currencies: currenciesFor(version), countries: servedCountries() } : { currencies: currenciesFor(version) };
-    return { version: currencyTableVersion(table), ...table };
+    const table = version === "1.7.1" && tableFault !== "no_countries" ? { currencies: currenciesFor(version), countries: servedCountries() } : { currencies: currenciesFor(version) };
+    return { version: version === "1.7.1" && tableFault === "wrong_version" ? "ct-0000000000000000" : currencyTableVersion(table), ...table };
   };
   const tableVersion = (version: ServedVersion): string => servedTable(version).version;
   /** Whether the served country map still gives a v4 snapshot's ship-to country its currency (1.7.1). */
@@ -1101,7 +1106,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (reportFault !== null) return fail(reportFault, "bad_request", "fake cloud error");
     const parsed = OutcomeReport.safeParse(parseJson(body));
     if (!parsed.success) return fail(400, "bad_request", "body does not match OutcomeReport");
-    // Up to 1.7.0 a report's final_total is Money, USD only; 1.7.1 takes any two-decimal currency (OutcomeMoney).
+    // Up to 1.7.0 a report's final_total is Money, USD only; 1.7.1 takes any two-decimal currency (TwoDecimalMoney).
     if (version !== "1.7.1" && parsed.data.final_total !== undefined && parsed.data.final_total.currency !== "USD") {
       return fail(400, "bad_request", "body does not match OutcomeReport");
     }
@@ -1128,8 +1133,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
         if (snapshot.completion_mode === "shop_agent" && !oneTap) return refused(409, "one_tap_off", "one tap is off");
         const broken = ceilingBroken(snapshot, a.claimedBy, a.handle, at);
         if (broken !== null) return refused(409, broken, `the ${broken === "ceiling_order" ? "order" : "week"} ceiling is exceeded`);
-        // 1.7.1 (security review): the country map is checked again, so a country left out since is not paid.
-        if (a.version === "1.7.1" && !countryServes(snapshot)) return refused(403, "currency_unsupported", "the currency is not the ship-to country's");
+        // 1.7.1: the country map is checked again, so a country left out since is not paid (409, the approval stays approved).
+        if (a.version === "1.7.1" && !countryServes(snapshot)) return refused(409, "currency_unsupported", "the currency is not the ship-to country's");
       }
     } else if (report.completing_report_id !== a.completingReportId) {
       return fail(409, "conflict", "completing_report_id is not the accepted completing report");
@@ -1176,7 +1181,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
     if (body.length > MAX_BODY_BYTES) return fail(413, "too_large", "body over 16 KiB");
     const retry = take(`requests:${ipKey}`, quotas.requests_per_minute, 60, at);
     if (retry !== null) return limited("requests", retry);
-    if (path === "/v1/pause" && method === "POST" && req.headers["intent-contract-version"] === PAUSE_CONTRACT_VERSION) {
+    if (path === "/v1/pause" && method === "POST" && isPauseVersion(req.headers["intent-contract-version"])) {
       const checked = verifyRequest(req.headers, { method, path, body }, { now: at, seenNonce });
       if (!checked.ok) return checked.status === 400 ? DIGEST_MISMATCH() : UNAUTHORIZED();
       return pause(body, at);
@@ -1261,7 +1266,7 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       "content-type": "application/json",
       "content-length": String(bytes.length),
       // An unsupported request version is answered in the newest version this host serves.
-      "intent-contract-version": path === "/v1/pause" && req.headers["intent-contract-version"] === PAUSE_CONTRACT_VERSION ? PAUSE_CONTRACT_VERSION : (version ?? CONTRACT_VERSION),
+      "intent-contract-version": path === "/v1/pause" && isPauseVersion(req.headers["intent-contract-version"]) ? req.headers["intent-contract-version"] : (version ?? CONTRACT_VERSION),
       ...reply.headers,
     };
     const drop = reply.status >= 200 && reply.status < 300 && faultOn("dropReceipt", path);
@@ -1288,8 +1293,8 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       if (paused || accountPaused) return { status: 409, state: a.state, reason: "paused" };
       const broken = ceilingBroken(a.snapshot, passkey.sub, a.handle, at);
       if (broken !== null) return { status: 409, state: a.state, reason: broken };
-      // 1.7.1 (security review): the confirm page checks the country map again; the approval stays pending.
-      if (a.version === "1.7.1" && !countryServes(a.snapshot)) return { status: 403, state: a.state, reason: "currency_unsupported" };
+      // 1.7.1: the confirm page checks the country map again (409); the approval stays pending.
+      if (a.version === "1.7.1" && !countryServes(a.snapshot)) return { status: 409, state: a.state, reason: "currency_unsupported" };
     }
 
     a.claimedBy = passkey.sub;
@@ -1441,6 +1446,9 @@ export async function startFakeCloud(options: FakeCloudOptions = {}): Promise<Fa
       },
       setCountries(map) {
         configuredCountries = { ...map };
+      },
+      setTableFault(fault) {
+        tableFault = fault;
       },
       pinned: () => [...pinnedKeys],
     },
