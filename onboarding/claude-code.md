@@ -24,8 +24,10 @@ How to work:
 In every step, `intent <command>` means this exact command line:
 
 ```console
-$ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} npx -y intent-gateway@0.1.0-preview.5 <command>
+$ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} INTENT_SHOP_CLIENT_ID=5c733ab2-1903-400a-891e-7ba20c09e2a3 npx -y intent-gateway@0.1.0-preview.5 <command>
 ```
+
+`INTENT_SHOP_CLIENT_ID` is Shop's public client for a shopper's own agent: the developer links their own Shop account, for their own use. The linked wallet keeps it, so the `claude mcp add` line in step 2 does not set it.
 
 Your first reply starts with this opening, word for word, and goes straight on with step 1:
 

@@ -10,6 +10,7 @@ import { COMMANDS, COMMON } from "../src/cli/index.ts";
 import { loadPolicy, meet, type Policy, runCases } from "../src/policy/index.ts";
 import { FindOffersInput } from "../src/gateway/index.ts";
 import { SUPPORTED_NODE, nodeSupported } from "../src/runtime/index.ts";
+import { SHOP_PUBLIC_CLIENT_ID } from "../src/disclosure/index.ts";
 
 const repo = join(import.meta.dirname, "..");
 const read = (path: string): string => readFileSync(join(repo, path), "utf8");
@@ -133,6 +134,14 @@ describe("onboarding prompt and policy-advisor skill", () => {
   it("names the Shop link and agent-payments options the CLI has", () => {
     expect(Object.keys(COMMANDS["wallet link"] ?? {}).sort()).toEqual(["finish", "start"]);
     expect(Object.keys(COMMANDS["wallet status"] ?? {}).sort()).toEqual(["timeout", "wait-budget"]);
+  });
+
+  it("the intent line signs in to Shop as Shop's public client: the gateway's own client is refused (a served prompt failed at the link)", () => {
+    const prompt = read(PROMPT);
+    const line = codeOf(prompt).find((c) => c.includes("npx -y intent-gateway@") && c.includes("<command>"));
+    expect(line).toContain(`INTENT_SHOP_CLIENT_ID=${SHOP_PUBLIC_CLIENT_ID} npx`);
+    // The vault keeps the linked client, so the server line needs none.
+    expect(codeOf(prompt).find((c) => c.includes("claude mcp add intent"))).not.toContain("INTENT_SHOP_CLIENT_ID");
   });
 
   it("uses the commands the onboarding needs", () => {
