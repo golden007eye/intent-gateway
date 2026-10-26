@@ -1,6 +1,6 @@
 # Appendix E: Approval proof (normative)
 
-Contract version 1.7.0. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/e1-approval-proof.json` (ES256), `vectors/e1-rs256-approval-proof.json` (RS256), `vectors/e2-snapshot-v2-request.json` (step 7, snapshots v2 and v3), `vectors/e3-snapshot-v4-request.json` (step 7, snapshot v4).
+Contract version 1.7.1. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/e1-approval-proof.json` (ES256), `vectors/e1-rs256-approval-proof.json` (RS256), `vectors/e2-snapshot-v2-request.json` (step 7, snapshots v2 and v3), `vectors/e3-snapshot-v4-request.json` (step 7, snapshot v4).
 
 The buyer approves a purchase with a passkey on the confirm page. The proof carries that passkey assertion, the passkey's public key and Intent Cloud's signature, so the gateway can check the approval itself. `GET /v1/approvals/{approval_handle}` returns it as `proof` once the approval is `approved`, `handed_off` or `ordered`; it is absent while `pending` and after a rejection or expiry.
 

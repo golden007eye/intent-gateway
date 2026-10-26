@@ -1,12 +1,12 @@
-// The pure rules of a submitted Shop checkout (contract 1.7.0, Appendix A "Snapshot v4" and Appendix H; vectors a4,
+// The pure rules of a submitted Shop checkout (contract 1.7.1, Appendix A "Snapshot v4" and Appendix H; vectors a4,
 // e3 and h1): coarse postcodes, the currency table version, the account key thumbprint, a v4 snapshot's own rules,
 // and step 7 for a v4 snapshot against the CheckoutRequest the gateway sent. Pure.
 import { createHash } from "node:crypto";
 import { canonicalize } from "../jcs/index.ts";
-import { coarsen } from "../shipto/index.ts";
-import { type AccountKey, type AnySnapshot, type CheckoutRequest, type CheckoutTotals, type CurrencyCeiling, ShipToCountry, SnapshotV4 } from "./schemas.ts";
+import { coarsen, isCoarse } from "../shipto/index.ts";
+import { type AccountKey, type AnySnapshot, type CheckoutRequest, type CheckoutTotals, type CurrencyCeiling, type CurrencyTable, ShipToCountry, SnapshotV4 } from "./schemas.ts";
 
-/** The currencies a 1.7.0 currency table may list: ISO 4217 minor unit 2 (Appendix A "Currency table and ceiling"). */
+/** The currencies a currency table may list: ISO 4217 minor unit 2 (Appendix A "Currency table and ceiling"). */
 export const TWO_DECIMAL_CURRENCIES = ["AUD", "CAD", "CHF", "CZK", "DKK", "EUR", "GBP", "HKD", "MXN", "NOK", "NZD", "PLN", "SEK", "SGD", "USD"] as const;
 
 /**
@@ -17,17 +17,39 @@ export const COARSE_COUNTRIES: readonly ShipToCountry[] = ShipToCountry.options;
 export type CoarseCountry = ShipToCountry;
 
 /**
- * `coarse(country, code)` of Appendix A: spaces and `-` removed, upper-cased, then the first 5 (US), 3 (CA) or all 4
- * (AU) characters, which must match the country's pattern; null when there is no coarse code, and for a country this
- * contract does not ship to. The rules themselves are src/shipto's, which knows more countries than the contract.
+ * `coarse(country, code)` of Appendix A: spaces and `-` removed, upper-cased, then the country's cut (US the first 5,
+ * CA the first 3, AU all 4, GB all but the inward code, IE the first 3, the euro countries the first 2), which must
+ * match the country's pattern; null when there is no coarse code, and for a country this contract does not ship to.
+ * It takes a full postcode, never an already-coarse one. The rules themselves are src/shipto's.
  */
 export function coarsePostcode(country: string, code: string): string | null {
   return (COARSE_COUNTRIES as readonly string[]).includes(country) ? coarsen(country, code) : null;
 }
 
-/** `"ct-"` + the first 16 hex characters of SHA-256(JCS(currencies)): the currency table's version. */
-export function currencyTableVersion(currencies: Readonly<Record<string, CurrencyCeiling>>): string {
-  return `ct-${createHash("sha256").update(canonicalize(currencies), "utf8").digest("hex").slice(0, 16)}`;
+/** Whether `code` is a coarse postcode of `country` as submitted: its own country's pattern, for a contract country. */
+export function isCoarsePostcode(country: string, code: string): boolean {
+  return (COARSE_COUNTRIES as readonly string[]).includes(country) && isCoarse(country, code);
+}
+
+/**
+ * The currency table's version: `"ct-"` + the first 16 hex characters of SHA-256(JCS({currencies, countries})) for a
+ * 1.7.1 table, or of SHA-256(JCS(currencies)) for a 1.7.0 one (no `countries`).
+ */
+export function currencyTableVersion(table: { readonly currencies: Readonly<Record<string, CurrencyCeiling>>; readonly countries?: Readonly<Record<string, string>> | undefined }): string {
+  const hashed = table.countries === undefined ? table.currencies : { currencies: table.currencies, countries: table.countries };
+  return `ct-${createHash("sha256").update(canonicalize(hashed), "utf8").digest("hex").slice(0, 16)}`;
+}
+
+/**
+ * Whether a 1.7.1 currency table may be used: it has `countries`, lists two-decimal currencies only, and its version is
+ * the hash of what it holds. A table that fails any of these is not used.
+ */
+export function usableCurrencyTable(table: CurrencyTable | undefined): table is CurrencyTable & { readonly countries: Readonly<Record<string, string>> } {
+  return (
+    table?.countries !== undefined &&
+    Object.keys(table.currencies).every((c) => (TWO_DECIMAL_CURRENCIES as readonly string[]).includes(c)) &&
+    currencyTableVersion(table) === table.version
+  );
 }
 
 /** RFC 7638 thumbprint of an Ed25519 account key (Appendix H): base64url SHA-256 of {"crv","kty","x"}, no spaces. */
@@ -79,7 +101,7 @@ export function snapshotV4Problem(value: unknown): string | null {
   if (!parsed.success) return "schema";
   const s = parsed.data;
   if (!totalsAddUp(s.totals)) return "totals";
-  if (coarsePostcode(s.ship_to.country, s.ship_to.postal_code_coarse) !== s.ship_to.postal_code_coarse) return "ship_to";
+  if (!isCoarsePostcode(s.ship_to.country, s.ship_to.postal_code_coarse)) return "ship_to";
   if ((s.completion_mode === "handoff") !== (s.continue_url_hash !== undefined)) return "continue_url_hash";
   return null;
 }
@@ -104,7 +126,7 @@ export const V4_FIELDS = [
 export type V4Field = (typeof V4_FIELDS)[number];
 
 /**
- * Appendix E step 7 (1.7.0) for an approval from `POST /v1/checkouts`: the fields of `snapshot` that are not the
+ * Appendix E step 7 (1.7.0, unchanged in 1.7.1) for an approval from `POST /v1/checkouts`: the fields of `snapshot` that are not the
  * request the gateway sent, in e3's order, or ["v"] alone when it is not a v4 snapshot. [] means it is the request.
  */
 export function checkoutRequestProblems(snapshot: unknown, request: CheckoutRequest): (V4Field | "v")[] {

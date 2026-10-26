@@ -1,25 +1,58 @@
-// binding-v2 (contract 1.7.0, Appendix G) replayed from vector o6. Expected values come from Intent Cloud's vector,
+// binding-v2 (contract 1.7.1, Appendix G) replayed from vector o6. Expected values come from Intent Cloud's vector,
 // never from this implementation; the vector is read with parseIntegerJson like every wire input.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { type Binding, SnapshotV4 } from "../contract/index.ts";
+import { type Binding, coarsePostcode, SnapshotV4 } from "../contract/index.ts";
 import { parseIntegerJson } from "../jcs/index.ts";
 import { BindingError, bindingV2, type BindingContext, type ObservedOrderV2 } from "./index.ts";
 
 const O6 = parseIntegerJson(readFileSync(join(import.meta.dirname, "..", "..", "contract", "vectors", "o6-binding-v2.json"), "utf8")) as {
   snapshot: unknown;
-  cases: { name: string; input: { observed: ObservedOrderV2; context: BindingContext }; expected: Binding }[];
+  cases: { name: string; input: { observed: ObservedOrderV2; context: BindingContext; snapshot?: unknown }; expected: Binding }[];
 };
 const snapshot = SnapshotV4.parse(O6.snapshot);
 
 describe("vector o6: binding-v2, every case", () => {
-  it("holds the 13 contract cases", () => {
-    expect(O6.cases.length).toBe(13);
+  it("holds the 38 contract cases: 14 on the US snapshot, 24 with their own (1.7.1: other countries)", () => {
+    expect(O6.cases.length).toBe(38);
+    expect(O6.cases.filter((c) => c.input.snapshot !== undefined)).toHaveLength(24);
   });
 
+  // A case's own snapshot (1.7.1: another country) when it has one, else the vector's US snapshot.
   it.each(O6.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
-    expect(bindingV2(snapshot, c.input.observed, c.input.context)).toEqual(c.expected);
+    const s = c.input.snapshot === undefined ? snapshot : SnapshotV4.parse(c.input.snapshot);
+    expect(bindingV2(s, c.input.observed, c.input.context)).toEqual(c.expected);
+  });
+
+  // What the gateway's chain records in place of the full postcode (its coarse form, taken in memory) must give the
+  // same verdict as the full postcode, so `intent verify` can re-run it; the full code is never recorded.
+  it.each(O6.cases.filter((c) => typeof c.input.observed.ship_to_postal_code === "string").map((c) => [c.name, c] as const))(
+    "recorded coarse code gives the same verdict: %s",
+    (_name, c) => {
+      const s = c.input.snapshot === undefined ? snapshot : SnapshotV4.parse(c.input.snapshot);
+      const { ship_to_postal_code: full, ...rest } = c.input.observed;
+      const recorded = { ...rest, ship_to_postal_code_coarse: coarsePostcode(s.ship_to.country, full as string) ?? "" };
+      expect(bindingV2(s, recorded, c.input.context)).toEqual(c.expected);
+    },
+  );
+
+  it("attack (security review): an observed postcode without its country is unknown, never match", () => {
+    const gb = SnapshotV4.parse(O6.cases.find((c) => c.name.startsWith("GB SW1A"))?.input.snapshot);
+    const base = { mode: "shop_agent", ship_to_optional: false } as const;
+    expect(bindingV2(gb, { ship_to_postal_code: "SW1A 1AA" }, base).checks.ship_to).toBe("unknown");
+    expect(bindingV2(gb, { ship_to_postal_code_coarse: "SW1A" }, base).checks.ship_to).toBe("unknown");
+    expect(bindingV2(gb, { ship_to_country: "IE", ship_to_postal_code: "SW1A 1AA" }, base).checks.ship_to).toBe("differs");
+  });
+
+  it("attack: a recorded coarse code is compared as it is, never coarsened again, and an empty one differs", () => {
+    const gb = SnapshotV4.parse(O6.cases.find((c) => c.name.startsWith("GB SW1A"))?.input.snapshot);
+    const base = { mode: "shop_agent", ship_to_optional: false } as const;
+    expect(bindingV2(gb, { ship_to_country: "GB", ship_to_postal_code_coarse: "SW1A" }, base).checks.ship_to).toBe("match");
+    expect(bindingV2(gb, { ship_to_country: "GB", ship_to_postal_code_coarse: "" }, base).checks.ship_to).toBe("differs");
+    expect(bindingV2(gb, { ship_to_country: "GB", ship_to_postal_code_coarse: "SW1" }, base).checks.ship_to).toBe("differs");
+    // The full postcode wins when both are given: an already coarse "SW1A" as the full code has no coarse form.
+    expect(bindingV2(gb, { ship_to_country: "GB", ship_to_postal_code: "SW1A", ship_to_postal_code_coarse: "SW1A" }, base).checks.ship_to).toBe("differs");
   });
 
   it("attack: a mode outside the contract is an error, not a result", () => {

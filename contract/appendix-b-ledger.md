@@ -1,6 +1,6 @@
 # Appendix B: Approval ledger (normative)
 
-Contract version 1.7.0. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/b1-ledger.json` and `vectors/b2-ledger-outcome.json`.
+Contract version 1.7.1. Published under Apache-2.0 as part of the Intent Cloud public contract. Vectors: `vectors/b1-ledger.json` and `vectors/b2-ledger-outcome.json`.
 
 ## Entry
 `E = {seq, prev_hash, approval, event, snapshot_hash, credential_id?, rule_version, recorded_at}`.

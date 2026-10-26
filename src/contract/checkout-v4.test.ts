@@ -1,4 +1,4 @@
-// Contract 1.7.0 vectors a4 (snapshot v4, coarse postcodes, currency tables), e3 (step 7 for v4), h1 (account key
+// Contract 1.7.1 vectors a4 (snapshot v4, coarse postcodes, submitted postcodes, country currencies, currency tables), e3 (step 7 for v4), h1 (account key
 // thumbprints) and h2 (pause signatures), replayed against src/contract's pure rules.
 import { createPrivateKey, createPublicKey, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -8,6 +8,7 @@ import { canonicalize, nonIntegerToken, parseIntegerJson, sha256Hex } from "../j
 import {
   accountKeyThumbprint,
   CheckoutRequest,
+  CoarseShipTo,
   checkoutRefHash,
   checkoutRequestProblems,
   coarsePostcode,
@@ -15,9 +16,11 @@ import {
   continueUrlHash,
   CurrencyTable,
   currencyTableVersion,
+  isCoarsePostcode,
   PauseRequest,
   SnapshotV4,
   snapshotV4Problem,
+  usableCurrencyTable,
 } from "./index.ts";
 
 type Obj = Record<string, unknown>;
@@ -71,15 +74,44 @@ describe("a4: snapshot v4", () => {
     expect(coarsePostcode(c.country as string, c.postal_code as string)).toBe(c.coarse);
   });
 
-  it.each((a4.currency_tables as Obj[]).map((c) => [c.version as string, c] as const))("currency table %s", (_, c) => {
-    expect(canonicalize(c.currencies)).toBe(c.jcs);
-    expect(currencyTableVersion(c.currencies as Record<string, { order: number; week: number }>)).toBe(c.version);
+  // A submitted postcode must already be coarse, and in its own country's form (else Intent Cloud answers 400).
+  it.each((a4.submitted as Obj[]).map((c) => [`${c.country as string} ${JSON.stringify(c.postal_code)}`, c] as const))("submitted %s", (_, c) => {
+    const accepted = CoarseShipTo.safeParse({ country: c.country, postal_code: c.postal_code }).success && isCoarsePostcode(c.country as string, c.postal_code as string);
+    expect(accepted).toBe(c.accepted);
+  });
+
+  const countryCurrencies = a4.country_currencies as { countries: Record<string, string>; cases: { country: string; currency: string; refused: string | null }[] };
+  it.each(countryCurrencies.cases.map((c) => [`${c.country} in ${c.currency}`, c] as const))("country currency: %s", (_, c) => {
+    expect(countryCurrencies.countries[c.country] === c.currency ? null : "currency_unsupported").toBe(c.refused);
+  });
+
+  type Table = { version: string; currencies: Record<string, { order: number; week: number }>; countries?: Record<string, string>; jcs: string };
+  it.each((a4.currency_tables as Table[]).map((c) => [c.version, c] as const))("currency table %s", (_, c) => {
+    const hashed = c.countries === undefined ? c.currencies : { currencies: c.currencies, countries: c.countries };
+    expect(canonicalize(hashed)).toBe(c.jcs);
+    expect(currencyTableVersion(c)).toBe(c.version);
+    // The gateway uses only a 1.7.1 table: one without countries (1.7.0's form) is not used.
+    expect(usableCurrencyTable(CurrencyTable.parse({ version: c.version, currencies: c.currencies, ...(c.countries === undefined ? {} : { countries: c.countries }) }))).toBe(c.countries !== undefined);
+  });
+
+  it("attack: a table whose countries were changed after its version was taken is not used", () => {
+    const table = (a4.currency_tables as Table[])[0] as Table;
+    expect(usableCurrencyTable({ version: table.version, currencies: table.currencies, countries: { ...table.countries, GB: "EUR" } })).toBe(false);
+    expect(usableCurrencyTable({ version: table.version, currencies: table.currencies })).toBe(false);
+  });
+
+  it("attack: a table that lists a currency without two decimals is not used, even when its version is right", () => {
+    const body = { currencies: { USD: { order: 1, week: 1 }, JPY: { order: 1, week: 1 } }, countries: { US: "USD" } };
+    expect(usableCurrencyTable({ version: currencyTableVersion(body), ...body })).toBe(false);
   });
 });
 
 describe("currency table keys (the spec has no propertyNames)", () => {
   it.each(["usd", "US", "USDX", "", "U$D"])("attack: the key %j is refused", (key) => {
     expect(CurrencyTable.safeParse({ version: "ct-0000000000000000", currencies: { [key]: { order: 1, week: 1 } } }).success).toBe(false);
+  });
+  it.each(["us", "USA", "", "U1"])("attack: the country key %j is refused", (key) => {
+    expect(CurrencyTable.safeParse({ version: "ct-0000000000000000", currencies: { USD: { order: 1, week: 1 } }, countries: { [key]: "USD" } }).success).toBe(false);
   });
   it("an empty table is refused, a USD one accepted", () => {
     expect(CurrencyTable.safeParse({ version: "ct-0000000000000000", currencies: {} }).success).toBe(false);

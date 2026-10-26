@@ -1,6 +1,6 @@
 # Appendix C: Gateway request signatures (normative)
 
-Contract version 1.7.0. Published under Apache-2.0 as part of the Intent Cloud public contract. Vector: `vectors/c2-http-signature.json`.
+Contract version 1.7.1. Published under Apache-2.0 as part of the Intent Cloud public contract. Vector: `vectors/c2-http-signature.json`.
 
 Every gateway → Intent Cloud request is signed with HTTP Message Signatures (RFC 9421) and a session key. There is no bearer token and no account: the key is the caller's only identity.
 

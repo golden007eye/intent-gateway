@@ -1,6 +1,6 @@
 # ADR-0025: Buyers outside the US: a country and postcode, caps scaled per currency
 
-Status: accepted · 2026-10-25 · Amends ADR-0024 (the submit's currency and ship-to checks); relates to ADR-0009 (policy v1 narrows only), ADR-0021 (search seam)
+Status: accepted · 2026-10-25 · Amended by ADR-0026 (contract 1.7.1) · Amends ADR-0024 (the submit's currency and ship-to checks); relates to ADR-0009 (policy v1 narrows only), ADR-0021 (search seam)
 
 ## Context
 

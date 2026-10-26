@@ -12,6 +12,7 @@ import {
   ApprovalProofV1,
   ApprovalStatus as ApprovalStatusV2,
   Cart,
+  currencyTableVersion,
   ErrorBody,
   Jwks,
   KeyStatement,
@@ -20,6 +21,7 @@ import {
   Receipt,
   SearchResponse,
   SnapshotV1,
+  usableCurrencyTable,
 } from "../contract/index.ts";
 
 // The requests in this file send no Intent-Contract-Version, so the fake answers as 1.5.0 (v1 snapshots and proofs),
@@ -36,11 +38,14 @@ import {
   type CatalogItem,
   CONFIRM_ORIGIN,
   DEFAULT_CATALOG,
+  DEFAULT_COUNTRIES,
   DEFAULT_CURRENCIES,
+  LIVE_CURRENCIES,
   type FakeCloud,
   type FakeCloudOptions,
   SoftPasskey,
   startFakeCloud,
+  SUMS_1_7_0,
 } from "./index.ts";
 import { addressKey } from "./server.ts";
 
@@ -280,15 +285,43 @@ describe("GET /v1/meta", () => {
     expect(json).not.toHaveProperty("enrol_origin");
   });
 
-  it("with Intent-Contract-Version: 1.7.0 reports 1.7.0, the vendored SHA256SUMS hash and the currency table", async () => {
+  it("with Intent-Contract-Version: 1.7.1 reports 1.7.1, the vendored SHA256SUMS hash and the currency table with its countries", async () => {
     const cloud = await start();
-    const { res, json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.7.0" } });
+    const { res, json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.7.1" } });
     expect(res.status).toBe(200);
-    expect(res.headers.get("intent-contract-version")).toBe("1.7.0");
+    expect(res.headers.get("intent-contract-version")).toBe("1.7.1");
     const meta = Meta.parse(json);
     const source = /sha256 of `SHA256SUMS`: `([0-9a-f]{64})`/.exec(readFileSync(join(repo, "contract", "SOURCE.md"), "utf8"));
-    expect(meta).toMatchObject({ contract_version: "1.7.0", contract_sums_sha256: source?.[1] });
+    expect(meta).toMatchObject({ contract_version: "1.7.1", contract_sums_sha256: source?.[1] });
     expect(meta.currency_table?.currencies).toEqual(DEFAULT_CURRENCIES);
+    expect(meta.currency_table?.countries).toEqual(DEFAULT_COUNTRIES);
+    expect(usableCurrencyTable(meta.currency_table)).toBe(true);
+  });
+
+  it("serves only the countries whose currency is in the table, and the version covers that served map", async () => {
+    const cloud = await start({ currencies: { USD: { order: 1, week: 1 }, EUR: { order: 1, week: 1 } } });
+    const { json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.7.1" } });
+    const table = Meta.parse(json).currency_table;
+    expect(Object.keys(table?.countries ?? {}).sort()).toEqual(["AT", "BE", "DE", "ES", "FI", "FR", "IE", "IT", "NL", "PT", "US"]);
+    expect(usableCurrencyTable(table)).toBe(true);
+  });
+
+  it("with Intent Cloud's live ceilings, serves exactly its tables: ct-9fd2a7de9ddcf8e2 to 1.7.1, ct-a5ec7a18fbcbdda7 to 1.7.0", async () => {
+    const cloud = await start({ currencies: LIVE_CURRENCIES });
+    const table = async (version: string) =>
+      Meta.parse((await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": version } })).json).currency_table;
+    expect(await table("1.7.1")).toMatchObject({ version: "ct-9fd2a7de9ddcf8e2", currencies: LIVE_CURRENCIES, countries: DEFAULT_COUNTRIES });
+    expect(await table("1.7.0")).toEqual({ version: "ct-a5ec7a18fbcbdda7", currencies: { USD: { order: 5000, week: 10_000 } } });
+  });
+
+  it("with Intent-Contract-Version: 1.7.0 reports the frozen 1.7.0 sums and the USD row only, without countries", async () => {
+    const cloud = await start();
+    const { json } = await call(cloud, createSession(), "GET", "/v1/meta", "", { headers: { "intent-contract-version": "1.7.0" } });
+    const meta = Meta.parse(json);
+    expect(meta).toMatchObject({ contract_version: "1.7.0", contract_sums_sha256: SUMS_1_7_0 });
+    expect(meta.currency_table?.currencies).toEqual({ USD: DEFAULT_CURRENCIES.USD });
+    expect(meta.currency_table).not.toHaveProperty("countries");
+    expect(meta.currency_table?.version).toBe(currencyTableVersion({ currencies: { USD: DEFAULT_CURRENCIES.USD as { order: number; week: number } } }));
   });
 
   it("with Intent-Contract-Version: 1.6.1 reports the frozen 1.6.1 sums and no currency table", async () => {

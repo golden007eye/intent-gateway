@@ -1,7 +1,7 @@
 {
   "id": "A4",
   "appendix": "A",
-  "description": "Snapshot v4 (contract 1.7.0): one shop_agent and one handoff snapshot of a submitted Shop checkout. checkout_ref_hash is over input.checkout_id (the part before ?), continue_url_hash over input.continue_url (handoff only), completer_keyid is gw- + the public key of completer_seed_hex and account_key_thumbprint the RFC 7638 thumbprint of account_seed_hex's key (Appendix H). invalid lists v4 snapshots a validator refuses, one rule broken in each. coarse lists coarse(country, postal_code) of Appendix A (null: no coarse code). continue_urls lists hand-off targets a checkout of that store_site and myshopify_domain allows. currency_tables gives the version of each table: ct- + the first 16 hex of SHA-256(JCS(currencies)); the second is the kill switch's all-zero table. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
+  "description": "Snapshot v4 (contract 1.7.0, as 1.7.1 amends it): one shop_agent and one handoff snapshot of a submitted Shop checkout to the US, and one shop_agent snapshot to GB. checkout_ref_hash is over input.checkout_id (the part before ?), continue_url_hash over input.continue_url (handoff only), completer_keyid is gw- + the public key of completer_seed_hex and account_key_thumbprint the RFC 7638 thumbprint of account_seed_hex's key (Appendix H). invalid lists v4 snapshots a validator refuses, one rule broken in each. coarse lists coarse(country, postal_code) of Appendix A (null: no coarse code). submitted lists CheckoutRequest ship_to postcodes and whether Intent Cloud accepts them (false: 400). country_currencies lists checkouts to a country in a currency against the default table's countries (refused: the 403 code). continue_urls lists hand-off targets a checkout of that store_site and myshopify_domain allows. currency_tables gives the version of each table: ct- + the first 16 hex of SHA-256(jcs), jcs being JCS({currencies, countries}) in 1.7.1 and JCS(currencies) in 1.7.0 (the second table, no countries); the third drops FI from the countries, the fourth is the kill switch's all-zero table, the fifth a USD-only kill switch. countries is the served map: only the countries whose currency is in currencies (configured_countries, when it differs, is the configured map), and the version covers the served map. TEST KEY ONLY: published so every implementation can reproduce this vector; never use it for anything else.",
   "cases": [
     {
       "name": "v4 shop_agent snapshot",
@@ -35,17 +35,17 @@
           },
           "completion_mode": "shop_agent",
           "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-          "currency_table": "ct-a5ec7a18fbcbdda7",
+          "currency_table": "ct-9fd2a7de9ddcf8e2",
           "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
         }
       },
       "expected": {
-        "jcs": "{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"approval\":\"ap_TEST0005\",\"checkout_ref_hash\":\"sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452\",\"completer_keyid\":\"gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s\",\"completion_mode\":\"shop_agent\",\"currency\":\"USD\",\"currency_table\":\"ct-a5ec7a18fbcbdda7\",\"expires_at\":\"2026-10-18T20:15:00Z\",\"myshopify_domain\":\"test-shop.myshopify.com\",\"nonce\":\"ICEiIyQlJicoKSorLC0uLw\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_code_coarse\":\"94110\"},\"store_name\":\"Test Shop\",\"store_site\":\"https://shop.example\",\"title\":\"Trail Runner 3 - US 10 / Blue\",\"totals\":{\"shipping\":500,\"subtotal\":1200,\"tax\":107,\"total\":1807},\"v\":4,\"variant_ref\":\"gid://shopify/ProductVariant/1001\"}",
-        "snapshot_hash": "79329bbf8fa1ed0e94d667d83c07d04785fa79eff81b5bd042882e1935d8676f",
-        "check_code": "79329bbf",
+        "jcs": "{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"approval\":\"ap_TEST0005\",\"checkout_ref_hash\":\"sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452\",\"completer_keyid\":\"gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s\",\"completion_mode\":\"shop_agent\",\"currency\":\"USD\",\"currency_table\":\"ct-9fd2a7de9ddcf8e2\",\"expires_at\":\"2026-10-18T20:15:00Z\",\"myshopify_domain\":\"test-shop.myshopify.com\",\"nonce\":\"ICEiIyQlJicoKSorLC0uLw\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_code_coarse\":\"94110\"},\"store_name\":\"Test Shop\",\"store_site\":\"https://shop.example\",\"title\":\"Trail Runner 3 - US 10 / Blue\",\"totals\":{\"shipping\":500,\"subtotal\":1200,\"tax\":107,\"total\":1807},\"v\":4,\"variant_ref\":\"gid://shopify/ProductVariant/1001\"}",
+        "snapshot_hash": "631497c3313e073d05359892e32c41876a113a36ae8e70d48f8f9450b551aaff",
+        "check_code": "631497c3",
         "challenge": {
-          "approve": "C1qVou9FAQgCeK-UahkGi368BKVb0JUujGdMWrYV-Ag",
-          "reject": "lyYRkwuM1nt9AmegNFjFYVR07gAka89mJK6T5KuRmAU"
+          "approve": "E58bseJV-meLeuh61sPrXasJ-cMznHlI9aT9sL6aJr4",
+          "reject": "AYF5z_SM6ctTpc1dR624rs7IMBn8wMhtPuvAJX9djDs"
         }
       }
     },
@@ -81,19 +81,65 @@
           },
           "completion_mode": "handoff",
           "completer_keyid": "gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw",
-          "currency_table": "ct-a5ec7a18fbcbdda7",
+          "currency_table": "ct-9fd2a7de9ddcf8e2",
           "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
           "continue_url_hash": "sha256:eccdf29c57e944cce8f5c48d54da4c91bf96a94ae3bbc29dbefef042da7f206a"
         },
         "continue_url": "https://shop.app/checkouts/finalizer/r/TEST0006?key=TESTKEY0006"
       },
       "expected": {
-        "jcs": "{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"approval\":\"ap_TEST0006\",\"checkout_ref_hash\":\"sha256:13d80a1f12ac415f4fe1455400855118eb16fda8cca29e70bdc75340ca06f886\",\"completer_keyid\":\"gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw\",\"completion_mode\":\"handoff\",\"continue_url_hash\":\"sha256:eccdf29c57e944cce8f5c48d54da4c91bf96a94ae3bbc29dbefef042da7f206a\",\"currency\":\"USD\",\"currency_table\":\"ct-a5ec7a18fbcbdda7\",\"expires_at\":\"2026-10-18T20:15:00Z\",\"myshopify_domain\":\"test-shop.myshopify.com\",\"nonce\":\"MDEyMzQ1Njc4OTo7PD0-Pw\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_code_coarse\":\"94110\"},\"store_name\":\"Test Shop\",\"store_site\":\"https://shop.example\",\"title\":\"Trail Runner 3 - US 10 / Blue\",\"totals\":{\"shipping\":500,\"subtotal\":1200,\"tax\":107,\"total\":1807},\"v\":4,\"variant_ref\":\"gid://shopify/ProductVariant/1001\"}",
-        "snapshot_hash": "eda4a1922a6b7a63c9a05f75444f8401b12449971790e7d8f82d62bb6573ce64",
-        "check_code": "eda4a192",
+        "jcs": "{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"approval\":\"ap_TEST0006\",\"checkout_ref_hash\":\"sha256:13d80a1f12ac415f4fe1455400855118eb16fda8cca29e70bdc75340ca06f886\",\"completer_keyid\":\"gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw\",\"completion_mode\":\"handoff\",\"continue_url_hash\":\"sha256:eccdf29c57e944cce8f5c48d54da4c91bf96a94ae3bbc29dbefef042da7f206a\",\"currency\":\"USD\",\"currency_table\":\"ct-9fd2a7de9ddcf8e2\",\"expires_at\":\"2026-10-18T20:15:00Z\",\"myshopify_domain\":\"test-shop.myshopify.com\",\"nonce\":\"MDEyMzQ1Njc4OTo7PD0-Pw\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"US\",\"postal_code_coarse\":\"94110\"},\"store_name\":\"Test Shop\",\"store_site\":\"https://shop.example\",\"title\":\"Trail Runner 3 - US 10 / Blue\",\"totals\":{\"shipping\":500,\"subtotal\":1200,\"tax\":107,\"total\":1807},\"v\":4,\"variant_ref\":\"gid://shopify/ProductVariant/1001\"}",
+        "snapshot_hash": "6a55e49f629d6e3092e5d56dce1445c572ae22a5bf565d72e19531879eaf132f",
+        "check_code": "6a55e49f",
         "challenge": {
-          "approve": "W8DPePSbkUKuXCLXRZ2pcwFT-bgKyFVvrbVXC76kX6Y",
-          "reject": "pIi54O499HAAZhgJwSs2756Kghov2kYUMDkvH0HtwtU"
+          "approve": "6H0HYBUAwVFOaU0xztJyYP1yVG6FyCKNLM2D2x3GqAk",
+          "reject": "O-UagfBlDtmuCYqRfy9b-zLnweegSZrktEb78P0dd4k"
+        }
+      }
+    },
+    {
+      "name": "v4 shop_agent snapshot to GB",
+      "input": {
+        "checkout_id": "gid://shopify/Checkout/TEST0005?key=TESTKEY0005",
+        "completer_seed_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+        "account_seed_hex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+        "snapshot": {
+          "v": 4,
+          "approval": "ap_TEST0005",
+          "nonce": "ICEiIyQlJicoKSorLC0uLw",
+          "expires_at": "2026-10-18T20:15:00Z",
+          "rule_version": "recheck-v1",
+          "store_name": "Test Shop",
+          "store_site": "https://shop.example",
+          "myshopify_domain": "test-shop.myshopify.com",
+          "variant_ref": "gid://shopify/ProductVariant/1001",
+          "title": "Trail Runner 3 - US 10 / Blue",
+          "quantity": 1,
+          "currency": "GBP",
+          "totals": {
+            "subtotal": 1200,
+            "shipping": 500,
+            "tax": 107,
+            "total": 1807
+          },
+          "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+          "ship_to": {
+            "country": "GB",
+            "postal_code_coarse": "SW1A"
+          },
+          "completion_mode": "shop_agent",
+          "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+          "currency_table": "ct-9fd2a7de9ddcf8e2",
+          "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+        }
+      },
+      "expected": {
+        "jcs": "{\"account_key_thumbprint\":\"D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc\",\"approval\":\"ap_TEST0005\",\"checkout_ref_hash\":\"sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452\",\"completer_keyid\":\"gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s\",\"completion_mode\":\"shop_agent\",\"currency\":\"GBP\",\"currency_table\":\"ct-9fd2a7de9ddcf8e2\",\"expires_at\":\"2026-10-18T20:15:00Z\",\"myshopify_domain\":\"test-shop.myshopify.com\",\"nonce\":\"ICEiIyQlJicoKSorLC0uLw\",\"quantity\":1,\"rule_version\":\"recheck-v1\",\"ship_to\":{\"country\":\"GB\",\"postal_code_coarse\":\"SW1A\"},\"store_name\":\"Test Shop\",\"store_site\":\"https://shop.example\",\"title\":\"Trail Runner 3 - US 10 / Blue\",\"totals\":{\"shipping\":500,\"subtotal\":1200,\"tax\":107,\"total\":1807},\"v\":4,\"variant_ref\":\"gid://shopify/ProductVariant/1001\"}",
+        "snapshot_hash": "14b0f937c0d074e89d543885195779f3f611e8864bcc0d2a06f63990fbdf6719",
+        "check_code": "14b0f937",
+        "challenge": {
+          "approve": "TV2EpSQFqxwH3snxyMtN9YMQBvIA5uHAKXdhk7tUbMQ",
+          "reject": "HLu7akzhtB-_J1o0Q1ReFAEyjVwhBpgTX0zCAyfD6YY"
         }
       }
     }
@@ -127,7 +173,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -159,7 +205,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -191,7 +237,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -223,7 +269,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -250,12 +296,204 @@
         },
         "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
         "ship_to": {
+          "country": "JP",
+          "postal_code_coarse": "100"
+        },
+        "completion_mode": "shop_agent",
+        "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
+        "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
+      "name": "a full GB postcode",
+      "snapshot": {
+        "v": 4,
+        "approval": "ap_TEST0005",
+        "nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "expires_at": "2026-10-18T20:15:00Z",
+        "rule_version": "recheck-v1",
+        "store_name": "Test Shop",
+        "store_site": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "variant_ref": "gid://shopify/ProductVariant/1001",
+        "title": "Trail Runner 3 - US 10 / Blue",
+        "quantity": 1,
+        "currency": "USD",
+        "totals": {
+          "subtotal": 1200,
+          "shipping": 500,
+          "tax": 107,
+          "total": 1807
+        },
+        "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+        "ship_to": {
           "country": "GB",
+          "postal_code_coarse": "SW1A1AA"
+        },
+        "completion_mode": "shop_agent",
+        "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
+        "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
+      "name": "a lowercase GB outward code",
+      "snapshot": {
+        "v": 4,
+        "approval": "ap_TEST0005",
+        "nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "expires_at": "2026-10-18T20:15:00Z",
+        "rule_version": "recheck-v1",
+        "store_name": "Test Shop",
+        "store_site": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "variant_ref": "gid://shopify/ProductVariant/1001",
+        "title": "Trail Runner 3 - US 10 / Blue",
+        "quantity": 1,
+        "currency": "USD",
+        "totals": {
+          "subtotal": 1200,
+          "shipping": 500,
+          "tax": 107,
+          "total": 1807
+        },
+        "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+        "ship_to": {
+          "country": "GB",
+          "postal_code_coarse": "sw1a"
+        },
+        "completion_mode": "shop_agent",
+        "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
+        "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
+      "name": "an IE routing key with a letter it never has",
+      "snapshot": {
+        "v": 4,
+        "approval": "ap_TEST0005",
+        "nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "expires_at": "2026-10-18T20:15:00Z",
+        "rule_version": "recheck-v1",
+        "store_name": "Test Shop",
+        "store_site": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "variant_ref": "gid://shopify/ProductVariant/1001",
+        "title": "Trail Runner 3 - US 10 / Blue",
+        "quantity": 1,
+        "currency": "USD",
+        "totals": {
+          "subtotal": 1200,
+          "shipping": 500,
+          "tax": 107,
+          "total": 1807
+        },
+        "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+        "ship_to": {
+          "country": "IE",
+          "postal_code_coarse": "B12"
+        },
+        "completion_mode": "shop_agent",
+        "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
+        "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
+      "name": "a full IE Eircode",
+      "snapshot": {
+        "v": 4,
+        "approval": "ap_TEST0005",
+        "nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "expires_at": "2026-10-18T20:15:00Z",
+        "rule_version": "recheck-v1",
+        "store_name": "Test Shop",
+        "store_site": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "variant_ref": "gid://shopify/ProductVariant/1001",
+        "title": "Trail Runner 3 - US 10 / Blue",
+        "quantity": 1,
+        "currency": "USD",
+        "totals": {
+          "subtotal": 1200,
+          "shipping": 500,
+          "tax": 107,
+          "total": 1807
+        },
+        "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+        "ship_to": {
+          "country": "IE",
+          "postal_code_coarse": "A65F4E2"
+        },
+        "completion_mode": "shop_agent",
+        "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
+        "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
+      "name": "a 5-digit DE postcode",
+      "snapshot": {
+        "v": 4,
+        "approval": "ap_TEST0005",
+        "nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "expires_at": "2026-10-18T20:15:00Z",
+        "rule_version": "recheck-v1",
+        "store_name": "Test Shop",
+        "store_site": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "variant_ref": "gid://shopify/ProductVariant/1001",
+        "title": "Trail Runner 3 - US 10 / Blue",
+        "quantity": 1,
+        "currency": "USD",
+        "totals": {
+          "subtotal": 1200,
+          "shipping": 500,
+          "tax": 107,
+          "total": 1807
+        },
+        "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+        "ship_to": {
+          "country": "DE",
+          "postal_code_coarse": "10115"
+        },
+        "completion_mode": "shop_agent",
+        "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
+        "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
+      }
+    },
+    {
+      "name": "a GB code for FR",
+      "snapshot": {
+        "v": 4,
+        "approval": "ap_TEST0005",
+        "nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "expires_at": "2026-10-18T20:15:00Z",
+        "rule_version": "recheck-v1",
+        "store_name": "Test Shop",
+        "store_site": "https://shop.example",
+        "myshopify_domain": "test-shop.myshopify.com",
+        "variant_ref": "gid://shopify/ProductVariant/1001",
+        "title": "Trail Runner 3 - US 10 / Blue",
+        "quantity": 1,
+        "currency": "USD",
+        "totals": {
+          "subtotal": 1200,
+          "shipping": 500,
+          "tax": 107,
+          "total": 1807
+        },
+        "checkout_ref_hash": "sha256:b68bf093e0a43889029751a9ac45a36d8b370d2d6cc6240a3059b8d1f6767452",
+        "ship_to": {
+          "country": "FR",
           "postal_code_coarse": "SW1A"
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -287,7 +525,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
         "continue_url_hash": "sha256:eccdf29c57e944cce8f5c48d54da4c91bf96a94ae3bbc29dbefef042da7f206a"
       }
@@ -320,7 +558,7 @@
         },
         "completion_mode": "handoff",
         "completer_keyid": "gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -351,7 +589,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -383,7 +621,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -415,7 +653,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -447,7 +685,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -479,7 +717,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -511,7 +749,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -543,7 +781,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -575,7 +813,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     },
@@ -607,7 +845,7 @@
         },
         "completion_mode": "shop_agent",
         "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-        "currency_table": "ct-a5ec7a18fbcbdda7",
+        "currency_table": "ct-9fd2a7de9ddcf8e2",
         "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
       }
     }
@@ -688,6 +926,16 @@
     },
     {
       "country": "US",
+      "postal_code": " 94110 ",
+      "coarse": "94110"
+    },
+    {
+      "country": "US",
+      "postal_code": "941101",
+      "coarse": null
+    },
+    {
+      "country": "US",
       "postal_code": "9411",
       "coarse": null
     },
@@ -708,6 +956,11 @@
     },
     {
       "country": "CA",
+      "postal_code": "K1A",
+      "coarse": null
+    },
+    {
+      "country": "CA",
       "postal_code": "11A 0B1",
       "coarse": null
     },
@@ -718,35 +971,712 @@
     },
     {
       "country": "AU",
+      "postal_code": " 2000",
+      "coarse": "2000"
+    },
+    {
+      "country": "AU",
       "postal_code": "200",
+      "coarse": null
+    },
+    {
+      "country": "AU",
+      "postal_code": "20001",
       "coarse": null
     },
     {
       "country": "GB",
       "postal_code": "SW1A 1AA",
+      "coarse": "SW1A"
+    },
+    {
+      "country": "GB",
+      "postal_code": "M1 1AE",
+      "coarse": "M1"
+    },
+    {
+      "country": "GB",
+      "postal_code": "EC1A 1BB",
+      "coarse": "EC1A"
+    },
+    {
+      "country": "GB",
+      "postal_code": "B33 8TH",
+      "coarse": "B33"
+    },
+    {
+      "country": "GB",
+      "postal_code": "CR2 6XH",
+      "coarse": "CR2"
+    },
+    {
+      "country": "GB",
+      "postal_code": "DN55 1PT",
+      "coarse": "DN55"
+    },
+    {
+      "country": "GB",
+      "postal_code": "w1a 0ax",
+      "coarse": "W1A"
+    },
+    {
+      "country": "GB",
+      "postal_code": "sw1a-1aa",
+      "coarse": "SW1A"
+    },
+    {
+      "country": "GB",
+      "postal_code": "M11A",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "SW1A",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "SW1A1A",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "SW1AXYZ",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "1AA 1AA",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "SW1AB 1AA",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "ſW1A 1AA",
+      "coarse": null
+    },
+    {
+      "country": "GB",
+      "postal_code": "ﬆ 1 1AA",
+      "coarse": null
+    },
+    {
+      "country": "IE",
+      "postal_code": "D6W 1234",
+      "coarse": "D6W"
+    },
+    {
+      "country": "IE",
+      "postal_code": "A65 F4E2",
+      "coarse": "A65"
+    },
+    {
+      "country": "IE",
+      "postal_code": "d02 x285",
+      "coarse": "D02"
+    },
+    {
+      "country": "IE",
+      "postal_code": "T12 AC34",
+      "coarse": "T12"
+    },
+    {
+      "country": "IE",
+      "postal_code": "T12 AB34",
+      "coarse": null
+    },
+    {
+      "country": "IE",
+      "postal_code": "B12 AC34",
+      "coarse": null
+    },
+    {
+      "country": "IE",
+      "postal_code": "D6W",
+      "coarse": null
+    },
+    {
+      "country": "IE",
+      "postal_code": "D6",
+      "coarse": null
+    },
+    {
+      "country": "DE",
+      "postal_code": "10115",
+      "coarse": "10"
+    },
+    {
+      "country": "DE",
+      "postal_code": " 80331",
+      "coarse": "80"
+    },
+    {
+      "country": "DE",
+      "postal_code": "10",
+      "coarse": null
+    },
+    {
+      "country": "DE",
+      "postal_code": "10 garbage",
+      "coarse": null
+    },
+    {
+      "country": "DE",
+      "postal_code": "1",
+      "coarse": null
+    },
+    {
+      "country": "FR",
+      "postal_code": "75008",
+      "coarse": "75"
+    },
+    {
+      "country": "FR",
+      "postal_code": "75 008",
+      "coarse": "75"
+    },
+    {
+      "country": "FR",
+      "postal_code": "2A004",
+      "coarse": null
+    },
+    {
+      "country": "NL",
+      "postal_code": "1012 AB",
+      "coarse": "10"
+    },
+    {
+      "country": "NL",
+      "postal_code": "1012ab",
+      "coarse": "10"
+    },
+    {
+      "country": "NL",
+      "postal_code": "1012",
+      "coarse": null
+    },
+    {
+      "country": "ES",
+      "postal_code": "28013",
+      "coarse": "28"
+    },
+    {
+      "country": "ES",
+      "postal_code": "28 013",
+      "coarse": "28"
+    },
+    {
+      "country": "IT",
+      "postal_code": "00184",
+      "coarse": "00"
+    },
+    {
+      "country": "IT",
+      "postal_code": "0 0184",
+      "coarse": "00"
+    },
+    {
+      "country": "BE",
+      "postal_code": "1000",
+      "coarse": "10"
+    },
+    {
+      "country": "BE",
+      "postal_code": " 1000 ",
+      "coarse": "10"
+    },
+    {
+      "country": "BE",
+      "postal_code": "10000",
+      "coarse": null
+    },
+    {
+      "country": "AT",
+      "postal_code": "1010",
+      "coarse": "10"
+    },
+    {
+      "country": "AT",
+      "postal_code": "10 10",
+      "coarse": "10"
+    },
+    {
+      "country": "PT",
+      "postal_code": "1100-148",
+      "coarse": "11"
+    },
+    {
+      "country": "PT",
+      "postal_code": "1100 148",
+      "coarse": "11"
+    },
+    {
+      "country": "PT",
+      "postal_code": "1100",
+      "coarse": null
+    },
+    {
+      "country": "FI",
+      "postal_code": "00100",
+      "coarse": "00"
+    },
+    {
+      "country": "FI",
+      "postal_code": "001 00",
+      "coarse": "00"
+    },
+    {
+      "country": "FI",
+      "postal_code": "X0100",
+      "coarse": null
+    },
+    {
+      "country": "JP",
+      "postal_code": "100-0001",
       "coarse": null
     }
   ],
+  "submitted": [
+    {
+      "country": "US",
+      "postal_code": "94110",
+      "accepted": true
+    },
+    {
+      "country": "US",
+      "postal_code": "94110-1234",
+      "accepted": false
+    },
+    {
+      "country": "CA",
+      "postal_code": "K1A",
+      "accepted": true
+    },
+    {
+      "country": "CA",
+      "postal_code": "K1A0B1",
+      "accepted": false
+    },
+    {
+      "country": "AU",
+      "postal_code": "2000",
+      "accepted": true
+    },
+    {
+      "country": "AU",
+      "postal_code": "200",
+      "accepted": false
+    },
+    {
+      "country": "GB",
+      "postal_code": "SW1A",
+      "accepted": true
+    },
+    {
+      "country": "GB",
+      "postal_code": "M1",
+      "accepted": true
+    },
+    {
+      "country": "GB",
+      "postal_code": "EC1A",
+      "accepted": true
+    },
+    {
+      "country": "GB",
+      "postal_code": "SW1A1AA",
+      "accepted": false
+    },
+    {
+      "country": "GB",
+      "postal_code": "SW1A 1AA",
+      "accepted": false
+    },
+    {
+      "country": "GB",
+      "postal_code": "sw1a",
+      "accepted": false
+    },
+    {
+      "country": "GB",
+      "postal_code": "1A",
+      "accepted": false
+    },
+    {
+      "country": "IE",
+      "postal_code": "D6W",
+      "accepted": true
+    },
+    {
+      "country": "IE",
+      "postal_code": "A65",
+      "accepted": true
+    },
+    {
+      "country": "IE",
+      "postal_code": "A65F4E2",
+      "accepted": false
+    },
+    {
+      "country": "IE",
+      "postal_code": "B12",
+      "accepted": false
+    },
+    {
+      "country": "IE",
+      "postal_code": "d6w",
+      "accepted": false
+    },
+    {
+      "country": "DE",
+      "postal_code": "10",
+      "accepted": true
+    },
+    {
+      "country": "DE",
+      "postal_code": "10115",
+      "accepted": false
+    },
+    {
+      "country": "DE",
+      "postal_code": "1",
+      "accepted": false
+    },
+    {
+      "country": "FR",
+      "postal_code": "75",
+      "accepted": true
+    },
+    {
+      "country": "FR",
+      "postal_code": "SW1A",
+      "accepted": false
+    },
+    {
+      "country": "NL",
+      "postal_code": "10",
+      "accepted": true
+    },
+    {
+      "country": "NL",
+      "postal_code": "1012AB",
+      "accepted": false
+    },
+    {
+      "country": "ES",
+      "postal_code": "28",
+      "accepted": true
+    },
+    {
+      "country": "IT",
+      "postal_code": "00",
+      "accepted": true
+    },
+    {
+      "country": "BE",
+      "postal_code": "10",
+      "accepted": true
+    },
+    {
+      "country": "AT",
+      "postal_code": "10",
+      "accepted": true
+    },
+    {
+      "country": "PT",
+      "postal_code": "11",
+      "accepted": true
+    },
+    {
+      "country": "PT",
+      "postal_code": "1100",
+      "accepted": false
+    },
+    {
+      "country": "FI",
+      "postal_code": "00",
+      "accepted": true
+    },
+    {
+      "country": "US",
+      "postal_code": "SW1A",
+      "accepted": false
+    },
+    {
+      "country": "JP",
+      "postal_code": "100",
+      "accepted": false
+    }
+  ],
+  "country_currencies": {
+    "countries": {
+      "AT": "EUR",
+      "AU": "AUD",
+      "BE": "EUR",
+      "CA": "CAD",
+      "DE": "EUR",
+      "ES": "EUR",
+      "FI": "EUR",
+      "FR": "EUR",
+      "GB": "GBP",
+      "IE": "EUR",
+      "IT": "EUR",
+      "NL": "EUR",
+      "PT": "EUR",
+      "US": "USD"
+    },
+    "cases": [
+      {
+        "country": "US",
+        "currency": "USD",
+        "refused": null
+      },
+      {
+        "country": "CA",
+        "currency": "CAD",
+        "refused": null
+      },
+      {
+        "country": "GB",
+        "currency": "GBP",
+        "refused": null
+      },
+      {
+        "country": "AU",
+        "currency": "AUD",
+        "refused": null
+      },
+      {
+        "country": "IE",
+        "currency": "EUR",
+        "refused": null
+      },
+      {
+        "country": "DE",
+        "currency": "EUR",
+        "refused": null
+      },
+      {
+        "country": "FI",
+        "currency": "EUR",
+        "refused": null
+      },
+      {
+        "country": "US",
+        "currency": "CAD",
+        "refused": "currency_unsupported"
+      },
+      {
+        "country": "CA",
+        "currency": "USD",
+        "refused": "currency_unsupported"
+      },
+      {
+        "country": "GB",
+        "currency": "EUR",
+        "refused": "currency_unsupported"
+      },
+      {
+        "country": "IE",
+        "currency": "GBP",
+        "refused": "currency_unsupported"
+      },
+      {
+        "country": "DE",
+        "currency": "USD",
+        "refused": "currency_unsupported"
+      },
+      {
+        "country": "AU",
+        "currency": "USD",
+        "refused": "currency_unsupported"
+      }
+    ]
+  },
   "currency_tables": [
     {
+      "version": "ct-9fd2a7de9ddcf8e2",
       "currencies": {
+        "AUD": {
+          "order": 7500,
+          "week": 15000
+        },
+        "CAD": {
+          "order": 7000,
+          "week": 14000
+        },
+        "EUR": {
+          "order": 5000,
+          "week": 10000
+        },
+        "GBP": {
+          "order": 4000,
+          "week": 8000
+        },
         "USD": {
           "order": 5000,
           "week": 10000
         }
       },
-      "jcs": "{\"USD\":{\"order\":5000,\"week\":10000}}",
-      "version": "ct-a5ec7a18fbcbdda7"
+      "countries": {
+        "AT": "EUR",
+        "AU": "AUD",
+        "BE": "EUR",
+        "CA": "CAD",
+        "DE": "EUR",
+        "ES": "EUR",
+        "FI": "EUR",
+        "FR": "EUR",
+        "GB": "GBP",
+        "IE": "EUR",
+        "IT": "EUR",
+        "NL": "EUR",
+        "PT": "EUR",
+        "US": "USD"
+      },
+      "jcs": "{\"countries\":{\"AT\":\"EUR\",\"AU\":\"AUD\",\"BE\":\"EUR\",\"CA\":\"CAD\",\"DE\":\"EUR\",\"ES\":\"EUR\",\"FI\":\"EUR\",\"FR\":\"EUR\",\"GB\":\"GBP\",\"IE\":\"EUR\",\"IT\":\"EUR\",\"NL\":\"EUR\",\"PT\":\"EUR\",\"US\":\"USD\"},\"currencies\":{\"AUD\":{\"order\":7500,\"week\":15000},\"CAD\":{\"order\":7000,\"week\":14000},\"EUR\":{\"order\":5000,\"week\":10000},\"GBP\":{\"order\":4000,\"week\":8000},\"USD\":{\"order\":5000,\"week\":10000}}}"
     },
     {
+      "version": "ct-8985f9efd2fb2993",
+      "currencies": {
+        "AUD": {
+          "order": 7500,
+          "week": 15000
+        },
+        "CAD": {
+          "order": 7000,
+          "week": 14000
+        },
+        "EUR": {
+          "order": 5000,
+          "week": 10000
+        },
+        "GBP": {
+          "order": 4000,
+          "week": 8000
+        },
+        "USD": {
+          "order": 5000,
+          "week": 10000
+        }
+      },
+      "jcs": "{\"AUD\":{\"order\":7500,\"week\":15000},\"CAD\":{\"order\":7000,\"week\":14000},\"EUR\":{\"order\":5000,\"week\":10000},\"GBP\":{\"order\":4000,\"week\":8000},\"USD\":{\"order\":5000,\"week\":10000}}"
+    },
+    {
+      "version": "ct-389324a08bacb899",
+      "currencies": {
+        "AUD": {
+          "order": 7500,
+          "week": 15000
+        },
+        "CAD": {
+          "order": 7000,
+          "week": 14000
+        },
+        "EUR": {
+          "order": 5000,
+          "week": 10000
+        },
+        "GBP": {
+          "order": 4000,
+          "week": 8000
+        },
+        "USD": {
+          "order": 5000,
+          "week": 10000
+        }
+      },
+      "countries": {
+        "AT": "EUR",
+        "AU": "AUD",
+        "BE": "EUR",
+        "CA": "CAD",
+        "DE": "EUR",
+        "ES": "EUR",
+        "FR": "EUR",
+        "GB": "GBP",
+        "IE": "EUR",
+        "IT": "EUR",
+        "NL": "EUR",
+        "PT": "EUR",
+        "US": "USD"
+      },
+      "jcs": "{\"countries\":{\"AT\":\"EUR\",\"AU\":\"AUD\",\"BE\":\"EUR\",\"CA\":\"CAD\",\"DE\":\"EUR\",\"ES\":\"EUR\",\"FR\":\"EUR\",\"GB\":\"GBP\",\"IE\":\"EUR\",\"IT\":\"EUR\",\"NL\":\"EUR\",\"PT\":\"EUR\",\"US\":\"USD\"},\"currencies\":{\"AUD\":{\"order\":7500,\"week\":15000},\"CAD\":{\"order\":7000,\"week\":14000},\"EUR\":{\"order\":5000,\"week\":10000},\"GBP\":{\"order\":4000,\"week\":8000},\"USD\":{\"order\":5000,\"week\":10000}}}"
+    },
+    {
+      "version": "ct-f55421fea9f32b55",
+      "currencies": {
+        "AUD": {
+          "order": 0,
+          "week": 0
+        },
+        "CAD": {
+          "order": 0,
+          "week": 0
+        },
+        "EUR": {
+          "order": 0,
+          "week": 0
+        },
+        "GBP": {
+          "order": 0,
+          "week": 0
+        },
+        "USD": {
+          "order": 0,
+          "week": 0
+        }
+      },
+      "countries": {
+        "AT": "EUR",
+        "AU": "AUD",
+        "BE": "EUR",
+        "CA": "CAD",
+        "DE": "EUR",
+        "ES": "EUR",
+        "FI": "EUR",
+        "FR": "EUR",
+        "GB": "GBP",
+        "IE": "EUR",
+        "IT": "EUR",
+        "NL": "EUR",
+        "PT": "EUR",
+        "US": "USD"
+      },
+      "jcs": "{\"countries\":{\"AT\":\"EUR\",\"AU\":\"AUD\",\"BE\":\"EUR\",\"CA\":\"CAD\",\"DE\":\"EUR\",\"ES\":\"EUR\",\"FI\":\"EUR\",\"FR\":\"EUR\",\"GB\":\"GBP\",\"IE\":\"EUR\",\"IT\":\"EUR\",\"NL\":\"EUR\",\"PT\":\"EUR\",\"US\":\"USD\"},\"currencies\":{\"AUD\":{\"order\":0,\"week\":0},\"CAD\":{\"order\":0,\"week\":0},\"EUR\":{\"order\":0,\"week\":0},\"GBP\":{\"order\":0,\"week\":0},\"USD\":{\"order\":0,\"week\":0}}}"
+    },
+    {
+      "version": "ct-600f7d43ddee5d97",
       "currencies": {
         "USD": {
           "order": 0,
           "week": 0
         }
       },
-      "jcs": "{\"USD\":{\"order\":0,\"week\":0}}",
-      "version": "ct-bbdb6b2b39f28776"
+      "countries": {
+        "US": "USD"
+      },
+      "configured_countries": {
+        "US": "USD",
+        "CA": "CAD",
+        "GB": "GBP",
+        "AU": "AUD",
+        "IE": "EUR",
+        "DE": "EUR",
+        "FR": "EUR",
+        "NL": "EUR",
+        "ES": "EUR",
+        "IT": "EUR",
+        "BE": "EUR",
+        "AT": "EUR",
+        "PT": "EUR",
+        "FI": "EUR"
+      },
+      "jcs": "{\"countries\":{\"US\":\"USD\"},\"currencies\":{\"USD\":{\"order\":0,\"week\":0}}}"
     }
   ]
 }

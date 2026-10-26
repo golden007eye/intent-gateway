@@ -1,83 +1,64 @@
-// The ship-to countries the gateway knows: each one's name, currency, postcode format and coarse postcode rule. The
-// coarse postcode is the only part of a postcode the gateway keeps or sends (invariant 3); the full one is dropped as
-// soon as it is coarsened. Every rule first removes spaces and `-` and upper-cases, then cuts. Which of these
-// countries a search may ship to today is the contract's ship_to country list met with Intent Cloud's currency table
-// (the gateway's shipsTo). Pure.
+// The ship-to countries the gateway knows: each one's name, postcode format and coarse postcode rule. The coarse
+// postcode is the only part of a postcode the gateway keeps or sends (invariant 3); the full one is dropped as soon as
+// it is coarsened. `coarse()` is strict (Appendix A, as Intent Cloud's binding-v2 runs it): ASCII only, spaces and `-`
+// removed, upper-cased, then the whole result must be one full postcode of the country, and the coarse part is a
+// fixed group of it. An already-coarse value, trailing characters or non-ASCII input has no coarse form. The same
+// function reads the developer's postcode and binding check 4's, so the two agree. A country's currency is never kept
+// here: it is read only from the `countries` of Intent Cloud's currency table (currencyFor). Which of these countries
+// a search may ship to today is that map met with the contract's ship_to country list (the gateway's shipsTo). Pure.
 
 export interface ShipCountry {
   /** ISO 3166-1 alpha-2. */
   readonly code: string;
   /** As it reads inside a sentence: "the US", "Canada". */
   readonly name: string;
-  /** ISO 4217: the currency a search, its budget and its checkout are in. */
-  readonly currency: string;
   /** The postcode's form, for asking again: "a 5-digit ZIP code, such as 94107". */
   readonly format: string;
-  /** The folded postcode's coarse form, or null when it has none. */
-  readonly cut: (folded: string) => string | null;
-  /** What a coarse postcode of this country looks like. */
+  /** A whole folded postcode of this country; group 1 is its coarse part. */
+  readonly full: RegExp;
+  /** What a coarse postcode of this country looks like (what a submit sends). */
   readonly coarse: RegExp;
 }
 
-/** The first `n` characters, when they match `pattern`. */
-const first =
-  (n: number, pattern: RegExp) =>
-  (folded: string): string | null => {
-    const cut = folded.slice(0, n);
-    return pattern.test(cut) ? cut : null;
-  };
-
-const US = /^[0-9]{5}$/;
-const CA = /^[A-Z][0-9][A-Z]$/;
-const AU = /^[0-9]{4}$/;
-const GB = /^[A-Z]{1,2}[0-9][A-Z0-9]?$/;
-/** A UK inward code: a digit and two letters. */
-const GB_INWARD = /^[0-9][A-Z]{2}$/;
-const IE = /^(?:[AC-FHKNPRTV-Y][0-9]{2}|D6W)$/;
 const EU2 = /^[0-9]{2}$/;
 
-const euro = (code: string, name: string, example: string): ShipCountry => ({
+const euro = (code: string, name: string, example: string, full: RegExp): ShipCountry => ({
   code,
   name,
-  currency: "EUR",
   format: `a postcode such as ${example}`,
-  cut: first(2, EU2),
+  full,
   coarse: EU2,
 });
+/** DE, FR, ES, IT and FI: 5 digits, the first 2 kept. */
+const EU5 = /^([0-9]{2})[0-9]{3}$/;
+/** BE and AT: 4 digits, the first 2 kept. */
+const EU4 = /^([0-9]{2})[0-9]{2}$/;
 
 const ALL: readonly ShipCountry[] = [
-  { code: "US", name: "the US", currency: "USD", format: "a 5-digit ZIP code, such as 94107", cut: first(5, US), coarse: US },
-  { code: "CA", name: "Canada", currency: "CAD", format: "a postal code such as K1A 0B1", cut: first(3, CA), coarse: CA },
-  // Exactly 4 digits: a longer code has no coarse form.
+  // The 5-digit ZIP, or ZIP+4.
+  { code: "US", name: "the US", format: "a 5-digit ZIP code, such as 94107", full: /^([0-9]{5})(?:[0-9]{4})?$/, coarse: /^[0-9]{5}$/ },
+  // The forward sortation area of a whole postal code.
+  { code: "CA", name: "Canada", format: "a postal code such as K1A 0B1", full: /^([A-Z][0-9][A-Z])[0-9][A-Z][0-9]$/, coarse: /^[A-Z][0-9][A-Z]$/ },
+  { code: "AU", name: "Australia", format: "a 4-digit postcode, such as 2000", full: /^([0-9]{4})$/, coarse: /^[0-9]{4}$/ },
+  // The outward code of a whole postcode (outward and inward code), so "SW1A" alone is asked for again.
+  { code: "GB", name: "the UK", format: "a full postcode such as SW1A 1AA", full: /^([A-Z]{1,2}[0-9][A-Z0-9]?)[0-9][A-Z]{2}$/, coarse: /^[A-Z]{1,2}[0-9][A-Z0-9]?$/ },
+  // The routing key of a whole Eircode.
   {
-    code: "AU",
-    name: "Australia",
-    currency: "AUD",
-    format: "a 4-digit postcode, such as 2000",
-    cut: (f) => (AU.test(f) ? f : null),
-    coarse: AU,
+    code: "IE",
+    name: "Ireland",
+    format: "a full Eircode such as D02 X285",
+    full: /^([AC-FHKNPRTV-Y][0-9]{2}|D6W)[0-9AC-FHKNPRTV-Y]{4}$/,
+    coarse: /^(?:[AC-FHKNPRTV-Y][0-9]{2}|D6W)$/,
   },
-  // The outward code: the postcode without its last 3 characters, which must be an inward code (so a postcode short
-  // of a character, `SW1A1A`, has no coarse form rather than the wrong one, `SW1`).
-  {
-    code: "GB",
-    name: "the UK",
-    currency: "GBP",
-    format: "a postcode such as SW1A 1AA",
-    cut: (f) => (GB.test(f.slice(0, -3)) && GB_INWARD.test(f.slice(-3)) ? f.slice(0, -3) : null),
-    coarse: GB,
-  },
-  // The Eircode's routing key.
-  { code: "IE", name: "Ireland", currency: "EUR", format: "an Eircode such as D02 X285", cut: first(3, IE), coarse: IE },
-  euro("DE", "Germany", "10115"),
-  euro("FR", "France", "75001"),
-  euro("NL", "the Netherlands", "1012 AB"),
-  euro("ES", "Spain", "28001"),
-  euro("IT", "Italy", "00184"),
-  euro("BE", "Belgium", "1000"),
-  euro("AT", "Austria", "1010"),
-  euro("PT", "Portugal", "1000-001"),
-  euro("FI", "Finland", "00100"),
+  euro("DE", "Germany", "10115", EU5),
+  euro("FR", "France", "75001", EU5),
+  euro("NL", "the Netherlands", "1012 AB", /^([0-9]{2})[0-9]{2}[A-Z]{2}$/),
+  euro("ES", "Spain", "28001", EU5),
+  euro("IT", "Italy", "00184", EU5),
+  euro("BE", "Belgium", "1000", EU4),
+  euro("AT", "Austria", "1010", EU4),
+  euro("PT", "Portugal", "1000-001", /^([0-9]{2})[0-9]{5}$/),
+  euro("FI", "Finland", "00100", EU5),
 ];
 
 /** Currencies in words, for asking the budget; any other is named by its code. */
@@ -103,13 +84,15 @@ export function shipCountry(code: string): ShipCountry | undefined {
 }
 
 /**
- * The coarse postcode of `postcode` in `country`: spaces and `-` removed, upper-cased, then the country's cut, or null
- * when the postcode has no coarse form there (or the country has no rule).
+ * `coarse(country, postcode)`: null for non-ASCII input; else spaces and `-` removed and upper-cased, and the result
+ * must be one whole postcode of the country (its `full` pattern), whose coarse group is returned. Null when there is
+ * none, including an already-coarse value, trailing characters and a country the gateway has no rule for.
  */
 export function coarsen(country: string, postcode: string): string | null {
   const rules = shipCountry(country);
-  if (rules === undefined) return null;
-  return rules.cut(postcode.replace(/[\s-]/g, "").toUpperCase());
+  // eslint-disable-next-line no-control-regex -- ASCII is exactly U+0000 to U+007F.
+  if (rules === undefined || !/^[\x00-\x7f]*$/.test(postcode)) return null;
+  return rules.full.exec(postcode.replace(/[ -]/g, "").toUpperCase())?.[1] ?? null;
 }
 
 /** Whether `code` is already a coarse postcode of `country` (what a policy lets leave the gateway). */
@@ -123,15 +106,16 @@ export function namesText(codes: readonly string[]): string {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1) ?? ""}`;
 }
 
-/** What a currency table may say about countries: contract 1.7.1 adds `countries` (country → currency); 1.7.0 has none. */
-export type CountryCurrencies = Readonly<Record<string, unknown>> & { readonly countries?: Readonly<Record<string, string>> };
+/** What the currency table says about countries (contract 1.7.1): each served country's currency. */
+export interface CountryCurrencies {
+  readonly countries?: Readonly<Record<string, string>> | undefined;
+}
 
 /**
- * The currency a search, its budget and its checkout to `country` are in: the table's `countries` entry when the
- * table has one, else the gateway's own mapping (SHIP_COUNTRIES). The one place a country's currency is read.
+ * The currency a search, its budget and its checkout to `country` are in: the table's `countries` entry, or undefined
+ * for a country it leaves out and with no table. The one place a country's currency is read; there is no fallback.
  */
 export function currencyFor(country: string, table: CountryCurrencies | null): string | undefined {
   const listed = table?.countries;
-  if (listed !== undefined) return Object.hasOwn(listed, country) ? listed[country] : undefined;
-  return shipCountry(country)?.currency;
+  return listed !== undefined && Object.hasOwn(listed, country) ? listed[country] : undefined;
 }

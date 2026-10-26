@@ -220,10 +220,19 @@ describe("projectCheckout (S1 step 6 shape)", () => {
       budgetOffered: true,
       // 1000 + nothing is not 1399: totals that do not add up are never guessed (contract 1.7.0 CheckoutTotals).
       totals: null,
-      // Only the coarse postcode crosses the port (contract 1.7.0): 94107, never 94107-1234.
+      // The coarse postcode is what leaves; the full one is kept in memory for binding check 4 only (below).
       shipToArea: { country: "US", postalCodeCoarse: "94107" },
       continueUrl: null,
     });
+    expect(projected.shipToArea?.postalCode).toBe("94107-1234");
+    // The full code does not travel with a copy: not in a spread, a structured clone or the object's keys.
+    const area = projected.shipToArea as NonNullable<typeof projected.shipToArea>;
+    expect(Object.keys(area)).toEqual(["country", "postalCodeCoarse"]);
+    expect({ ...area }).not.toHaveProperty("postalCode");
+    expect({ ...projected }.shipToArea).toBe(area);
+    expect(structuredClone(area)).not.toHaveProperty("postalCode");
+    expect(JSON.stringify(structuredClone(projected))).not.toContain("94107-1234");
+    expect(Object.entries(area).flat()).not.toContain("94107-1234");
     const text = JSON.stringify(projected);
     for (const value of [...Object.values(PII), "Jane", "94107-1234", "1234", "Checkout/abc", "4242"]) expect(text).not.toContain(value);
     expect(projectCheckout(base, "asked.myshopify.com", "10001").checkout.shipTo).toBe("differs");

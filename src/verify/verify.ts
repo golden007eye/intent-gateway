@@ -17,6 +17,7 @@ import {
   checkApprover,
   type KeySet,
   type PinnedRootKey,
+  readSentCheckout,
   type ReceiptResponse,
   type SentRequest,
   verifyApprovalProof,
@@ -638,6 +639,44 @@ function cloudOutcomeProblem(
   return null;
 }
 
+/** The countries contract 1.7.0 shipped to: the only ones its coarse() kept a coarse code for as it was. */
+const COUNTRIES_1_7_0: ReadonlySet<string> = new Set(["US", "CA", "AU"]);
+
+/**
+ * The observed order of a v4 purchase as its gateway recorded it. A purchase submitted under contract 1.7.0 recorded
+ * the adapter's already-coarse code as `ship_to_postal_code` (1.7.0's coarse() kept a coarse US, CA or AU code as
+ * it was); under 1.7.1's strict coarse() that code has no coarse form, so it is read as the recorded coarse code it is.
+ * That reading needs all three: `sent` names 1.7.0, the logged submit was sent with `Intent-Contract-Version: 1.7.0`,
+ * and the snapshot ships to US, CA or AU. Anything else, a 1.7.1 purchase included, is read as it stands.
+ */
+function observedAsRecorded(observed: Readonly<Record<string, unknown>>, country: string, handle: string, before: readonly Entry[]): Record<string, unknown> {
+  const pending = before.findLast((e) => e.kind === "approval_pending" && record(e.body).handle === handle);
+  const sent = pending === undefined ? null : readSentCheckout(record(pending.body).sent);
+  if (sent?.contract_version !== "1.7.0" || !COUNTRIES_1_7_0.has(country) || submitVersion(sent.checkout_request.completer_keyid, before) !== "1.7.0") return { ...observed };
+  if (!("ship_to_postal_code" in observed) || "ship_to_postal_code_coarse" in observed) return { ...observed };
+  const { ship_to_postal_code: code, ...rest } = observed;
+  return { ...rest, ship_to_postal_code_coarse: code };
+}
+
+/** The `Intent-Contract-Version` header of the logged `createCheckout` that named `completerKeyid`, or null. */
+function submitVersion(completerKeyid: string, before: readonly Entry[]): string | null {
+  for (const e of before) {
+    const b = record(e.body);
+    if (e.kind !== "disclosure" || b.endpoint !== "createCheckout" || typeof b.body_b64 !== "string") continue;
+    let sentBody: unknown;
+    try {
+      sentBody = JSON.parse(Buffer.from(b.body_b64, "base64").toString("utf8"));
+    } catch {
+      continue;
+    }
+    if (record(sentBody).completer_keyid !== completerKeyid) continue;
+    const headers = Array.isArray(b.headers) ? (b.headers as unknown[]) : [];
+    const found = headers.find((h): h is [string, string] => Array.isArray(h) && typeof h[0] === "string" && h[0].toLowerCase() === "intent-contract-version");
+    return found === undefined ? null : found[1];
+  }
+  return null;
+}
+
 function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: BindableApprovalProof["snapshot"], before: readonly Entry[]): string | null {
   if (entry.state_shown !== entry.state) return `shows ${entry.state_shown}, but records ${entry.state}`;
   if (entry.source === "gateway_precheck" && entry.state !== "failed") return "names the gateway's precheck for a state other than failed";
@@ -648,7 +687,7 @@ function localOutcomeProblem(entry: LocalOutcomeEntry, snapshot: BindableApprova
     let rerun: unknown;
     try {
       const context = { ...inputs.context, mode: String(inputs.context.mode), ship_to_optional: inputs.context.ship_to_optional };
-      rerun = snapshot.v === 4 ? bindingV2(snapshot, inputs.observed, context) : bindingV1(snapshot, inputs.observed, context);
+      rerun = snapshot.v === 4 ? bindingV2(snapshot, observedAsRecorded(inputs.observed, snapshot.ship_to.country, entry.handle, before), context) : bindingV1(snapshot, inputs.observed, context);
     } catch {
       return "holds binding inputs with an unknown mode";
     }

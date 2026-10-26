@@ -7,6 +7,10 @@ import { describe, expect, it } from "vitest";
 import { coarsePostcode } from "../contract/index.ts";
 import { coarsen, currencyFor, currencyWords, isCoarse, namesText, SHIP_COUNTRIES, shipCountry } from "./index.ts";
 
+const a4 = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "contract", "vectors", "a4-snapshot-v4.json"), "utf8")) as {
+  coarse: { country: string; postal_code: string; coarse: string | null }[];
+};
+
 /** [country, postcode, coarse or null]. */
 const CASES: readonly (readonly [string, string, string | null])[] = [
   ["US", "94107", "94107"],
@@ -56,6 +60,45 @@ const CASES: readonly (readonly [string, string, string | null])[] = [
   ["PT", "P1000", null],
   ["FI", "00100", "00"],
   ["FI", "FI-00100", null],
+  // Strict coarse() (Intent Cloud's security review): an already-coarse value, trailing characters and non-ASCII input
+  // have no coarse form, in every country.
+  ["US", "94107X", null],
+  ["US", "94107-12", null],
+  ["US", "９４１０７", null],
+  ["CA", "K1A", null],
+  ["CA", "K1A 0B1 X", null],
+  ["CA", "K1A 0B", null],
+  ["AU", "2000A", null],
+  ["AU", "２０００", null],
+  ["GB", "SW1A 1AAX", null],
+  ["GB", "M1", null],
+  ["GB", "SW1A 1ÅA", null],
+  ["IE", "D02", null],
+  ["IE", "D02 X2855", null],
+  ["IE", "T12 AB34", null],
+  ["IE", "D02 X28É", null],
+  ["DE", "10", null],
+  ["DE", "101150", null],
+  ["DE", "1011", null],
+  ["FR", "75", null],
+  ["FR", "75001 Paris", null],
+  ["NL", "1012", null],
+  ["NL", "1012 ABC", null],
+  ["NL", "10", null],
+  ["ES", "28", null],
+  ["ES", "280011", null],
+  ["IT", "00", null],
+  ["IT", "001840", null],
+  ["BE", "10", null],
+  ["BE", "10000", null],
+  ["AT", "10", null],
+  ["AT", "1010 ", null],
+  ["PT", "10", null],
+  ["PT", "1000", null],
+  ["PT", "1000-0012", null],
+  ["FI", "00", null],
+  ["FI", "0010", null],
+  ["US", "94107\t", null],
 ];
 
 describe("coarse postcodes, every country", () => {
@@ -85,29 +128,34 @@ describe("coarse postcodes, every country", () => {
     expect(isCoarse("US", "94107-1234")).toBe(false);
   });
 
-  it("US, CA and AU coarsen exactly as the contract's coarse(), case for case (vector a4)", () => {
-    const a4 = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "contract", "vectors", "a4-snapshot-v4.json"), "utf8")) as {
-      coarse: { country: string; postal_code: string; coarse: string | null }[];
-    };
-    for (const c of a4.coarse.filter((x) => ["US", "CA", "AU"].includes(x.country))) expect(coarsen(c.country, c.postal_code)).toBe(c.coarse);
-    // GB has a rule here, but contract 1.7.0 ships to none: its coarse() has no code for it.
-    expect(coarsePostcode("GB", "SW1A 1AA")).toBeNull();
-    for (const [country, postcode, coarse] of CASES.filter(([c]) => ["US", "CA", "AU"].includes(c))) expect(coarsePostcode(country, postcode)).toBe(coarse);
+  it("the contract's coarse() is this one for every contract country (vector a4 is replayed in src/contract)", () => {
+    for (const [country, postcode, coarse] of CASES) expect(coarsePostcode(country, postcode)).toBe(coarse);
+  });
+
+  it("the vector covers every country the gateway has rules for; one it has none for has no coarse code", () => {
+    const countries = new Set(a4.coarse.map((c) => c.country));
+    for (const code of Object.keys(SHIP_COUNTRIES)) expect(countries.has(code), code).toBe(true);
+    for (const c of a4.coarse.filter((x) => !Object.hasOwn(SHIP_COUNTRIES, x.country))) expect(c.coarse).toBeNull();
+  });
+
+  it("coarse() of an already coarse GB code is no code: the full postcode must be given (Appendix G check 4)", () => {
+    expect(coarsen("GB", "SW1A")).toBeNull();
+    expect(coarsen("GB", "SW1A 1AA")).toBe("SW1A");
   });
 });
 
 describe("a country's currency", () => {
-  it("from the fixed mapping when the table names no countries (contract 1.7.0)", () => {
-    const table = { version: "ct-0000000000000000", currencies: { USD: { order: 1, week: 1 } } };
-    expect(["US", "CA", "AU", "GB", "IE", "DE", "FI"].map((c) => currencyFor(c, table))).toEqual(["USD", "CAD", "AUD", "GBP", "EUR", "EUR", "EUR"]);
-    expect(currencyFor("CA", null)).toBe("CAD");
-    expect(currencyFor("JP", null)).toBeUndefined();
+  it("only from the table's `countries` (contract 1.7.1); no table, or a country it leaves out, gives none", () => {
+    const table = { countries: { US: "USD", CA: "CAD", GB: "GBP" } };
+    expect(["US", "CA", "GB"].map((c) => currencyFor(c, table))).toEqual(["USD", "CAD", "GBP"]);
+    expect(currencyFor("AU", table)).toBeUndefined();
+    expect(currencyFor("CA", null)).toBeUndefined();
+    expect(currencyFor("US", {})).toBeUndefined();
   });
 
-  it("from the table's `countries` when it has them (contract 1.7.1), and none for a country it leaves out", () => {
-    const table = { version: "ct-0000000000000000", currencies: {}, countries: { US: "USD", CA: "USD" } };
-    expect(currencyFor("CA", table)).toBe("USD");
-    expect(currencyFor("AU", table)).toBeUndefined();
+  it("attack: there is no fixed fallback, and an inherited name is not a country", () => {
+    expect(currencyFor("toString", { countries: { US: "USD" } })).toBeUndefined();
+    expect(Object.values(SHIP_COUNTRIES).some((c) => "currency" in c)).toBe(false);
   });
 
   it("in words, for the budget question", () => {

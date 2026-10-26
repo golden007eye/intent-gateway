@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Intent Cloud Gateway API
-  version: 1.7.0
+  version: 1.7.1
   summary: The API the intent gateway uses to reach Intent Cloud for offers, carts and approvals.
   description: |
     Normative. The public subset of the Intent Cloud contract, for the intent gateway.
@@ -18,16 +18,19 @@ info:
       status then carries an approval proof (Appendix E) that the gateway verifies itself.
     - **Key statement.** Receipt and approval keys are listed in a statement signed by the host's
       offline root key (Appendix F), served at `GET /v1/key-statement`.
-    - **Versions (1.7.0).** A caller picks its version with the `Intent-Contract-Version` request
+    - **Versions (1.7.1).** A caller picks its version with the `Intent-Contract-Version` request
       header on every request, `GET /v1/meta` included. Without it a request is answered as 1.5.0,
-      byte for byte (the 1.5.0 files, their sums and v1 snapshots). `1.6.0` and `1.6.1` are
+      byte for byte (the 1.5.0 files, their sums and v1 snapshots). `1.6.0`, `1.6.1` and `1.7.0` are
       answered exactly as their frozen files say, with their sums. 1.6.0 added snapshot v2, the
       completer key, outcomes, outcome statements and outcome reports (Appendix G); 1.6.1 snapshot
-      v3 (a Shopify store's `myshopify_domain`). This document is 1.7.0, served only on an explicit
-      `1.7.0` header: `POST /v1/checkouts` (a Shop checkout the gateway submits, snapshot v4, one
-      completion mode per approval, the ceiling and the refusals), binding-v2, the currency table on
-      `GET /v1/meta`, and `POST /v1/pause` with the account key (Appendix H). Carts made with
-      1.7.0 keep snapshot v3.
+      v3 (a Shopify store's `myshopify_domain`); 1.7.0 `POST /v1/checkouts` (a Shop checkout the
+      gateway submits, snapshot v4, one completion mode per approval, the ceiling and the refusals),
+      binding-v2, the currency table on `GET /v1/meta`, and `POST /v1/pause` with the account key
+      (Appendix H). This document is 1.7.1, served only on an explicit `1.7.1` header: 1.7.0 with
+      buyers outside the US, CA and AU (GB, IE and the euro countries DE, FR, NL, ES, IT, BE, AT, PT,
+      FI, each with its coarse postcode) and each ship-to country's currency
+      (`currency_table.countries`), which `POST /v1/checkouts` enforces. Carts made with 1.7.x keep
+      snapshot v3.
     - **Formats.** Money is integer minor units. The purchase snapshot is Appendix A, the approval
       ledger entry Appendix B. JSON canonicalisation is RFC 8785 (JCS) with integers only.
     - **Limits.** The edge accepts bodies up to 16 KiB (413 above) and rate-limits per IPv4 address
@@ -407,7 +410,7 @@ paths:
       operationId: createCheckout
       summary: Submit a Shop checkout for approval
       description: |
-        1.7.0 only (any other version gets 404). The gateway submits a Shop checkout it created and
+        1.7.0 and 1.7.1 only (any other version gets 404). The gateway submits a Shop checkout it created and
         read back; Intent Cloud creates a `pending` approval for it with a v4 snapshot (Appendix A)
         and exactly one completion mode. A hand-off after a one-tap approval is a new request with
         `completion_mode: handoff`, so a new approval (one mode per approval). The approval belongs
@@ -416,7 +419,8 @@ paths:
         mode supersedes the session's pending one, which becomes `expired`. Checkouts per IP key have the
         carts' quota (`limits.carts_per_hour`, or `carts_per_hour_passkey`): 429 `checkouts`; a replay is not
         counted. A refusal is 403
-        with a refusal `code` (Appendix A "Refusals"): `one_tap_off`, `currency_unsupported`,
+        with a refusal `code` (Appendix A "Refusals"): `one_tap_off`, `currency_unsupported` (in 1.7.1 also a
+        currency that is not the ship-to country's, `Meta.currency_table.countries`),
         `store_blocked`, `category_excluded`, `ceiling_order`; a paused account key gets 409 `conflict` with
         `code: paused`.
       tags: [carts]
@@ -476,7 +480,7 @@ paths:
       operationId: pauseAccount
       summary: Pause every purchase of the buyers pinned to an account key
       description: |
-        1.7.0 only (Appendix H): any other version gets 404. Signed with a gateway session key like
+        1.7.0 and 1.7.1 only (Appendix H): any other version gets 404. Signed with a gateway session key like
         every call, and in the body by the account key. Checks, in order: the schema (400), 10
         requests a minute per IP key (429 `requests`), the key (404 `unknown account key`: a key is
         pinned only at a buyer's first passkey approval), 10 pauses an hour per key (429 `pause`;
@@ -559,12 +563,12 @@ components:
       in: header
       required: false
       description: |
-        The contract version the caller speaks (1.7.0). Without it the request is answered as
-        1.5.0, byte for byte; `1.6.0` and `1.6.1` are answered as their frozen files say. An unsupported
-        value gets 400 `unsupported contract version`.
+        The contract version the caller speaks (1.7.1). Without it the request is answered as
+        1.5.0, byte for byte; `1.6.0`, `1.6.1` and `1.7.0` are answered as their frozen files say. An
+        unsupported value gets 400 `unsupported contract version`.
       schema:
         type: string
-        enum: [1.5.0, 1.6.0, 1.6.1, 1.7.0]
+        enum: [1.5.0, 1.6.0, 1.6.1, 1.7.0, 1.7.1]
     CartHandle:
       name: cart_handle
       in: path
@@ -735,6 +739,24 @@ components:
         currency:
           type: string
           const: USD
+    TwoDecimalMoney:
+      description: |
+        Money in any two-decimal ISO 4217 currency (1.7.1): an outcome's or a report's `final_total`
+        (Appendix G) and an approval's `display.total`, so a v4 approval in CAD, GBP, EUR or AUD reads
+        back. Up to 1.7.0 these were `Money`, USD only: a 1.6.x or 1.7.0 report in another currency is
+        still 400, and a 1.7.0 approval is USD only. Binding check 5 compares only in the snapshot's
+        currency.
+      type: object
+      additionalProperties: false
+      required: [amount_minor, currency]
+      properties:
+        amount_minor:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        currency:
+          type: string
+          enum: [AUD, CAD, CHF, CZK, DKK, EUR, GBP, HKD, MXN, NOK, NZD, PLN, SEK, SGD, USD]
     ShipTo:
       description: A US destination. Non-US is refused by the schema.
       type: object
@@ -1114,7 +1136,7 @@ components:
           minLength: 1
           maxLength: 120
         total:
-          $ref: "#/components/schemas/Money"
+          $ref: "#/components/schemas/TwoDecimalMoney"
         image_url:
           $ref: "#/components/schemas/ImageUrl"
     ApprovalStatus:
@@ -1449,7 +1471,7 @@ components:
         order_ref:
           $ref: "#/components/schemas/OrderRef"
         final_total:
-          $ref: "#/components/schemas/Money"
+          $ref: "#/components/schemas/TwoDecimalMoney"
         binding:
           $ref: "#/components/schemas/Binding"
     Outcome:
@@ -1524,7 +1546,7 @@ components:
         order_ref:
           $ref: "#/components/schemas/OrderRef"
         final_total:
-          $ref: "#/components/schemas/Money"
+          $ref: "#/components/schemas/TwoDecimalMoney"
         binding:
           $ref: "#/components/schemas/Binding"
         observed_at:
@@ -1612,7 +1634,7 @@ components:
         order_ref:
           $ref: "#/components/schemas/OrderRef"
         final_total:
-          $ref: "#/components/schemas/Money"
+          $ref: "#/components/schemas/TwoDecimalMoney"
         binding:
           $ref: "#/components/schemas/Binding"
         observed_at:
@@ -1704,9 +1726,12 @@ components:
         Intent Cloud's ceiling per currency (1.7.0, Appendix A "Snapshot v4"): for each supported
         currency, the most one order may total and the most one buyer's approved, unreleased orders
         may total over a rolling 7 days, in that currency's minor units. There is no conversion: each
-        currency is summed on its own. `version` is `"ct-"` + the first 16 hex characters of
-        `SHA-256(JCS(currencies))`, so it changes whenever a value does. A ceiling of 0 refuses every
-        checkout in that currency.
+        currency is summed on its own. A ceiling of 0 refuses every checkout in that currency. 1.7.1
+        adds `countries`: the currency a checkout to each ship-to country must be in, listing only the
+        countries whose currency is in `currencies` (a country not listed is refused). A 1.7.0 caller
+        gets the USD row only (1.7.0 is USD only), and no table without one. `version` is
+        `"ct-"` + the first 16 hex characters of `SHA-256(JCS({currencies, countries}))` in 1.7.1, and of
+        `SHA-256(JCS(currencies))` in 1.7.0 (no `countries`), so it changes whenever a value does.
       type: object
       additionalProperties: false
       required: [version, currencies]
@@ -1718,6 +1743,11 @@ components:
           minProperties: 1
           additionalProperties:
             $ref: "#/components/schemas/CurrencyCeiling"
+        countries:
+          description: 1.7.1 only. The served countries, each with its currency in `currencies`.
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/CurrencyCode"
     CurrencyTableVersion:
       type: string
       pattern: ^ct-[0-9a-f]{16}$
@@ -1759,17 +1789,20 @@ components:
     CoarseShipTo:
       description: |
         The destination as country and coarse postcode only (1.7.0, Appendix A "Coarse postcodes"):
-        US the 5-digit ZIP, CA the first 3 characters, AU the 4-digit postcode. A finer code is refused.
+        US the 5-digit ZIP, CA the first 3 characters, AU the 4-digit postcode; 1.7.1 adds GB the outward
+        code, IE the Eircode routing key, and DE, FR, NL, ES, IT, BE, AT, PT, FI the first 2 digits (1.7.0
+        refuses those countries: 400). The pattern is the union; the code must match its own country's
+        (400 otherwise). A finer code is refused.
       type: object
       additionalProperties: false
       required: [country, postal_code]
       properties:
         country:
           type: string
-          enum: [US, CA, AU]
+          enum: [US, CA, AU, GB, IE, DE, FR, NL, ES, IT, BE, AT, PT, FI]
         postal_code:
           type: string
-          pattern: ^(?:[0-9]{5}|[A-Z][0-9][A-Z]|[0-9]{4})$
+          pattern: ^(?:[0-9]{5}|[A-Z][0-9][A-Z]|[0-9]{4}|[A-Z]{1,2}[0-9][A-Z0-9]?|[AC-FHKNPRTV-Y][0-9]{2}|D6W|[0-9]{2})$
     SnapshotShipTo:
       description: The snapshot's ship-to (v4), the country and the coarse postcode of the checkout request.
       type: object
@@ -1778,10 +1811,10 @@ components:
       properties:
         country:
           type: string
-          enum: [US, CA, AU]
+          enum: [US, CA, AU, GB, IE, DE, FR, NL, ES, IT, BE, AT, PT, FI]
         postal_code_coarse:
           type: string
-          pattern: ^(?:[0-9]{5}|[A-Z][0-9][A-Z]|[0-9]{4})$
+          pattern: ^(?:[0-9]{5}|[A-Z][0-9][A-Z]|[0-9]{4}|[A-Z]{1,2}[0-9][A-Z0-9]?|[AC-FHKNPRTV-Y][0-9]{2}|D6W|[0-9]{2})$
     ShopContinueUrl:
       description: |
         The hand-off page (1.7.0): https on exactly shop.app, the checkout's myshopify_domain or the host

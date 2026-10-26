@@ -98,7 +98,8 @@ export const ObservedBody = z.discriminatedUnion("endpoint", [
     title: Text,
     merchant: Text,
     total_minor: Minor,
-    currency: z.literal("USD"),
+    // The display total's currency (a v4 approval is in its own; contract 1.7.1).
+    currency: z.string().regex(/^[A-Z]{3}$/),
     withheld: Withheld,
   }),
 ]);

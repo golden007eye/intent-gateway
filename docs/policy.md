@@ -13,7 +13,7 @@ share:
   ship_to: postcode_only
 ```
 
-At most the country and a coarse postcode leave the gateway as the ship-to location: a search through Shop sends only the country, and a submitted checkout carries the country and the coarse postcode (for the US, the 5-digit ZIP; for Canada, the first 3 characters; for Australia, the 4-digit postcode). The gateway coarsens the postcode as soon as `find_offers` gets it, and keeps or logs only the coarse part. Everything else is the baseline below. `intent policy show` prints the policy in force and where it came from.
+At most the country and a coarse postcode leave the gateway as the ship-to location: a search through Shop sends only the country, and a submitted checkout carries the country and the coarse postcode (for the US, the 5-digit ZIP; for Canada, the first 3 characters; for Australia, the 4-digit postcode; for the UK, the outward code; for Ireland, the Eircode's routing key; for the euro countries, the first 2 digits). The gateway coarsens the postcode as soon as `find_offers` gets it, and keeps or logs only the coarse part. Everything else is the baseline below. `intent policy show` prints the policy in force and where it came from.
 
 The policy file is `<data dir>/policy.yaml` (on Linux `~/.local/share/intent-gateway/policy.yaml`), or `<data dir>/demo/policy.yaml` in demo mode. Set `INTENT_POLICY` to use another path. A running gateway reads its policy at start; restart it after a change.
 
@@ -54,10 +54,12 @@ Spend limits are written in whole US dollars. A purchase is in the ship-to count
 | the US | $20 | $40 |
 | Canada | CAD 28 | CAD 56 |
 | Australia | AUD 30 | AUD 60 |
+| the UK | GBP 16 | GBP 32 |
+| Ireland and the euro countries | EUR 20 | EUR 40 |
 
 Each currency has its own daily and weekly window: the limits count only purchases in the same currency, the way Intent Cloud enforces its weekly ceiling. So the limits add up across currencies: with `weekly-40`, $40 in US dollars and CAD 56 in Canadian dollars can both be spent in the same week. When the meta Intent Cloud returns holds no valid currency table, or no usable ceiling for the currency, a search in it is refused with one line, and a purchase in it is never let through with no limit. A ceiling is not usable when its ratio to the US-dollar one, per order or per week, is below 0.25 or above 4 (today's are 0.8 to 1.5): a table must not be able to widen your limits without bound.
 
-The gateway has the coarse-postcode rules for the UK (the outward code: `SW1A 1AA` is `SW1A`), Ireland (the Eircode's routing key: `D02`) and the euro countries Germany, France, the Netherlands, Spain, Italy, Belgium, Austria, Portugal and Finland (the first two digits: `10115` is `10`). It ships there once a later contract version adds them; until then a search there is refused: `intent ships to the US, Canada and Australia for now; the UK is coming soon.`
+Each country's currency is the one the currency table Intent Cloud returns gives it (contract 1.7.1); the gateway keeps no list of its own. The coarse postcode needs the whole postcode: the UK's outward code (`SW1A 1AA` is `SW1A`), Ireland's Eircode routing key (`D02 X285` is `D02`), and the first two digits in Germany, France, the Netherlands, Spain, Italy, Belgium, Austria, Portugal and Finland (`10115` is `10`). A part of a postcode, such as `SW1A`, is asked for again. A country the table leaves out is refused with one line: `intent does not ship to the UK yet; it ships to …`.
 
 ### Completion modes
 
