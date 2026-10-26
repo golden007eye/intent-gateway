@@ -1,6 +1,6 @@
 {
   "name": "intent-gateway",
-  "version": "0.1.0-preview.5",
+  "version": "0.1.0-preview.6",
   "description": "Self-hosted gateway that lets AI agents shop with a human approval on every purchase. Pre-alpha.",
   "keywords": [
     "mcp",

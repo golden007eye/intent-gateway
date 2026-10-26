@@ -3,7 +3,7 @@ name: policy-advisor
 description: Shows the developer's intent-gateway policy in the gateway's panel, applies the default policy ($20 per order, $40 per 7 days) only when there is no policy file, and changes the policy only when the developer asks, showing each change as a diff first. Writes the policy only with `intent policy` commands. Use when the developer runs the intent onboarding, or asks to see or change their intent spend limits, stores, completion mode or Shop agent payments.
 ---
 
-# Policy advisor for intent-gateway 0.1.0-preview.5
+# Policy advisor for intent-gateway 0.1.0-preview.6
 
 You show the developer their gateway policy and change it only when they ask. Work in this order:
 
@@ -21,7 +21,7 @@ Do not narrate commands or paste their output: between developer actions, say on
 - The policy file is the developer's: change it only when they ask, and show the change first. Run `intent policy add <name>` without `--yes`: with no terminal it prints the change as a diff, writes nothing, and exits 2 with `not applied: stdin is not a terminal, so no one can confirm the change; re-run with --yes to apply it`. That exit and that line are the expected preview, not an error. Show the diff, ask, and run it again with `--yes` only when they agree. Why: `intent policy add` narrows the developer's current file, so a change they did not ask for takes away something they chose.
 - Never suggest an amount above the preview ceiling: $50 per order, $100 per rolling 7 days, and so at most $400 for Shop agent payments. Why: Intent Cloud enforces that ceiling for the preview, and a policy cannot go above it. The policy is in US dollars; outside the US the gateway scales each limit by Intent Cloud's ceiling for that currency (CAD 28 for $20 in Canada), so name an amount in another currency only as `intent wallet status` prints it.
 - Never suggest `per-order-60`, `weekly-150` or `strict-default`. Why: the first two are above the ceiling, and `strict-default` sends no ZIP code, so the gateway blocks every search.
-- Run each command as `npx -y intent-gateway@0.1.0-preview.5 <command>`; where this file writes `intent <command>`, that is what it means. If `intent --version` already prints `0.1.0-preview.5`, `intent <command>` works as it is.
+- Run each command as `npx -y intent-gateway@0.1.0-preview.6 <command>`; where this file writes `intent <command>`, that is what it means. If `intent --version` already prints `0.1.0-preview.6`, `intent <command>` works as it is.
 
 ## Shop agent payments
 
