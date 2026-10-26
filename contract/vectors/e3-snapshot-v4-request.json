@@ -28,7 +28,7 @@
     },
     "completion_mode": "shop_agent",
     "completer_keyid": "gw-d3bocLkzVPKgskwj8qNsxOgOIjIYwbl5Jv3QGDlqK5s",
-    "currency_table": "ct-a5ec7a18fbcbdda7",
+    "currency_table": "ct-9fd2a7de9ddcf8e2",
     "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc"
   },
   "cases": [
@@ -411,7 +411,7 @@
           },
           "completion_mode": "handoff",
           "completer_keyid": "gw-E9mQinCSWZLtVGAH0n9Q2mi6chfvYqw8ynhFKf8QRxw",
-          "currency_table": "ct-a5ec7a18fbcbdda7",
+          "currency_table": "ct-9fd2a7de9ddcf8e2",
           "account_key_thumbprint": "D8xQ33i2CARBcsSNdTOpI4W35swVVKhlFC5R-GqjZoc",
           "continue_url_hash": "sha256:eccdf29c57e944cce8f5c48d54da4c91bf96a94ae3bbc29dbefef042da7f206a"
         }

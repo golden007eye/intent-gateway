@@ -252,7 +252,7 @@ function reportsOf(entries: readonly Entry[], handle: string): LoggedReport[] {
 }
 
 /** The answers that refuse a report for good (Appendix G R1–R4); 401, 429 and 5xx leave it open, to retry. */
-const REFUSING = new Set([400, 404, 409, 410]);
+const REFUSING = new Set([400, 403, 404, 409, 410]);
 
 /** A report with this id that Intent Cloud accepted (201, receipt verified, not discarded); refused for good; or neither yet. */
 function reportFate(reports: readonly LoggedReport[], reportId: unknown): "accepted" | "refused" | "open" {
@@ -277,18 +277,23 @@ function observedOf(checkout: WalletCheckout, zip: string, merchantOrigin: strin
 }
 
 /**
- * The observed order binding-v2 reads from a wallet checkout (contract 1.7.0): the store the checkout lives at, its
- * hash, lines, the destination's country and coarse postcode (coarsened inside the adapter: the full code never
- * reaches the gateway, so binding-v2 coarsens an already coarse code, which is itself), and the total.
+ * The observed order binding-v2 reads from a wallet checkout (contract 1.7.1): the store the checkout lives at, its
+ * hash, lines, the destination's country and postcode, and the total. `full` is what binding-v2 runs on now, with the
+ * FULL postcode Shop shows (Appendix G check 4: coarse() of the full code, so GB "SW1A 1AA" is "SW1A"); it stays in
+ * memory. `recorded` is what the chain keeps for `intent verify` to re-run the same verdict: the coarse code taken
+ * from the full one ("" when it had none), never the full code (invariant 3).
  */
-function observedV4(checkout: WalletCheckout, merchantOrigin: string): Body {
+function observedV4(checkout: WalletCheckout, merchantOrigin: string): { full: Body; recorded: Body } {
   const area = checkout.shipToArea ?? null;
-  return {
+  const common = {
     merchant_origin: merchantOrigin,
     checkout_ref_hash: checkout.checkoutRef,
     lines: checkout.lines.map((l) => ({ variant_ref: l.variantRef, quantity: l.quantity })),
-    ...(area === null ? {} : { ship_to_country: area.country, ship_to_postal_code: area.postalCodeCoarse }),
     ...(checkout.total === null ? {} : { final_total: { amount_minor: checkout.total.amountMinor, currency: checkout.total.currency } }),
+  };
+  return {
+    full: { ...common, ...(area === null ? {} : { ship_to_country: area.country, ship_to_postal_code: area.postalCode }) },
+    recorded: { ...common, ...(area === null ? {} : { ship_to_country: area.country, ship_to_postal_code_coarse: area.postalCodeCoarse ?? "" }) },
   };
 }
 
@@ -307,9 +312,9 @@ function checkoutMerchantOrigin(checkout: WalletCheckout, pairedStore: string | 
 function bind(snapshot: CompletableSnapshot, checkout: WalletCheckout, recordedRef: string, pairedStore: string | null): { observed: Body; context: Body; verdict: Binding } {
   if (snapshot.v === 4) {
     // binding-v2: check 2 is bound to the checkout the passkey signed, so no recorded ref is needed.
-    const observed = observedV4(checkout, checkoutMerchantOrigin(checkout, pairedStore));
+    const { full, recorded } = observedV4(checkout, checkoutMerchantOrigin(checkout, pairedStore));
     const context = { mode: "shop_agent", ship_to_optional: shipToOptional("shop_api") };
-    return { observed, context, verdict: bindingV2(snapshot, observed, { ...context, mode: "shop_agent" }) };
+    return { observed: recorded, context, verdict: bindingV2(snapshot, full, { ...context, mode: "shop_agent" }) };
   }
   const observed = observedOf(checkout, snapshot.ship_to.postal_code, checkoutMerchantOrigin(checkout, pairedStore));
   const context = { mode: "shop_agent", recorded_checkout_ref_hash: recordedRef, ship_to_optional: shipToOptional("shop_api") };
@@ -352,7 +357,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
   const approvedTotal = snapshotTotal(snapshot);
   const totalMinor = approvedTotal.amount_minor;
   /**
-   * The ZIP the adapter compares a v1 binding's ship-to with; a v4 purchase has none (the adapter coarsens the
+   * The ZIP the adapter compares a v1 binding's ship-to with; a v4 purchase has none (the adapter reads the
    * destination itself, shipToArea, and binding-v2 compares that).
    */
   const zip = snapshot.v === 4 ? undefined : snapshot.ship_to.postal_code;
@@ -430,14 +435,17 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
   });
 
   /** Sends one report; the answer is in the chain (receipt) for later calls to read. False when it was not accepted. */
-  /** The refusal code (contract 1.7.0 Error.code) of the last report Intent Cloud refused with 409, if any. */
+  /**
+   * The refusal code (contract 1.7.x Error.code) of the last report Intent Cloud refused with 409, or with 403 (1.7.1:
+   * `currency_unsupported` when the country map changed since the approval), if any.
+   */
   const refused: { code: string | null } = { code: null };
 
   async function send(report: Body): Promise<boolean> {
     const head = store.entries().at(-1)?.seq ?? -1;
     try {
       const result = await ctx.cloud.reportOutcome(handle, report as OutcomeReport, ctx.signer);
-      if (!result.ok && result.status === 409 && result.body !== null && "code" in result.body && typeof result.body.code === "string") refused.code = result.body.code;
+      if (!result.ok && (result.status === 409 || result.status === 403) && result.body !== null && "code" in result.body && typeof result.body.code === "string") refused.code = result.body.code;
       if (isPausedAnswer(result)) await pausedReport(head);
       return result.ok && result.status === 201 && asBody(result.body).accepted === true;
     } catch (error) {
@@ -674,7 +682,7 @@ export async function advanceCompletion(ctx: CompletionContext, input: Completio
     const attempted = attemptsOf(store.entries(), handle).length > 0;
     // Refused before acceptance: a local outcome only (Appendix G precheck step 3), and nothing was sent to the wallet.
     if (fate === "refused" && !attempted) {
-      // A 409 at the completing report (1.7.0: a ceiling or a pause) refuses before anything is paid: no
+      // A 409 or 403 at the completing report (a ceiling, a pause, or 1.7.1's country map) refuses before anything is paid: no
       // complete_checkout is ever sent for it. Its code names why, for the developer.
       await local({ state: "failed", source: "gateway_precheck", reason: refused.code === null ? "redeem_refused" : `redeem_refused:${refused.code}` });
       return finish(completion);

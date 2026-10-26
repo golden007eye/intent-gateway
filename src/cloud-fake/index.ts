@@ -9,6 +9,7 @@ export { type Action, type AssertOptions, assertionProblem, challengeFor, SoftPa
 export {
   type ApprovalRecordView,
   type CheckoutControls,
+  DEFAULT_COUNTRIES,
   DEFAULT_CURRENCIES,
   DEFAULT_QUOTAS,
   LIVE_CURRENCIES,
@@ -21,6 +22,7 @@ export {
   SUMS_1_5_0,
   SUMS_1_6_0,
   SUMS_1_6_1,
+  SUMS_1_7_0,
   type SnapshotPatch,
   variantRef,
   type Quotas,

@@ -217,7 +217,7 @@ describe("start", () => {
     };
     const failure = h.gateway.start();
     await expect(failure).rejects.toThrow(GatewayStartError);
-    await expect(failure).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.7\.0.*contract_sums_sha256 is 0{64}/);
+    await expect(failure).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.7\.1.*contract_sums_sha256 is 0{64}/);
     expect(bodies(h, "keys")).toHaveLength(0);
     await expect(h.gateway.findOffers(SHOES)).rejects.toThrow(GatewayNotStartedError);
     expect(h.totalSends()).toBe(0);
@@ -556,7 +556,7 @@ describe("createCart snapshot checks", () => {
       completion_mode: "handoff",
       completer_keyid: view?.snapshot.v === 3 ? view.snapshot.completer_keyid : "v1",
       sent: {
-        contract_version: "1.7.0",
+        contract_version: "1.7.1",
         cart_request: {
           offer_handle: bodies(h, "observed").find((o) => o.endpoint === "searchCatalog") === undefined ? "" : (JSON.parse(Buffer.from(String(bodies(h, "disclosure").find((d) => d.endpoint === "createCart")?.body_b64), "base64").toString("utf8")) as { offer_handle: string }).offer_handle,
           quantity: 2,
@@ -1168,7 +1168,7 @@ describe("contract 1.6.x: completer key, local checks before any approval reques
     // Requests to Intent Cloud are logged byte for byte (G2b): no redaction, and the version header is kept.
     for (const d of bodies(h, "disclosure")) {
       expect(d).not.toHaveProperty("redacted");
-      expect(d.headers).toContainEqual(["intent-contract-version", "1.7.0"]);
+      expect(d.headers).toContainEqual(["intent-contract-version", "1.7.1"]);
     }
   });
 
@@ -1390,7 +1390,7 @@ describe("contract 1.6.x: completer key, local checks before any approval reques
 
   it("against a host that serves only 1.5.0, start fails with contract mismatch", async () => {
     const h = await setup({ start: false, fake: { versions: ["1.5.0"] } });
-    await expect(h.gateway.start()).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.7\.0 .*Intent-Contract-Version is 1\.5\.0/);
+    await expect(h.gateway.start()).rejects.toThrow(/contract mismatch: this gateway implements contract 1\.7\.1 .*Intent-Contract-Version is 1\.5\.0/);
   });
 
   it("the key is gone after a terminal outcome (the merchant's order), read once", async () => {
@@ -1491,7 +1491,7 @@ describe("contract 1.6.x: completer key, local checks before any approval reques
     h.patch.search = async (r) => ({ ...(await h.real.search(r)), contractVersion: "1.5.0" });
     const result = await h.gateway.findOffers(SHOES);
     expect(result.status).toBe("error");
-    expect(result.message).toContain("answered in contract 1.5.0, not 1.7.0");
+    expect(result.message).toContain("answered in contract 1.5.0, not 1.7.1");
     expect(bodies(h, "observed")).toHaveLength(0);
     // A cart whose answer comes back downgraded asks for no approval and keeps no key.
     delete h.patch.search;

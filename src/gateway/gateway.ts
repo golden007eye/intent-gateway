@@ -6,8 +6,9 @@
 //   for the agent to ask about; the gateway never guesses one and calls nothing. Under a policy that blocks
 //   categories, the category is required too: offers carry none of their own, so it is the only category the policy
 //   can check. The postcode is coarsened at once (src/shipto): only {country, coarse} is held, sent or remembered.
-// - Countries: a search ships to a country of the contract whose currency is in Intent Cloud's currency table
-//   (shipsTo), in that currency; outside the US only through a linked Shop wallet. The policy's USD caps are scaled to
+// - Countries: a search ships to a country the currency table Intent Cloud returns lists in its `countries`, that the
+//   contract names and that src/shipto has coarse rules for (shipsTo), in the currency that table gives it; outside
+//   the US only through a linked Shop wallet. The policy's USD caps are scaled to
 //   the currency by the table's ceilings (policy's capsIn), and count only orders in that currency.
 // - Identity: every tool input is scanned with findIdentity before any request is built. A finding writes a `block`
 //   entry (kinds and paths, never values) and nothing is sent.
@@ -44,11 +45,10 @@ import {
   type CoarseCountry,
   continueUrlAllowed,
   type CurrencyTable,
-  currencyTableVersion,
+  usableCurrencyTable,
   snapshotV4Problem,
   totalsAddUp,
   StoreSite,
-  TWO_DECIMAL_CURRENCIES,
   type CartRequest as CloudCartRequest,
   type CompletionMode as CloudCompletionMode,
   CONTRACT_VERSION,
@@ -243,14 +243,14 @@ export const FindOffersInput = z.strictObject({
     .number()
     .optional()
     .describe(
-      "The most the user said they will spend, in the currency of the ship-to country: USD for the US, CAD for Canada, " +
-        "AUD for Australia. Never guess it.",
+      "The most the user said they will spend, in the currency of the ship-to country (USD for the US, GBP for the UK, " +
+        "EUR for the euro countries). Never guess it.",
     ),
   country: z
     .string()
     .max(60)
     .optional()
-    .describe("The ship-to country as an ISO 3166 alpha-2 code (US, CA, AU), from what the user said. Never guess it."),
+    .describe("The ship-to country as an ISO 3166 alpha-2 code (US, CA, GB, DE, ...), from what the user said. Never guess it."),
   postcode: z.string().max(40).optional().describe("The postcode (ZIP code in the US) the user said to ship to. Never guess it."),
 });
 export type FindOffersInput = z.input<typeof FindOffersInput>;
@@ -460,38 +460,38 @@ export function createGateway(options: GatewayOptions): Gateway {
   const ceilings = (): CurrencyTable["currencies"] | null => currencyTable?.currencies ?? null;
 
   /**
-   * The countries a search may ship to now: the contract's (COARSE_COUNTRIES, its ship_to enum) whose currency is in
-   * Intent Cloud's currency table. With no valid table, the US only: the policy's caps cannot be put in another currency.
+   * The countries a search may ship to now: those the currency table's `countries` lists (contract 1.7.1: only the
+   * countries whose currency is in the table), met with the contract's ship_to enum (COARSE_COUNTRIES) and the
+   * countries src/shipto has coarse rules for. A country's currency comes only from that map. With no valid table,
+   * none: the gateway has no currency to put its limits in.
    */
   function shipsTo(): CoarseCountry[] {
     return COARSE_COUNTRIES.filter((c) => {
       const currency = currencyOf(c);
-      if (currency === "USD") return currencyTable === null || currencyTable.currencies.USD !== undefined;
       // A currency whose ceilings are out of line with the USD ones cannot carry the caps (policy's scalable).
-      return currency !== undefined && scalable(currency, ceilings());
+      return shipCountry(c) !== undefined && currency !== undefined && currencyTable?.currencies[currency] !== undefined && scalable(currency, ceilings());
     });
   }
 
-  /** The currency of a search to `country` (src/shipto's currencyFor over the table Intent Cloud sent). */
+  /** The currency of a search to `country`: the `countries` of the table Intent Cloud sent (src/shipto's currencyFor). */
   const currencyOf = (country: string): string | undefined => currencyFor(country, currencyTable);
 
   /** Why a search cannot ship to `country` (upper-cased), in one line for the agent, or null when it can. */
   function countryRefusal(country: string): string | null {
     const accepted = shipsTo();
     if ((accepted as readonly string[]).includes(country)) return null;
+    if (currencyTable === null) return "Not sent: the meta Intent Cloud returns holds no valid currency table, so the gateway cannot put its limits in any currency. Restart the gateway.";
+    if (accepted.length === 0) return "Not sent: the currency table Intent Cloud returns lists no country intent ships to, so no search can be made now.";
     const rules = shipCountry(country);
     const currency = currencyOf(country);
-    if ((COARSE_COUNTRIES as readonly string[]).includes(country) && rules !== undefined && currency !== undefined) {
-      if (currencyTable === null) {
-        return `Not sent: the answer Intent Cloud returns names no currencies intent can use, so intent cannot search in ${currency} for ${rules.name}; update intent or try later.`;
-      }
+    if (rules !== undefined && currency !== undefined && (COARSE_COUNTRIES as readonly string[]).includes(country)) {
       return currencyTable.currencies[currency] === undefined
         ? `Not sent: the currency table Intent Cloud returns (${currencyTable.version}) does not list ${currency}, so intent cannot ship to ${rules.name} for now.`
         : `Not sent: the ceilings Intent Cloud returns for ${currency} are out of line with its US-dollar ones, so intent cannot put your limits in ${currency} for ${rules.name}; try later.`;
     }
-    if (accepted.length === 0) return "Not sent: the currency table Intent Cloud returns lists none of the currencies intent ships in, so no search can be made now.";
-    const soon = rules === undefined ? "" : `; ${rules.name} is coming soon`;
-    return `Not sent: intent ships to ${namesText(accepted)} for now${soon}.`;
+    return rules === undefined
+      ? `Not sent: intent ships to ${namesText(accepted)} for now.`
+      : `Not sent: intent does not ship to ${rules.name} yet; it ships to ${namesText(accepted)}.`;
   }
 
   const head = (): number => store.entries().at(-1)?.seq ?? -1;
@@ -645,12 +645,11 @@ export function createGateway(options: GatewayOptions): Gateway {
       );
     }
 
-    // The currency table (1.7.0): which currencies a submitted checkout may be in. Its version must be the hash of its
-    // own currencies, or the table is not used (a submit then refuses, naming why).
+    // The currency table (1.7.1): which currencies a submitted checkout may be in, and each ship-to country's currency.
+    // It must carry `countries`, list two-decimal currencies only, and its version must be the hash of
+    // {currencies, countries}; otherwise it is not used (a search or a submit then refuses, naming why).
     const table = meta.body.currency_table;
-    // Only two-decimal currencies may be listed (1.7.0): a table with any other is not used.
-    const twoDecimal = table !== undefined && Object.keys(table.currencies).every((c) => (TWO_DECIMAL_CURRENCIES as readonly string[]).includes(c));
-    currencyTable = table !== undefined && twoDecimal && currencyTableVersion(table.currencies) === table.version ? table : null;
+    currencyTable = usableCurrencyTable(table) ? table : null;
 
     const statement = await cloud.keyStatement();
     if (!statement.ok) throw new GatewayStartError(`Intent Cloud key statement failed with status ${String(statement.status)}`);
@@ -762,7 +761,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const currency = place === undefined ? undefined : currencyOf(place.code);
     const budget = input.budget;
     if (budget === undefined || !Number.isFinite(budget) || budget <= 0) {
-      missing.push({ field: "budget", ask: `What is the most you want to spend${place === undefined ? "" : `, in ${currencyWords(currency ?? place.currency)}`}?` });
+      missing.push({ field: "budget", ask: `What is the most you want to spend${place === undefined || currency === undefined ? "" : `, in ${currencyWords(currency)}`}?` });
     }
     // The full postcode is coarsened here and goes no further: not into the log, a request or a remembered offer.
     const full = blankToUndefined(input.postcode);
@@ -1279,7 +1278,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         quantity,
         currency,
         totals: { subtotal: totals.subtotal, shipping: totals.shipping, tax: totals.tax, total: totals.total },
-        ship_to: { country: area.country as CoarseCountry, postal_code: area.postalCodeCoarse },
+        ship_to: { country: area.country as CoarseCountry, postal_code: area.postalCodeCoarse as string },
         ...(continueUrl === undefined ? {} : { continue_url: continueUrl }),
       },
       completion_mode: mode,
@@ -1872,6 +1871,8 @@ const REFUSAL_WORDS: Readonly<Record<string, string>> = {
   no_budget_instrument: 'Shop offered no agent budget to pay this checkout with, and the gateway never pays with the card: turn on "Allow agent to pay" with a budget in the Shop app.',
   wallet_disconnected: "Shop answered that this connection can no longer read the account (as when it is removed in the Shop app): run intent wallet unlink shop, then intent wallet link shop.",
   create_unconfirmed: "Shop gave no usable answer to the checkout request, and the gateway never sends it twice.",
+  // A refusal of the completing report that names no code the contract lists (a 403 the vendored spec does not list).
+  redeem_refused: "Intent Cloud returns a refusal to redeem this approval before payment, so the gateway paid nothing. Nothing was bought.",
 };
 
 /**
@@ -1880,7 +1881,8 @@ const REFUSAL_WORDS: Readonly<Record<string, string>> = {
  */
 export const REFUSAL_CODE_WORDS: Readonly<Record<RefusalCode, string>> = {
   one_tap_off: "Intent Cloud answered that one tap is off for this account, so it refused a purchase paid by the gateway's wallet. Nothing was bought.",
-  currency_unsupported: "Intent Cloud answered that it does not support this checkout's currency. Nothing was bought.",
+  currency_unsupported:
+    "Intent Cloud answered that it does not support this checkout's currency for its ship-to country (the countries it ships to may have changed since the search). Nothing was bought.",
   store_blocked: "Intent Cloud answered that this store is on its block list. Nothing was bought; choose another store.",
   category_excluded: "Intent Cloud answered that this item is in a category it excludes (health and medical, age-restricted, financial or digital goods). Nothing was bought.",
   ceiling_order: "Intent Cloud answered that this order is above its per-order ceiling for the currency. Nothing was bought.",
@@ -1992,7 +1994,7 @@ function shopCheckoutProblem(
     return { rule: "checkout: totals", words: "Shop's checkout totals do not add up to its total (a discount or a fee the gateway does not submit)" };
   }
   const area = checkout.shipToArea ?? null;
-  if (area === null || !(COARSE_COUNTRIES as readonly string[]).includes(area.country)) {
+  if (area === null || area.postalCodeCoarse === null || !(COARSE_COUNTRIES as readonly string[]).includes(area.country)) {
     return { rule: "checkout: ship_to", words: `Shop's checkout ships to no single destination in ${namesText(COARSE_COUNTRIES)}` };
   }
   // Only the country and the coarse postcode leave the gateway; both must be the ones the user gave for the search.
@@ -2002,6 +2004,10 @@ function shopCheckoutProblem(
       rule: "checkout: ship_to differs",
       words: "Shop's saved address ships to another country or postcode area than the one given for the search; set the preferred address in the Shop app, or search with its postcode",
     };
+  }
+  // 1.7.1: a checkout must be in its ship-to country's currency (the table's `countries`), or Intent Cloud refuses it.
+  if (table.countries?.[area.country] !== total.currency) {
+    return { rule: `currency_unsupported: ${total.currency} (${table.version})`, words: `Shop's checkout is in ${total.currency}, which is not the currency the currency table Intent Cloud returns (${table.version}) gives its ship-to country` };
   }
   return null;
 }

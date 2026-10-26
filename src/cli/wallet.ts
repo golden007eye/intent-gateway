@@ -13,7 +13,7 @@
 // link --start / --finish split the link in two processes, for an agent's shell that shows output only when a command
 // ends; status --wait-budget reads the account through the log until Shop shows agent payments on.
 import { type Config, ConfigError, INTENT } from "../config/index.ts";
-import { currencyTableVersion } from "../contract/index.ts";
+import { usableCurrencyTable } from "../contract/index.ts";
 import {
   CloudNetworkError,
   CloudResponseError,
@@ -276,7 +276,7 @@ async function readCeilings(io: Io, config: Config, store: Store): Promise<Ceili
     if (!verifyStatement(statement.body, pins, new Date(now())).ok) return unread("its key statement does not verify against the pinned root key");
     await store.append("keys", { statement: statement.body });
     const table = meta.body.currency_table;
-    if (table === undefined || currencyTableVersion(table.currencies) !== table.version) return unread("its meta holds no valid currency table");
+    if (!usableCurrencyTable(table)) return unread("its meta holds no valid currency table");
     return table.currencies;
   } catch (error) {
     // The disclosure log's own failures stop the command (invariant 2); a host that cannot be reached is said.

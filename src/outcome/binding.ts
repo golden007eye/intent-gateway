@@ -83,12 +83,18 @@ export function totalMatches(approvedMinor: number, final: unknown, approvedCurr
 /** An observed order for binding-v2 (Appendix G, 1.7.0): binding-v1's, plus the ship-to country. */
 export interface ObservedOrderV2 extends ObservedOrder {
   readonly ship_to_country?: unknown;
+  /**
+   * The gateway's own extension, for re-running a binding from what its chain recorded: `coarse()` of the full
+   * postcode, taken in memory, or "" when it had none. The chain never holds the full postcode. Read only when
+   * `ship_to_postal_code` is absent; compared as it is, never coarsened again.
+   */
+  readonly ship_to_postal_code_coarse?: unknown;
 }
 
 /**
- * binding-v2 (contract 1.7.0, Appendix G; vector o6) over a v4 snapshot. Check 1 accepts either signed name of the
+ * binding-v2 (contract 1.7.1, Appendix G; vector o6) over a v4 snapshot. Check 1 accepts either signed name of the
  * store in both modes; check 2 is bound in both modes (the passkey signed the checkout's hash); check 4 coarsens the
- * observed postcode by the snapshot country's rule and compares the country; check 5 compares in the snapshot's
+ * FULL observed postcode by the snapshot country's rule and compares the country; check 5 compares in the snapshot's
  * currency only. Throws BindingError for an unknown mode.
  */
 export function bindingV2(s: SnapshotV4, o: ObservedOrderV2, m: BindingContext): Binding {
@@ -104,9 +110,16 @@ export function bindingV2(s: SnapshotV4, o: ObservedOrderV2, m: BindingContext):
 }
 
 function checkShipToV2(s: SnapshotV4, o: ObservedOrderV2): BindingCheck {
-  if (!absent(o.ship_to_country) && o.ship_to_country !== s.ship_to.country) return "differs";
+  // Security review of 1.7.1: without the observed country the destination is not known, whatever the postcode.
+  if (absent(o.ship_to_country)) return "unknown";
+  if (o.ship_to_country !== s.ship_to.country) return "differs";
   const code = o.ship_to_postal_code;
-  if (absent(code)) return "unknown";
+  if (absent(code)) {
+    // A recorded coarse code (the gateway's chain): "" stands for a postcode that had no coarse form.
+    const recorded = o.ship_to_postal_code_coarse;
+    if (absent(recorded)) return "unknown";
+    return typeof recorded === "string" && recorded !== "" && recorded === s.ship_to.postal_code_coarse ? "match" : "differs";
+  }
   if (typeof code !== "string") return "differs";
   const coarse = coarsePostcode(s.ship_to.country, code);
   return coarse !== null && coarse === s.ship_to.postal_code_coarse ? "match" : "differs";

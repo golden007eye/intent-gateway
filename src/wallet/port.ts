@@ -122,11 +122,13 @@ export interface WalletCheckout extends CheckoutLocator {
    */
   readonly totals?: WalletTotals | null;
   /**
-   * The destination's country and coarse postcode (contract 1.7.0 "Coarse postcodes": US 5 digits, CA 3 characters,
-   * AU 4 digits), coarsened inside the adapter: the full postcode never crosses the port. Null when the rail shows no
-   * single destination, or its country has no coarse form.
+   * The destination's country, its full postcode and its coarse postcode (contract 1.7.1 "Coarse postcodes"), or null
+   * when the rail shows no single destination. `postalCodeCoarse` is null when the postcode has no coarse form there.
+   * The full `postalCode` is for binding check 4 only (Appendix G: coarse() takes the full postcode): it stays in
+   * memory and is never logged, chained, sent or shown (invariant 3); the adapter makes it non-enumerable, so a
+   * spread or JSON.stringify of the checkout drops it.
    */
-  readonly shipToArea?: { readonly country: string; readonly postalCodeCoarse: string } | null;
+  readonly shipToArea?: { readonly country: string; readonly postalCode: string; readonly postalCodeCoarse: string | null } | null;
   /**
    * The rail's own page where the buyer can finish this checkout (Shop's `continue_url`), for a hand-off; null when
    * none. It may carry a credential in its query, so the gateway never logs or shows it except in the submit that needs it.

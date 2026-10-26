@@ -294,16 +294,21 @@ function totalsOf(checkout: Json): WalletTotals | null {
   return { subtotal, shipping, tax, total: totalAmount };
 }
 
-/** The selected (else the only) destination's country and coarse postcode, coarsened here; the full code is dropped. */
-function shipToArea(checkout: Json): { country: string; postalCodeCoarse: string } | null {
+/**
+ * The selected (else the only) destination's country, full postcode and coarse postcode. The full code is kept in
+ * memory for binding check 4 only; it is never logged or sent.
+ */
+function shipToArea(checkout: Json): { country: string; postalCode: string; postalCodeCoarse: string | null } | null {
   const destinations = selectedDestinations(checkout);
   if (destinations.length !== 1) return null;
   const d = destinations[0];
   const country = typeof d?.address_country === "string" ? d.address_country : null;
   const code = typeof d?.postal_code === "string" ? d.postal_code : null;
   if (country === null || code === null || !/^[A-Z]{2}$/.test(country)) return null;
-  const coarse = coarsePostcode(country, code);
-  return coarse === null ? null : { country, postalCodeCoarse: coarse };
+  const area = { country, postalCodeCoarse: coarsePostcode(country, code) };
+  // Not enumerable: a spread, JSON.stringify or a log of the checkout never carries the full postcode (invariant 3).
+  Object.defineProperty(area, "postalCode", { value: code, enumerable: false });
+  return area as { country: string; postalCode: string; postalCodeCoarse: string | null };
 }
 
 /** Shop's continue_url when it is an https URL; its host is checked by the gateway before any submit (continueUrlAllowed). */

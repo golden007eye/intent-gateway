@@ -24,7 +24,7 @@ import {
 /** e2's input without the snapshot: the version spoken, the gateway's own CartRequest, the Offer and the Cart received. */
 export const SentPurchase = z.strictObject({
   /** The contract version the cart was made in; absent in entries a 1.6.0 gateway chained. */
-  contract_version: z.enum(["1.6.0", "1.6.1", "1.7.0"]).optional(),
+  contract_version: z.enum(["1.6.0", "1.6.1", "1.7.0", "1.7.1"]).optional(),
   cart_request: CartRequest,
   offer: z.strictObject({ variant_ref: VariantRef, merchant: Merchant, myshopify_domain: MyshopifyDomain.optional() }),
   cart: z.strictObject({
@@ -53,7 +53,7 @@ export const SENT_FIELDS = [
 export type SentReason = (typeof SENT_FIELDS)[number] | "v";
 
 /** The snapshot version each contract version takes (Appendix E step 7). */
-const SNAPSHOT_VERSION = { "1.6.0": 2, "1.6.1": 3, "1.7.0": 3 } as const;
+const SNAPSHOT_VERSION = { "1.6.0": 2, "1.6.1": 3, "1.7.0": 3, "1.7.1": 3 } as const;
 
 /**
  * The snapshot's fields that are not the purchase in `sent`, in e2's order, or [] when it is (Appendix E step 7): the
@@ -117,7 +117,7 @@ export function readSent(value: unknown): SentPurchase | null {
 }
 
 /**
- * `sent` of a submitted Shop checkout (contract 1.7.0, `POST /v1/checkouts`): the CheckoutRequest exactly as sent,
+ * `sent` of a submitted Shop checkout (contract 1.7.0 and 1.7.1, `POST /v1/checkouts`): the CheckoutRequest exactly as sent,
  * which Appendix E step 7 holds the v4 snapshot to (vector e3), and the currency table version Meta served when it
  * was sent, which the snapshot must name.
  */
@@ -126,7 +126,7 @@ export function readSent(value: unknown): SentPurchase | null {
 // chained request leaves it out, and `continue_url_hash` (its contract hash, what the snapshot signs) stands for it.
 export const SentCheckout = z
   .strictObject({
-    contract_version: z.literal("1.7.0"),
+    contract_version: z.enum(["1.7.0", "1.7.1"]),
     checkout_request: CheckoutRequest,
     currency_table: CurrencyTableVersion,
     continue_url_hash: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(),
@@ -139,7 +139,7 @@ export type SentCheckout = z.infer<typeof SentCheckout>;
 export function sentCheckoutOf(request: CheckoutRequest, currencyTable: string): SentCheckout {
   const { continue_url: url, ...checkout } = request.checkout;
   return {
-    contract_version: "1.7.0",
+    contract_version: "1.7.1",
     checkout_request: { ...request, checkout },
     currency_table: currencyTable,
     ...(url === undefined ? {} : { continue_url_hash: continueUrlHash(url) }),

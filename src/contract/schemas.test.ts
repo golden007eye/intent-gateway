@@ -153,9 +153,9 @@ describe("operations", () => {
     expect(ops).toHaveLength(10);
   });
 
-  it("every operation takes the optional Intent-Contract-Version request header, 1.5.0, 1.6.0, 1.6.1 or 1.7.0", () => {
+  it("every operation takes the optional Intent-Contract-Version request header, 1.5.0, 1.6.0, 1.6.1, 1.7.0 or 1.7.1", () => {
     const param = (components["parameters"] as Record<string, Obj>)["ContractVersion"] as Obj;
-    expect(param).toMatchObject({ name: "Intent-Contract-Version", in: "header", required: false, schema: { enum: ["1.5.0", "1.6.0", "1.6.1", "1.7.0"] } });
+    expect(param).toMatchObject({ name: "Intent-Contract-Version", in: "header", required: false, schema: { enum: ["1.5.0", "1.6.0", "1.6.1", "1.7.0", "1.7.1"] } });
     for (const { op } of ops) {
       const params = ((op as unknown as Obj)["parameters"] ?? []) as Obj[];
       expect(params.map((p) => p["$ref"]), op.operationId).toContain("#/components/parameters/ContractVersion");

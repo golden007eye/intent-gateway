@@ -162,8 +162,9 @@ function contentProblem(o: StatedOutcome, s: BindableSnapshot | SnapshotV4, opti
   if (o.reported !== undefined && (!REPORT_STATES.has(o.reported.state) || !GATEWAY_SOURCES.has(o.reported.source as never))) return "required_fields";
   if (o.order_ref !== undefined && !ORDER_REF.test(o.order_ref)) return "order_ref";
   if (o.reported?.order_ref !== undefined && !ORDER_REF.test(o.reported.order_ref)) return "order_ref";
-  if (o.final_total !== undefined && o.final_total.currency !== "USD") return "final_total";
-  if (o.state === "ordered" && o.final_total !== undefined && o.final_total.amount_minor > snapshotTotal(s).amount_minor) return "final_total";
+  // 1.7.1 OutcomeMoney: any two-decimal currency; an ordered total is in the approved currency and at most the approved total.
+  const approved = snapshotTotal(s);
+  if (o.state === "ordered" && o.final_total !== undefined && (o.final_total.currency !== approved.currency || o.final_total.amount_minor > approved.amount_minor)) return "final_total";
   // A v4 approval's outcomes are bound with binding-v2, earlier ones with binding-v1 (Appendix G).
   if (binding !== undefined && binding.rule_version !== bindingRuleFor(s)) return "binding_result";
   if (binding !== undefined && binding.result !== bindingResult(binding.checks, shipToOptional(o.source))) return "binding_result";
