@@ -14,7 +14,7 @@
 # servers and tools and stops at once if anything else was loaded. Never run `claude mcp add` from here.
 #
 # Usage: scripts/e2e-outsider.sh [--tarball | --npm <version|next> | --docker | --image <ref>]
-#                                [--only <a,b,...>] [--out <dir>] [--keep]
+#                                [--only <a,b,...>] [--out <new or empty dir>] [--keep]
 # Settings: CLAUDE_BIN (default claude), E2E_CLAUDE_MODEL (default: Claude Code's own), E2E_CLAUDE_TIMEOUT
 # (seconds per claude call, default 240), E2E_STDIO=0 (skip the stdio variant of b).
 #
@@ -94,6 +94,12 @@ case "$node_fits" in
 esac
 RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
 OUT="${OUT:-${TMPDIR:-/tmp}/intent-e2e-$RUN_ID}"
+# The stranger's HOME, data dirs and logs live under the output dir, so an earlier run's would be read as theirs (a
+# demo chain that is not empty on the first run, a stale log).
+if [ -d "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
+  echo "e2e: the output dir $OUT is not empty; an earlier run's HOME and logs would be read as this one's: name a new or empty dir" >&2
+  exit 2
+fi
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 case "$OUT/" in
