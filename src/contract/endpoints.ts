@@ -26,7 +26,7 @@ import {
  * The contract version this module implements: the spec's `info.version`, sent as `Intent-Contract-Version` on every
  * request (a request without it is answered as 1.5.0), and the version Intent Cloud must report back.
  */
-export const CONTRACT_VERSION = "1.7.0";
+export const CONTRACT_VERSION = "1.7.1";
 
 export interface Endpoint {
   readonly method: "GET" | "POST";

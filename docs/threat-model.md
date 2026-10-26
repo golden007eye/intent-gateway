@@ -1,6 +1,6 @@
 # Threat model
 
-This page says what the gateway protects, from whom, and where its protection ends. It covers the gateway as it is built today, in demo mode and against an Intent Cloud host, including the search through a linked Shop wallet, the Shop checkout submitted for passkey approval (contract 1.7.0) and one-tap purchases ([One-tap purchases](one-tap.md)). Real purchases need an invite: an Intent Cloud passkey, made at an invite-gated sign-up. The rules the code is held to are the five invariants in the repository's agent guide; each section below names how one is enforced and tested. Settled design decisions are in the [ADRs](adr/0005-packaging-npx-docker.md).
+This page says what the gateway protects, from whom, and where its protection ends. It covers the gateway as it is built today, in demo mode and against an Intent Cloud host, including the search through a linked Shop wallet, the Shop checkout submitted for passkey approval (contract 1.7.1) and one-tap purchases ([One-tap purchases](one-tap.md)). Real purchases need an invite: an Intent Cloud passkey, made at an invite-gated sign-up. The rules the code is held to are the five invariants in the repository's agent guide; each section below names how one is enforced and tested. Settled design decisions are in the [ADRs](adr/0005-packaging-npx-docker.md).
 
 To report a vulnerability, see [Security](security.md).
 

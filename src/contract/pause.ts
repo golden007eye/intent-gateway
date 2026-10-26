@@ -1,5 +1,5 @@
-// The pause call of contract 1.7.0 (ADR-0023; Appendix H, vectors h1 and h2):
-// - `POST /v1/pause`, sent with `Intent-Contract-Version: 1.7.0` and signed by the gateway session (Appendix C).
+// The pause call of contract 1.7.0, answered in 1.7.0 and 1.7.1 (ADR-0023; Appendix H, vectors h1 and h2):
+// - `POST /v1/pause`, sent with `Intent-Contract-Version: 1.7.1` and signed by the gateway session (Appendix C).
 // - Body exactly {account_key_thumbprint, counter, issued_at, signature}. `signature` is base64url Ed25519 by the
 //   account key over UTF-8 "intent-pause-v1\n" || JCS({account_key_thumbprint, counter, issued_at, action: "pause"});
 //   `action` is signed but never sent.
@@ -16,8 +16,8 @@ import { z } from "zod";
 import { canonicalize } from "../jcs/index.ts";
 import { PauseAccepted, PauseRequest } from "./schemas.ts";
 
-/** The contract version the pause call is sent in. */
-export const PAUSE_CONTRACT_VERSION = "1.7.0";
+/** The contract version the pause call is sent in: the gateway's own (Appendix H answers 1.7.0 and 1.7.1). */
+export const PAUSE_CONTRACT_VERSION = "1.7.1";
 /** The domain separator the account key signs before the JCS payload. */
 export const PAUSE_SIGNING_PREFIX = "intent-pause-v1\n";
 
