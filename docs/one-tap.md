@@ -127,7 +127,7 @@ Against malware running as your user, these files are obfuscation, not protectio
 
 ## What you can check
 
-- `intent log` shows each Shop call, and the store pair check's GET to the storefront, as a `call` line, `✓ answered 200 (no receipt: unsigned)`, and each outcome report sent to Intent Cloud ([a one-tap purchase in the log](log.md#a-one-tap-purchase)); `intent log -v` shows every entry, with the token as `redacted`.
+- `intent log` shows each Shop call, and the store pair check's GET to the storefront, as a `call` line, `✓ answered 200 (no signed receipt)`, and each outcome report sent to Intent Cloud ([a one-tap purchase in the log](log.md#a-one-tap-purchase)); `intent log -v` shows every entry, with the token as `redacted`.
 - `intent verify` re-checks the outcomes, that each purchase has at most one `complete_checkout`, sent after it was claimed, and that a purchase whose snapshot signs a store pair was redeemed only after the store pair check passed.
 - With a linked wallet, `intent wallet check shop` compares the orders Shop returns for the account with the purchases in the log ([orders the log does not name](log.md#orders-the-log-does-not-name)).
 

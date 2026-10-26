@@ -180,7 +180,7 @@ describe("demo flow", () => {
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);
     expect(report.exitCode).toBe(0);
     expect(report.counts.approvals).toBe(1);
-    expect(formatReport(report)).toContain("acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): ");
+    expect(formatReport(report)).toContain("acknowledged by a receipt from the local demo Intent Cloud (demo log, test keys): ");
     expect(formatReport(report)).not.toContain("public edge");
   });
 

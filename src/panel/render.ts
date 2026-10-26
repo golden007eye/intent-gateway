@@ -72,7 +72,7 @@ function pauseBar(m: PanelModel, canPause: boolean): string {
     return live(
       "pause",
       `<div class="pause-bar"><button type="button" class="pause-button" data-pause>Pause purchases</button>` +
-        `<p>Stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.</p></div>`,
+        `<p>Stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.</p></div>`,
     );
   }
   const stopped =
@@ -102,7 +102,7 @@ function nav(m: PanelModel): string {
     ([id, name]) =>
       `<li><a href="#/${id}" data-route="${id}"${id === "overview" ? ' aria-current="page"' : ""}><span>${name}</span>${live(`count-${id}`, counts[id] ?? "")}</a></li>`,
   ).join("");
-  return `<nav class="nav" aria-label="Panel views"><ul>${items}</ul><p class="nav-foot">${m.mode === "demo" ? "DEMO chain" : "REAL chain"} · read-only</p></nav>`;
+  return `<nav class="nav" aria-label="Panel views"><ul>${items}</ul><p class="nav-foot">${m.mode === "demo" ? "DEMO log" : "REAL log"} · read-only</p></nav>`;
 }
 
 // ---- overview -----------------------------------------------------------------------------------------------------
@@ -143,7 +143,7 @@ function overview(m: PanelModel): string {
         : `<p class="small">${String(k.acknowledged)} acknowledged by receipt</p><p class="small t-warn">${esc(problems.join(" · "))}</p>`) +
       // Each wallet destination apart: it answers, it never acknowledges (no receipt).
       k.elsewhere
-        .map((d) => `<p class="small">Also sent to ${esc(d.destination)}: ${String(d.sent)} (${String(d.answered)} answered, unsigned${d.maybeSent === 0 ? "" : `; ${String(d.maybeSent)} logged, maybe sent`})</p>`)
+        .map((d) => `<p class="small">Also sent to ${esc(d.destination)}: ${String(d.sent)} (${String(d.answered)} answered, no signed receipt${d.maybeSent === 0 ? "" : `; ${String(d.maybeSent)} logged, maybe sent`})</p>`)
         .join(""),
   );
   const refused = card("Refused before sending", String(k.refusedBefore), `<p class="small">${esc(k.refusedNote)}</p>`, "", k.refusedBefore > 0 ? " t-bad" : "");
@@ -301,8 +301,8 @@ function policy(m: PanelModel): string {
 
 function serverLog(m: PanelModel): string {
   const chain = m.chain.ok
-    ? `<p class="t-ok">${String(m.entries)} entries, every hash links${m.head === null ? "" : `, head seq ${String(m.head.seq)}`}.</p>`
-    : `<p class="t-bad" role="alert">The chain breaks at seq ${String(m.chain.brokenSeq)}: ${esc(m.chain.reason)}. Run <code class="cmd">${esc(m.verifyCommand)}</code>.</p>`;
+    ? `<p class="t-ok">${String(m.entries)} entries, each linked to the one before${m.head === null ? "" : `; last entry #${String(m.head.seq)}`}.</p>`
+    : `<p class="t-bad" role="alert">The log breaks at entry #${String(m.chain.brokenSeq)}: ${esc(m.chain.reason)}. Run <code class="cmd">${esc(m.verifyCommand)}</code>.</p>`;
   const rows = m.log
     .map(
       (r) =>
@@ -314,7 +314,7 @@ function serverLog(m: PanelModel): string {
   return (
     chain +
     (m.log.length === 0 ? `<p class="muted">No entries yet: the gateway has sent nothing.</p>` : `<ol class="log" id="log-rows">${rows}</ol>`) +
-    `<p class="small">The same chain as <code class="cmd">${esc(m.intent)} log -v</code>, which groups it by action.</p>`
+    `<p class="small">The same entries as <code class="cmd">${esc(m.intent)} log -v</code>, which groups it by action.</p>`
   );
 }
 
@@ -322,7 +322,7 @@ function serverLog(m: PanelModel): string {
  * list is fixed at page load, so a kind first logged later shows under "all" until a reload. */
 function logFilters(m: PanelModel): string {
   return (
-    `<p class="lede">The full local chain, entry by entry and field by field: what the gateway logged before each send and what came back.</p>` +
+    `<p class="lede">The full local log, entry by entry and field by field: what the gateway logged before each send and what came back.</p>` +
     `<form class="filters" id="log-filters" hidden role="search" aria-label="Filter the server log">` +
     `<label>Kind <select id="log-kind"><option value="">all</option>${m.logKinds.map((k) => `<option>${esc(k)}</option>`).join("")}</select></label>` +
     `<label>Find <input id="log-q" type="search" autocomplete="off" spellcheck="false" placeholder="field, value or seq"></label>` +
@@ -338,10 +338,10 @@ function verify(m: PanelModel): string {
   const v = m.verify;
   const status = v.ok ? `<div class="status status-ok">${ICONS.check}</div>` : `<div class="status status-err">${ICONS.alert}</div>`;
   return (
-    `<p class="lede">The same checks as ${command}, run by the panel over this chain whenever it changes: the hash links, the key statements, every receipt and every approval proof.</p>` +
+    `<p class="lede">The same checks as ${command}, run by the panel over this log whenever it changes: the links between entries, the key statements, every receipt and every approval proof.</p>` +
     `<section class="paper vres">${status}<h2>${v.ok ? "Every check passed" : "A check failed"}</h2>` +
     `<ul class="checks">${v.checks.map((c) => `<li class="${c.ok ? "ok" : "bad"}">${c.ok ? ICONS.check : ICONS.cross}<div><p class="cn">${esc(c.name)}<span class="sr-only">: ${c.ok ? "passed" : "failed"}</span></p>${c.details.map((d) => `<p class="small">${esc(d)}</p>`).join("")}</div></li>`).join("")}</ul>` +
-    `<p class="small mono">head seq ${String(v.head.seq)} · ${esc(v.head.hash)}</p></section>` +
+    `<p class="small mono">last entry #${String(v.head.seq)} · ${esc(v.head.hash)}</p></section>` +
     `<p class="small">The panel skips the install self-check; ${command} runs it too.</p>`
   );
 }

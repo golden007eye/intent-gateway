@@ -106,7 +106,7 @@ describe("find_offers with a linked Shop wallet", () => {
       catalog: { query: "stickers", context: { address_country: "US", currency: "USD" }, filters: { price: { max: 5000 }, ships_to: { country: "US" } }, pagination: { limit: 10 } },
     });
     expect(JSON.stringify(h.shop.searches)).not.toContain(STICKERS.zip);
-    expect(result.summary).toMatch(/^Sent: shop search_catalog \(/);
+    expect(result.summary).toMatch(/^Sent: Shop search_catalog \(/);
     expect(result.summary).not.toContain("searchCatalog (");
     expect(result.message).toContain("nothing was sent to Intent Cloud");
   });

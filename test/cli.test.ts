@@ -115,6 +115,6 @@ describe("intent as a process", () => {
     expect(await exec(["--version"])).toEqual({ code: 0, stdout: `${BUILD.version}\n`, stderr: "" });
     const unknown = await exec(["frobnicate"]);
     expect(unknown.code).toBe(2);
-    expect(unknown.stderr).toMatch(/^intent: unknown command "frobnicate"\n\nintent-gateway: /);
+    expect(unknown.stderr).toMatch(/^intent: unknown command "frobnicate"\n\nintent: the gateway /);
   });
 });

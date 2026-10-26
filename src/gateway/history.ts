@@ -97,10 +97,15 @@ export function disclosedSince(chain: readonly Entry[], fromSeq: number): Disclo
  * entry answers is listed apart, as `intent log` does: "Logged, maybe sent; no answer recorded: …".
  */
 export function summaryLine(disclosed: Disclosed, extraBlocked: readonly string[] = []): string {
-  const fieldsOf = (s: Disclosed["sends"][number]) => (s.fields.length === 0 ? "no body fields" : s.fields.join(", "));
-  const nameOf = (s: Disclosed["sends"][number]) => (s.destination === null ? s.endpoint : `${s.destination} ${s.endpoint}`);
+  const fieldsOf = (s: Disclosed["sends"][number]) => {
+    const fields = s.destination === null ? s.fields : mcpFields(s.fields);
+    return fields.length === 0 ? "no body fields" : fields.join(", ");
+  };
+  // `shop_accounts` reads as `Shop accounts`, as `intent log` writes it.
+  const label = (d: string) => d.charAt(0).toUpperCase() + d.slice(1).replaceAll("_", " ");
+  const nameOf = (s: Disclosed["sends"][number]) => (s.destination === null ? s.endpoint : `${label(s.destination)} ${s.endpoint}`);
   const answer = (s: Disclosed["sends"][number]) =>
-    s.destination !== null ? "; answered, unsigned" : s.acknowledged ? "; receipt verified" : "; no verified receipt";
+    s.destination !== null ? "; answered, no signed receipt" : s.acknowledged ? "; receipt verified" : "; no verified receipt";
   const sent = disclosed.sends.filter((s) => s.answered).map((s) => `${nameOf(s)} (${fieldsOf(s)}${answer(s)})`);
   const unanswered = disclosed.sends.filter((s) => !s.answered).map((s) => `${nameOf(s)} (${fieldsOf(s)})`);
   const blocked = [...disclosed.blocked, ...extraBlocked];
@@ -109,6 +114,23 @@ export function summaryLine(disclosed: Disclosed, extraBlocked: readonly string[
     ...(unanswered.length === 0 ? [] : [`Logged, maybe sent; no answer recorded: ${unanswered.join("; ")}`]),
     `Blocked: ${blocked.length === 0 ? "nothing" : blocked.join("; ")}`,
   ].join(" / ");
+}
+
+/**
+ * A wallet's MCP request fields, as the agent reads them: the tool's arguments by name (`params.arguments.` dropped),
+ * then any other field, then the protocol fields every MCP request carries, counted. Every logged field is still
+ * named or counted (invariant 5); `intent log -v` lists each one.
+ */
+function mcpFields(fields: readonly string[]): string[] {
+  const args: string[] = [];
+  const other: string[] = [];
+  let protocol = 0;
+  for (const field of fields) {
+    if (field.startsWith("params.arguments.")) args.push(field.slice("params.arguments.".length));
+    else if (field === "jsonrpc" || field === "id" || field === "method" || field === "params.name" || field === "params.arguments" || field.startsWith("params._meta.")) protocol++;
+    else other.push(field);
+  }
+  return [...args, ...other, ...(protocol === 0 ? [] : [`${String(protocol)} MCP protocol field${protocol === 1 ? "" : "s"}`])];
 }
 
 function strings(value: unknown): string[] {

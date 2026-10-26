@@ -419,7 +419,7 @@ function feedLine(a: Activity, time: Clock): Line {
         ...base,
         label: "call",
         tone: answered ? (status !== null && status >= 400 ? "warn" : "plain") : toneOf(a.requests),
-        text: join([`${destinationLabel(f.destination ?? "")} ${f.endpoint ?? ""}`.trim(), answered ? `answered${status === null ? "" : ` ${String(status)}`}, unsigned` : delivery()]),
+        text: join([`${destinationLabel(f.destination ?? "")} ${f.endpoint ?? ""}`.trim(), answered ? `answered${status === null ? "" : ` ${String(status)}`}, no signed receipt` : delivery()]),
       };
     }
     case "pause":
@@ -555,7 +555,7 @@ function purchaseView(p: Purchase, time: Clock): PurchaseView {
   const lastCheck = p.checks.at(-1);
   steps.push(
     p.approval !== null
-      ? { n: 4, name: "Agent checked", state: "done", note: join([time(p.approval.time), "verified and chained"]), drawer: lastCheck === undefined ? null : drawerId(lastCheck), link: null }
+      ? { n: 4, name: "Agent checked", state: "done", note: join([time(p.approval.time), "verified and logged"]), drawer: lastCheck === undefined ? null : drawerId(lastCheck), link: null }
       : lastCheck !== undefined
         ? { n: 4, name: "Agent checks", state: p.state === "waiting" ? "waiting" : "todo", note: `checked ${String(p.checks.length)}×, not approved yet`, drawer: drawerId(lastCheck), link: null }
         : { n: 4, name: "Agent checks", state: "todo", note: "not yet", drawer: null, link: null },
@@ -584,7 +584,7 @@ const drawerId = (a: Activity): string => `a-${String(a.seq)}`;
 
 function drawerOf(a: Activity, time: Clock): Drawer {
   const heading = a.action === "search" ? "Search" : a.action === "cart" ? "Cart" : a.action === "status" ? "Agent checked" : "Your approval";
-  const seqs = a.seqs.length <= 1 ? `seq ${String(a.seq)}` : `seq ${String(a.seqs[0])}–${String(a.seqs.at(-1))}`;
+  const seqs = a.seqs.length <= 1 ? `entry #${String(a.seq)}` : `entries #${String(a.seqs[0])}–${String(a.seqs.at(-1))}`;
   const facts: (readonly [string, string])[] =
     a.action === "approval"
       ? [
@@ -592,7 +592,7 @@ function drawerOf(a: Activity, time: Clock): Drawer {
           ["total", money(a.facts.total_minor)],
           ["passkey", a.facts.fingerprint ?? ""],
           ["time", time(a.time, true)],
-          ["proof", "verified by the gateway and chained"],
+          ["proof", "verified by the gateway and logged"],
         ]
       : [];
   return { id: drawerId(a), heading, requests: a.requests.map(requestDetail), facts, seqs };
@@ -698,7 +698,7 @@ function entrySummary(kind: string, b: Record<string, unknown>): string {
     case "disclosure":
       return join([`logged${to} ${text(b.endpoint)}`, names(b.fields) || "no body fields"], "  ");
     case "response":
-      return join([`answer to #${String(b.disclosure_seq)}`, typeof b.status === "number" ? `status ${String(b.status)}` : "", typeof b.bytes === "number" ? `${String(b.bytes)} bytes` : "", "unsigned"]);
+      return join([`answer to #${String(b.disclosure_seq)}`, typeof b.status === "number" ? `status ${String(b.status)}` : "", typeof b.bytes === "number" ? `${String(b.bytes)} bytes` : "", "no signed receipt"]);
     case "receipt":
       return join([`receipt for #${String(b.disclosure_seq)}`, typeof b.status === "number" ? `status ${String(b.status)}` : "", b.verified === true ? "signature checked" : ""]);
     case "unacknowledged":
@@ -732,7 +732,7 @@ function entrySummary(kind: string, b: Record<string, unknown>): string {
     case "approval_pending":
       return join([`approval asked ${text(b.handle)}`, typeof b.total_minor === "number" ? money(b.total_minor) : ""]);
     case "approval":
-      return `approval verified and chained ${text(b.handle)}`;
+      return `approval verified and logged ${text(b.handle)}`;
     case "approver_pin":
       return `approver pinned ${text(b.fingerprint)}`;
     case "approver_flag":

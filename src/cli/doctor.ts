@@ -134,20 +134,20 @@ export function checkChain(dataDir: string, report: Report): ReturnType<typeof c
   try {
     items = readLog(dataDir);
   } catch (error) {
-    report("fail", `chain: ${describeError(error, { dataDir })}`);
+    report("fail", `log: ${describeError(error, { dataDir })}`);
     return null;
   }
   if (items.length === 0) {
-    report("ok", "chain: empty; nothing has been sent yet");
+    report("ok", "log: empty; nothing has been sent yet");
     return "empty";
   }
   const chain = verifyChain(items);
   if (!chain.ok) {
-    report("fail", `chain: breaks at seq ${String(chain.brokenSeq)} (${chain.reason}); run ${INTENT} verify, then move audit.jsonl aside to start a new chain`);
+    report("fail", `log: breaks at entry #${String(chain.brokenSeq)} (${chain.reason}); run ${INTENT} verify, then move audit.jsonl aside to start a new log`);
     return null;
   }
   const head = items.at(-1) as { seq: number; hash: string };
-  report("ok", `chain: ${String(items.length)} entries, every hash links; head seq ${String(head.seq)} hash ${head.hash}`);
+  report("ok", `log: ${String(items.length)} entries, each linked to the one before; last entry #${String(head.seq)}, hash ${head.hash}`);
   return chainMode(items as Entry[]);
 }
 
@@ -156,7 +156,7 @@ async function checkLease(dataDir: string, now: number, report: Report): Promise
   try {
     text = await readFile(join(dataDir, "audit.lock"), "utf8");
   } catch {
-    report("ok", "lease: free");
+    report("ok", "write lock: free");
     return;
   }
   let expires: unknown;
@@ -166,11 +166,11 @@ async function checkLease(dataDir: string, now: number, report: Report): Promise
     expires = undefined;
   }
   if (typeof expires !== "number") {
-    report("warn", "lease: audit.lock is not a lease the gateway wrote; stop every gateway on this data dir, then delete audit.lock");
+    report("warn", "write lock: audit.lock is not a lock the gateway wrote; stop every gateway on this data dir, then delete audit.lock");
   } else if (expires > now) {
-    report("ok", `lease: held until ${new Date(expires).toISOString()} by a gateway that is writing, or one that stopped mid-write; it frees itself then`);
+    report("ok", `write lock: held until ${new Date(expires).toISOString()} by a gateway that is writing, or one that stopped mid-write; it frees itself then`);
   } else {
-    report("ok", `lease: expired at ${new Date(expires).toISOString()}; the next writer takes it over`);
+    report("ok", `write lock: expired at ${new Date(expires).toISOString()}; the next writer takes it over`);
   }
 }
 

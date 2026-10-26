@@ -495,7 +495,7 @@ describe("credentials inside JSON text, and values nested too deep (ADR-0014)", 
     const report = await runVerify({ dataDir: dir, pinnedRootKeys: PINNED, now: new Date(), skipSupplyChain: true });
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);
     expect(report.exitCode).toBe(0);
-    const details = report.checks.find((c) => c.name === "disclosures")?.details ?? [];
+    const details = report.checks.find((c) => c.name === "requests")?.details ?? [];
     const warnings = details.filter((d) => d.startsWith("warning: "));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("a credential inside JSON text at body.params.arguments.state");

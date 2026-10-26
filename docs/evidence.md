@@ -5,7 +5,7 @@
 ```console
 $ intent evidence ap_N5bRA9JDjEf8qgb6
 evidence: wrote /home/you/evidence-ap_N5bRA9JDjEf8qgb6.json
-  purchase ap_N5bRA9JDjEf8qgb6: 25 of the 29 entries of the chain; head seq 28 hash fe4d220a…4935
+  purchase ap_N5bRA9JDjEf8qgb6: 25 of the 29 entries of the chain; last entry #28, hash fe4d220a…4935
   Anyone can check it offline: intent verify --evidence /home/you/evidence-ap_N5bRA9JDjEf8qgb6.json
 
 $ intent verify --evidence evidence-ap_N5bRA9JDjEf8qgb6.json
@@ -17,18 +17,18 @@ purchase: ok
   an entry of the purchase left out of the pack cannot be detected
 key statements: ok
   1 recorded, checked offline against the pinned root key
-disclosures: ok
+requests: ok
   sent: 6
-  acknowledged by a receipt from Intent Cloud's public edge: 6
+  acknowledged by a receipt from Intent Cloud: 6
   sent, not acknowledged: 0
   discarded: 0
-  answers summarised locally (observed, never sent): 6
+  answers summarised in the log (kept here, never sent): 6
 approvals: ok
   verified: 1
 outcomes: ok
   re-checked: 2 (handed_off: 1, ordered: 1)
-head: seq 28 hash fe4d220a…4935
-  Compare this head with one saved earlier, or with another pack from the same chain.
+last entry: #28, hash fe4d220a…4935
+  Compare this hash with one saved earlier, or with another pack from the same log.
 verify: ok
 ```
 

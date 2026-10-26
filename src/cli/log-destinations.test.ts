@@ -93,13 +93,40 @@ async function writeWalletFlow(): Promise<string> {
 
 const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 
+describe("intent log: repeated calls", () => {
+  it("shows the same call answered the same way back to back as one line with its count; -v and --json keep each", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "log-repeat-")), "data");
+    let second = 0;
+    store = await openStore(dir, { clock: () => TS + (second += 5000) });
+    const cloud = createDisclosedCloud(unreachableCloud, store, { keySet: () => null });
+    // A Shop sign-in waits: the token request is polled, answered 400 until the person approves, then 200.
+    let polls = 0;
+    const shop = createDisclosedWallet(shopTransport((op) => (op === "token" && ++polls <= 3 ? 400 : 200)), cloud, { destination: "shop" });
+    for (let i = 0; i < 4; i++) await shop.call("token", rpc("token", { device_code: "d" }));
+    await shop.call("get_checkout", rpc("get_checkout", { checkout_id: "co_1" }));
+    await store.close();
+    store = null;
+    const items = readLog(dir);
+    const out = formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data" });
+    const calls = out.split("\n").filter((l) => l.includes("  call  "));
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toMatch(/Shop token · device_code +⚠ answered 400 \(no signed receipt\) ×3$/);
+    // The 200 that ended the wait is its own line, and so is a different call.
+    expect(calls[1]).toMatch(/Shop token · device_code +✓ answered 200 \(no signed receipt\)$/);
+    expect(calls[2]).toMatch(/Shop get_checkout · checkout_id +✓ answered 200 \(no signed receipt\)$/);
+    // The counts still count each call.
+    expect(out).toContain("5 wallet calls");
+    expect(formatJson(items).trim().split("\n").filter((l) => l.includes('"action":"call"'))).toHaveLength(5);
+  });
+});
+
 describe("intent log: wallet destinations, refusals and wallet entries", () => {
   it("the timeline: a Shop call is answered with its status, blocks say nothing sent, each destination has its own Sent line", async () => {
     const items = readLog(await writeWalletFlow());
     const out = formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data" });
     expect(out).toContain("call      Shop get_checkout · checkout_id");
-    expect(out).toContain("✓ answered 200 (no receipt: unsigned)");
-    expect(out).toContain("⚠ answered 401 (no receipt: unsigned)");
+    expect(out).toContain("✓ answered 200 (no signed receipt)");
+    expect(out).toContain("⚠ answered 401 (no signed receipt)");
     expect(out).toContain("Shop search: an email address in params.arguments.note");
     expect(out).toContain("Shop search: not logged as sent: a credential in the query (access_token), which the log cannot digest");
     expect(out).toContain("Shop wallet linked");

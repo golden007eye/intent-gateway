@@ -12,7 +12,7 @@ set -eu
 data="${INTENT_DATA_DIR:-/data}"
 token_file="$data/http-token"
 
-say() { printf 'intent-gateway: %s\n' "$*" >&2; }
+say() { printf 'intent: %s\n' "$*" >&2; }
 
 # `docker exec` takes the container's short id, which Docker sets as HOSTNAME (12 hex digits). Any other HOSTNAME
 # (--hostname, --network host) is not an id, so the commands then say <container>. Mirrors dockerExec() in src/config.

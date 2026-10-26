@@ -310,7 +310,7 @@ describe("findOffers when Intent Cloud cannot be reached", () => {
       "Sent: nothing / Blocked: nothing",
     ]);
     expect(h.warnings.filter((w) => w.includes(reason))).toEqual([
-      `intent-gateway: ${reason}. Restart the gateway, then run ${INTENT} verify.`,
+      `intent: ${reason}. Restart the gateway, then run ${INTENT} verify.`,
     ]);
   });
 });
@@ -708,7 +708,7 @@ describe("invariant 4: approved only when verified, chained and from the pinned 
     expect((chained[0]?.proof as { approval_handle?: string }).approval_handle).toBe(approval);
     // The pin entry precedes the approval entry.
     expect(h.kinds().lastIndexOf("approver_pin")).toBeLessThan(h.kinds().lastIndexOf("approval"));
-    expect(h.warnings).toEqual([`intent-gateway: pinned the first approving passkey. Fingerprint: ${result.fingerprint}`]);
+    expect(h.warnings).toEqual([`intent: pinned the first approving passkey. Fingerprint: ${result.fingerprint}`]);
     expect(verifyChain(h.store.entries()).ok).toBe(true);
   });
 

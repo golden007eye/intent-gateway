@@ -409,7 +409,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   try {
     wallet = options.oneTap?.connect(cloud) ?? null;
   } catch (error) {
-    logger.warn(`intent-gateway: the linked wallet cannot be used, so purchases are handed off: ${(error as Error).message}`);
+    logger.warn(`intent: the linked wallet cannot be used, so purchases are handed off: ${(error as Error).message}`);
   }
   // The store pair check's storefront, behind the same disclosure core (log before send to every destination).
   const storefront: StorefrontPort | null = wallet === null ? null : (options.oneTap?.storefront ?? connectStorefront)(cloud);
@@ -488,7 +488,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       if (error instanceof DisclosureRefusedError) return refuse("blocked", `Not sent: ${error.reasons.join("; ")}.`);
       if (error instanceof DisclosureStoppedError) {
         // Said once on the terminal too: the developer must restart the gateway, the agent cannot fix it.
-        if (!stopReported) logger.warn(`intent-gateway: ${error.message}. Restart the gateway, then run ${INTENT} verify.`);
+        if (!stopReported) logger.warn(`intent: ${error.message}. Restart the gateway, then run ${INTENT} verify.`);
         stopReported = true;
         return refuse("error", `Not sent: ${error.message}. The developer must restart the gateway.`);
       }
@@ -605,7 +605,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       const keys = await completerKeys.list();
       for (const keyid of expiredCompleterKeys(store.entries(), keys, now())) await completerKeys.remove(keyid);
     } catch (error) {
-      logger.warn(`intent-gateway: could not tidy the completer keys in ${completerKeys.dir}: ${(error as Error).message}`);
+      logger.warn(`intent: could not tidy the completer keys in ${completerKeys.dir}: ${(error as Error).message}`);
     }
   }
 
@@ -645,7 +645,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       const verified = fetched.ok ? await chainStatement(fetched.body) : fetched.refused.message;
       if (typeof verified !== "string") {
         keySet = verified;
-        logger.warn(`intent-gateway: the key statement expired on ${expiredOn}; fetched and chained a fresh one.`);
+        logger.warn(`intent: the key statement expired on ${expiredOn}; fetched and chained a fresh one.`);
         return { ok: true, keys: verified };
       }
       why = verified;
@@ -849,7 +849,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (known === undefined) {
       return {
         status: "invalid",
-        message: "Not sent: this offer did not come from a search through this gateway. Call find_offers first.",
+        message: "Not sent: this gateway has no such offer (it keeps offers only while it runs). Call find_offers again and use an offer_handle from that result.",
         summary: summary(fromSeq),
       };
     }
@@ -1377,7 +1377,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (check.entry !== null) await store.append(check.entry.kind, check.entry.body);
     await store.append("approval", { handle, proof: status.proof, sign_count: verified.credential.signCount });
     if (check.decision === "pin") {
-      logger.warn(`intent-gateway: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
+      logger.warn(`intent: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
     }
     const shown = await recordOutcome(handle, status, verified.snapshot, verified.snapshotHash, keys);
     const parsedProof = BindableApprovalProof.safeParse(status.proof);
@@ -1515,7 +1515,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         : { ...words, state_shown: adopted.state_shown, kept_earlier: true, ...(adopted.order_ref === undefined ? {} : { order_ref: adopted.order_ref }) };
     if (shownState !== null && adopted?.cloud != null && !replaces(adopted.cloud, cloud)) {
       logger.warn(
-        `intent-gateway: Intent Cloud reported outcome ${cloud.state} for ${handle} after it reported the final outcome ${adopted.cloud.state} (Appendix G R5a); the gateway keeps the earlier one.`,
+        `intent: Intent Cloud reported outcome ${cloud.state} for ${handle} after it reported the final outcome ${adopted.cloud.state} (Appendix G R5a); the gateway keeps the earlier one.`,
       );
       return keep();
     }
@@ -1548,7 +1548,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     // Intent Cloud's word is repeated only when its state and outcome agree (Appendix G; never more than the outcome).
     const inconsistent = status === null ? null : statusProblem(status.state, status.outcome, mode);
     if (inconsistent !== null) {
-      logger.warn(`intent-gateway: Intent Cloud reported an approval state and an outcome that disagree (${inconsistent}); the gateway does not repeat them.`);
+      logger.warn(`intent: Intent Cloud reported an approval state and an outcome that disagree (${inconsistent}); the gateway does not repeat them.`);
       // The structured reading (never more than the verified statement) is still given; the sentence repeats nothing.
       return {
         status: "approved",

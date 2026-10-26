@@ -99,6 +99,8 @@ describe("intent wallet link shop", () => {
     expect(r.code, r.err).toBe(0);
     expect(r.err).toBe("");
     expect(r.out).toContain(`check that it shows the code ${s.shop.userCode}:\n  ${s.shop.authUrl}activate\n`);
+    // No terminal (an agent's shell): the wait blocks it, so the line names the two-part link.
+    expect(r.out).toContain("From an agent's shell, stop this and use intent wallet link shop --start, then --finish.\n");
     expect(r.out).toContain("Shop wallet linked: tokens kept in the encrypted vault");
     expect(r.out).toContain("Shop budget left for the gateway: 50.00 USD");
     expect(r.out).toContain("One-tap with Shop pays from the agent budget only while agent payments are on in the Shop app and your policy allows one tap; otherwise purchases are handed off to Shop's checkout page");
@@ -127,7 +129,7 @@ describe("intent wallet link shop", () => {
     expectNoSecrets(s, log);
     const verify = await s.run(["verify", "--skip-install-check"]);
     expect(verify.code, verify.out + verify.err).toBe(0);
-    expect(verify.out).toContain("credentials digested in the log");
+    expect(verify.out).toContain("credentials sent (the log keeps only their sha256)");
   });
 
   it("linking again: the new sign-in first, then the earlier token revoked (logged), the unlink chained, then the link", async () => {
@@ -410,8 +412,10 @@ describe("intent init", () => {
     expect(r.code, r.out + r.err).toBe(0);
     expect(r.out).toContain(`intent init: data dir ${s.dir}`);
     expect(r.out).toContain("policy: the bundled zip-only");
-    expect(r.out).toContain("chain: empty");
+    expect(r.out).toContain("log: empty");
     expect(r.out).toContain("Shop one-tap: skipped (no terminal to ask at); purchases are handed off to the merchant's checkout; link it later with");
+    // From an agent's shell the link that works is the two-part one.
+    expect(r.out).toMatch(/link it later with .* wallet link shop --start\n/);
     expect(r.out).not.toContain("[y/N]");
     expect(r.out).toContain("Connect an agent (Claude Code):\n  claude mcp add intent -e INTENT_DATA_DIR=");
     expect(r.out).toContain(`-e INTENT_SHOP_CLIENT_ID=${s.shop.clientId}`);
@@ -454,6 +458,7 @@ describe("intent init", () => {
     const r = await s.run(["init"], { tty: true, input: "y\n" });
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain(`check that it shows the code ${s.shop.userCode}`);
+    expect(r.out).not.toContain("From an agent's shell");
     expect(r.out).toContain("Shop wallet linked");
     expect(r.out).toContain("claude mcp add intent");
     expect(existsSync(vaultPath(s.dir, "shop"))).toBe(true);

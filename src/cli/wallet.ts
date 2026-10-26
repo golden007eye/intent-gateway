@@ -100,7 +100,8 @@ export async function walletStatus(io: Io, config: Config): Promise<number> {
     const name = RAIL_NAMES[rail];
     const file = vaultPath(config.dataDir, rail);
     if (!(await hasSecret(config.dataDir, rail))) {
-      line(io.stdout, `${name} wallet: not linked`);
+      // From an agent's shell (no terminal) the link that works is the two-part one.
+      line(io.stdout, `${name} wallet: not linked; link it with ${INTENT} wallet link ${rail}${io.isTTY.stdin && io.isTTY.stdout ? "" : " --start"}`);
       continue;
     }
     const fix = `unlink it with ${INTENT} wallet unlink ${rail} and link it again`;
@@ -712,6 +713,8 @@ function showPrompt(io: Io, name: string, prompt: DeviceGrantPrompt): void {
   line(io.stdout, `  ${printable(prompt.verificationUri)}`);
   if (io.isTTY.stdout) line(io.stdout, printableLines(approvalQr(prompt.verificationUriComplete ?? prompt.verificationUri).text.trimEnd()));
   line(io.stdout, `Waiting for you to approve it in ${name} (up to ${String(Math.ceil(prompt.expiresInS / 60))} min; Ctrl-C stops)…`);
+  // An agent's shell has no terminal: this run blocks it for the whole wait, which the two-part link does not.
+  if (!io.isTTY.stdout) line(io.stdout, `From an agent's shell, stop this and use ${INTENT} wallet link ${name.toLowerCase()} --start, then --finish.`);
 }
 
 function delay(ms: number): Promise<void> {

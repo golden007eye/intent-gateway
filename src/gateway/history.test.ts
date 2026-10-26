@@ -47,8 +47,29 @@ describe("summaryLine with destinations", () => {
       entry(4, "disclosure", { endpoint: "complete_checkout", destination: "shop", fields: [] }),
     ];
     expect(summaryLine(disclosedSince(chain, -1))).toBe(
-      "Sent: searchCatalog (product; receipt verified); shop get_checkout (params.arguments.checkout_id; answered, unsigned) / " +
-        "Logged, maybe sent; no answer recorded: shop complete_checkout (no body fields) / Blocked: nothing",
+      "Sent: searchCatalog (product; receipt verified); Shop get_checkout (checkout_id; answered, no signed receipt) / " +
+        "Logged, maybe sent; no answer recorded: Shop complete_checkout (no body fields) / Blocked: nothing",
+    );
+  });
+
+  it("names a wallet call's arguments and counts the MCP protocol fields; any other field is still named (invariant 5)", () => {
+    const fields = [
+      "id",
+      "jsonrpc",
+      "method",
+      "params._meta.io.modelcontextprotocol/clientInfo.name",
+      "params._meta.io.modelcontextprotocol/protocolVersion",
+      "params.arguments.catalog.query",
+      "params.name",
+      // Attack: a field outside the envelope and the arguments is never folded into the count.
+      "params.extra",
+    ];
+    const chain = [
+      entry(0, "disclosure", { endpoint: "search_catalog", destination: "shop", fields }),
+      entry(1, "response", { disclosure_seq: 0, status: 200, body_sha256: "0".repeat(64), bytes: 2 }),
+    ];
+    expect(summaryLine(disclosedSince(chain, -1))).toBe(
+      "Sent: Shop search_catalog (catalog.query, params.extra, 6 MCP protocol fields; answered, no signed receipt) / Blocked: nothing",
     );
   });
 

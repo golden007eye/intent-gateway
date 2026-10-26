@@ -52,9 +52,9 @@ describe("intent wallet status", () => {
   it("says not linked when there is no vault, with or without INTENT_SHOP_CLIENT_ID (the gateway has its own client)", async () => {
     const s = setup();
     const r = await s.run(["wallet", "status"]);
-    expect(r).toMatchObject({ code: 0, out: "Shop wallet: not linked\n", err: "" });
+    expect(r).toMatchObject({ code: 0, out: "Shop wallet: not linked; link it with intent wallet link shop --start\n", err: "" });
     const withClient = await s.run(["wallet", "status"], { INTENT_SHOP_CLIENT_ID: "my-gateway-client" });
-    expect(withClient).toMatchObject({ code: 0, out: "Shop wallet: not linked\n", err: "" });
+    expect(withClient).toMatchObject({ code: 0, out: "Shop wallet: not linked; link it with intent wallet link shop --start\n", err: "" });
   });
 
   it("says linked when the vault opens, and prints neither the token nor the key", async () => {
@@ -159,7 +159,7 @@ describe("intent wallet unlink shop", () => {
     }
 
     const status = await s.run(["wallet", "status"]);
-    expect(status.out).toBe("Shop wallet: not linked\n");
+    expect(status.out).toBe("Shop wallet: not linked; link it with intent wallet link shop --start\n");
     const log = await s.run(["log", "-v"]);
     expect(log.code).toBe(0);
     expect(log.out).toContain("Shop wallet unlinked, token not revoked (deleted here only)");
@@ -227,7 +227,7 @@ describe("intent wallet unlink shop", () => {
       }
       const verify = await s.run(["verify", "--skip-install-check"]);
       expect(verify.code, verify.out + verify.err).toBe(0);
-      expect(verify.out).toContain("credentials digested in the log");
+      expect(verify.out).toContain("credentials sent (the log keeps only their sha256)");
     });
 
     it("revoke answers 500: the file is still deleted, stderr names the Shop setting, and the chain says revoked:false", async () => {

@@ -112,7 +112,7 @@ describe("intent log --verbose and --json (golden)", () => {
     const result = await s.run(["log", "--utc"]);
     expect(result).toMatchObject({ code: 0, err: "" });
     expect(result.out.replace(s.dir, "<data>")).toMatchInlineSnapshot(`
-      "intent log · real chain · <data> · 18 entries
+      "intent log · real · <data> · 18 entries
 
       Friday 16 October 2026 (UTC)
       17:26:37  keys      keys signed by cloud-root-1 · valid until 2027-01-14  ✓ recorded

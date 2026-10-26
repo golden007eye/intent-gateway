@@ -416,7 +416,7 @@ class FileStore implements Store {
       }
       const items = parseLines(buf.subarray(0, read).toString("utf8"));
       const result = verifyChain(items, from);
-      if (!result.ok) this.#corrupt(`the chain is broken at seq ${String(result.brokenSeq)}: ${result.reason}`);
+      if (!result.ok) this.#corrupt(`the log is broken at entry #${String(result.brokenSeq)}: ${result.reason}`);
       const last = items.at(-1) as Entry | undefined;
       return last === undefined ? from : { size: from.size + read, hash: last.hash, seq: last.seq };
     } finally {
