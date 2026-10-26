@@ -123,14 +123,19 @@ const disclosures = (h: Harness): Record<string, unknown>[] => h.store.entries()
 const sentBody = (d: Record<string, unknown>): string => (typeof d.body_b64 === "string" ? Buffer.from(d.body_b64, "base64").toString("utf8") : "");
 /** The decoded bodies sent for one endpoint. */
 const sentBodies = (h: Harness, endpoint: string): string[] => disclosures(h).filter((d) => d.endpoint === endpoint).map(sentBody);
-/** Every body sent (decoded) and every other chain entry, as text. */
+/** Every request sent (its path, headers and decoded body) and every other chain entry, as text. */
 const scanned = (h: Harness): string =>
-  [...disclosures(h).map(sentBody), ...h.store.entries().filter((e) => e.kind !== "disclosure").map((e) => JSON.stringify(e.body))].join("\n");
+  [
+    ...disclosures(h).map((d) => JSON.stringify({ path: d.path, headers: d.headers, body: sentBody(d) })),
+    ...h.store.entries().filter((e) => e.kind !== "disclosure").map((e) => JSON.stringify(e.body)),
+  ].join("\n");
 /**
- * Text with its long tokens (hashes, signatures, keys, handles: 16 characters or more of base64 or hex) removed, so a
- * search for a short postcode part cannot match random text by chance.
+ * Whether `text` holds `part` as a postcode part would appear: the full code anywhere, and a short part (an inward
+ * code, a ZIP+4's last four) only as its own token, not inside a longer run of letters and digits such as a hash, a
+ * signature or a key. Nothing is erased first, so `postal_code=94107-1234` or `zip:1234` is still found.
  */
-const withoutRandom = (text: string): string => text.replace(/[A-Za-z0-9_+/=-]{16,}/g, "");
+const holdsPart = (text: string, part: string): boolean =>
+  part.length >= 8 ? text.includes(part) : new RegExp(`(?<![A-Za-z0-9])${part}(?![A-Za-z0-9])`).test(text);
 const completes = (h: Harness): number => disclosures(h).filter((d) => d.endpoint === "complete_checkout").length;
 
 describe("create_cart with a linked Shop wallet: the 1.7.1 submit", () => {
@@ -311,12 +316,13 @@ describe("create_cart with a linked Shop wallet: the 1.7.1 submit", () => {
     expect(h.fake.checkouts.received).toHaveLength(0);
   });
 
-  it("refuses a checkout currency the table does not list, locally, naming the table version", async () => {
+  it("refuses a checkout currency the table does not list, locally, in plain words; the table version is kept in the log", async () => {
     // A USD-only table and a store that prices the checkout in GBP: refused before any submit.
     const g = await setup({ currencies: { USD: { order: 50000, week: 100000 } }, faults: { checkoutCurrency: "GBP" } });
     const result = await cart(g);
     expect(result.status).toBe("refused");
-    expect(result.message).toMatch(/GBP, which the currency table Intent Cloud returns \(ct-[0-9a-f]{16}\) does not list/);
+    expect(result.message).toBe("Not sent: Shop's checkout is in GBP, a currency intent cannot take orders in now. Nothing was submitted for approval and nothing was bought.");
+    expect(result.message).not.toMatch(/ct-[0-9a-f]{16}/);
     expect(g.fake.checkouts.received).toHaveLength(0);
     const blocked = g.store.entries().findLast((e) => e.kind === "block");
     expect(body(blocked as Entry).held).toMatchObject({ currency: "GBP", currency_table: expect.stringMatching(/^ct-/) as unknown });
@@ -326,7 +332,7 @@ describe("create_cart with a linked Shop wallet: the 1.7.1 submit", () => {
     const h = await setup({ faults: { checkoutCurrency: "CAD" } });
     const result = await cart(h);
     expect(result.status).toBe("refused");
-    expect(result.message).toContain("Shop's checkout is in CAD, not the USD the search was in");
+    expect(result.message).toBe("Not sent: Shop's checkout is in CAD, but orders shipping to the US must be in USD. Nothing was submitted for approval and nothing was bought.");
     expect(h.fake.checkouts.received).toHaveLength(0);
   });
 
@@ -442,15 +448,15 @@ describe("create_cart with a linked Shop wallet: the 1.7.1 submit", () => {
 
   /** The developer's line for a completing report refused with `code`, as get_approval_status gives it. */
   const line = (code: string, words: string): string =>
-    `Approved: the buyer's pinned passkey signed this purchase, and the gateway verified and logged the proof. The gateway did not send the purchase to Shop (redeem_refused:${code}): no complete_checkout was sent. ${words} Nothing was bought. Create a new cart to hand the purchase off to the merchant's checkout.`;
+    `Approved: the buyer's pinned passkey signed this purchase, and the gateway verified and logged the proof. The gateway did not send the purchase to Shop (redeem_refused:${code}): no complete_checkout was sent. ${words}`;
   // 1.7.1: Intent Cloud checks the ceilings and the country map again at the completing report, and refuses with 409.
   // Each code is final and one clear line, and nothing is paid.
   it.each([
-    ["ceiling_order", line("ceiling_order", "Intent Cloud answered that this order is above its per-order ceiling for the currency."), (h: Harness) => { h.fake.checkouts.setCurrencies({ ...DEFAULT_CURRENCIES, GBP: { order: 100, week: 100_000 } }); }],
-    ["ceiling_week", line("ceiling_week", "Intent Cloud answered that this order would pass the buyer's weekly ceiling for the currency."), (h: Harness) => { h.fake.checkouts.setCurrencies({ ...DEFAULT_CURRENCIES, GBP: { order: 100_000, week: 100 } }); }],
+    ["ceiling_order", line("ceiling_order", "Intent Cloud answered that this order is above its per-order ceiling for the currency. Nothing was bought. Pick a cheaper offer or a smaller quantity."), (h: Harness) => { h.fake.checkouts.setCurrencies({ ...DEFAULT_CURRENCIES, GBP: { order: 100, week: 100_000 } }); }],
+    ["ceiling_week", line("ceiling_week", "Intent Cloud answered that this order would pass the buyer's weekly ceiling for the currency. Nothing was bought. Try a cheaper offer, or wait until a week has passed since your earlier orders."), (h: Harness) => { h.fake.checkouts.setCurrencies({ ...DEFAULT_CURRENCIES, GBP: { order: 100_000, week: 100 } }); }],
     [
       "currency_unsupported",
-      line("currency_unsupported", "Intent Cloud answered that it does not support this checkout's currency for its ship-to country (the countries it ships to may have changed since the search)."),
+      line("currency_unsupported", "Intent Cloud answered that it does not take orders in this checkout's currency for its ship-to country (the countries it ships to may have changed since the search). Nothing was bought. Search again."),
       (h: Harness) => { h.fake.checkouts.setCountries(Object.fromEntries(Object.entries(DEFAULT_COUNTRIES).filter(([c]) => c !== "GB"))); },
     ],
   ] as const)("a 409 %s at the completing report is final: a clear line, no complete_checkout, no second report", async (code, words, change) => {
@@ -609,13 +615,18 @@ describe("buyers outside the US: Canada, Australia, the UK, Ireland and the euro
       formatReport(report),
       JSON.stringify(report),
       JSON.stringify([found, result, done]),
-    ].map(withoutRandom);
-    for (const out of outputs) for (const part of ["94107-1234", "941071234", "1234"]) expect(out).not.toContain(part);
+    ];
+    for (const out of outputs) for (const part of ["94107-1234", "941071234", "1234"]) expect(holdsPart(out, part), part).toBe(false);
+    // The check itself finds a leak in the forms a log would hold it.
+    for (const leak of ["postal_code=94107-1234", '{"zip":"1234"}', "zip+4 941071234", "/v1/x?postcode=1234"]) {
+      expect(["94107-1234", "941071234", "1234"].some((part) => holdsPart(leak, part)), leak).toBe(true);
+    }
   });
 
-  it("a Canadian one tap chained under contract 1.7.0 (observed code already coarse) still verifies; the same record under 1.7.1 does not", async () => {
-    const h = await setup({ faults: { region: CANADA }, policy: DEFAULTS });
-    const found = await h.gateway.findOffers({ category: "stickers", budget: 25, country: "CA", postcode: CANADA.postalCode });
+  /** A one tap to `region`, ordered, then its chain rewritten into a new data dir as a gateway of `sent`/`header` would. */
+  async function oldChain(region: typeof CANADA | typeof UK) {
+    const h = await setup({ faults: { region }, policy: DEFAULTS });
+    const found = await h.gateway.findOffers({ category: "stickers", budget: 25, country: region.country, postcode: region.postalCode });
     if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
     const result = await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
     if (result.status !== "approval_needed") throw new Error(result.message);
@@ -623,30 +634,47 @@ describe("buyers outside the US: Canada, Australia, the UK, Ireland and the euro
     const done = await status(h, result.approval_handle);
     if (done.status !== "approved") throw new Error(done.message);
     expect(done.completion).toMatchObject({ state: "ordered" });
-    // The chain as a 1.7.0 gateway wrote it: `sent` names 1.7.0, and binding_inputs holds the coarse code as
-    // ship_to_postal_code (1.7.0's coarse() kept "K1A" as it was).
-    const oldWay = (version: string) => (e: Entry): unknown => {
+    // As a 1.7.0 gateway wrote it: `sent` names the version, the submit's header too, and binding_inputs holds the
+    // coarse code as ship_to_postal_code (1.7.0's coarse() kept "K1A" as it was).
+    const rewrite = (sentVersion: string, header: string) => (e: Entry): unknown => {
       const b = body(e);
-      if (e.kind === "approval_pending") return { ...b, sent: { ...(b.sent as object), contract_version: version } };
+      if (e.kind === "approval_pending") return { ...b, sent: { ...(b.sent as object), contract_version: sentVersion } };
+      if (e.kind === "disclosure" && b.endpoint === "createCheckout") {
+        return { ...b, headers: (b.headers as [string, string][]).map(([n, v]) => [n, n === "intent-contract-version" ? header : v]) };
+      }
       const inputs = b.binding_inputs as { observed: Record<string, unknown>; context: unknown } | undefined;
       if (e.kind !== "outcome" || inputs === undefined) return b;
       const { ship_to_postal_code_coarse: coarse, ...rest } = inputs.observed;
       return { ...b, binding_inputs: { ...inputs, observed: { ...rest, ship_to_postal_code: coarse } } };
     };
-    const rewritten = async (version: string): Promise<string> => {
+    return async (sentVersion: string, header: string) => {
       const dir = join(await fsp.mkdtemp(join(tmpdir(), "checkout-v4-old-")), "data");
       await fsp.cp(h.dir, dir, { recursive: true, filter: (src) => !src.endsWith("audit.jsonl") && !src.endsWith("audit.lock") });
       const store = await openStore(dir, { clock: () => T0 });
-      for (const e of h.store.entries()) await store.append(e.kind, oldWay(version)(e));
+      for (const e of h.store.entries()) await store.append(e.kind, rewrite(sentVersion, header)(e));
       await store.close();
-      return dir;
+      const report = await runVerify({ dataDir: dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(T0), skipSupplyChain: true });
+      return JSON.stringify(report.checks.filter((c) => !c.ok));
     };
-    expect(h.store.entries().some((e) => e.kind === "outcome" && (body(e).binding_inputs as { observed?: object } | undefined)?.observed !== undefined)).toBe(true);
-    const old = await runVerify({ dataDir: await rewritten("1.7.0"), pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(T0), skipSupplyChain: true });
-    expect(old.checks.filter((c) => !c.ok)).toEqual([]);
-    // Attack: the same already-coarse record claimed under 1.7.1 is re-run with strict coarse() and fails.
-    const claimed = await runVerify({ dataDir: await rewritten("1.7.1"), pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(T0), skipSupplyChain: true });
-    expect(JSON.stringify(claimed.checks.filter((c) => !c.ok))).toContain("holds a local binding other than its recorded inputs give");
+  }
+  const BINDING_FAILS = "holds a local binding other than its recorded inputs give";
+
+  it("a Canadian one tap chained under contract 1.7.0 (observed code already coarse) still verifies", async () => {
+    const verifyAs = await oldChain(CANADA);
+    expect(await verifyAs("1.7.0", "1.7.0")).toBe("[]");
+  });
+
+  it.each([
+    ["sent under 1.7.1", "1.7.1", "1.7.1"],
+    ["sent naming 1.7.0, but the logged submit's header says 1.7.1", "1.7.0", "1.7.1"],
+  ])("attack: the same Canadian record %s is re-run with strict coarse() and fails", async (_, sentVersion, header) => {
+    const verifyAs = await oldChain(CANADA);
+    expect(await verifyAs(sentVersion, header)).toContain(BINDING_FAILS);
+  });
+
+  it("attack: a UK record claimed under 1.7.0 gets no old reading (1.7.0 shipped to US, CA and AU only) and fails", async () => {
+    const verifyAs = await oldChain(UK);
+    expect(await verifyAs("1.7.0", "1.7.0")).toContain(BINDING_FAILS);
   });
 
   it.each(["no_countries", "wrong_version"] as const)("attack: a meta table with %s is not used: a US search is refused, nothing is sent, and start says so once", async (fault) => {
@@ -654,11 +682,11 @@ describe("buyers outside the US: Canada, Australia, the UK, Ireland and the euro
     const result = await h.gateway.findOffers(STICKERS);
     expect(result).toMatchObject({
       status: "refused",
-      message: "Not sent: the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; try again later or update intent.",
+      message: "Not sent: the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; restart Claude Code later (it restarts intent), or update intent.",
     });
     expect(disclosures(h).filter((d) => d.endpoint === "search_catalog" || d.endpoint === "searchCatalog")).toHaveLength(0);
     expect(h.warnings).toEqual([
-      "intent-gateway: the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; try again later or update intent.",
+      "intent: the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; restart Claude Code later (it restarts intent), or update intent.",
     ]);
   });
 

@@ -486,7 +486,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const currency = currencyOf(country);
     if (rules !== undefined && currency !== undefined && (COARSE_COUNTRIES as readonly string[]).includes(country)) {
       return currencyTable.currencies[currency] === undefined
-        ? `Not sent: the currency table Intent Cloud returns (${currencyTable.version}) does not list ${currency}, so intent cannot ship to ${rules.name} for now.`
+        ? `Not sent: intent cannot take orders in ${currency} now, so it cannot ship to ${rules.name} for now.`
         : `Not sent: the ceilings Intent Cloud returns for ${currency} are out of line with its US-dollar ones, so intent cannot put your limits in ${currency} for ${rules.name}; try later.`;
     }
     return rules === undefined
@@ -651,7 +651,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const table = meta.body.currency_table;
     currencyTable = usableCurrencyTable(table) ? table : null;
     // Said once on the terminal too, so the developer learns of it before the first search.
-    if (currencyTable === null) logger.warn(`intent-gateway: ${NO_TABLE_AT_START}`);
+    if (currencyTable === null) logger.warn(`intent: ${NO_TABLE_AT_START}`);
 
     const statement = await cloud.keyStatement();
     if (!statement.ok) throw new GatewayStartError(`Intent Cloud key statement failed with status ${String(statement.status)}`);
@@ -1860,18 +1860,25 @@ function completionWords(c: CompletionView): string {
     case "failed":
       return c.source === "shop_api"
         ? "Shop reported the checkout as not completed (read from Shop by the gateway). Create a new cart to hand the purchase off to the merchant's checkout."
-        : `The gateway did not send the purchase to Shop (${c.reason ?? "refused"}): no complete_checkout was sent.${refusalWords(c.reason)} Create a new cart to hand the purchase off to the merchant's checkout.`;
+        : // These refusals say what to do next themselves, and a hand-off would meet the same ceiling or country check.
+          `The gateway did not send the purchase to Shop (${c.reason ?? "refused"}): no complete_checkout was sent.${refusalWords(c.reason)}${OWN_NEXT_STEP.has(c.reason ?? "") ? "" : " Create a new cart to hand the purchase off to the merchant's checkout."}`;
   }
 }
 
 /** Shop's tool-level error codes (S1) that an indeterminate outcome may carry as its reason, and that are named to the developer. */
 const SHOP_ERROR_CODES: ReadonlySet<string> = new Set(["checkout_completion_ineligible", "invalid_checkout_id"]);
 
-/** What the developer can do about a one-tap refusal the gateway made before paying (complete.ts reasons). */
-/** Why nothing ships when the currency table at start is missing or does not check (contract 1.7.1). */
-const NO_TABLE_AT_START = "the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; try again later or update intent.";
+/** Refusals of the redemption whose words already name the next step (a hand-off would not get past them). */
+const OWN_NEXT_STEP: ReadonlySet<string> = new Set(["redeem_refused", "redeem_refused:ceiling_order", "redeem_refused:ceiling_week", "redeem_refused:currency_unsupported"]);
+
+/**
+ * Why nothing ships when the currency table at start is missing or does not check (contract 1.7.1). The table is read
+ * only at start, so the fix is a restart (Claude Code restarts intent), or a newer intent.
+ */
+const NO_TABLE_AT_START = "the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; restart Claude Code later (it restarts intent), or update intent.";
 const NO_CURRENCY_TABLE = `Not sent: ${NO_TABLE_AT_START}`;
 
+/** What the developer can do about a one-tap refusal the gateway made before paying (complete.ts reasons). */
 const REFUSAL_WORDS: Readonly<Record<string, string>> = {
   budget_unknown: 'Shop shows no budget for this connection: turn on "Allow agent to pay" with a budget in the Shop app.',
   no_budget_instrument: 'Shop offered no agent payments to pay this checkout with, and the gateway never pays with the card: turn on "Allow agent to pay" with a budget in the Shop app.',
@@ -1888,11 +1895,11 @@ const REFUSAL_WORDS: Readonly<Record<string, string>> = {
 export const REFUSAL_CODE_WORDS: Readonly<Record<RefusalCode, string>> = {
   one_tap_off: "Intent Cloud answered that one tap is off for this account, so it refused a purchase paid by the gateway's wallet. Nothing was bought.",
   currency_unsupported:
-    "Intent Cloud answered that it does not support this checkout's currency for its ship-to country (the countries it ships to may have changed since the search). Nothing was bought.",
+    "Intent Cloud answered that it does not take orders in this checkout's currency for its ship-to country (the countries it ships to may have changed since the search). Nothing was bought. Search again.",
   store_blocked: "Intent Cloud answered that this store is on its block list. Nothing was bought; choose another store.",
   category_excluded: "Intent Cloud answered that this item is in a category it excludes (health and medical, age-restricted, financial or digital goods). Nothing was bought.",
-  ceiling_order: "Intent Cloud answered that this order is above its per-order ceiling for the currency. Nothing was bought.",
-  ceiling_week: "Intent Cloud answered that this order would pass the buyer's weekly ceiling for the currency. Nothing was bought.",
+  ceiling_order: "Intent Cloud answered that this order is above its per-order ceiling for the currency. Nothing was bought. Pick a cheaper offer or a smaller quantity.",
+  ceiling_week: "Intent Cloud answered that this order would pass the buyer's weekly ceiling for the currency. Nothing was bought. Try a cheaper offer, or wait until a week has passed since your earlier orders.",
   // Contract 1.7.0 final: there is no unpin; the developer's recovery is a new account key. `intent init` never replaces
   // a key (ADR-0022), so the key file is moved away first.
   account_key_other_buyer:
@@ -1989,11 +1996,11 @@ function shopCheckoutProblem(
   if (total === null) return { rule: "checkout: no total", words: "Shop's checkout shows no total" };
   // G7: a currency Intent Cloud's table does not list is refused here, naming the table version it was checked against.
   if (table.currencies[total.currency] === undefined) {
-    return { rule: `currency_unsupported: ${total.currency} (${table.version})`, words: `Shop's checkout is in ${total.currency}, which the currency table Intent Cloud returns (${table.version}) does not list` };
+    return { rule: `currency_unsupported: ${total.currency} (${table.version})`, words: `Shop's checkout is in ${total.currency}, a currency intent cannot take orders in now` };
   }
   // The policy's limits were put in the search's currency, and an amount is never converted.
   if (total.currency !== searched.currency) {
-    return { rule: `currency: ${total.currency}`, words: `Shop's checkout is in ${total.currency}, not the ${searched.currency} the search was in; the gateway never converts` };
+    return { rule: `currency: ${total.currency}`, words: `Shop's checkout is in ${total.currency}, but orders shipping to ${shipCountry(searched.shipTo.country)?.name ?? searched.shipTo.country} must be in ${searched.currency}` };
   }
   const totals = checkout.totals ?? null;
   if (totals === null || !totalsAddUp(totals) || totals.total !== total.amountMinor) {
@@ -2013,7 +2020,12 @@ function shopCheckoutProblem(
   }
   // 1.7.1: a checkout must be in its ship-to country's currency (the table's `countries`), or Intent Cloud refuses it.
   if (table.countries?.[area.country] !== total.currency) {
-    return { rule: `currency_unsupported: ${total.currency} (${table.version})`, words: `Shop's checkout is in ${total.currency}, which is not the currency the currency table Intent Cloud returns (${table.version}) gives its ship-to country` };
+    const place = shipCountry(area.country)?.name ?? area.country;
+    const due = table.countries?.[area.country];
+    return {
+      rule: `currency_unsupported: ${total.currency} (${table.version})`,
+      words: due === undefined ? `Shop's checkout ships to ${place}, where intent does not ship now` : `Shop's checkout is in ${total.currency}, but orders shipping to ${place} must be in ${due}`,
+    };
   }
   return null;
 }

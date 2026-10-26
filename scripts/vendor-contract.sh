@@ -43,6 +43,16 @@ cp "$dest/SOURCE.md" "$stage/new/SOURCE.md"
 sed -i.bak -e "s/^- Version: .*/- Version: $version/" \
   -e "s/^- sha256 of \`SHA256SUMS\`: .*/- sha256 of \`SHA256SUMS\`: \`$sums\`/" "$stage/new/SOURCE.md"
 rm -f "$stage/new/SOURCE.md.bak"
+# Swap with the old tree kept until the new one is in place: if the second move fails, the old tree goes back, and if
+# that fails too, the stage is kept and the recovery command printed (the trap then removes nothing).
 mv "$dest" "$stage/old"
-mv "$stage/new" "$dest"
+if ! mv "$stage/new" "$dest"; then
+  if mv "$stage/old" "$dest"; then
+    echo "could not move the new tree in; contract/ is unchanged" >&2
+  else
+    trap - EXIT
+    echo "could not move the new tree in, nor the old one back; restore it with: mv '$stage/old' '$dest'" >&2
+  fi
+  exit 1
+fi
 echo "vendored contract $version, sha256(SHA256SUMS) $sums"
