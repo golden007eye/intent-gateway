@@ -18,8 +18,9 @@
 # Settings: CLAUDE_BIN (default claude), E2E_CLAUDE_MODEL (default: Claude Code's own), E2E_CLAUDE_TIMEOUT
 # (seconds per claude call, default 240), E2E_STDIO=0 (skip the stdio variant of b).
 #
-# u1, u2 and r (contract 1.7.1) are a buyer in the UK on the demo: u1 the search in GBP with only the coarse postcode
-# sent, u2 its cart and approval in GBP (a SKIP while the demo Shop prices in US dollars only), r the refusals.
+# u1, u2 and r (contract 1.7.1) are a buyer in the UK on the demo: u1 the search in GBP, with no postcode sent but the
+# coarse SW1A, u2 its cart and approval in GBP (a SKIP while the demo Shop prices in US dollars only), r the refusals.
+# --only u runs u1 and u2; --only u2 runs u1 too, for its search.
 #
 # Intent Cloud staging, in every mode, only when named in --only (none is in the default list):
 #   s   unattended: a fresh data dir against staging; doctor (the vendored contract), init, search, a hand-off cart (v2
@@ -130,8 +131,8 @@ wants() { case ",$ONLY," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 # An unknown name would otherwise run nothing and report success.
 for name in ${ONLY//,/ }; do
   case "$name" in
-    a | b | c | d | u | r | e | f | g | s | su | j | j2) ;;
-    *) printf 'e2e: unknown scenario "%s" in --only; known: a,b,c,d,u,r,e,f,g,s,su,j,j2\n' "$name" >&2; exit 2 ;;
+    a | b | c | d | u | u1 | u2 | r | e | f | g | s | su | j | j2) ;;
+    *) printf 'e2e: unknown scenario "%s" in --only; known: a,b,c,d,u,u1,u2,r,e,f,g,s,su,j,j2\n' "$name" >&2; exit 2 ;;
   esac
 done
 
@@ -346,6 +347,30 @@ function tamper(file) {
   console.log(`changed line ${i + 1}, offset ${j}, to ${digit}`);
 }
 
+// The chain, each line followed by the request bodies it logged (body_b64) decoded, so a scan of the output sees
+// what each body carried as well as the entries themselves.
+function bodies(file) {
+  const decoded = [];
+  const walk = (v) => {
+    if (v === null || typeof v !== "object") return;
+    for (const [k, x] of Object.entries(v)) {
+      if (k === "body_b64" && typeof x === "string") decoded.push(Buffer.from(x, "base64").toString("utf8"));
+      else walk(x);
+    }
+  };
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (line === "") continue;
+    console.log(line);
+    decoded.length = 0;
+    try {
+      walk(JSON.parse(line));
+    } catch {
+      continue;
+    }
+    for (const b of decoded) console.log(b);
+  }
+}
+
 switch (cmd) {
   case "free-port": {
     const s = createServer().listen(0, "127.0.0.1", () => {
@@ -379,6 +404,9 @@ switch (cmd) {
     break;
   case "pending":
     pending(...args);
+    break;
+  case "bodies":
+    bodies(...args);
     break;
   default:
     console.error(`unknown helper command ${cmd}`);
@@ -653,13 +681,20 @@ scenario_d() {
 # shellcheck disable=SC2016
 PROMPT_UK='Find stickers to SW1A 1AA in the UK, under £20.'
 UK_SEARCH='{"category":"stickers","budget":20,"country":"GB","postcode":"SW1A 1AA"}'
-UK_FULL='SW1A[ -]?1AA'
+UK_FULL='SW1A(%20|\+|[ -])?1AA'
 UK_INWARD='(^|[^A-Za-z0-9+/_-])1AA([^A-Za-z0-9+/_=-]|$)'
 DEMO_CHAIN="$OHOME/.local/share/intent-gateway/demo/audit.jsonl"
-# no_full_postcode <file> <what>: neither the whole UK postcode (any case) nor its inward code is in the file.
+# no_full_postcode <file> <what>: the file is there and not empty, and neither the whole UK postcode (any case, also
+# URL-encoded) nor its inward code (any case) is in it.
 no_full_postcode() {
+  [ -s "$1" ] || { WHY="$2: $1 is missing or empty, so it cannot be checked"; return 1; }
   if grep -Eiq -- "$UK_FULL" "$1"; then WHY="$2: the full postcode is in $1: $(grep -Eim 1 -- "$UK_FULL" "$1" | cut -c1-300)"; return 1; fi
-  if grep -Eq -- "$UK_INWARD" "$1"; then WHY="$2: the inward code 1AA is in $1: $(grep -Em 1 -- "$UK_INWARD" "$1" | cut -c1-300)"; return 1; fi
+  if grep -Eiq -- "$UK_INWARD" "$1"; then WHY="$2: the inward code 1AA is in $1: $(grep -Eim 1 -- "$UK_INWARD" "$1" | cut -c1-300)"; return 1; fi
+}
+# chain_scan <chain> <out>: the chain with its logged request bodies decoded (helper bodies), for no_full_postcode.
+chain_scan() {
+  [ -s "$1" ] || { WHY="the chain $1 is missing or empty"; return 1; }
+  helper bodies "$1" >"$2" || { WHY="could not decode the request bodies of $1"; return 1; }
 }
 # sent_postcodes <log -v file>: each postcode value sent, one per line (none when no request carried one).
 sent_postcodes() { grep -Eio '(postal_code|postcode)[a-z_]* = "[^"]*"' "$1" | sed 's/.* = //' | sort -u || true; }
@@ -677,10 +712,11 @@ uk_logs() {
   local v="$LOGS/$1-log.txt" j="$LOGS/$1-log.json" c="$LOGS/$1-chain.jsonl"
   t_log >"$v" 2>&1 || { WHY="log --demo -v failed; see $v"; return 1; }
   gw log --demo --json >"$j" 2>&1 || { WHY="log --demo --json failed; see $j"; return 1; }
-  cp "$DEMO_CHAIN" "$c"
+  cp "$DEMO_CHAIN" "$c" || { WHY="could not copy the chain $DEMO_CHAIN"; return 1; }
+  chain_scan "$c" "$c.scan" || return 1
   no_full_postcode "$v" "log --demo -v" || return 1
   no_full_postcode "$j" "log --demo --json" || return 1
-  no_full_postcode "$c" "the chain" || return 1
+  no_full_postcode "$c.scan" "the chain and its request bodies" || return 1
   only_coarse_sent "$v" || return 1
 }
 
@@ -690,6 +726,7 @@ scenario_u1() {
   UK_FROM="$(wc -l <"$LOGS/u1-log-before.txt")"
   ask_claude u-uk "$MCP_CONFIG" new "$PROMPT_UK" || return 1
   must_match "$REPORT" '^called: .*mcp__gw__find_offers' "Claude called find_offers" || return 1
+  must_match "$REPORT" '[0-9]+ offers? from' "Claude's find_offers was answered with a search" || return 1
   must_not_match "$REPORT" 'Ask the user only for|Not sent: intent' "the gateway searched for the UK address Claude passed" || return 1
   # The same search straight to the gateway, so u2 has its offers whatever the agent passed.
   UK_OFFERS="$LOGS/u-offers.txt"
@@ -708,6 +745,11 @@ scenario_u1() {
 scenario_u2() {
   [ -n "$UK_OFFERS" ] && [ -s "$UK_OFFERS" ] || { WHY="no UK search to read (u1 did not get that far)"; return 1; }
   if ! grep -q 'offer_handle: of_' "$UK_OFFERS"; then
+    # A SKIP only for the known demo gap: no offer, and the gateway hid the demo Shop's US-dollar ones by currency.
+    if ! grep -Eq '^0 offers from Shop search' "$UK_OFFERS" || ! grep -Eq 'hidden by the gateway policy \(([a-z_]+, )*currency[,)]' "$UK_OFFERS"; then
+      WHY="the UK search gave no offer, and not because the demo Shop's offers were hidden by currency: $(grep -v '^DEMO' "$UK_OFFERS" | head -n 2 | tr '\n' '|' | cut -c1-300); see $UK_OFFERS"
+      return 1
+    fi
     SKIPPED=1
     WHY="the demo Shop prices in US dollars only, so the UK search found no offer to cart: $(grep -Eo '[0-9]+ offers? from.*' "$UK_OFFERS" | head -n 1 | cut -c1-200)"
     return 1
@@ -980,7 +1022,12 @@ sg_verify() {
     *) sg_cli verify --skip-install-check ;;
   esac
 }
-sg_disclosures() { local f="$LOGS/$1-chain.jsonl"; sg_chain "$f"; grep -c '"kind":"disclosure"' "$f" || true; }
+# sg_disclosures <name>: the chain's disclosure count; prints nothing and fails when the chain cannot be copied out.
+sg_disclosures() {
+  local f="$LOGS/$1-chain.jsonl"
+  { sg_chain "$f" && [ -s "$f" ]; } || return 1
+  grep -c '"kind":"disclosure"' "$f" || true
+}
 
 # start_staging <name>: init (Shop skipped: no client, no terminal) and serve. Sets SG_URL and SG_TOKEN.
 start_staging() {
@@ -1067,7 +1114,7 @@ scenario_s() {
   sg_call get_approval_status "{\"approval_handle\":\"$ap\"}" >"$f" 2>&1 || { WHY="get_approval_status failed; see $f"; return 1; }
   must_match "$f" 'Waiting for the buyer to approve with their passkey' "the cart is still pending" || return 1
   # The refusals: each is refused in the gateway, and nothing more is disclosed.
-  n0="$(sg_disclosures s-before)"
+  n0="$(sg_disclosures s-before)" || { WHY="could not copy the chain out before the refusals"; return 1; }
   sg_call find_offers "{\"category\":\"alcohol\",\"product\":\"red wine\",\"budget\":40,\"country\":\"US\",\"postcode\":\"$STAGING_ZIP\"}" >"$LOGS/s-alcohol.txt" 2>&1 || true
   must_match "$LOGS/s-alcohol.txt" 'Sent: nothing / Blocked: categories\.block' "an alcohol search is blocked by the policy" || return 1
   sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget\":$STAGING_BUDGET,\"country\":\"US\",\"postcode\":\"$STAGING_ZIP\",\"email\":\"buyer@example.com\"}" >"$LOGS/s-identity.txt" 2>&1 || true
@@ -1076,7 +1123,7 @@ scenario_s() {
   must_match "$LOGS/s-foreign-offer.txt" 'this gateway has no such offer' "a cart for an offer this gateway never saw is refused" || return 1
   sg_call get_approval_status '{"approval_handle":"ap_AAAAAAAAAAAAAAAAAAAAAA"}' >"$LOGS/s-foreign-approval.txt" 2>&1 || true
   must_match "$LOGS/s-foreign-approval.txt" 'did not ask for that approval' "a status for an approval this gateway never asked for is refused" || return 1
-  n1="$(sg_disclosures s-after)"
+  n1="$(sg_disclosures s-after)" || { WHY="could not copy the chain out after the refusals"; return 1; }
   [ "$n0" = "$n1" ] || { WHY="the refusals added $((n1 - n0)) disclosure(s) to the chain; see $LOGS/s-after-chain.jsonl"; return 1; }
   f="$LOGS/s-evidence.txt"
   local rc=0
@@ -1099,8 +1146,8 @@ scenario_su() {
   start_staging su || return 1
   f="$LOGS/su-doctor.txt"
   sg_cli doctor >"$f" 2>&1 || { WHY="doctor exited non-zero; see $f"; return 1; }
-  must_match "$f" 'serves 1\.7\.[1-9][0-9]*, and its SHA256SUMS matches' "doctor: staging serves contract 1.7.1 or later and its SHA256SUMS matches" || return 1
-  n0="$(sg_disclosures su-before)"
+  must_match "$f" 'serves (1\.7\.[1-9][0-9]*|1\.([89]|[1-9][0-9])\.[0-9]+), and its SHA256SUMS matches' "doctor: staging serves contract 1.7.1 or later and its SHA256SUMS matches" || return 1
+  n0="$(sg_disclosures su-before)" || { WHY="could not copy the chain out before the searches"; return 1; }
   f="$LOGS/su-uk.txt"
   sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget\":$STAGING_BUDGET,\"country\":\"GB\",\"postcode\":\"SW1A 1AA\"}" >"$f" 2>&1 || true
   must_match "$f" '^Not sent: searching for the UK needs a linked Shop wallet' "a UK search with no Shop wallet is refused with the wallet line" || return 1
@@ -1111,18 +1158,19 @@ scenario_su() {
   f="$LOGS/su-japan.txt"
   sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget\":$STAGING_BUDGET,\"country\":\"JP\",\"postcode\":\"100-0001\"}" >"$f" 2>&1 || true
   must_match "$f" '^Not sent: intent ships to .*the UK.* for now\.' "Japan gets the line naming the countries staging serves" || return 1
-  n1="$(sg_disclosures su-after)"
+  n1="$(sg_disclosures su-after)" || { WHY="could not copy the chain out after the searches"; return 1; }
   [ "$n0" = "$n1" ] || { WHY="the non-US searches added $((n1 - n0)) disclosure(s); see $LOGS/su-after-chain.jsonl"; return 1; }
   sg_cli log -v >"$LOGS/su-log.txt" 2>&1 || { WHY="log -v exited non-zero; see $LOGS/su-log.txt"; return 1; }
   sg_cli log --json >"$LOGS/su-log.json" 2>&1 || { WHY="log --json exited non-zero; see $LOGS/su-log.json"; return 1; }
   no_full_postcode "$LOGS/su-log.txt" "log -v" || return 1
   no_full_postcode "$LOGS/su-log.json" "log --json" || return 1
-  no_full_postcode "$LOGS/su-after-chain.jsonl" "the chain" || return 1
+  chain_scan "$LOGS/su-after-chain.jsonl" "$LOGS/su-chain.scan" || return 1
+  no_full_postcode "$LOGS/su-chain.scan" "the chain and its request bodies" || return 1
   f="$LOGS/su-verify.txt"
   sg_verify >"$f" 2>&1 || { WHY="verify exited non-zero; see $f"; return 1; }
   must_match "$f" '^verify: ok' "verify after the non-US searches" || return 1
   stop_staging
-  WHY="doctor: contract $(grep -Eo 'serves 1\.7\.[0-9]+' "$LOGS/su-doctor.txt" | cut -d' ' -f2); UK: $(grep -m1 '^Not sent' "$LOGS/su-uk.txt" | cut -c1-70)…; SW1A asked again; Japan: $(grep -m1 '^Not sent' "$LOGS/su-japan.txt" | cut -c1-90)…; no disclosure, no full postcode in log or chain; verify: ok"
+  WHY="doctor: contract $(grep -Eo 'serves 1\.[0-9]+\.[0-9]+' "$LOGS/su-doctor.txt" | cut -d' ' -f2); UK: $(grep -m1 '^Not sent' "$LOGS/su-uk.txt" | cut -c1-70)…; SW1A asked again; Japan: $(grep -m1 '^Not sent' "$LOGS/su-japan.txt" | cut -c1-90)…; no disclosure, no full postcode in log or chain; verify: ok"
 }
 
 # ask the person: printed to the terminal, whatever the output is redirected to.
@@ -1329,7 +1377,7 @@ esac
 case "$MODE" in
   tarball | npm)
     wants a && run_scenario a "first run: --help, doctor --demo, verify --demo on an empty chain" scenario_a
-    if wants b || wants c || wants d || wants u || wants r || wants e || wants f; then
+    if wants b || wants c || wants d || wants u || wants u1 || wants u2 || wants r || wants e || wants f; then
       if start_gateway gateway; then
         MCP_CONFIG="$OUT/mcp-http.json"
         helper mcp-http "$GW_URL" - >"$MCP_CONFIG"
@@ -1342,8 +1390,10 @@ case "$MODE" in
           wants b && run_scenario b "happy path over demo --http: offers, cart, approve, approved, verify ok" scenario_b_from_happy
         fi
         wants d && run_scenario d "a blocked request (alcohol): refused, nothing sent" scenario_d
-        if wants u; then
+        if wants u || wants u1 || wants u2; then
           run_scenario u1 "a UK buyer (SW1A 1AA, under £20): searched in GBP, only SW1A sent, the full postcode in no log" scenario_u1
+        fi
+        if wants u || wants u2; then
           run_scenario u2 "a UK buyer: offers, cart and approval in GBP, no full postcode in the evidence pack" scenario_u2
         fi
         wants r && run_scenario r "outside the US, refused with nothing sent: a partial UK postcode asked again, Japan" scenario_r

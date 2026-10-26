@@ -582,7 +582,7 @@ describe("buyers outside the US: Canada, Australia, the UK, Ireland and the euro
     // is its coarse one.
     const seen = scanned(h);
     expect(sentBodies(h, "reportOutcome").length).toBeGreaterThanOrEqual(2);
-    if (region.country !== "AU") for (const full of [region.postalCode, region.postalCode.replace(/ /g, "")]) expect(seen).not.toContain(full);
+    if (region.country !== "AU") for (const full of [region.postalCode, region.postalCode.replace(/ /g, "")]) expect(holdsPart(seen, full), full).toBe(false);
     expect(verifyChain(h.store.entries()).ok).toBe(true);
     const report = await runVerify({ dataDir: h.dir, pinnedRootKeys: [h.fake.keys.rootPin], now: new Date(T0), skipSupplyChain: true });
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);
@@ -713,7 +713,7 @@ describe("buyers outside the US: Canada, Australia, the UK, Ireland and the euro
     expect(blocked.status).toBe("blocked");
     const all = everythingSent(h, found, result, blocked);
     expect(all).toContain("K1A");
-    for (const part of ["K1A 0B1", "K1A0B1", "k1a-0b1", "k1a0b1"]) expect(all).not.toContain(part);
+    for (const part of ["K1A 0B1", "K1A0B1", "k1a-0b1", "k1a0b1"]) expect(holdsPart(all, part), part).toBe(false);
     // The inward part alone, in every body sent and every value held or shown (signatures and digests, random text, are
     // left out: they may hold three such characters by chance).
     const values = [
@@ -722,7 +722,7 @@ describe("buyers outside the US: Canada, Australia, the UK, Ireland and the euro
       ...h.shop.calls.map((c) => JSON.stringify(c.body)),
       JSON.stringify([h.fake.checkouts.received, found, result, blocked]),
     ].join("\n");
-    expect(values).not.toContain("0B1");
+    expect(holdsPart(values, "0B1")).toBe(false);
     // The checkout Intent Cloud received ships to the country and the coarse postcode only.
     expect((h.fake.checkouts.received[0] as { checkout: { ship_to: unknown } }).checkout.ship_to).toEqual({ country: "CA", postal_code: "K1A" });
   });

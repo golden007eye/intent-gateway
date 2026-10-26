@@ -35,7 +35,7 @@ It is run on demand on a maintainer's machine, never in CI, because it needs a l
 
 ### Against Intent Cloud staging
 
-Three scenarios run the gateway for real, with no demo: a fresh data dir and the pinned staging host. They work in every mode and run only when named in `--only`.
+Four scenarios run the gateway for real, with no demo: a fresh data dir and the pinned staging host. They work in every mode and run only when named in `--only`.
 
 | Scenario | Runs | What it does |
 |---|---|---|
