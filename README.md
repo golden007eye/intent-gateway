@@ -31,7 +31,7 @@ If Claude Code already has an MCP server named `intent` (for example a connector
 **2 · Ask for something.** Start `claude` and ask:
 
 ```text
-> Find stickers to ZIP 94107, under $20, and prepare a cart for the cheapest.
+> Find stickers to ZIP 94107 in the US, under $20, and prepare a cart for the cheapest.
 ```
 
 The agent calls `find_offers`, which the gateway answers by searching the demo Shop itself, then `create_cart`, which creates the Shop checkout and submits it for approval, and shows an approval link such as `http://127.0.0.1:8788/confirm/c/…`. Open it, check the item and total, enter the demo code and click **Approve $<total> with demo passkey**. The code is six digits, new on every start and never shown to the agent; the page shows the command that reads it (`cat <data dir>/demo/approval-code`). Then ask the agent to check the approval status: it reports the purchase as approved, with the approver passkey's fingerprint, and the gateway pays it at once from the demo Shop's agent budget (one tap), so the status reads `ordered (read from Shop)`. Keep the Claude Code session open until then: the confirm page runs inside the gateway it started.

@@ -30,6 +30,9 @@ const CASES: readonly (readonly [string, string, string | null])[] = [
   ["GB", "1AA", null],
   ["GB", "SW1A", null],
   ["GB", "12 3AB", null],
+  // A character short: the inward code is checked too, so this is no postcode, not the area SW1.
+  ["GB", "SW1A1A", null],
+  ["GB", "SW1A 1A1", null],
   ["IE", "D02 X285", "D02"],
   ["IE", "D6W 1234", "D6W"],
   ["IE", "A65 F4E2", "A65"],

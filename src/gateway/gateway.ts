@@ -80,7 +80,7 @@ import {
 } from "../disclosure/index.ts";
 import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
-import { capsIn, CLOUD_BASELINE, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
+import { capsIn, CLOUD_BASELINE, scalable, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
 import { coarsen, currencyFor, currencyWords, namesText, shipCountry } from "../shipto/index.ts";
 import { isPausedAnswer, noteSubmitAnswer, pausedIn, pauseState, refuseForPause } from "../pause/index.ts";
 import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
@@ -466,7 +466,9 @@ export function createGateway(options: GatewayOptions): Gateway {
   function shipsTo(): CoarseCountry[] {
     return COARSE_COUNTRIES.filter((c) => {
       const currency = currencyOf(c);
-      return currency === "USD" ? currencyTable === null || currencyTable.currencies.USD !== undefined : currency !== undefined && currencyTable?.currencies[currency] !== undefined;
+      if (currency === "USD") return currencyTable === null || currencyTable.currencies.USD !== undefined;
+      // A currency whose ceilings are out of line with the USD ones cannot carry the caps (policy's scalable).
+      return currency !== undefined && scalable(currency, ceilings());
     });
   }
 
@@ -480,9 +482,12 @@ export function createGateway(options: GatewayOptions): Gateway {
     const rules = shipCountry(country);
     const currency = currencyOf(country);
     if ((COARSE_COUNTRIES as readonly string[]).includes(country) && rules !== undefined && currency !== undefined) {
-      return currencyTable === null
-        ? `Not sent: the meta Intent Cloud returns holds no valid currency table, so the gateway cannot put its limits in ${currency} for ${rules.name}. Restart the gateway.`
-        : `Not sent: the currency table Intent Cloud returns (${currencyTable.version}) does not list ${currency}, so intent cannot ship to ${rules.name} for now.`;
+      if (currencyTable === null) {
+        return `Not sent: the answer Intent Cloud returns names no currencies intent can use, so intent cannot search in ${currency} for ${rules.name}; update intent or try later.`;
+      }
+      return currencyTable.currencies[currency] === undefined
+        ? `Not sent: the currency table Intent Cloud returns (${currencyTable.version}) does not list ${currency}, so intent cannot ship to ${rules.name} for now.`
+        : `Not sent: the ceilings Intent Cloud returns for ${currency} are out of line with its US-dollar ones, so intent cannot put your limits in ${currency} for ${rules.name}; try later.`;
     }
     if (accepted.length === 0) return "Not sent: the currency table Intent Cloud returns lists none of the currencies intent ships in, so no search can be made now.";
     const soon = rules === undefined ? "" : `; ${rules.name} is coming soon`;
@@ -1517,9 +1522,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       signer = undefined;
     }
     const met = meet(policy, CLOUD_BASELINE);
-    // The per-order cap in the approved currency; one that cannot be put in it (no table) lets nothing through.
-    const approvedCurrency = proof.snapshot.v === 4 ? proof.snapshot.currency : "USD";
-    const cap = met.spend.per_order_usd === undefined ? null : (capsIn(met.spend, approvedCurrency, ceilings())?.per_order_usd ?? 0);
+    const cap = paymentCapMinor(met.spend, proof.snapshot, ceilings());
     const oneTap = options.oneTap;
     return advanceCompletion(
       {
@@ -1531,12 +1534,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         overCap: (chain) => {
           // This purchase counted once: its own approval and pending entries left out, then evaluated as a new cart.
           const others = chain.filter((e) => !((e.kind === "approval" || e.kind === "approval_pending") && bodyOf(e).handle === handle));
-          const s = proof.snapshot;
-          const offer =
-            s.v === 4
-              ? policyOffer(s.myshopify_domain, "", { amount_minor: s.totals.total }, null, s.quantity, s.currency)
-              : policyOffer(s.merchant.domain, "", s.total, null, s.quantity);
-          return spendCheck(offer, "shop_agent", others).some(
+          return spendCheck(paymentOffer(proof.snapshot), "shop_agent", others).some(
             (b) => b.rule.startsWith("spend.") || b.rule === "history_invalid",
           );
         },
@@ -1739,6 +1737,22 @@ function policyOffer(
 ): PolicyOffer {
   const totalMinor = shipping === null ? price.amount_minor : price.amount_minor * quantity + shipping.amount_minor;
   return { merchant, category, price_usd: totalMinor / 100 / quantity, quantity, ...(currency === "USD" ? {} : { currency }) };
+}
+
+/**
+ * The policy's per-order cap at payment, in the approved currency's minor units (a v4 snapshot's `currency`; USD before
+ * v4), scaled by Intent Cloud's ceilings; null when the policy sets none. A cap that cannot be put in that currency is
+ * 0, so nothing is paid: never no cap.
+ */
+export function paymentCapMinor(spend: Policy["spend"], snapshot: AnySnapshot, ceilings: CurrencyTable["currencies"] | null): number | null {
+  if (spend.per_order_usd === undefined) return null;
+  return capsIn(spend, snapshotTotal(snapshot).currency, ceilings)?.per_order_usd ?? 0;
+}
+
+/** An approved purchase in the policy's terms at payment: its total, in its own currency, counted as one new cart. */
+export function paymentOffer(s: AnySnapshot): PolicyOffer {
+  const total = snapshotTotal(s);
+  return s.v === 4 ? policyOffer(s.myshopify_domain, "", total, null, s.quantity, total.currency) : policyOffer(s.merchant.domain, "", total, null, s.quantity);
 }
 
 /** What the agent is told when the developer's pause stops a step here. */

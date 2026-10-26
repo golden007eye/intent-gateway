@@ -115,7 +115,8 @@ export async function walletStatus(io: Io, config: Config): Promise<number> {
       // Opened to prove the vault is readable; the token itself is never printed.
       const vaultText = await loadSecret(config.dataDir, rail, key);
       line(io.stdout, printable(`${name} wallet: linked (encrypted vault ${file}; key from ${describeKeySource(config.wallet.key)})`));
-      if (vaultText !== null) await accountStatus(io, config, rail, vaultText, key);
+      // The amount left could not be checked (the ceilings were not read): said, and exit 1.
+      if (vaultText !== null && !(await accountStatus(io, config, rail, vaultText, key))) code = 1;
     } catch (error) {
       if (!(error instanceof WalletVaultError)) throw error;
       code = 1;
@@ -129,7 +130,7 @@ export async function walletStatus(io: Io, config: Config): Promise<number> {
  * What the rail says about the linked account right now: one get_account, logged before it leaves (invariant 2).
  * A connection the buyer removed in the Shop app (the token still answers, S1 step 12b) reads as not linked at Shop.
  */
-async function accountStatus(io: Io, config: Config, rail: WalletRail, vaultText: string, key: WalletKey): Promise<void> {
+async function accountStatus(io: Io, config: Config, rail: WalletRail, vaultText: string, key: WalletKey): Promise<boolean> {
   const name = RAIL_NAMES[rail];
   const store = await openStore(config.dataDir, {
     onWait: leaseNotice((text) => {
@@ -152,6 +153,10 @@ async function accountStatus(io: Io, config: Config, rail: WalletRail, vaultText
       }
       if (advise !== null) {
         const adviser = await advise(store);
+        if (adviser.unread !== undefined) {
+          line(io.stderr, printable(`intent: ${adviser.unread}`));
+          return false;
+        }
         const advice = adviser(account.budgetRemaining.currency);
         if (typeof advice === "string") line(io.stdout, printable(`Note: ${advice}`));
         else if (agentPayments(account, adviser) === "low") lowLines(io, account, advice, { page: account.manageUrl, connection: connectionName(linkedShopClientId(vaultText)) });
@@ -163,6 +168,7 @@ async function accountStatus(io: Io, config: Config, rail: WalletRail, vaultText
   } finally {
     await store.close();
   }
+  return true;
 }
 
 /** The account in words: removed, no budget (one tap unavailable) or the budget left. */
@@ -231,8 +237,11 @@ interface BudgetAdvice {
   readonly basis: string;
 }
 
-/** The advice in a currency, or the one line that says why there is none (no ceilings read, or none for it). */
-type Adviser = (currency: string) => BudgetAdvice | string;
+/**
+ * The advice in a currency, or the one line that says why there is none in it. `unread`: the ceilings could not be
+ * read at all, in one line ending "try again"; then nothing about the amount left may be said, low or on.
+ */
+type Adviser = ((currency: string) => BudgetAdvice | string) & { readonly unread?: string };
 
 /**
  * Loads the policy now (a policy that does not load is the caller's error); the ceilings are read from Intent Cloud's
@@ -242,7 +251,9 @@ async function budgetAdviser(io: Io, config: Config): Promise<(store: Store) => 
   const { policy } = await activePolicy(config.policyPath);
   let adviser: Promise<Adviser> | undefined;
   return (store) => {
-    adviser ??= readCeilings(io, config, store).then((read): Adviser => (currency) => (typeof read === "string" ? read : adviceIn(policy.spend, currency, read)));
+    adviser ??= readCeilings(io, config, store).then((read): Adviser =>
+      typeof read === "string" ? Object.assign(() => read, { unread: read }) : (currency: string) => adviceIn(policy.spend, currency, read),
+    );
     return adviser;
   };
 }
@@ -253,7 +264,7 @@ async function budgetAdviser(io: Io, config: Config): Promise<(store: Store) => 
  */
 async function readCeilings(io: Io, config: Config, store: Store): Promise<Ceilings | string> {
   const host = config.cloud.url;
-  const unread = (why: string): string => `the ceilings Intent Cloud returns could not be read from ${host} (${why}), so the gateway suggests no amount`;
+  const unread = (why: string): string => `the ceilings Intent Cloud returns could not be read from ${host} (${why}), so the amount left was not checked; try again`;
   const now = io.now ?? Date.now;
   try {
     const pins = await rootKeys(config, { contacts: true });
@@ -277,7 +288,7 @@ async function readCeilings(io: Io, config: Config, store: Store): Promise<Ceili
 function adviceIn(spend: Spend, currency: string, ceilings: Ceilings): BudgetAdvice | string {
   const ceiling = ceilings[currency];
   const caps = capsIn(spend, currency, ceilings);
-  if (ceiling === undefined || caps === null) return `Shop shows this budget in ${currency}, which the currency table Intent Cloud returns does not list, so the gateway suggests no amount`;
+  if (ceiling === undefined || caps === null) return `Shop shows this budget in ${currency}, for which the currency table Intent Cloud returns gives no usable ceiling, so the gateway suggests no amount`;
   const cap = caps.per_week_usd;
   const weeklyMinor = Math.min(cap ?? ceiling.week, ceiling.week);
   const basis = cap !== undefined && cap < ceiling.week ? "your policy's weekly cap" : "the weekly ceiling Intent Cloud enforces";
@@ -419,6 +430,10 @@ export async function walletWaitBudget(io: Io, config: Config, timeoutText: stri
           return 1;
         }
         if (account.budgetRemaining !== null) adviser = await advise(store);
+        if (adviser.unread !== undefined) {
+          line(io.stderr, printable(`intent: ${adviser.unread}`));
+          return 1;
+        }
         const state = agentPayments(account, adviser);
         if (state === "on" && agentPaymentsOn(io, rail, account, adviser, { page, connection })) return 0;
         const advice = adviceFor(account.budgetRemaining);
@@ -695,6 +710,11 @@ async function finishLink(io: Io, config: Config, rail: WalletRail): Promise<num
  */
 async function nextStep(io: Io, config: Config, rail: WalletRail, account: WalletAccount, vaultText: string, store: Store): Promise<void> {
   const adviser = await (await budgetAdviser(io, config))(store);
+  if (adviser.unread !== undefined) {
+    // Agent payments may be on or low: neither is said without the ceilings. --wait-budget says the same and exits 1.
+    line(io.stderr, printable(`intent: ${adviser.unread}`));
+    return;
+  }
   const connection = connectionName(linkedShopClientId(vaultText));
   if (agentPaymentsOn(io, rail, account, adviser, { page: account.manageUrl, connection })) return;
   // A page Shop names off shop.app is never printed: then only what to tap.

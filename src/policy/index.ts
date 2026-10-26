@@ -21,6 +21,8 @@ export {
   capsIn,
   capText,
   evaluate,
+  RATIO_BOUNDS,
+  scalable,
   type Blocked,
   type CapsMinor,
   type Ceilings,

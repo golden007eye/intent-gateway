@@ -20,7 +20,8 @@ import {
   type ShopOfferView,
 } from "../gateway/index.ts";
 
-const LIMITS = "Ships to the US, Canada and Australia; outside the US only with a linked Shop wallet.";
+// Which countries are shipped to comes from Intent Cloud at start; a refusal names them, so nothing is listed here.
+const LIMITS = "Ships to the countries the gateway supports; if find_offers refuses a country, tell the user what it says.";
 
 /** The tools in the order they are listed, with descriptions an agent reads to decide what to pass. */
 export const TOOLS = {

@@ -31,6 +31,8 @@ const US = /^[0-9]{5}$/;
 const CA = /^[A-Z][0-9][A-Z]$/;
 const AU = /^[0-9]{4}$/;
 const GB = /^[A-Z]{1,2}[0-9][A-Z0-9]?$/;
+/** A UK inward code: a digit and two letters. */
+const GB_INWARD = /^[0-9][A-Z]{2}$/;
 const IE = /^(?:[AC-FHKNPRTV-Y][0-9]{2}|D6W)$/;
 const EU2 = /^[0-9]{2}$/;
 
@@ -55,13 +57,14 @@ const ALL: readonly ShipCountry[] = [
     cut: (f) => (AU.test(f) ? f : null),
     coarse: AU,
   },
-  // The outward code: the postcode without its last 3 characters (the inward code).
+  // The outward code: the postcode without its last 3 characters, which must be an inward code (so a postcode short
+  // of a character, `SW1A1A`, has no coarse form rather than the wrong one, `SW1`).
   {
     code: "GB",
     name: "the UK",
     currency: "GBP",
     format: "a postcode such as SW1A 1AA",
-    cut: (f) => (GB.test(f.slice(0, -3)) ? f.slice(0, -3) : null),
+    cut: (f) => (GB.test(f.slice(0, -3)) && GB_INWARD.test(f.slice(-3)) ? f.slice(0, -3) : null),
     coarse: GB,
   },
   // The Eircode's routing key.

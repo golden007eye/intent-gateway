@@ -84,13 +84,12 @@ function spentWithin(history: readonly Purchase[], now: number, windowMs: number
 /**
  * The policy's caps (whole USD) in `currency`'s minor units: each USD cap × (the currency's ceiling / the USD ceiling),
  * the order ceilings for per_order and per_day and the week ceilings for per_week, floored to a whole minor unit. USD
- * caps need no table. Null when they cannot be scaled: no table, or one without USD or the currency, or a USD ceiling
- * of zero.
+ * caps need no table. Null when they cannot be scaled (scalable): then no cap in that currency exists.
  */
 export function capsIn(spend: Spend, currency: string, ceilings: Ceilings | null): CapsMinor | null {
+  if (!scalable(currency, ceilings)) return null;
   const usd = ceilings?.USD;
   const own = currency === "USD" ? undefined : ceilings?.[currency];
-  if (currency !== "USD" && (usd === undefined || own === undefined || usd.order <= 0 || usd.week <= 0)) return null;
   const caps: { -readonly [K in keyof CapsMinor]: number } = {};
   for (const key of ["per_order_usd", "per_day_usd", "per_week_usd"] as const) {
     const cap = spend[key];
@@ -103,6 +102,27 @@ export function capsIn(spend: Spend, currency: string, ceilings: Ceilings | null
     caps[key] = Number((BigInt(cap) * 100n * BigInt(num)) / BigInt(den));
   }
   return caps;
+}
+
+/**
+ * The narrowest and widest a currency's ceiling may be against the USD one, per order and per week, for the policy's
+ * caps to be scaled by it. Intent Cloud's ratios are 0.8 to 1.5 today; outside these bounds a table could widen a cap
+ * without limit, and a policy may only narrow (invariant 1), so the currency is treated as unsupported.
+ */
+export const RATIO_BOUNDS = Object.freeze({ min: 0.25, max: 4 });
+
+/**
+ * Whether the USD caps can be put in `currency`: always for USD; otherwise the table must list USD and the currency,
+ * with a USD ceiling above zero and both of the currency's ratios to it within RATIO_BOUNDS.
+ */
+export function scalable(currency: string, ceilings: Ceilings | null): boolean {
+  if (currency === "USD") return true;
+  const usd = ceilings?.USD;
+  const own = ceilings !== null && Object.hasOwn(ceilings, currency) ? ceilings[currency] : undefined;
+  if (usd === undefined || own === undefined || usd.order <= 0 || usd.week <= 0) return false;
+  // min ≤ own/usd ≤ max, compared without dividing.
+  const within = (o: number, u: number): boolean => o * (1 / RATIO_BOUNDS.min) >= u && o <= u * RATIO_BOUNDS.max;
+  return within(own.order, usd.order) && within(own.week, usd.week);
 }
 
 /** A cap for a sentence: `$20` in USD, `CAD 28` (or `CAD 28.50`) otherwise. */
@@ -195,7 +215,7 @@ function checkCart(p: Policy, o: Offer, history: readonly Purchase[], now: numbe
   if (scaled === null) {
     // Caps that cannot be put in this currency are never skipped: the cart is refused.
     if (Object.keys(p.spend).length > 0) {
-      out.push({ path: "offer.currency", rule: "spend.currency", reason: `the limits cannot be put in ${currency}: the currency table Intent Cloud returns does not list it` });
+      out.push({ path: "offer.currency", rule: "spend.currency", reason: `the limits cannot be put in ${currency}: the currency table Intent Cloud returns gives no usable ceiling for it` });
     }
     return;
   }

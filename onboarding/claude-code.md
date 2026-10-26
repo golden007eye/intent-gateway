@@ -126,6 +126,8 @@ This step is required: never skip it, also when the developer says they already 
 
    If it prints a line that starts `intent: no Shop agent payments seen after` or `intent: Shop agent payments are still low after`, say that line and ask whether to wait again; if yes, run `intent wallet status --wait-budget --timeout 540` again. If the developer would rather not turn on agent payments, go on: every order then goes to Shop's checkout page.
 
+   If `--finish` or `--wait-budget` prints a line that starts `intent: the ceilings Intent Cloud returns could not be read` (it exits 1), the amount left was not checked: say that line, then run `intent wallet status --wait-budget --timeout 540` once more. If it prints the same line again, say in one line that the amount could not be checked right now, and go on to step 6; run it again before the first purchase.
+
 ## Step 6: the policy
 
 Install the policy-advisor skill from this exact package version into this project's `.claude/skills/`:
@@ -162,7 +164,7 @@ Then add, in one line, that turning off agent payments in Shop is that hard stop
 
 > **Your turn:** say what to buy
 >
-> Tell me one small thing to buy, and the most you'll spend (under $20 in the US).
+> Tell me one small thing to buy, and the most you'll spend (under $20, CAD 28 or AUD 30).
 >
 > Where should it ship? Country and postcode.
 

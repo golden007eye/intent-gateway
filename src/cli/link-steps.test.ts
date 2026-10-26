@@ -469,16 +469,24 @@ describe("agent payments on, but too little left for one purchase", () => {
     expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
     const r = await s.run(["wallet", "status", "--wait-budget"]);
     expect(r.code).toBe(0);
-    expect(r.out).toBe("Agent payments on: NZD 150.00 per month, NZD 1.00 left\nNote: Shop shows this budget in NZD, which the currency table Intent Cloud returns does not list, so the gateway suggests no amount\n");
+    expect(r.out).toBe("Agent payments on: NZD 150.00 per month, NZD 1.00 left\nNote: Shop shows this budget in NZD, for which the currency table Intent Cloud returns gives no usable ceiling, so the gateway suggests no amount\n");
   });
 
-  it("Intent Cloud's meta cannot be read: one line saying so, never a guessed amount", async () => {
+  it("Intent Cloud's meta cannot be read: one line saying so and exit 1, in status and --wait-budget; never 'on' or an amount", async () => {
     const s = await withPolicy({ budgetMinor: 100 }, DEFAULTS);
     expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
     // A port nothing listens on: the connection is refused.
-    const r = await s.run(["wallet", "status"], { env: { ...s.env, INTENT_CLOUD_URL: `http://127.0.0.1:${String(await freePort())}` } });
-    expect(r.out).toMatch(/\nNote: the ceilings Intent Cloud returns could not be read from http:\/\/127\.0\.0\.1:\d+ \(.+\), so the gateway suggests no amount\n$/);
-    expect(r.out).not.toContain("raise it to");
+    const env = { ...s.env, INTENT_CLOUD_URL: `http://127.0.0.1:${String(await freePort())}` };
+    const unread = /^intent: the ceilings Intent Cloud returns could not be read from http:\/\/127\.0\.0\.1:\d+ \(.+\), so the amount left was not checked; try again\n$/;
+    const status = await s.run(["wallet", "status"], { env });
+    expect(status.code).toBe(1);
+    expect(status.err).toMatch(unread);
+    // A budget with plenty left is not called "on" either: it is not known to cover one purchase.
+    s.shop.faults.budgetMinor = 5000;
+    const wait = await s.run(["wallet", "status", "--wait-budget"], { env });
+    expect(wait.code).toBe(1);
+    expect(wait.err).toMatch(unread);
+    for (const r of [status, wait]) expect(r.out).not.toMatch(/raise it to|Agent payments on/);
   });
 });
 

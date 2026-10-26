@@ -58,29 +58,33 @@ async function setup(options: { faults?: FakeShopFaults; policy?: string; curren
   const store = await openStore(dir, { clock: now });
   cleanup.push(() => store.close());
   const session = createSession();
-  const holder: { real: DisclosedCloud | null } = { real: null };
   const vaultText = JSON.stringify({ v: 1, client_id: shop.clientId, access_token: shop.accessToken, refresh_token: shop.refreshToken });
   const checkoutIds = await openCheckoutVault(dir, "shop", new WalletKey(randomBytes(32), "test"), now);
   const storefront = createFakeStorefront({ "stickers.example": FAKE_STORE });
-  const gateway = createGateway({
-    cloud: (keySet) => {
-      holder.real = connectCloud({ baseUrl: fake.url, session, now }, store, { keySet, now });
-      return holder.real;
-    },
-    store,
-    completerKeys: openCompleterKeys(dir, { now }),
-    oneTap: {
-      connect: (cloud) => connectShop(holder.real ?? cloud, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText, checkoutIds }),
-      storefront: (cloud) => connectStorefront(holder.real ?? cloud, storefront.transport),
-      searchInGateway: true,
-    },
-    accountKey: async () => (await ensureAccountKey(dir)).key,
-    policy: loadPolicy(options.policy ?? BASE_POLICY),
-    pinnedRootKeys: [fake.keys.rootPin],
-    now,
-    logger: { warn: () => undefined },
-  });
-  await gateway.start();
+  const make = async (policy: string, session = createSession()): Promise<Gateway> => {
+    const holder: { real: DisclosedCloud | null } = { real: null };
+    const gateway = createGateway({
+      cloud: (keySet) => {
+        holder.real = connectCloud({ baseUrl: fake.url, session, now }, store, { keySet, now });
+        return holder.real;
+      },
+      store,
+      completerKeys: openCompleterKeys(dir, { now }),
+      oneTap: {
+        connect: (cloud) => connectShop(holder.real ?? cloud, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText, checkoutIds }),
+        storefront: (cloud) => connectStorefront(holder.real ?? cloud, storefront.transport),
+        searchInGateway: true,
+      },
+      accountKey: async () => (await ensureAccountKey(dir)).key,
+      policy: loadPolicy(policy),
+      pinnedRootKeys: [fake.keys.rootPin],
+      now,
+      logger: { warn: () => undefined },
+    });
+    await gateway.start();
+    return gateway;
+  };
+  const gateway = await make(options.policy ?? BASE_POLICY, session);
   return { gateway, store, fake, shop, storefront, passkey: new SoftPasskey(), dir };
 }
 
@@ -430,39 +434,8 @@ describe("create_cart with a linked Shop wallet: the 1.7.0 submit", () => {
 });
 
 /** A gateway whose fake Intent Cloud serves `currencies` from the start. */
-async function setupWithTable(currencies: Record<string, { order: number; week: number }>): Promise<Harness> {
-  const now = (): number => T0;
-  const fake = await startFakeCloud({ now, oneTap: true, currencies });
-  const shop = await startFakeShop({});
-  cleanup.push(() => fake.close(), () => shop.close());
-  const dir = join(await fsp.mkdtemp(join(tmpdir(), "checkout-v4-")), "data");
-  const store = await openStore(dir, { clock: now });
-  cleanup.push(() => store.close());
-  const session = createSession();
-  const holder: { real: DisclosedCloud | null } = { real: null };
-  const vaultText = JSON.stringify({ v: 1, client_id: shop.clientId, access_token: shop.accessToken, refresh_token: shop.refreshToken });
-  const storefront = createFakeStorefront({ "stickers.example": FAKE_STORE });
-  const checkoutIds = await openCheckoutVault(dir, "shop", new WalletKey(randomBytes(32), "test"), now);
-  const gateway = createGateway({
-    cloud: (keySet) => {
-      holder.real = connectCloud({ baseUrl: fake.url, session, now }, store, { keySet, now });
-      return holder.real;
-    },
-    store,
-    completerKeys: openCompleterKeys(dir, { now }),
-    oneTap: {
-      connect: (cloud) => connectShop(holder.real ?? cloud, { mcpUrl: shop.mcpUrl, authUrl: shop.authUrl, vaultText, checkoutIds }),
-      storefront: (cloud) => connectStorefront(holder.real ?? cloud, storefront.transport),
-      searchInGateway: true,
-    },
-    accountKey: async () => (await ensureAccountKey(dir)).key,
-    policy: loadPolicy(BASE_POLICY),
-    pinnedRootKeys: [fake.keys.rootPin],
-    now,
-    logger: { warn: () => undefined },
-  });
-  await gateway.start();
-  return { gateway, store, fake, shop, storefront, passkey: new SoftPasskey(), dir };
+function setupWithTable(currencies: Record<string, { order: number; week: number }>): Promise<Harness> {
+  return setup({ currencies });
 }
 
 // ---- buyers outside the US (contract 1.7.0: US, CA and AU) ----------------------------------------------------------
@@ -504,6 +477,8 @@ describe("buyers outside the US: Canada and Australia through Shop, in their own
     expect(verifyChain(h.store.entries()).ok).toBe(true);
   });
 
+  // The per-order cap at payment (after the passkey) in CAD and AUD: payment-cap.test.ts. Contract 1.7.0 reads an
+  // approval's display total as USD only, so a CAD or AUD approval cannot be read back through get_approval_status yet.
   it("the caps are put in CAD: a $5 cap is CAD 7 (× 7000/5000), so the CAD 8.99 checkout is refused before any submit", async () => {
     const h = await setup({ faults: { region: CANADA }, policy: "version: 1\napproval: passkey\nspend:\n  per_order_usd: 5\n", currencies: { USD: { order: 5000, week: 10_000 }, CAD: { order: 7000, week: 14_000 } } });
     const found = await h.gateway.findOffers({ category: "stickers", budget: 25, country: "CA", postcode: CANADA.postalCode });
@@ -577,6 +552,16 @@ describe("buyers outside the US: Canada and Australia through Shop, in their own
     expect(ca.message).toMatch(/^Not sent: the currency table Intent Cloud returns \(ct-[0-9a-f]{16}\) does not list CAD, so intent cannot ship to Canada for now\.$/);
     const gb = await h.gateway.findOffers({ category: "stickers", budget: 25, country: "GB", postcode: "SW1A 1AA" });
     expect(gb.message).toBe("Not sent: intent ships to the US and Australia for now; the UK is coming soon.");
+    expect(disclosures(h).filter((d) => d.endpoint === "search_catalog")).toHaveLength(0);
+  });
+
+  it("attack (invariant 1): a table whose CAD ceilings are out of line with USD's cannot widen the caps: Canada is refused", async () => {
+    const h = await setup({ policy: DEFAULTS, currencies: { USD: { order: 1, week: 10_000 }, CAD: { order: 1e12, week: 14_000 } } });
+    const ca = await h.gateway.findOffers({ category: "stickers", budget: 25, country: "CA", postcode: CANADA.postalCode });
+    expect(ca).toMatchObject({
+      status: "refused",
+      message: "Not sent: the ceilings Intent Cloud returns for CAD are out of line with its US-dollar ones, so intent cannot put your limits in CAD for Canada; try later.",
+    });
     expect(disclosures(h).filter((d) => d.endpoint === "search_catalog")).toHaveLength(0);
   });
 

@@ -41,6 +41,22 @@ describe("the default caps ($20 an order, $40 a week) in each currency", () => {
     expect(capsIn(DEFAULTS.spend, "USD", null)).toEqual({ per_order_usd: 2000, per_day_usd: 2000, per_week_usd: 4000 });
   });
 
+  it("attack (invariant 1): a table whose ratio to USD is implausible cannot widen a cap: the currency has none", () => {
+    // USD.order 1 and CAD.order 1e12 would make $20 a cap of CAD 20 trillion.
+    const wide: Ceilings = { USD: { order: 1, week: 10_000 }, CAD: { order: 1e12, week: 14_000 } };
+    expect(capsIn(DEFAULTS.spend, "CAD", wide)).toBeNull();
+    const d = evaluate(DEFAULTS, cart(1_000_000, "CAD"), [], NOW, wide);
+    expect(d.send).toBe(false);
+    expect(d.blocked.map((b) => b.rule)).toEqual(["spend.currency"]);
+    // Each ratio alone, order or week, at the bounds 0.25 and 4 and just past them.
+    const at = (order: number, week: number): Ceilings => ({ USD: { order: 1000, week: 1000 }, CAD: { order, week } });
+    expect(capsIn(DEFAULTS.spend, "CAD", at(4000, 250))).not.toBeNull();
+    expect(capsIn(DEFAULTS.spend, "CAD", at(4001, 1000))).toBeNull();
+    expect(capsIn(DEFAULTS.spend, "CAD", at(1000, 249))).toBeNull();
+    expect(capsIn(DEFAULTS.spend, "CAD", at(1000, 4001))).toBeNull();
+    expect(capsIn(DEFAULTS.spend, "CAD", at(249, 1000))).toBeNull();
+  });
+
   it("attack: another currency with no table, a table without it, or a zero USD ceiling has no caps", () => {
     expect(capsIn(DEFAULTS.spend, "CAD", null)).toBeNull();
     expect(capsIn(DEFAULTS.spend, "NZD", TABLE)).toBeNull();

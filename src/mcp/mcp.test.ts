@@ -143,7 +143,9 @@ describe("tools (AC-R1)", () => {
     expect(text).toContain("Never guess a country, a postcode or a budget");
     expect(text).toContain("their budget in the currency of the ship-to country");
     expect(text).toContain("ask the user only for those");
-    expect(text).toContain("Ships to the US, Canada and Australia; outside the US only with a linked Shop wallet.");
+    expect(text).toContain("if find_offers refuses a country, tell the user what it says");
+    // The countries come from Intent Cloud at start, and the refusal names them: none is hard-coded here.
+    expect(text).not.toMatch(/Canada|Australia/);
     expect(text).not.toContain("US delivery only");
     expect(text).toContain("needs a person to approve it with a passkey");
   });

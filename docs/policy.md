@@ -55,7 +55,7 @@ Spend limits are written in whole US dollars. A purchase is in the ship-to count
 | Canada | CAD 28 | CAD 56 |
 | Australia | AUD 30 | AUD 60 |
 
-The daily and weekly limits count only purchases in the same currency, the way Intent Cloud enforces its weekly ceiling. When the meta Intent Cloud returns holds no valid currency table, or none for the currency, a search in it is refused with one line, and a purchase in it is never let through with no limit.
+Each currency has its own daily and weekly window: the limits count only purchases in the same currency, the way Intent Cloud enforces its weekly ceiling. So the limits add up across currencies: with `weekly-40`, $40 in US dollars and CAD 56 in Canadian dollars can both be spent in the same week. When the meta Intent Cloud returns holds no valid currency table, or no usable ceiling for the currency, a search in it is refused with one line, and a purchase in it is never let through with no limit. A ceiling is not usable when its ratio to the US-dollar one, per order or per week, is below 0.25 or above 4 (today's are 0.8 to 1.5): a table must not be able to widen your limits without bound.
 
 The gateway has the coarse-postcode rules for the UK (the outward code: `SW1A 1AA` is `SW1A`), Ireland (the Eircode's routing key: `D02`) and the euro countries Germany, France, the Netherlands, Spain, Italy, Belgium, Austria, Portugal and Finland (the first two digits: `10115` is `10`). It ships there once a later contract version adds them; until then a search there is refused: `intent ships to the US, Canada and Australia for now; the UK is coming soon.`
 
