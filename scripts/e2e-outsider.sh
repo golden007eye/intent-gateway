@@ -946,7 +946,7 @@ scenario_s() {
   sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget_usd\":$STAGING_BUDGET,\"zip\":\"$STAGING_ZIP\",\"email\":\"buyer@example.com\"}" >"$LOGS/s-identity.txt" 2>&1 || true
   must_match "$LOGS/s-identity.txt" 'Sent: nothing / Blocked: .*\$\.email' "a search carrying an email is blocked (invariant 3)" || return 1
   sg_call create_cart '{"offer_handle":"of_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}' >"$LOGS/s-foreign-offer.txt" 2>&1 || true
-  must_match "$LOGS/s-foreign-offer.txt" 'did not come from a search through this gateway' "a cart for an offer this gateway never saw is refused" || return 1
+  must_match "$LOGS/s-foreign-offer.txt" 'this gateway has no such offer' "a cart for an offer this gateway never saw is refused" || return 1
   sg_call get_approval_status '{"approval_handle":"ap_AAAAAAAAAAAAAAAAAAAAAA"}' >"$LOGS/s-foreign-approval.txt" 2>&1 || true
   must_match "$LOGS/s-foreign-approval.txt" 'did not ask for that approval' "a status for an approval this gateway never asked for is refused" || return 1
   n1="$(sg_disclosures s-after)"

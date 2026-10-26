@@ -102,9 +102,10 @@ export function formatTimeline(context: TimelineContext, style: TimelineStyle): 
       const same = rows[next];
       if (later?.action !== "call" || same === undefined || same.values !== r.values || same.outcome !== r.outcome) break;
       if ((later.time === "" ? "" : dayHeader(later.time, style)) !== date) break;
-      // Back to back in the log itself, not only in a filtered view.
+      // Back to back in the log itself, not only in a filtered view, and to the same destination (two destinations can
+      // read alike in words: `shop_accounts` and `Shop accounts`).
       const before = shown[next - 1];
-      if (before === undefined || later.seq !== (before.seqs.at(-1) ?? before.seq) + 1) break;
+      if (before === undefined || later.seq !== (before.seqs.at(-1) ?? before.seq) + 1 || later.facts.destination !== activity.facts.destination) break;
       repeats++;
     }
     const last = shown[index + repeats - 1];
@@ -384,7 +385,7 @@ function disclosed(summary: ActivitySummary, g: Glyphs, paint: (tone: Tone, s: s
   for (const d of destinations) out.push(paint("dim", sentLine(d)));
   const { checked, unchecked, findings } = summary.identity;
   if (findings.length > 0) {
-    out.push(paint("bad", `${g.bad} Buyer identity in what was sent: ${findings.map((f) => `seq ${String(f.seq)} (${f.kinds.join(", ")})`).join(", ")}; run ${INTENT} verify`));
+    out.push(paint("bad", `${g.bad} Buyer identity in what was sent: ${findings.map((f) => `entry #${String(f.seq)} (${f.kinds.join(", ")})`).join(", ")}; run ${INTENT} verify`));
   } else if (checked > 0 || unchecked === 0) {
     const caveat = unchecked === 0 ? "" : ` (${plural(unchecked, "request", "requests")} with no logged bytes not checked)`;
     out.push(paint("dim", `Never sent: your name, postal address, card${caveat}.`));

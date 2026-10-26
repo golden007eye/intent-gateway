@@ -713,8 +713,9 @@ function showPrompt(io: Io, name: string, prompt: DeviceGrantPrompt): void {
   line(io.stdout, `  ${printable(prompt.verificationUri)}`);
   if (io.isTTY.stdout) line(io.stdout, printableLines(approvalQr(prompt.verificationUriComplete ?? prompt.verificationUri).text.trimEnd()));
   line(io.stdout, `Waiting for you to approve it in ${name} (up to ${String(Math.ceil(prompt.expiresInS / 60))} min; Ctrl-C stops)…`);
-  // An agent's shell has no terminal: this run blocks it for the whole wait, which the two-part link does not.
-  if (!io.isTTY.stdout) line(io.stdout, `From an agent's shell, stop this and use ${INTENT} wallet link ${name.toLowerCase()} --start, then --finish.`);
+  // Most likely an agent's shell (it could also be a pipe such as tee, so the line asks), where this output may show only
+  // after the whole wait; --start prints the link and exits.
+  if (!io.isTTY.stdout) line(io.stdout, `Running this from an agent's shell? Stop it and use ${INTENT} wallet link ${name.toLowerCase()} --start, then --finish, so the link shows before the wait.`);
 }
 
 function delay(ms: number): Promise<void> {

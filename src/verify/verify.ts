@@ -393,7 +393,7 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
         demoChain(entries)
           ? `acknowledged by a receipt from the local demo Intent Cloud (demo log, test keys): ${String(counts.receipts)}`
           : `acknowledged by a receipt from Intent Cloud: ${String(counts.receipts)}`,
-        ...(counts.responses === 0 ? [] : [`answered, no signed receipt (that destination signs none; its answer is logged): ${String(counts.responses)}`]),
+        ...(counts.responses === 0 ? [] : [`answered, no signed receipt (that destination signs none; its status and a digest of the answer are logged): ${String(counts.responses)}`]),
         `sent, not acknowledged: ${String(counts.unacknowledged - notSent)}`,
         `discarded: ${String(counts.discarded)}`,
         ...(observed.size === 0 ? [] : [`answers summarised in the log (kept here, never sent): ${String(observed.size)}`]),

@@ -493,7 +493,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const prompt = read(PROMPT);
     const step5 = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     const wallet = read("src/cli/wallet.ts");
-    // --start: one line; the agent shows its link and code, then runs --finish at once.
+    // --start: one line; the agent shows its link and code, ends its reply, and runs --finish once the developer replies.
     expect(step5).toContain("`Open <link> and approve the code <CODE> in Shop before <time>, then run <the --finish command>`, and exits; the command it names is the one you ran, with `--finish`.");
     expect(wallet).toContain("`Open ${page} and approve the code ${prompt.userCode} in ${name} before ${isoSeconds(started.expiresAt)}, then run ${INTENT} wallet link ${rail} --finish`");
     expect(step5).toContain("If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1 once; if it expires again, ask the developer whether to try again.");

@@ -100,7 +100,7 @@ describe("intent wallet link shop", () => {
     expect(r.err).toBe("");
     expect(r.out).toContain(`check that it shows the code ${s.shop.userCode}:\n  ${s.shop.authUrl}activate\n`);
     // No terminal (an agent's shell): the wait blocks it, so the line names the two-part link.
-    expect(r.out).toContain("From an agent's shell, stop this and use intent wallet link shop --start, then --finish.\n");
+    expect(r.out).toContain("Running this from an agent's shell? Stop it and use intent wallet link shop --start, then --finish, so the link shows before the wait.\n");
     expect(r.out).toContain("Shop wallet linked: tokens kept in the encrypted vault");
     expect(r.out).toContain("Shop agent payments left for the gateway: 50.00 USD");
     expect(r.out).toContain("One-tap with Shop pays from the agent budget only while agent payments are on in the Shop app and your policy allows one tap; otherwise purchases are handed off to Shop's checkout page");
@@ -458,7 +458,7 @@ describe("intent init", () => {
     const r = await s.run(["init"], { tty: true, input: "y\n" });
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain(`check that it shows the code ${s.shop.userCode}`);
-    expect(r.out).not.toContain("From an agent's shell");
+    expect(r.out).not.toContain("from an agent's shell?");
     expect(r.out).toContain("Shop wallet linked");
     expect(r.out).toContain("claude mcp add intent");
     expect(existsSync(vaultPath(s.dir, "shop"))).toBe(true);

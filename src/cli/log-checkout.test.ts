@@ -102,7 +102,7 @@ describe("intent log on the 1.7.0 checkout submit", () => {
     it(`attack: ${what} in the submit is still reported`, async () => {
       const items = await submitChain(body);
       expect(identity(items).findings).toEqual([{ seq: 2, kinds: [kind] }]);
-      expect(log(items)).toMatch(new RegExp(`Buyer identity in what was sent: seq 2 \\(${kind}\\)`));
+      expect(log(items)).toMatch(new RegExp(`Buyer identity in what was sent: entry #2 \\(${kind}\\)`));
     });
   }
 });

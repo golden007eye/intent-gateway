@@ -118,6 +118,53 @@ describe("intent log: repeated calls", () => {
     expect(out).toContain("5 wallet calls");
     expect(formatJson(items).trim().split("\n").filter((l) => l.includes('"action":"call"'))).toHaveLength(5);
   });
+
+  /** Two identical token calls (answered 400), with `between` appended after the first. */
+  async function twoCalls(between: (s: Store) => Promise<unknown>, destinations: readonly [string, string] = ["shop", "shop"]): Promise<unknown[]> {
+    const dir = join(mkdtempSync(join(tmpdir(), "log-repeat-")), "data");
+    let second = 0;
+    store = await openStore(dir, { clock: () => TS + (second += 5000) });
+    const cloud = createDisclosedCloud(unreachableCloud, store, { keySet: () => null });
+    const [first, other] = destinations;
+    await createDisclosedWallet(shopTransport(() => 400), cloud, { destination: first }).call("token", rpc("token", { device_code: "d" }));
+    await between(store);
+    await createDisclosedWallet(shopTransport(() => 400), cloud, { destination: other }).call("token", rpc("token", { device_code: "d" }));
+    await store.close();
+    store = null;
+    return readLog(dir);
+  }
+  const callRows = (out: string) => out.split("\n").filter((l) => l.includes("  call  "));
+
+  it("attack: two identical calls with another entry between them stay two rows, also when that entry shows no row", async () => {
+    // A demo session entry opens no row of its own: on screen the calls are back to back, in the log they are not.
+    const items = await twoCalls((s) => s.append("session", { mode: "demo", id: "x" }));
+    const rows = callRows(formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data" }));
+    expect(rows).toHaveLength(2);
+    expect(rows.join("\n")).not.toContain("×");
+  });
+
+  it("attack: two identical calls that a filter puts side by side stay two rows", async () => {
+    const items = await twoCalls((s) => s.append("wallet", { rail: "shop", action: "linked", revoked: false }));
+    // Unfiltered, the wallet row sits between them; --action call hides it.
+    const out = formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data", actions: new Set(["call"]) });
+    expect(out).not.toContain("wallet linked");
+    expect(callRows(out)).toHaveLength(2);
+    expect(out).not.toContain("×");
+  });
+
+  it("attack: identical calls to two destinations that read alike in words stay two rows", async () => {
+    // `shop_accounts` and `Shop accounts` are both written "Shop accounts"; they are still two destinations. The gateway
+    // writes only lower-case names, so the second comes from a chain edited by hand, which `intent log` still reads.
+    const items = (await twoCalls(() => Promise.resolve(), ["shop_accounts", "shop_accounts"])) as { kind: string; body: Record<string, unknown> }[];
+    const disclosures = items.filter((i) => i.kind === "disclosure");
+    expect(disclosures).toHaveLength(2);
+    const edited = disclosures[1];
+    if (edited !== undefined) edited.body.destination = "Shop accounts";
+    const rows = callRows(formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data" }));
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.includes("Shop accounts token"))).toBe(true);
+    expect(rows.join("\n")).not.toContain("×");
+  });
 });
 
 describe("intent log: wallet destinations, refusals and wallet entries", () => {

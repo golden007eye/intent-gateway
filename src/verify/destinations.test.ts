@@ -69,7 +69,7 @@ describe("verify: disclosures to wallet destinations", () => {
     expect(report.exitCode).toBe(0);
     expect(report.counts).toMatchObject({ disclosures: 1, responses: 1, redactions: 2, unanswered: 0 });
     const text = formatReport(report);
-    expect(text).toContain("answered, no signed receipt (that destination signs none; its answer is logged): 1");
+    expect(text).toContain("answered, no signed receipt (that destination signs none; its status and a digest of the answer are logged): 1");
     expect(text).toContain("credential values sent, repeats counted (the log keeps only their sha256): 2");
   });
 

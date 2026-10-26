@@ -748,9 +748,15 @@ export function walletCheckWords(f: Readonly<ActivityFacts>): string[] {
 }
 
 /** `intent_cloud` → `Intent Cloud`, `shop` → `Shop`, `shop_accounts` → `Shop accounts`: a destination in words. */
+export function destinationLabel(destination: string): string {
+  if (destination === INTENT_CLOUD) return "Intent Cloud";
+  const words = destination.replaceAll("_", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /**
- * The client fields the MCP SDK puts in `params._meta` of every request a wallet adapter sends. Only these are
- * summed up as the MCP envelope; any other `_meta` field is named on its own (invariant 5).
+ * The client fields the gateway's own Shop MCP client (src/wallet-shop/rpc.ts) writes in `params._meta` of every
+ * request. Only these are summed up as the MCP envelope; any other `_meta` field is named on its own (invariant 5).
  */
 export const MCP_CLIENT_META: ReadonlySet<string> = new Set([
   "params._meta.io.modelcontextprotocol/clientCapabilities",
@@ -761,12 +767,6 @@ export const MCP_CLIENT_META: ReadonlySet<string> = new Set([
 
 /** The JSON-RPC fields of every MCP request, the tool name and an empty arguments object. */
 export const MCP_ENVELOPE: ReadonlySet<string> = new Set(["jsonrpc", "id", "method", "params.name", "params.arguments"]);
-
-export function destinationLabel(destination: string): string {
-  if (destination === INTENT_CLOUD) return "Intent Cloud";
-  const words = destination.replaceAll("_", " ");
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
 
 /** A redaction marker (`[redacted sha256:<hex>]`) in words: `redacted (sha256 1a2b3c4d…)`; null for any other value. */
 export function credentialWords(value: unknown): string | null {
