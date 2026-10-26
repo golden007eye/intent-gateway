@@ -39,14 +39,15 @@ Three scenarios run the gateway for real, with no demo: a fresh data dir and the
 
 | Scenario | Runs | What it does |
 |---|---|---|
-| `s` | unattended | `doctor` (contract 1.6 and the key statement), `init --yes`, a search, a hand-off cart (completion mode `handoff`, a completer key, the merchant's origin and variant from the snapshot, an exact total), still pending, four refusals that disclose nothing, no evidence before an approval, `verify` ok. The cart expires unapproved. |
+| `s` | unattended | `doctor` (the vendored contract and the key statement), `init --yes`, a search, a hand-off cart (completion mode `handoff`, a completer key, the merchant's origin and variant from the snapshot, an exact total), still pending, four refusals that disclose nothing, no evidence before an approval, `verify` ok. The cart expires unapproved. |
+| `su` | unattended | Buyers outside the US: `doctor` (contract 1.7.1 or later), then with no Shop wallet linked a UK search refused with the wallet line, a partial UK postcode asked again and Japan refused with the countries staging serves; nothing disclosed, no full postcode in the log or the chain, `verify` ok. |
 | `j` | manual, `E2E_STAGING=1` | The hand-off purchase (AC-J1), described below. |
 | `j2` | manual, `E2E_ONETAP=1` | The one-tap skeleton (AC-J2). It also needs `INTENT_SHOP_CLIENT_ID`, `INTENT_WALLET_KEY_FILE`, a Shop account to link and a store one tap can reach. It cannot pass on staging: the staging store's test payment gateway makes Shop refuse to pay (`checkout_completion_ineligible`). |
 
 Staging covers hand-off only. One tap (AC-J2) is proven by hand: a small real order at a real store, paid from the developer's own Shop account.
 
 ```console
-$ scripts/e2e-outsider.sh --tarball --only s
+$ scripts/e2e-outsider.sh --tarball --only s,su
 $ E2E_STAGING=1 scripts/e2e-outsider.sh --docker --only j
 ```
 
