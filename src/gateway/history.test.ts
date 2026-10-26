@@ -61,15 +61,17 @@ describe("summaryLine with destinations", () => {
       "params._meta.io.modelcontextprotocol/protocolVersion",
       "params.arguments.catalog.query",
       "params.name",
-      // Attack: a field outside the envelope and the arguments is never folded into the count.
+      // Attack: a field outside the envelope and the arguments, or a _meta field the SDK does not send, is never folded
+      // into the count.
       "params.extra",
+      "params._meta.evil",
     ];
     const chain = [
       entry(0, "disclosure", { endpoint: "search_catalog", destination: "shop", fields }),
       entry(1, "response", { disclosure_seq: 0, status: 200, body_sha256: "0".repeat(64), bytes: 2 }),
     ];
     expect(summaryLine(disclosedSince(chain, -1))).toBe(
-      "Sent: Shop search_catalog (catalog.query, params.extra, 6 MCP protocol fields; answered, no signed receipt) / Blocked: nothing",
+      "Sent: Shop search_catalog (catalog.query, params.extra, params._meta.evil, 6 MCP protocol fields; answered, no signed receipt) / Blocked: nothing",
     );
   });
 

@@ -124,7 +124,7 @@ export async function policyAdd(io: Io, config: Config, name: string, flags: Add
   line(io.stdout, `applied: ${policyPath} now includes ${name}; policy.lock records ${lockOrigin(lock)}`);
   // In the image the gateway is the container's own process, so the restart is the container's, not a command in it.
   // Most gateways are started by the agent (`claude mcp add`), so restarting the agent restarts the gateway.
-  const restart = config.runtime === "container" ? `run docker restart ${containerRef(io.env)}` : `restart the agent that starts it (Claude Code, say), or ${INTENT} serve,`;
+  const restart = config.runtime === "container" ? `run docker restart ${containerRef(io.env)}` : `restart Claude Code (or whatever runs ${INTENT} serve)`;
   line(io.stdout, `a running gateway reads its policy at start: ${restart} to use it`);
   return 0;
 }

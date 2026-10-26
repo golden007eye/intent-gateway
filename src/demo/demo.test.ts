@@ -169,9 +169,11 @@ describe("demo flow", () => {
     // The demo code reaches the person through the gateway's stderr and its file, never through a tool result.
     for (const text of [offers, cart, status]) expect(text).not.toContain(demo.code);
     // The cart message names the button exactly as the confirm page labels it.
-    const label = /click "(Approve \$[0-9,]+\.[0-9]{2} with demo passkey)" \(enter the code shown in the gateway's terminal\)/.exec(cart)?.[1] ?? "";
+    const label = /click "(Approve \$[0-9,]+\.[0-9]{2} with demo passkey)" \(enter the demo code: the page shows the command that prints it\)/.exec(cart)?.[1] ?? "";
     expect(label).not.toBe("");
     expect(page.body).toContain(`>${label}<`);
+    // The message says the page shows the command that prints the demo code: it does.
+    expect(page.body).toContain("read the code with <code class=\"cmd\">");
     expect(cart).not.toMatch(/phone/);
     expect(store.entries().map((e) => e.kind)).toContain("approval");
 

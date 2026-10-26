@@ -29,7 +29,7 @@ export interface ErrorContext {
 }
 
 const LIBRARY_FIX: Readonly<Record<LibraryErrorCode, string>> = {
-  UNKNOWN_POLICY: "run it again with one of those names",
+  UNKNOWN_POLICY: "pick a library policy, such as per-order-20 or weekly-40",
   INDEX_INVALID: `reinstall the gateway (${UPDATE_COMMAND}), or pass --commit <sha> to take the library from GitHub`,
   HASH_MISMATCH: "nothing was written; reinstall the gateway, or pass --commit <sha> of a signed commit on main",
   NO_BUILD_COMMIT: "pass --commit <sha> of a signed commit on main to take the policy from GitHub",

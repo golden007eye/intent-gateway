@@ -7,7 +7,7 @@
 // a wallet destination (Shop) says "answered" with the status its `response` entry recorded, never "receipt": a wallet
 // signs none. The "Sent to … only" lines name each destination apart, from what its logged requests carried.
 // `intent verify` re-checks every signature. Pure; the golden test pins it.
-import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, INTENT_CLOUD, summarise, walletCheckWords } from "../activity/index.ts";
+import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, INTENT_CLOUD, MCP_CLIENT_META, summarise, walletCheckWords } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 import { printable } from "../ui/index.ts";
 
@@ -102,9 +102,14 @@ export function formatTimeline(context: TimelineContext, style: TimelineStyle): 
       const same = rows[next];
       if (later?.action !== "call" || same === undefined || same.values !== r.values || same.outcome !== r.outcome) break;
       if ((later.time === "" ? "" : dayHeader(later.time, style)) !== date) break;
+      // Back to back in the log itself, not only in a filtered view.
+      const before = shown[next - 1];
+      if (before === undefined || later.seq !== (before.seqs.at(-1) ?? before.seq) + 1) break;
       repeats++;
     }
-    const counted = repeats === 1 ? r : { ...r, outcome: `${r.outcome} ${g.times}${String(repeats)}` };
+    const last = shown[index + repeats - 1];
+    const until = last === undefined || last.time === "" ? "" : `, until ${clockTime(last.time, style)}`;
+    const counted = repeats === 1 ? r : { ...r, outcome: `${r.outcome} ${g.times}${String(repeats)}${until}` };
     lines.push(rowLine(activity, counted, valuesWidth, style, g, paint));
     index += repeats - 1;
   }
@@ -416,15 +421,17 @@ function walletFields(fields: readonly string[]): string[] {
   const rest: string[] = [];
   let envelope = false;
   let meta = false;
+  let empty = false;
   for (const field of fields) {
     if (field.startsWith("params.arguments.")) args.push(field.slice("params.arguments.".length));
     else if (field === "params.name") rest.unshift("tool name");
     else if (field === "jsonrpc" || field === "id" || field === "method") envelope = true;
-    else if (field.startsWith("params._meta.")) meta = true;
-    // An empty arguments object is a field of its own only when the tool takes no arguments.
-    else if (field !== "params.arguments") rest.push(field);
+    else if (MCP_CLIENT_META.has(field)) meta = true;
+    // The arguments object is a leaf only when it is empty: the tool was called with no arguments.
+    else if (field === "params.arguments") empty = true;
+    else rest.push(field);
   }
-  const parts = [...(envelope ? ["jsonrpc, id, method"] : []), ...(meta ? ["client name, version and capabilities"] : [])];
+  const parts = [...(envelope ? ["jsonrpc, id, method"] : []), ...(empty ? ["no arguments"] : []), ...(meta ? ["client name, version and capabilities"] : [])];
   return [...args, ...rest, ...(parts.length === 0 ? [] : [`MCP envelope (${parts.join("; ")})`])];
 }
 

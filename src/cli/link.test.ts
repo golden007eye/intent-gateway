@@ -102,7 +102,7 @@ describe("intent wallet link shop", () => {
     // No terminal (an agent's shell): the wait blocks it, so the line names the two-part link.
     expect(r.out).toContain("From an agent's shell, stop this and use intent wallet link shop --start, then --finish.\n");
     expect(r.out).toContain("Shop wallet linked: tokens kept in the encrypted vault");
-    expect(r.out).toContain("Shop budget left for the gateway: 50.00 USD");
+    expect(r.out).toContain("Shop agent payments left for the gateway: 50.00 USD");
     expect(r.out).toContain("One-tap with Shop pays from the agent budget only while agent payments are on in the Shop app and your policy allows one tap; otherwise purchases are handed off to Shop's checkout page");
     expect(r.out).not.toContain("not yet wired");
     expect(r.out).not.toContain("refresh token");
@@ -129,7 +129,7 @@ describe("intent wallet link shop", () => {
     expectNoSecrets(s, log);
     const verify = await s.run(["verify", "--skip-install-check"]);
     expect(verify.code, verify.out + verify.err).toBe(0);
-    expect(verify.out).toContain("credentials sent (the log keeps only their sha256)");
+    expect(verify.out).toContain("credential values sent, repeats counted (the log keeps only their sha256)");
   });
 
   it("linking again: the new sign-in first, then the earlier token revoked (logged), the unlink chained, then the link", async () => {
@@ -168,7 +168,7 @@ describe("intent wallet link shop", () => {
     expect(second[9]?.body).toEqual({ rail: "shop", action: "unlinked", revoked: true });
     expect(second[10]?.body).toEqual({ rail: "shop", action: "linked", revoked: false });
     // The new grant survives the revocation of the old one.
-    expect(r.out).toContain("Shop budget left for the gateway");
+    expect(r.out).toContain("Shop agent payments left for the gateway");
     const vault = await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"));
     expect(JSON.parse(vault ?? "{}")).toMatchObject({ access_token: s.shop.accessToken, refresh_token: s.shop.refreshToken });
     expectNoSecrets(s, r);
@@ -314,7 +314,7 @@ describe("a linked wallet keeps the client it was linked with", () => {
     const env = without(s.env, "INTENT_SHOP_CLIENT_ID");
     const status = await s.run(["wallet", "status"], { env });
     expect(status.err).toBe("");
-    expect(status.out).toContain("Shop budget left for the gateway: 50.00 USD");
+    expect(status.out).toContain("Shop agent payments left for the gateway: 50.00 USD");
     expect(grants(s.shop, before)).toEqual([["refresh_token", s.shop.clientId]]);
     expect(s.shop.oauthRequests.slice(before).map((q) => q.form.client_id)).not.toContain(DEFAULT_SHOP_CLIENT_ID);
     const unlink = await s.run(["wallet", "unlink", "shop"], { env });
@@ -352,7 +352,7 @@ describe("a linked wallet keeps the client it was linked with", () => {
     expect(status.err).toBe(
       `intent: warning: this Shop wallet was linked as the client ${s.shop.clientId}, so INTENT_SHOP_CLIENT_ID (another-client) is not used for it; run intent wallet link shop to link it as that client\n`,
     );
-    expect(status.out).toContain("Shop budget left for the gateway: 50.00 USD");
+    expect(status.out).toContain("Shop agent payments left for the gateway: 50.00 USD");
     expect(grants(s.shop, before)).toEqual([["refresh_token", s.shop.clientId]]);
   });
 
@@ -363,7 +363,7 @@ describe("a linked wallet keeps the client it was linked with", () => {
       s.shop.expireAccessTokens();
       const status = await s.run(["wallet", "status"], { env: env(s) });
       expect(status.err).toBe("");
-      expect(status.out).toContain("Shop budget left for the gateway: 50.00 USD");
+      expect(status.out).toContain("Shop agent payments left for the gateway: 50.00 USD");
       expect(grants(s.shop, 0)).toEqual([["refresh_token", s.shop.clientId]]);
       const vault = JSON.parse((await loadSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"))) ?? "{}") as { client_id?: string };
       expect(vault.client_id).toBe(s.shop.clientId);

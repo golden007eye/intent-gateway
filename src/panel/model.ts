@@ -740,7 +740,7 @@ function entrySummary(kind: string, b: Record<string, unknown>): string {
     case "keys":
       return `key statement ${text(record(b.statement).kid)}`;
     case "session":
-      return b.mode === "demo" ? "demo chain" : `session ${text(b.id)}`;
+      return b.mode === "demo" ? "demo log" : `session ${text(b.id)}`;
     default:
       return kind;
   }

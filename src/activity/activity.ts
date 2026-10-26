@@ -748,6 +748,20 @@ export function walletCheckWords(f: Readonly<ActivityFacts>): string[] {
 }
 
 /** `intent_cloud` → `Intent Cloud`, `shop` → `Shop`, `shop_accounts` → `Shop accounts`: a destination in words. */
+/**
+ * The client fields the MCP SDK puts in `params._meta` of every request a wallet adapter sends. Only these are
+ * summed up as the MCP envelope; any other `_meta` field is named on its own (invariant 5).
+ */
+export const MCP_CLIENT_META: ReadonlySet<string> = new Set([
+  "params._meta.io.modelcontextprotocol/clientCapabilities",
+  "params._meta.io.modelcontextprotocol/clientInfo.name",
+  "params._meta.io.modelcontextprotocol/clientInfo.version",
+  "params._meta.io.modelcontextprotocol/protocolVersion",
+]);
+
+/** The JSON-RPC fields of every MCP request, the tool name and an empty arguments object. */
+export const MCP_ENVELOPE: ReadonlySet<string> = new Set(["jsonrpc", "id", "method", "params.name", "params.arguments"]);
+
 export function destinationLabel(destination: string): string {
   if (destination === INTENT_CLOUD) return "Intent Cloud";
   const words = destination.replaceAll("_", " ");

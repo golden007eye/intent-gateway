@@ -108,7 +108,7 @@ describe("intent wallet status", () => {
     it("prints the budget left, logged before it was sent; no identity printed", async () => {
       const { r, s } = await statusOf({});
       expect(r.code).toBe(0);
-      expect(r.out).toContain("Shop budget left for the gateway: 50.00 USD");
+      expect(r.out).toContain("Shop agent payments left for the gateway: 50.00 USD");
       expect((readChain(s.dir) as { kind: string; body: Record<string, unknown> }[]).map((e) => [e.kind, e.body.endpoint])).toEqual([
         ["session", undefined],
         ["disclosure", "get_account"],
@@ -227,7 +227,7 @@ describe("intent wallet unlink shop", () => {
       }
       const verify = await s.run(["verify", "--skip-install-check"]);
       expect(verify.code, verify.out + verify.err).toBe(0);
-      expect(verify.out).toContain("credentials sent (the log keeps only their sha256)");
+      expect(verify.out).toContain("credential values sent, repeats counted (the log keeps only their sha256)");
     });
 
     it("revoke answers 500: the file is still deleted, stderr names the Shop setting, and the chain says revoked:false", async () => {

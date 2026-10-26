@@ -15,7 +15,7 @@ How to work:
 - Do one step at a time, in order. Run the commands yourself.
 - Do not narrate commands, recap a step or paste command output. Between developer actions, say only the status line: `✓ <n>/9  <what happened>. Next: <what>.` Here `<n>` is the step just finished and 9 is the number of steps. Use that mark and that form every time, once per finished step, and never for a step that is not finished yet. The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.
 - Anything the developer must see, click or type (a link, a code, a choice) goes in your own reply, written out in full, never only in a command's output. Why: Claude Code does not reliably show command output to the developer.
-- Each developer action is a block in your own reply, copied from this prompt with its link or code filled in. It starts with the bold **Your turn:** marker and a short label. It gives one action, in short lines, with its link or code on its own line. It ends with "Reply done", and it ends your reply: run nothing after it. Where a command can see the action (the Shop link, agent payments, the purchase), run that command once the developer replies; it confirms the action or waits for it. Why: an agent that ran the waiting command in the same reply showed the block only after the wait, so the developer never saw the link. Say nothing after a block while the developer acts.
+- Each developer action is a block in your own reply, copied from this prompt without the `>` marks, with its link or code filled in. It starts with the bold **Your turn:** marker and a short label. It gives one action, in short lines, with its link or code on its own line. It ends your reply: run nothing after it. It ends with "Reply done", unless the developer answers it with a choice or with "continue". Where a command can see the action (the Shop link, agent payments, the purchase), run that command once the developer replies; it confirms the action or waits for it. Why: an agent that ran the waiting command in the same reply showed the block only after the wait, so the developer never saw the link. Say nothing after a block while the developer acts.
 - The commands that wait (`intent wallet link shop --finish`, `intent wallet status --wait-budget`, `get_approval_status`) send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.
 - Never ask for, type or store the developer's name, postal address or card. They give those to Shop themselves.
 - If a command fails, show its error line and the fix it names, and stop at that step. Do not work around it.
@@ -97,13 +97,11 @@ This step is required: never skip it, also when the developer says they already 
 
 > **Your turn:** approve the Shop link
 >
-> Open this link and approve intent in Shop.
->
-> The code is already filled in if you use this link.
+> Open this link and approve intent in Shop; the code is already filled in.
 >
 > <the link, as a clickable link>
 >
-> <the code>
+> Code: <the code>
 >
 > Reply done
 
@@ -182,7 +180,7 @@ Tell the developer these two sentences, exactly:
 >
 > <the approval link, as a clickable link>
 >
-> <the check code>
+> Check code: <the check code>
 >
 > Reply done
 
@@ -201,6 +199,6 @@ Setup is done. To change the limits later, the developer runs the policy-advisor
 
 > **Done:** <outcome>, from <store>, total <total>
 >
-> `intent log` shows what the gateway sent.
+> Ask me any time to run `intent log` (what the gateway sent) or `intent pause`.
 >
-> `intent pause` stops every purchase that goes through intent and isn't paid yet.
+> `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.

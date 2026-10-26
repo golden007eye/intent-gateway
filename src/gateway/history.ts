@@ -1,5 +1,6 @@
 // What the gateway reads back from its own chain: the spend history for the policy's daily and weekly caps, and
 // the "Sent: … / Blocked: …" summary of one tool call. Pure; the chain is passed in.
+import { destinationLabel, MCP_CLIENT_META, MCP_ENVELOPE } from "../activity/index.ts";
 import { chargedNothing } from "../outcome/index.ts";
 import type { Purchase } from "../policy/index.ts";
 import { type Entry, neverLeft } from "../store/index.ts";
@@ -101,9 +102,7 @@ export function summaryLine(disclosed: Disclosed, extraBlocked: readonly string[
     const fields = s.destination === null ? s.fields : mcpFields(s.fields);
     return fields.length === 0 ? "no body fields" : fields.join(", ");
   };
-  // `shop_accounts` reads as `Shop accounts`, as `intent log` writes it.
-  const label = (d: string) => d.charAt(0).toUpperCase() + d.slice(1).replaceAll("_", " ");
-  const nameOf = (s: Disclosed["sends"][number]) => (s.destination === null ? s.endpoint : `${label(s.destination)} ${s.endpoint}`);
+  const nameOf = (s: Disclosed["sends"][number]) => (s.destination === null ? s.endpoint : `${destinationLabel(s.destination)} ${s.endpoint}`);
   const answer = (s: Disclosed["sends"][number]) =>
     s.destination !== null ? "; answered, no signed receipt" : s.acknowledged ? "; receipt verified" : "; no verified receipt";
   const sent = disclosed.sends.filter((s) => s.answered).map((s) => `${nameOf(s)} (${fieldsOf(s)}${answer(s)})`);
@@ -127,7 +126,7 @@ function mcpFields(fields: readonly string[]): string[] {
   let protocol = 0;
   for (const field of fields) {
     if (field.startsWith("params.arguments.")) args.push(field.slice("params.arguments.".length));
-    else if (field === "jsonrpc" || field === "id" || field === "method" || field === "params.name" || field === "params.arguments" || field.startsWith("params._meta.")) protocol++;
+    else if (MCP_ENVELOPE.has(field) || MCP_CLIENT_META.has(field)) protocol++;
     else other.push(field);
   }
   return [...args, ...other, ...(protocol === 0 ? [] : [`${String(protocol)} MCP protocol field${protocol === 1 ? "" : "s"}`])];

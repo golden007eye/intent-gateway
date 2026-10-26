@@ -17,7 +17,7 @@ Try it now, with no setup (demo Intent Cloud on this machine, test keys, nothing
 
 Connect an agent:
   claude mcp add intent -- ${intent} demo     the demo
-  claude mcp add intent -- ${intent}          the real one: a passkey approval for every purchase
+  claude mcp add intent -- ${intent}          real purchases, each approved with your passkey
 
 ${inline ? "Commands:" : `Commands (run each as: ${intent} <command>):`}
 ${pad("serve [--http]")}MCP server over stdio (the default), or Streamable HTTP

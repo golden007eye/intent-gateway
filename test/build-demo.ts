@@ -56,7 +56,7 @@ export async function demoFirstRun(main: string): Promise<void> {
     const link = /Approval link: (\S+)/.exec(cart)?.[1] ?? "";
     const handle = /approval_handle: (\S+)/.exec(cart)?.[1] ?? "";
     expect(link).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/confirm\/c\//);
-    expect(cart).toMatch(/click "Approve \$[0-9,]+\.[0-9]{2} with demo passkey" \(enter the code shown in the gateway's terminal\)/);
+    expect(cart).toMatch(/click "Approve \$[0-9,]+\.[0-9]{2} with demo passkey" \(enter the demo code: the page shows the command that prints it\)/);
     const code = /Demo code for the confirm page: ([0-9]{6}) /.exec(stderr)?.[1] ?? "";
     expect(code).not.toBe("");
     expect(offers + cart).not.toContain(code);

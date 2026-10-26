@@ -129,9 +129,9 @@ describe("intent wallet link shop --start, then --finish", () => {
     expect(finish.err).toBe("");
     expect(finish.out).toContain("Waiting for you to approve the code in Shop (until 2026-10-18T12:10:00Z; if this stops early, run --finish again)…\n");
     expect(finish.out).toContain("Shop wallet linked: tokens kept in the encrypted vault");
-    expect(finish.out).toContain("Shop budget left for the gateway: 50.00 USD\n");
+    expect(finish.out).toContain("Shop agent payments left for the gateway: 50.00 USD\n");
     // Agent payments are already on in this account: the --wait-budget line, and no next step.
-    expect(finish.out).toContain("Shop budget left for the gateway: 50.00 USD\nAgent payments on: $150.00 per month, $50.00 left\n");
+    expect(finish.out).toContain("Shop agent payments left for the gateway: 50.00 USD\nAgent payments on: $150.00 per month, $50.00 left\n");
     expect(finish.out).not.toContain("Tap ");
     expect(oauthPaths(s)).toEqual(["/oauth/device", "/oauth/token"]);
     expect(s.sleeps).toEqual([5000]);
@@ -392,7 +392,7 @@ describe("agent payments on, but too little left for one purchase", () => {
     await s.run(START);
     const r = await s.run(FINISH);
     expect(r.code, r.err).toBe(0);
-    expect(r.out).toContain(`Shop budget left for the gateway: 6.02 USD\n${LOW_LINES}`);
+    expect(r.out).toContain(`Shop agent payments left for the gateway: 6.02 USD\n${LOW_LINES}`);
     expect(r.out).not.toContain("Agent payments on:");
   });
 
@@ -400,7 +400,7 @@ describe("agent payments on, but too little left for one purchase", () => {
     const s = await withPolicy(S1_LOW, DEFAULTS);
     expect((await s.run(["wallet", "link", "shop"])).code).toBe(0);
     const r = await s.run(["wallet", "status"]);
-    expect(r.out).toContain(`Shop budget left for the gateway: 6.02 USD\n${LOW_LINES}`);
+    expect(r.out).toContain(`Shop agent payments left for the gateway: 6.02 USD\n${LOW_LINES}`);
   });
 
   it("--wait-budget: low lines once, keeps reading, and succeeds once the budget is raised (3rd read)", async () => {
@@ -471,7 +471,7 @@ describe("one purchase is the smallest cap; a limit already at the suggestion wa
     const s = await linked({ budgetLimitMinor: 4000, budgetMinor: 500 });
     const status = await s.run(["wallet", "status"]);
     const wait = "Agent payments are on, but only $5 is left until Shop renews it at 2026-11-01T00:00:00Z; the limit is already at least the suggested $40, so wait for that renewal rather than raising it.\n";
-    expect(status.out).toContain(`Shop budget left for the gateway: 5.00 USD\n${wait}`);
+    expect(status.out).toContain(`Shop agent payments left for the gateway: 5.00 USD\n${wait}`);
     expect(status.out).not.toContain("raise it to");
     const late = await s.run(["wallet", "status", "--wait-budget", "--timeout", "5"]);
     expect(late.code).toBe(1);
@@ -502,7 +502,7 @@ describe("wallet status with a policy that does not load", () => {
     writeFileSync(join(s.dir, "policy.yaml"), "version: 1\napproval: none\n");
     const r = await s.run(["wallet", "status"]);
     expect(r.code).toBe(0);
-    expect(r.out).toContain("Shop budget left for the gateway: 6.02 USD\n");
+    expect(r.out).toContain("Shop agent payments left for the gateway: 6.02 USD\n");
     expect(r.err).toMatch(/^intent: the Shop account was read, but the agent-payments check was skipped: the policy did not load: .+\n$/);
     expect(r.err).not.toContain("could not be read");
   });
@@ -511,10 +511,10 @@ describe("wallet status with a policy that does not load", () => {
 describe("amounts in a currency's own minor unit", () => {
   it("JPY has no minor unit, KWD has three digits; neither is divided by 100", async () => {
     const s = await setup({ accountCurrency: "JPY", budgetLimitMinor: 15_000, budgetMinor: 1500 });
-    expect((await s.run(["wallet", "link", "shop"])).out).toContain("Shop budget left for the gateway: 1500 JPY\n");
+    expect((await s.run(["wallet", "link", "shop"])).out).toContain("Shop agent payments left for the gateway: 1500 JPY\n");
     expect((await s.run(["wallet", "status", "--wait-budget"])).out).toMatch(/^Agent payments on: 15000 JPY per month, 1500 JPY left\nNote: /);
     s.shop.faults.accountCurrency = "KWD";
-    expect((await s.run(["wallet", "status"])).out).toContain("Shop budget left for the gateway: 1.500 KWD\n");
+    expect((await s.run(["wallet", "status"])).out).toContain("Shop agent payments left for the gateway: 1.500 KWD\n");
     expect((await s.run(["wallet", "status", "--wait-budget"])).out).toMatch(/^Agent payments on: 15.000 KWD per month, 1.500 KWD left\nNote: /);
   });
 });
@@ -668,7 +668,7 @@ describe("intent wallet status --wait-budget", () => {
     const s = await setup();
     const r = await s.run(WAIT);
     expect(r.code).toBe(1);
-    expect(r.err).toContain("no Shop wallet is linked, so there is no budget to wait for; nothing was sent to Shop");
+    expect(r.err).toContain("no Shop wallet is linked, so there are no agent payments to wait for; nothing was sent to Shop");
     expect(s.shop.calls).toEqual([]);
     for (const bad of ["0", "601", "5s", "-1"]) expect((await s.run([...WAIT, "--timeout", bad])).code).toBe(2);
     expect((await s.run(["wallet", "status", "--timeout", "5"])).code).toBe(2);

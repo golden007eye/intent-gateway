@@ -70,7 +70,7 @@ describe("verify: disclosures to wallet destinations", () => {
     expect(report.counts).toMatchObject({ disclosures: 1, responses: 1, redactions: 2, unanswered: 0 });
     const text = formatReport(report);
     expect(text).toContain("answered, no signed receipt (that destination signs none; its answer is logged): 1");
-    expect(text).toContain("credentials sent (the log keeps only their sha256): 2");
+    expect(text).toContain("credential values sent, repeats counted (the log keeps only their sha256): 2");
   });
 
   it("attack: an unredacted authorization header in any disclosure exits 1, holds a credential", async () => {
@@ -174,6 +174,6 @@ describe("verify: disclosures to wallet destinations", () => {
     expect(failures(report)).toEqual([]);
     expect(report.exitCode).toBe(0);
     expect(report.counts).toMatchObject({ disclosures: 7, receipts: 7, responses: 0, redactions: 0, approvals: 1, unanswered: 0 });
-    expect(formatReport(report)).not.toMatch(/no signed receipt|credentials sent/);
+    expect(formatReport(report)).not.toMatch(/no signed receipt|credential values sent/);
   });
 });

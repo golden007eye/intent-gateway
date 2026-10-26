@@ -303,7 +303,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     // A block ends the reply, and the command that sees the action runs once the developer replies: in five dogfood
     // runs an agent told to show the block and then run --finish (10 minutes) or get_approval_status in the same reply
     // showed nothing before the wait, so the developer never saw the link (attack: no waiting command in the block's reply).
-    expect(prompt).toContain('It ends with "Reply done", and it ends your reply: run nothing after it.');
+    expect(prompt).toContain('It ends your reply: run nothing after it. It ends with "Reply done", unless the developer answers it with a choice or with "continue".');
     expect(prompt).toContain("2. When the developer replies, run `intent wallet link shop --finish`");
     expect(prompt).toContain("4. When the developer replies to that block (or right away, if you showed none), run `intent wallet status --wait-budget --timeout 540`");
     expect(prompt).toContain("5. When the developer replies, call `get_approval_status`.");
@@ -311,9 +311,9 @@ describe("onboarding prompt and policy-advisor skill", () => {
     // The opening does not end the turn: the developer would have to nudge the agent to start.
     expect(prompt).not.toContain("this opening, and nothing else");
     // The developer matches the check code the agent shows with the one on the confirm page; create_cart returns it.
-    expect(prompt).toContain("> Open the page, check the item, total and check code, then approve with your passkey.\n>\n> <the approval link, as a clickable link>\n>\n> <the check code>\n");
+    expect(prompt).toContain("> Open the page, check the item, total and check code, then approve with your passkey.\n>\n> <the approval link, as a clickable link>\n>\n> Check code: <the check code>\n");
     expect(read("src/mcp/tools.ts")).toContain("Check code: ${result.check_code}");
-    expect(prompt).toContain("> Open this link and approve intent in Shop.\n>\n> The code is already filled in if you use this link.\n");
+    expect(prompt).toContain("> Open this link and approve intent in Shop; the code is already filled in.\n>\n> <the link, as a clickable link>\n>\n> Code: <the code>\n");
     expect(prompt).toContain("When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (an amount in another currency), and this note");
     expect(prompt).toContain("send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.");
     const shop = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
@@ -339,7 +339,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
   }
 
   /** A line of a block that carries a link, a code or a command, not words: a placeholder, a URL or a code span. */
-  const carrier = (line: string): boolean => /^> (<.*>|\{\{[A-Z_]+\}\}|https?:\/\/\S+|`[^`]+`)$/.test(line);
+  const carrier = (line: string): boolean => /^> ((?:[A-Z][a-z ]+: )?<.*>|\{\{[A-Z_]+\}\}|https?:\/\/\S+|`[^`]+`)$/.test(line);
 
   /** A step that runs a command which sees a developer action by itself. */
   const DETECTS = /(run|call) `(intent wallet link shop --finish|intent wallet status --wait-budget|get_approval_status)/;
@@ -465,11 +465,12 @@ describe("onboarding prompt and policy-advisor skill", () => {
   it("ends with one card from the text the tools return: ordered only when the result says so, then intent log and intent pause", () => {
     const prompt = read(PROMPT);
     const end = prompt.slice(prompt.indexOf("Setup is done."));
-    expect(end).toMatch(/> \*\*Done:\*\* <outcome>, from <store>, total <total>\n>\n> `intent log` shows what the gateway sent\.\n>\n> `intent pause` stops every purchase that goes through intent and isn't paid yet\.\n$/);
+    // The developer runs no intent command themselves (it is an npx line); the agent does, when asked.
+    expect(end).toMatch(/> \*\*Done:\*\* <outcome>, from <store>, total <total>\n>\n> Ask me any time to run `intent log` \(what the gateway sent\) or `intent pause`\.\n>\n> `intent pause` stops every purchase that goes through intent and isn't paid yet\. For a hard stop, also turn off agent payments in the Shop app\.\n$/);
     // The Pause line is ADR-0023's honest line, as `intent pause` prints it (its first sentence), word for word.
     const honest = /export const HONEST_LINE = "([^"]*)"/.exec(read("src/cli/pause.ts"))?.[1] ?? "";
     expect(honest.startsWith("`intent pause` stops every purchase that goes through intent and isn't paid yet. ")).toBe(true);
-    expect(end).toContain(`> ${honest.slice(0, honest.indexOf(". ") + 1)}\n`);
+    expect(end).toContain(`> ${honest}\n`);
     expect(end).not.toContain("not yet approved");
     // Invariant 5: ordered (and an order number) only from the result; a hand-off is a hand-off; anything else is not completed.
     expect(end).toContain("`ordered`, with `order <number>` only when the `get_approval_status` result names one (`One-tap: ordered …, order <number>`, or \"placed the order (order <number>)\")");

@@ -110,7 +110,7 @@ describe("intent log: repeated calls", () => {
     const out = formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data" });
     const calls = out.split("\n").filter((l) => l.includes("  call  "));
     expect(calls).toHaveLength(3);
-    expect(calls[0]).toMatch(/Shop token · device_code +⚠ answered 400 \(no signed receipt\) ×3$/);
+    expect(calls[0]).toMatch(/Shop token · device_code +⚠ answered 400 \(no signed receipt\) ×3, until \d\d:\d\d:\d\d$/);
     // The 200 that ended the wait is its own line, and so is a different call.
     expect(calls[1]).toMatch(/Shop token · device_code +✓ answered 200 \(no signed receipt\)$/);
     expect(calls[2]).toMatch(/Shop get_checkout · checkout_id +✓ answered 200 \(no signed receipt\)$/);

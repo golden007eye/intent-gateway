@@ -397,7 +397,7 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
         `sent, not acknowledged: ${String(counts.unacknowledged - notSent)}`,
         `discarded: ${String(counts.discarded)}`,
         ...(observed.size === 0 ? [] : [`answers summarised in the log (kept here, never sent): ${String(observed.size)}`]),
-        ...(counts.redactions === 0 ? [] : [`credentials sent (the log keeps only their sha256): ${String(counts.redactions)}`]),
+        ...(counts.redactions === 0 ? [] : [`credential values sent, repeats counted (the log keeps only their sha256): ${String(counts.redactions)}`]),
         ...disclosureWarnings,
         ...disclosureFailures,
       ],

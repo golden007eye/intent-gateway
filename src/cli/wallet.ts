@@ -167,7 +167,7 @@ function accountLines(name: string, rail: WalletRail, account: WalletAccount): s
   if (budget === null) {
     return [`${name} budget: ${name} shows none for this connection, so one-tap is unavailable; turn on "Allow agent to pay" with a budget in the ${name} app`];
   }
-  return [`${name} budget left for the gateway: ${amountText(budget)}`];
+  return [`${name} agent payments left for the gateway: ${amountText(budget)}`];
 }
 
 /** How often `wallet status --wait-budget` reads the account, and the longest it waits by default (and at most). */
@@ -314,7 +314,7 @@ export async function walletWaitBudget(io: Io, config: Config, timeoutText: stri
     throw new CliError(`--timeout takes whole seconds from 1 to ${String(BUDGET_WAIT_MAX_S)}`, 2);
   }
   if (!(await hasSecret(config.dataDir, rail))) {
-    line(io.stderr, `intent: no ${name} wallet is linked, so there is no budget to wait for; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail} --start`);
+    line(io.stderr, `intent: no ${name} wallet is linked, so there are no agent payments to wait for; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail} --start`);
     return 1;
   }
   warn(io, config);
@@ -461,7 +461,7 @@ export type LinkMode = "full" | "start" | "finish";
  * developer see the code while the sign-in is still open.
  */
 export async function walletLink(io: Io, config: Config, rail: string, mode: LinkMode = "full"): Promise<number> {
-  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
+  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; the only wallet is ${WALLET_RAILS.join(", ")}`, 2);
   warn(io, config);
   if (mode === "finish") return finishLink(io, config, rail);
   // The key comes first, so a setup that cannot keep the tokens (the Docker image without a key secret) stops before
@@ -723,7 +723,7 @@ function delay(ms: number): Promise<void> {
 
 /** Opens the chain, deletes the rail's vault file, then chains the unlink. Exit 0 also when nothing was linked. */
 export async function walletUnlink(io: Io, config: Config, rail: string): Promise<number> {
-  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
+  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; the only wallet is ${WALLET_RAILS.join(", ")}`, 2);
   const name = RAIL_NAMES[rail];
   const notLinked = (): number => {
     line(io.stdout, `${name} wallet: not linked; nothing to unlink`);
@@ -793,7 +793,7 @@ export const CHECK_DEFAULT_SINCE = "7d";
  * Exit 1, with nothing sent, when no wallet is linked.
  */
 export async function walletCheck(io: Io, config: Config, rail: string, sinceText: string | undefined): Promise<number> {
-  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
+  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; the only wallet is ${WALLET_RAILS.join(", ")}`, 2);
   const name = RAIL_NAMES[rail];
   const since = parseSince(sinceText ?? CHECK_DEFAULT_SINCE, (io.now ?? Date.now)(), false);
   if (!(await hasSecret(config.dataDir, rail))) {

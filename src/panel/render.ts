@@ -325,7 +325,7 @@ function logFilters(m: PanelModel): string {
     `<p class="lede">The full local log, entry by entry and field by field: what the gateway logged before each send and what came back.</p>` +
     `<form class="filters" id="log-filters" hidden role="search" aria-label="Filter the server log">` +
     `<label>Kind <select id="log-kind"><option value="">all</option>${m.logKinds.map((k) => `<option>${esc(k)}</option>`).join("")}</select></label>` +
-    `<label>Find <input id="log-q" type="search" autocomplete="off" spellcheck="false" placeholder="field, value or seq"></label>` +
+    `<label>Find <input id="log-q" type="search" autocomplete="off" spellcheck="false" placeholder="field, value or entry #"></label>` +
     `<p class="small" id="log-shown" aria-live="polite"></p></form>`
   );
 }

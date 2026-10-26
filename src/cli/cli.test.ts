@@ -179,10 +179,10 @@ describe("--version and --help", () => {
     expect(result.err.split("\n")[0]).toMatch(/^intent: .*(intent --help|unknown command)/);
   });
 
-  it("an unknown command also prints the help", async () => {
+  it("an unknown command is one line that names --help, not the whole help", async () => {
     const result = await setup().run(["frobnicate"]);
-    expect(result.err).toContain('intent: unknown command "frobnicate"');
-    expect(result.err).toContain(help());
+    expect(result.code).toBe(2);
+    expect(result.err).toBe('intent: unknown command "frobnicate"; run intent --help for the list\n');
   });
 
   it.each([[["log", "--bogus"]], [["log", "--http"]], [["log", "extra"]], [["policy", "add"]]])("refuses %j with one usage line and exit 2", async (argv) => {
@@ -505,7 +505,7 @@ describe("intent policy add", () => {
   it("an unknown library policy is one line with its fix", async () => {
     const result = await setup().run(["policy", "add", "no-such-policy", "--yes"]);
     expect(result.code).toBe(1);
-    expect(result.err).toMatch(/^intent: policy library: no-such-policy is not in the library bundled with this gateway, which has block-dropship, daily-40, .*per-order-20.*, zip-only; run it again with one of those names\n/);
+    expect(result.err).toMatch(/^intent: policy library: no-such-policy is not in the library bundled with this gateway, which has block-dropship, daily-40, .*per-order-20.*, zip-only; pick a library policy, such as per-order-20 or weekly-40\n/);
     expect(result.err.trimEnd().split("\n")).toHaveLength(1);
   });
 });
@@ -911,7 +911,7 @@ describe("serve failures", () => {
     const result = await setup().run([], { input: `${JSON.stringify(initialize)}\n`, io: noDns });
     expect(result.code).toBe(1);
     expect(result.err).toBe(`intent: ${STAGING_DNS}\n`);
-    expect(JSON.parse(result.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent-gateway could not start: ${STAGING_DNS}` } });
+    expect(JSON.parse(result.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent could not start: ${STAGING_DNS}` } });
     // --http and a terminal print to stderr only; stdout stays empty.
     expect((await setup().run(["serve", "--http"], { input: `${JSON.stringify(initialize)}\n`, io: noDns })).out).toBe("");
   });
@@ -934,7 +934,7 @@ describe("serve failures", () => {
       expect(result.err).toBe(`intent: ${EMPTY_PIN_HINT}\n`);
       expect(result.out).toBe("");
       const mcp = await s.run([], { input: `${JSON.stringify(initialize)}\n` });
-      expect(JSON.parse(mcp.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent-gateway could not start: ${EMPTY_PIN_HINT}` } });
+      expect(JSON.parse(mcp.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent could not start: ${EMPTY_PIN_HINT}` } });
       expect(existsSync(join(s.dir, "audit.jsonl"))).toBe(false);
     });
   });
