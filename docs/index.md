@@ -3,7 +3,7 @@
 intent-gateway is a self-hosted gateway, run with npx or Docker, that gives AI agents real shopping under a privacy policy the developer controls. It is the developer channel of [intent](https://intentai.shop): the agent searches and prepares a checkout, a person approves each purchase with a passkey, and the developer's own Shop account pays.
 
 !!! note "Pre-alpha preview"
-    Preview releases are on npm (`intent-gateway@next`) and GHCR. [Demo mode](demo.md) needs nothing: no invite, no account. Real purchases go through the Intent Cloud host this preview uses by default and need an invite: approving needs an Intent Cloud passkey, made at an invite-gated sign-up. They also need your own Shop account, linked with `INTENT_SHOP_CLIENT_ID` set explicitly, because Shop does not accept the gateway's own client yet (a formal registration is pending). Intent Cloud enforces a ceiling of $50 per order and $100 per week, in US dollars only. Anything not built yet is marked *planned*.
+    Preview releases are on npm (`intent-gateway@next`) and GHCR. [Demo mode](demo.md) needs nothing: no invite, no account. Real purchases go through the Intent Cloud host this preview uses by default and need an invite: approving needs an Intent Cloud passkey, made at an invite-gated sign-up. They also need your own Shop account, linked with `INTENT_SHOP_CLIENT_ID` set explicitly, because Shop does not accept the gateway's own client yet (a formal registration is pending). Intent Cloud enforces a ceiling of $50 per order and $100 per week, and one per other currency it lists. Purchases ship to the US, Canada and Australia, outside the US through the linked Shop wallet. Anything not built yet is marked *planned*.
 
 ## How it fits together
 
@@ -27,7 +27,7 @@ intent-gateway is a self-hosted gateway, run with npx or Docker, that gives AI a
 - It does not store or forward the buyer's name, postal address or card, with one tap or without.
 - It holds no money: no custody, no crypto wallet.
 - It cannot buy without a person: every purchase needs one passkey-signed Approval.
-- It does not convert currencies: in the preview, purchases are in US dollars only.
+- It does not convert currencies: a purchase is in the ship-to country's currency, and only the policy's limits are scaled to it.
 
 ## Where to go next
 

@@ -23,7 +23,7 @@ export interface PurchaseChain {
   close(): Promise<void>;
 }
 
-const SHOES = { category: "running-shoes", budget_usd: 200, zip: "94103" } as const;
+const SHOES = { category: "running-shoes", budget: 200, country: "US", postcode: "94103" } as const;
 
 export async function purchaseChain(): Promise<PurchaseChain> {
   const fake = await startFakeCloud({});

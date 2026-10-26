@@ -59,7 +59,7 @@ $ ssh -L 8788:127.0.0.1:8788 <host>
 
 ## A one-tap run
 
-Ask your agent for stickers shipped to ZIP 94107, under $20. This is what a run printed, shortened.
+Ask your agent for stickers shipped to ZIP 94107 in the US, under $20. This is what a run printed, shortened.
 
 `find_offers` searches the demo Shop from the gateway. The CBD product is hidden by the bundled policy:
 

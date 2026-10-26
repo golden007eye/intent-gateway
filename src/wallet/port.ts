@@ -68,6 +68,8 @@ export interface WalletAccount {
   /** The rail's own page where the buyer manages this connection (Shop: an https URL on shop.app), or null. */
   readonly manageUrl: string | null;
   readonly connected: boolean;
+  /** The account's currency as the rail names it (ISO 4217), when it names one: what a budget would be in. */
+  readonly currency?: string | null;
 }
 
 export type BudgetRenewal = "daily" | "weekly" | "monthly" | "yearly";

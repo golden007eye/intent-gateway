@@ -126,6 +126,7 @@ describe("projectAccount (S1 step 4 shape)", () => {
       budgetLimit: { amount: { amountMinor: 1500, currency: "USD" }, renewal: "monthly", renewsAt: "2026-11-01T00:00:00Z" },
       manageUrl: "https://shop.app/account/connections",
       connected: true,
+      currency: "USD",
     });
     const text = JSON.stringify(projected);
     for (const value of [...Object.values(PII), "4242", "Apt 4", "6f9c1e2a"]) expect(text).not.toContain(value);
@@ -144,7 +145,7 @@ describe("projectAccount (S1 step 4 shape)", () => {
 
   it("the connection removed in the Shop app (S1 step 12b warnings): not connected, no budget", () => {
     for (const code of ["claims_unavailable", "addresses_unavailable", "budget_unavailable", "payment_instruments_unavailable"]) {
-      expect(projectAccount(account({ messages: [{ type: "warning", code, content: IDENTITY }] }))).toEqual({ budgetRemaining: null, budgetLimit: null, manageUrl: "https://shop.app/account/connections", connected: false });
+      expect(projectAccount(account({ messages: [{ type: "warning", code, content: IDENTITY }] }))).toEqual({ budgetRemaining: null, budgetLimit: null, manageUrl: "https://shop.app/account/connections", connected: false, currency: null });
     }
     expect(projectAccount(account({ messages: [{ type: "warning", code: "something_else" }] })).connected).toBe(true);
   });

@@ -32,3 +32,19 @@ describe("vector o6: binding-v2, every case", () => {
     expect(bindingV2(snapshot, { checkout_ref_hash: `sha256:${"0".repeat(64)}` }, base).checks.checkout_ref).toBe("differs");
   });
 });
+
+describe("binding-v2 check 4 outside the US: the observed postcode coarsened by the snapshot country's rule", () => {
+  const base = { mode: "shop_agent", ship_to_optional: false } as const;
+  it.each([
+    ["CA", "K1A", "K1A 0B1", "K1B 0B1"],
+    ["AU", "2000", "2000", "2001"],
+  ])("%s: the same area matches, another area or country differs", (country, coarse, same, other) => {
+    const s = SnapshotV4.parse({ ...(O6.snapshot as object), ship_to: { country, postal_code_coarse: coarse }, currency: country === "CA" ? "CAD" : "AUD" });
+    expect(bindingV2(s, { ship_to_country: country, ship_to_postal_code: same }, base).checks.ship_to).toBe("match");
+    expect(bindingV2(s, { ship_to_country: country, ship_to_postal_code: other }, base).checks.ship_to).toBe("differs");
+    expect(bindingV2(s, { ship_to_country: "US", ship_to_postal_code: same }, base).checks.ship_to).toBe("differs");
+    // The total in the snapshot's currency only: the same integer in USD differs.
+    expect(bindingV2(s, { final_total: { amount_minor: s.totals.total, currency: s.currency } }, base).checks.total).toBe("match");
+    expect(bindingV2(s, { final_total: { amount_minor: s.totals.total, currency: "USD" } }, base).checks.total).toBe("differs");
+  });
+});

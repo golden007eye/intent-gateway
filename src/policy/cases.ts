@@ -19,6 +19,7 @@ const outbound = z.discriminatedUnion("kind", [
     must_haves: z.array(text).max(50).optional(),
     budget_usd: z.number().optional(),
     ship_to_zip: text.optional(),
+    ship_to_country: text.optional(),
     history: z.array(z.unknown()).optional(),
   }),
   z.strictObject({

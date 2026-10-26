@@ -20,16 +20,18 @@ import {
   type ShopOfferView,
 } from "../gateway/index.ts";
 
-const LIMITS = "US delivery only.";
+// Which countries are shipped to comes from Intent Cloud at start; a refusal names them, so nothing is listed here.
+const LIMITS = "Ships to the countries the gateway supports; if find_offers refuses a country, tell the user what it says.";
 
 /** The tools in the order they are listed, with descriptions an agent reads to decide what to pass. */
 export const TOOLS = {
   find_offers: {
     schema: FindOffersInput,
     description:
-      "Find physical products that ship to a US address. Pass only what the user said: an exact product or a kind of " +
-      "product, any must-haves, their budget in US dollars and their 5-digit US ZIP code. Never guess a ZIP code or a " +
-      "budget. If the result lists missing details, ask the user only for those, then call again. " +
+      "Find physical products that ship to the user's address. Pass only what the user said: an exact product or a kind " +
+      "of product, any must-haves, their budget in the currency of the ship-to country, the country as a two-letter " +
+      "code and the postcode. Never guess a country, a postcode or a budget. If the result lists missing details, ask " +
+      "the user only for those, then call again. " +
       `${LIMITS} The result ends with what this gateway sent (to Intent Cloud, or to Shop when the gateway searches a ` +
       "linked Shop wallet itself) and what it blocked.",
   },
@@ -155,7 +157,8 @@ function offerLine(offer: Offer): string {
 }
 
 function shopOfferLine(offer: ShopOfferView): string {
-  const price = offer.price.currency === "USD" ? money({ amount_minor: offer.price.amount_minor, currency: "USD" }) : `${String(offer.price.amount_minor)} ${offer.price.currency} minor units`;
+  // Every currency a search is in has two decimals (the contract's currency table lists only those).
+  const price = minorText(offer.price.amount_minor, offer.price.currency);
   return `- ${offer.title} (${offer.variant}) from ${offer.store}: ${price}, shipping shown at checkout, in stock. offer_handle: ${offer.offer_handle}`;
 }
 

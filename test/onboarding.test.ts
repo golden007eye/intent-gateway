@@ -299,7 +299,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain("Do not narrate commands or paste their output. Between developer actions, say only the status line:");
     expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names.");
     expect(prompt).toContain("> Open this link and approve intent in Shop.\n>\n> The code is already filled in if you use this link.\n");
-    expect(prompt).toContain("When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (an amount in another currency), and this note");
+    expect(prompt).toContain("When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (why it names no amount), and this note");
     expect(prompt).toContain("send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.");
     const shop = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     expect(codeOf(shop).filter((c) => /wallet link shop$/.test(c))).toEqual([]);
@@ -408,17 +408,16 @@ describe("onboarding prompt and policy-advisor skill", () => {
     for (const file of FILES) expect([...read(file).matchAll(/[✓✔☑✅]/g)].length, file).toBe(1);
   });
 
-  it("the purchase asks for what find_offers takes: a US ZIP and a budget, promising no other country", () => {
+  it("the purchase asks for what find_offers takes: a country, a postcode and a budget, in the gateway's own words", () => {
     const prompt = read(PROMPT);
     const step8 = prompt.slice(prompt.indexOf("## Step 8"), prompt.indexOf("## Step 9"));
-    expect(step8).toContain("> Add your 5-digit US ZIP code: this preview ships to US addresses only.");
-    expect(step8).toContain("with `zip` and `budget_usd` as they gave them");
-    expect(step8).not.toMatch(/postcode|Canada|Australia|\bCA\b|\bAU\b/);
-    // What the gateway takes today: the find_offers fields, a 5-digit ZIP, and ship_to US.
-    expect(Object.keys(FindOffersInput.shape).sort()).toEqual(["budget_usd", "category", "must_haves", "product", "zip"]);
+    expect(step8).toContain("> Where should it ship? Country and postcode.");
+    expect(step8).toContain("with `country` (its two-letter code), `postcode` and `budget` as they gave them");
+    expect(step8).not.toMatch(/US addresses only|ZIP/);
+    // What the gateway takes today: the find_offers fields, and the same ask when the ship-to is missing.
+    expect(Object.keys(FindOffersInput.shape).sort()).toEqual(["budget", "category", "country", "must_haves", "postcode", "product"]);
     const gateway = read("src/gateway/gateway.ts");
-    expect(gateway).toContain("const US_ZIP = /^[0-9]{5}$/;");
-    expect(gateway).toContain('ship_to: { country: "US", postal_code: zip }');
+    expect(gateway).toContain('missing.push({ field: "ship_to", ask: "Where should it ship? Country and postcode." });');
   });
 
   it("polls get_approval_status only while the result says to, and relays any final result as it is", () => {
@@ -482,30 +481,33 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(step5).toContain("- `Agent payments on: …` (they are already on): skip the block below");
     expect(wallet).toContain("`Agent payments on: ${moneyText(limit.amount)}${per}, ${moneyText(account.budgetRemaining)} left`");
     // 2. Off: the Shop page, then what to tap.
-    expect(step5).toContain("- Agent payments are off: a Shop page, then `Tap …, turn on Allow agent to pay for me, enter $<amount>.`");
-    expect(wallet).toContain("`Tap ${connection}, turn on Allow agent to pay for me, enter ${dollars(advice.maxMinor)}.`");
+    expect(step5).toContain("- Agent payments are off: a Shop page, then `Tap …, turn on Allow agent to pay for me, enter <amount>.`, with the amount it prints");
+    expect(wallet).toContain("`Tap ${connection}, turn on Allow agent to pay for me, enter ${capText(advice.maxMinor, advice.currency)}.`");
     // 3. On but low: the Shop page, then raise it; --wait-budget may print the same lines when it starts.
-    expect(step5).toContain("- Agent payments are on but too little is left for one purchase: a Shop page, then `Agent payments are on, but only $<left> is left; raise it to $<amount>.`");
-    expect(wallet).toContain("`Agent payments are on, but only ${dollars(account.budgetRemaining?.amountMinor ?? 0)} is left; raise it to ${dollars(advice.maxMinor)}.`");
+    expect(step5).toContain("- Agent payments are on but too little is left for one purchase: a Shop page, then `Agent payments are on, but only <left> is left; raise it to <amount>.`");
+    expect(wallet).toContain("`Agent payments are on, but only ${leftText(account.budgetRemaining)} is left; raise it to ${max}.`");
     expect(step5).toContain("`intent wallet status --wait-budget` can print the same low lines when it starts; show them the same way");
     // 4. On, limit already high enough, budget spent this period: nothing to raise, so a status line, not a Your turn block.
     expect(step5).toContain(
-      "- Agent payments are on and the limit is high enough, but this period's amount is spent: one line that starts `Agent payments are on, but only $<left> is left until Shop renews it` and ends `so wait for that renewal rather than raising it.`",
+      "- Agent payments are on and the limit is high enough, but this period's amount is spent: one line that starts `Agent payments are on, but only <left> is left until Shop renews it` and ends `so wait for that renewal rather than raising it.`",
     );
     expect(step5).toContain("say that line as a one-line status, not a **Your turn** block, and add in one line that until Shop renews it, purchases are handed off to Shop's checkout page. Then skip 4 and go to step 6.");
-    expect(wallet).toContain("`Agent payments are on, but only ${dollars(account.budgetRemaining?.amountMinor ?? 0)} is left ${until}; the limit is already at least the suggested ${dollars(advice.maxMinor)}, so wait for that renewal rather than raising it.`");
+    expect(wallet).toContain("`Agent payments are on, but only ${leftText(account.budgetRemaining)} is left ${until}; the limit is already at least the suggested ${max}, so wait for that renewal rather than raising it.`");
     expect(wallet).toContain("return `until Shop renews it at ${limit.renewsAt}`;");
     expect(step5).toContain("For the last two, show the last two lines `--finish` printed, word for word, and nothing else");
     // --wait-budget: success, too high, timeout.
     expect(step5).toContain("When it prints `Agent payments on: …`, say that line");
     expect(step5).toContain("any line it prints that starts `intent: warning: this limit is above`");
-    expect(wallet).toContain("`intent: warning: this limit is above ${moneyText({ amountMinor: advice.maxMinor, currency: \"USD\" })}");
+    expect(wallet).toContain("`intent: warning: this limit is above ${moneyText({ amountMinor: advice.maxMinor, currency })}");
     expect(step5).toContain("If it prints a line that starts `intent: no Shop agent payments seen after` or `intent: Shop agent payments are still low after`, say that line");
     expect(wallet).toContain("`intent: no ${name} agent payments seen after ${String(timeoutS)} s");
     expect(wallet).toContain("`intent: ${name} agent payments are still low after ${String(timeoutS)} s");
-    // Another currency: the success line plus a Note line, which the agent passes on.
-    expect(step5).toContain("or `Note:` (an amount in another currency)");
-    expect(wallet).toContain("`Note: ${RAIL_NAMES[rail]} shows this budget in ${limit.amount.currency};");
+    // No amount to suggest (a currency the table lacks, or no ceilings read): the success line plus a Note line.
+    expect(step5).toContain("or `Note:` (why it names no amount)");
+    expect(wallet).toContain("line(io.stdout, printable(`Note: ${advice}`));");
+    // The ceilings not read: --finish and --wait-budget both exit 1 with the one try-again line.
+    expect(step5).toContain("prints a line that starts `intent: the ceilings Intent Cloud returns could not be read`, it exits 1");
+    expect(wallet).toContain("`the ceilings Intent Cloud returns could not be read from ${host} (${why}), so the amount left was not checked; try again`");
     expect(step5).not.toContain("INTENT_SHOP_CLIENT_ID");
   });
 
@@ -529,7 +531,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(step5).not.toMatch(/Shop enforces/);
     // No page, amount or period of the prompt's own: those come from the CLI, quoted only as its output patterns.
     expect(step5).not.toMatch(/https?:\/\/|\$\d|month/);
-    expect(step5.split("\n").filter((l) => l.includes("Allow agent to pay")).every((l) => l.includes("`Tap …, turn on Allow agent to pay for me, enter $<amount>.`"))).toBe(true);
+    expect(step5.split("\n").filter((l) => l.includes("Allow agent to pay")).every((l) => l.includes("`Tap …, turn on Allow agent to pay for me, enter <amount>.`"))).toBe(true);
     // No amount to choose; "budget" appears only in the flag (--wait-budget).
     expect(step5).not.toMatch(/[Ss]uggest|(?<!-)\bbudget\b/);
     const skill = read(SKILL);

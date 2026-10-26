@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readChain } from "../store/index.ts";
 import { saveSecret, vaultPath, WalletKey } from "../wallet/index.ts";
 import { type FakeShop, startFakeShop } from "../wallet-shop-fake/index.ts";
+import { type FakeCloud, LIVE_CURRENCIES, startFakeCloud } from "../cloud-fake/index.ts";
 import { type Io, main } from "./index.ts";
 
 const TOKEN = "shop-refresh-token-do-not-print-0123456789";
@@ -88,19 +89,26 @@ describe("intent wallet status", () => {
 
   describe("with a Shop client set: one get_account through the log (S1 shapes)", () => {
     let shop: FakeShop | undefined;
+    // Intent Cloud's meta, read for the ceilings when Shop shows a budget.
+    let cloud: FakeCloud | undefined;
     afterEach(async () => {
       await shop?.close();
+      await cloud?.close();
     });
     const statusOf = async (faults: Parameters<typeof startFakeShop>[0]) => {
       shop = await startFakeShop(faults);
+      cloud = await startFakeCloud({ currencies: LIVE_CURRENCIES });
       const s = setup();
       const vault = JSON.stringify({ v: 1, client_id: shop.clientId, access_token: shop.accessToken, refresh_token: shop.refreshToken });
       await saveSecret(s.dir, "shop", new WalletKey(s.keyBytes, "test"), vault);
-      const r = await s.run(["wallet", "status"], {
+      const trustKeys = join(s.dir, "..", "keys.json");
+      writeFileSync(trustKeys, JSON.stringify({ rootKeys: [cloud.keys.rootPin] }));
+      const r = await s.run(["wallet", "status", "--trust-keys", trustKeys], {
         INTENT_WALLET_KEY_FILE: join(s.dir, "..", "wallet.key"),
         INTENT_SHOP_CLIENT_ID: shop.clientId,
         INTENT_SHOP_AUTH_URL: shop.authUrl,
         INTENT_SHOP_MCP_URL: shop.mcpUrl,
+        INTENT_CLOUD_URL: cloud.url,
       });
       return { r, s };
     };
@@ -113,6 +121,13 @@ describe("intent wallet status", () => {
         ["session", undefined],
         ["disclosure", "get_account"],
         ["response", undefined],
+        // The ceilings: Intent Cloud's meta, then its key statement, so `intent verify` can check the meta's receipt (a session of its own).
+        ["session", undefined],
+        ["disclosure", "getMeta"],
+        ["receipt", undefined],
+        ["disclosure", "getKeyStatement"],
+        ["receipt", undefined],
+        ["keys", undefined],
       ]);
       expect(r.out + r.err).not.toMatch(/jane|Springfield|4242/i);
     });
