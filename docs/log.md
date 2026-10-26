@@ -11,31 +11,31 @@
 | `intent log --json` | One JSON object per action and per line, for scripts and `jq` (schema below). |
 
 ```text
-intent log · DEMO chain (test keys) · ~/.local/share/intent-gateway/demo · 43 entries
+intent log · DEMO (test keys) · ~/.local/share/intent-gateway/demo · 43 entries
 
 Sunday 18 October 2026
 16:57:39  start     gateway started · keys signed by cloud-root-1 · valid until 2027-…  ✓ 2 receipts
-16:57:39  call      Shop search_catalog · catalog.context.ad…  ✓ answered 200 (no receipt: unsigned)
-16:57:39  call      Shop create_checkout · checkout.line_ite…  ✓ answered 200 (no receipt: unsigned)
-16:57:39  call      Shop get_checkout · id, shop, params._me…  ✓ answered 200 (no receipt: unsigned)
-16:57:39  call      Shop get_account · params._meta.io.model…  ✓ answered 200 (no receipt: unsigned)
+16:57:39  call      Shop search_catalog · catalog.context.ad…  ✓ answered 200 (no signed receipt)
+16:57:39  call      Shop create_checkout · checkout.line_ite…  ✓ answered 200 (no signed receipt)
+16:57:39  call      Shop get_checkout · id, shop               ✓ answered 200 (no signed receipt)
+16:57:39  call      Shop get_account                           ✓ answered 200 (no signed receipt)
 16:57:39  keys      key reads                                             ✓ receipt
 16:57:39  cart      at most $8.99                                         → approval link  ✓ receipt
 16:57:40  status    approval ap_boLs…Cy1b                   → Intent Cloud says approved · ✓ receipt
 16:57:40  approved  $8.99 · passkey 99ef…0ea3 (pinned now)                ✓ passkey proof checked
-16:57:40  call      Shop get_account · params._meta.io.model…  ✓ answered 200 (no receipt: unsigned)
-16:57:40  call      Storefront meta_json                       ✓ answered 200 (no receipt: unsigned)
-16:57:40  call      Shop get_checkout · id, shop, params._me…  ✓ answered 200 (no receipt: unsigned)
+16:57:40  call      Shop get_account                           ✓ answered 200 (no signed receipt)
+16:57:40  call      Storefront meta_json                       ✓ answered 200 (no signed receipt)
+16:57:40  call      Shop get_checkout · id, shop               ✓ answered 200 (no signed receipt)
 16:57:40  outcome   outcome report sent to Intent Cloud · approval ap_boLs…Cy1b  ✓ receipt
-16:57:40  call      Shop get_checkout · id, shop, params._me…  ✓ answered 200 (no receipt: unsigned)
-16:57:40  call      Shop complete_checkout · checkout.paymen…  ✓ answered 200 (no receipt: unsigned)
+16:57:40  call      Shop get_checkout · id, shop               ✓ answered 200 (no signed receipt)
+16:57:40  call      Shop complete_checkout · checkout.paymen…  ✓ answered 200 (no signed receipt)
 16:57:40  outcome   outcome report sent to Intent Cloud · approval ap_boLs…Cy1b  ✓ receipt
 
 Sent to Intent Cloud only: account_key.crv, account_key.kty, account_key.x, binding.checks.checkout…
 Sent to Shop only: catalog.context.address_country, catalog.context.currency, catalog.filters.price…
 Sent to Storefront: no request fields.
 
-16 actions · 1 cart · 1 status check · 1 approval · 9 wallet calls · 6 receipts · 9 answered unsign…
+16 actions · 1 cart · 1 status check · 1 approval · 9 wallet calls · 6 receipts · 9 answered without a receipt
 Details: log --demo -v · Machine-readable: log --demo --json · Integrity: verify --demo
 Run each as: npx -y intent-gateway@next <command>
 ```
@@ -46,7 +46,7 @@ Each command in the last line starts with the invocation that runs this gateway 
 
 What came back (`→ approval link`, `→ Intent Cloud says approved`, `rejected`, and for an Intent Cloud search `→ 6 offers`) comes from the `observed` entries the gateway writes after each answer with a verified receipt: a summary of what Intent Cloud returns (the body is not covered by the receipt), kept on this machine and never sent (see [What came back](#what-came-back)). The `✓ receipt` after it is about the request: a receipt covers the request and the status it came back with, not the offers or the state in the body. A chain written before observations existed shows the values sent instead (`offer of_5mOm…t4wK ×1 · at most $41.98 · ZIP 94103`) and no `→ offers` or state.
 
-Each line's outcome is what the chain records for its requests: `✓ receipt` (a receipt came back), `⚠ sent, no receipt`, `⚠ not sent: no connection was made`, `⚠ maybe sent, no answer recorded` (the gateway stopped first, or is still waiting), `✗ answer discarded: no valid receipt`, `✗ nothing sent` (blocked), `✗ refused` (an answer that did not match what was asked), and for a call to a wallet destination `✓ answered 200 (no receipt: unsigned)` (`⚠` when the status is 400 or more): the destination answered with that status, recorded in a response entry; a wallet signs no receipt. `✓ passkey proof checked` marks an Approval the gateway verified before it chained it; `intent verify` re-checks it. The line "Sent to Intent Cloud only" lists every field of the requests shown that left or may have left. Each wallet destination with a request shown gets a line of its own, "Sent to Shop only: …": its tool arguments by name, then the tool name and the JSON-RPC envelope, and how many credentials went with them (such as the Shop token), which the log holds only as digests. The lines say what was logged as sent, never what a destination does with it. "Never sent: your name, postal address, card" is printed only after the gateway's buyer-identity check finds none in their logged values; otherwise the line names the request where it found one, or says which requests it could not check.
+Each line's outcome is what the chain records for its requests: `✓ receipt` (a receipt came back), `⚠ sent, no receipt`, `⚠ not sent: no connection was made`, `⚠ maybe sent, no answer recorded` (the gateway stopped first, or is still waiting), `✗ answer discarded: no valid receipt`, `✗ nothing sent` (blocked), `✗ refused` (an answer that did not match what was asked), and for a call to a wallet destination `✓ answered 200 (no signed receipt)` (`⚠` when the status is 400 or more): the destination answered with that status, recorded in a response entry; a wallet signs no receipt. `✓ passkey proof checked` marks an Approval the gateway verified before it chained it; `intent verify` re-checks it. The line "Sent to Intent Cloud only" lists every field of the requests shown that left or may have left. Each wallet destination with a request shown gets a line of its own, "Sent to Shop only: …": its tool arguments by name, then the tool name and the JSON-RPC envelope, and how many credentials went with them (such as the Shop token), which the log holds only as digests. The lines say what was logged as sent, never what a destination does with it. "Never sent: your name, postal address, card" is printed only after the gateway's buyer-identity check finds none in their logged values; otherwise the line names the request where it found one, or says which requests it could not check.
 
 Times and date headers are in the local time zone; `--utc` shows UTC. On a terminal the lines are cut to its width with `…`, the values first so the outcome stays visible; piped, nothing is cut. Without a UTF-8 locale the symbols are plain ASCII (`ok`, `!`, `x`, `->`).
 
@@ -102,7 +102,7 @@ The chain also holds a `store_pair` entry for each verdict of the store pair che
 
 ## Pause
 
-`intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app. ([ADR-0023](adr/0023-pause.md).)
+`intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app. ([ADR-0023](adr/0023-pause.md).)
 
 The chain records a pause with five entry kinds, each appended before the step it records:
 

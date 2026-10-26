@@ -179,10 +179,10 @@ describe("--version and --help", () => {
     expect(result.err.split("\n")[0]).toMatch(/^intent: .*(intent --help|unknown command)/);
   });
 
-  it("an unknown command also prints the help", async () => {
+  it("an unknown command is one line that names --help, not the whole help", async () => {
     const result = await setup().run(["frobnicate"]);
-    expect(result.err).toContain('intent: unknown command "frobnicate"');
-    expect(result.err).toContain(help());
+    expect(result.code).toBe(2);
+    expect(result.err).toBe('intent: unknown command "frobnicate"; run intent --help for the list\n');
   });
 
   it.each([[["log", "--bogus"]], [["log", "--http"]], [["log", "extra"]], [["policy", "add"]]])("refuses %j with one usage line and exit 2", async (argv) => {
@@ -219,7 +219,7 @@ describe("intent verify with no chain yet (F-h)", () => {
     const result = await setup().run(["verify", "--demo"]);
     expect(result.code).toBe(0);
     expect(result.err).toBe("");
-    expect(result.out).toMatch(/^chain: ok\n {2}No entries yet: the gateway has sent nothing\. Start it with intent serve, or try intent demo\.\n/);
+    expect(result.out).toMatch(/^log: ok\n {2}No entries yet: the gateway has sent nothing\. Start it with intent serve, or try intent demo\.\n/);
     expect(result.out).toMatch(/\nverify: ok\n$/);
     expect(result.out).not.toMatch(/ENOENT|usage|FAILED/);
   });
@@ -267,7 +267,7 @@ describe("a policy that shares no ZIP says that search cannot work (F-h)", () =>
     const shown = await s.run(["policy", "show", "--demo"]);
     expect(shown.code).toBe(0);
     expect(shown.out).toMatch(NOTE);
-    expect(shown.out).toMatch(/to search again, delete .+policy\.yaml and run intent policy add per-order-60/);
+    expect(shown.out).toMatch(/to search again, delete .+policy\.yaml and run intent policy add per-order-20/);
     const doctor = await s.run(["doctor", "--demo"]);
     expect(doctor.out).toMatch(/^WARN {2}policy: with this policy the gateway sends no ZIP code/m);
     expect(doctor.out).not.toMatch(/^FAIL/m);
@@ -285,7 +285,7 @@ describe("intent log (golden)", () => {
     const result = await s.run(["log", "--utc"]);
     expect(result).toMatchObject({ code: 0, err: "" });
     expect(result.out.replace(s.dir, "<data>")).toMatchInlineSnapshot(`
-      "intent log · real chain · <data> · 12 entries
+      "intent log · real · <data> · 12 entries
 
       Thursday 15 October 2026 (UTC)
       12:00:00  keys      keys signed by cloud-root-1 · valid until 2027-01-13  ✓ recorded
@@ -310,7 +310,7 @@ describe("intent log (golden)", () => {
     await writeChain(join(s.dir, "demo"), undefined, { demo: true });
     const result = await s.run(["log", "--demo"]);
     expect(result).toMatchObject({ code: 0, err: "" });
-    expect(result.out.split("\n")[0]).toMatch(/^intent log · DEMO chain \(test keys\) · .+\/demo · 12 entries$/);
+    expect(result.out.split("\n")[0]).toMatch(/^intent log · DEMO \(test keys\) · .+\/demo · 12 entries$/);
     expect(result.out).toContain("Details: intent log --demo -v · Machine-readable: intent log --demo --json · Integrity: intent verify --demo\n");
     const verbose = await s.run(["log", "--demo", "-v"]);
     expect(verbose.out).toContain("#2: the local demo Intent Cloud acknowledged receiving it (demo chain, test keys) (status 200, signature verified)");
@@ -323,7 +323,7 @@ describe("intent log (golden)", () => {
       await append("session", DEMO_SESSION);
     });
     const result = await s.run(["log"]);
-    expect(result.out.split("\n")[0]).toContain("· real chain ·");
+    expect(result.out.split("\n")[0]).toContain("· real ·");
     expect(result.out).not.toContain("DEMO");
     const verbose = await s.run(["log", "-v"]);
     expect(verbose.out).toContain("#1: Intent Cloud acknowledged receiving it (status 200, signature verified)\n");
@@ -505,7 +505,7 @@ describe("intent policy add", () => {
   it("an unknown library policy is one line with its fix", async () => {
     const result = await setup().run(["policy", "add", "no-such-policy", "--yes"]);
     expect(result.code).toBe(1);
-    expect(result.err).toMatch(/^intent: policy library: no-such-policy is not in the bundled index; see the names in the policies\/ folder/);
+    expect(result.err).toMatch(/^intent: policy library: no-such-policy is not in the library bundled with this gateway, which has block-dropship, daily-40, .*per-order-20.*, zip-only; pick a library policy, such as per-order-20 or weekly-40\n/);
     expect(result.err.trimEnd().split("\n")).toHaveLength(1);
   });
 });
@@ -687,12 +687,12 @@ describe("intent doctor", () => {
     expect(result.out).toMatch(/^ok {4}contract: .+ serves .+, and its SHA256SUMS matches this gateway's$/m);
     expect(result.out).toMatch(/^ok {4}key statement: signed by cloud-root-1, valid until .+ \(\d+ days\)$/m);
     expect(result.out).toMatch(/^ok {4}policy: the bundled zip-only/m);
-    expect(result.out).toMatch(/^ok {4}lease: /m);
+    expect(result.out).toMatch(/^ok {4}write lock: /m);
     expect(result).toMatchObject({ code: 0 });
     // Its requests are in the disclosure log like any other, and the chain now reports its head.
     const kinds = (readChain(s.dir) as Entry[]).map((e) => e.kind);
     expect(kinds).toEqual(["session", "disclosure", "receipt", "disclosure", "receipt", "keys"]);
-    expect((await s.run(["doctor", "--trust-keys", trustFile(fake)])).out).toMatch(/^ok {4}chain: 6 entries, every hash links; head seq 5 hash [0-9a-f]{64}$/m);
+    expect((await s.run(["doctor", "--trust-keys", trustFile(fake)])).out).toMatch(/^ok {4}log: 6 entries, each linked to the one before; last entry #5, hash [0-9a-f]{64}$/m);
   });
 
   it("names the fix for an unpinned host, an unreachable host and a readable data dir", async () => {
@@ -792,7 +792,7 @@ describe("intent doctor", () => {
       const waiting = `still waiting for Intent Cloud at 127.0.0.1:${port}: no answer yet (it gives up after 400 ms)`;
       const serve = await setup({ INTENT_CLOUD_URL: silent.url }).run(["serve", "--trust-keys", trustFile(fake)], { input: "", io });
       expect(serve.code).toBe(1);
-      expect(serve.err).toMatch(new RegExp(`^intent-gateway: ${waiting.replace(/[().]/g, "\\$&")}\\nintent: .*no complete response within 400 ms.*\\n$`));
+      expect(serve.err).toMatch(new RegExp(`^intent: ${waiting.replace(/[().]/g, "\\$&")}\\nintent: .*no complete response within 400 ms.*\\n$`));
       const doctor = await setup({ INTENT_CLOUD_URL: silent.url }).run(["doctor", "--trust-keys", trustFile(fake)], { io });
       expect(doctor.err).toBe(`intent doctor: ${waiting}\n`);
       expect(doctor.out).toContain(`\nFAIL  Intent Cloud at 127.0.0.1:${port} cannot be reached (no complete response within 400 ms)`);
@@ -838,7 +838,7 @@ describe("intent verify and intent panel", () => {
       const s = setup({ INTENT_CLOUD_URL: fake.url });
       await s.run(["doctor", "--trust-keys", trustFile(fake)]);
       const result = await s.run(["verify", "--trust-keys", trustFile(fake)]);
-      expect(result.out).toMatch(/^chain: ok$/m);
+      expect(result.out).toMatch(/^log: ok$/m);
       expect(result.out).toMatch(/^verify: ok\n$/m);
       expect(result.out).toContain("self-check: not run: this install is not a published release (no build-info.json: running from source)");
       expect(result.code).toBe(0);
@@ -911,7 +911,7 @@ describe("serve failures", () => {
     const result = await setup().run([], { input: `${JSON.stringify(initialize)}\n`, io: noDns });
     expect(result.code).toBe(1);
     expect(result.err).toBe(`intent: ${STAGING_DNS}\n`);
-    expect(JSON.parse(result.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent-gateway could not start: ${STAGING_DNS}` } });
+    expect(JSON.parse(result.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent could not start: ${STAGING_DNS}` } });
     // --http and a terminal print to stderr only; stdout stays empty.
     expect((await setup().run(["serve", "--http"], { input: `${JSON.stringify(initialize)}\n`, io: noDns })).out).toBe("");
   });
@@ -934,7 +934,7 @@ describe("serve failures", () => {
       expect(result.err).toBe(`intent: ${EMPTY_PIN_HINT}\n`);
       expect(result.out).toBe("");
       const mcp = await s.run([], { input: `${JSON.stringify(initialize)}\n` });
-      expect(JSON.parse(mcp.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent-gateway could not start: ${EMPTY_PIN_HINT}` } });
+      expect(JSON.parse(mcp.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent could not start: ${EMPTY_PIN_HINT}` } });
       expect(existsSync(join(s.dir, "audit.jsonl"))).toBe(false);
     });
   });
@@ -972,7 +972,7 @@ describe("serve failures", () => {
     expect(doctor.code).toBe(0);
     // The hand-written chain's entries carry no receipts, so verify fails; it ran against the demo dir and test root.
     const verify = await s.run(["verify", "--demo"]);
-    expect(verify.out).toMatch(/^chain: ok\n {2}12 entries/m);
+    expect(verify.out).toMatch(/^log: ok\n {2}12 entries/m);
     expect(verify.out).toContain("self-check: skipped on request (demo mode)");
     // INTENT_DEMO=1 (the image's switch) is the same as --demo.
     const env = setup({ INTENT_DEMO: "1" });
@@ -1024,7 +1024,7 @@ describe("serve failures", () => {
     expect(result.err).not.toContain(token);
     expect(DEMO_CONFIRM_PORT).toBe(8788);
     // A detached container has no Ctrl-C: the last line says how to stop it (F-i).
-    expect(result.err).toMatch(/\nintent-gateway: serving; stop it with docker stop (<container>|[0-9a-f]{12})\n$/);
+    expect(result.err).toMatch(/\nintent: serving; stop it with docker stop (<container>|[0-9a-f]{12})\n$/);
     expect(result.err).not.toContain("Ctrl-C");
   });
 
@@ -1146,7 +1146,7 @@ describe("printed commands name the invocation that works for this install (devr
     // A long invocation (a path) is named once above the list; a short one leads every line.
     if (intent.length > 30) expect(text).toContain(`Commands (run each as: ${intent} <command>):\n  serve [--http]  `);
     else expect(text).toContain(`\n  ${intent} verify `);
-    expect(text).toContain(`\n${intent} policy add per-order-60`);
+    expect(text).toContain(`\n${intent} policy add per-order-20`);
     // strict-default shares no ZIP, so no search works under it: help never suggests it (F-h).
     expect(text).not.toContain("strict-default");
     expect(text).not.toMatch(/^ {2}intent /m);
@@ -1165,7 +1165,7 @@ describe("intent demo --http (devrun F-c)", () => {
     expect(code).toBeDefined();
     expect(readFileSync(join(s.dir, "demo", "approval-code"), "utf8")).toBe(`${code ?? ""}\n`);
     expect(help()).toContain("demo [--http]");
-    expect(result.err).toMatch(/\nintent-gateway: serving until Ctrl-C\n$/);
+    expect(result.err).toMatch(/\nintent: serving until Ctrl-C\n$/);
     expect(result.err).not.toContain("docker stop");
   });
 });
@@ -1277,7 +1277,7 @@ describe("intent log: session entries", () => {
   it("names the demo chain and each gateway session by its local id", () => {
     const entry = (seq: number, body: unknown) => ({ seq, prev: "", ts: "t", kind: "session", body, hash: "" });
     const items = [entry(0, { mode: "demo" }), entry(1, { id: "abc" })];
-    expect(formatLog(items).split("\n")[0]).toContain("· DEMO chain (test keys) ·");
+    expect(formatLog(items).split("\n")[0]).toContain("· DEMO (test keys) ·");
     expect(formatLog(items)).toMatch(/ start {5}gateway started +✓ recorded\n/);
     expect(formatVerbose(items)).toContain("session        gateway session abc started (a local id, never sent)");
   });

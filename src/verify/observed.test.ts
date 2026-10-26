@@ -65,7 +65,7 @@ const observation = (d: Entry, changes: Record<string, unknown> = {}) => ({
 });
 
 const check = (report: Report, name: string) => report.checks.find((c) => c.name === name);
-const failures = (report: Report) => (check(report, "disclosures")?.details ?? []).filter((d) => d.startsWith("seq "));
+const failures = (report: Report) => (check(report, "requests")?.details ?? []).filter((d) => d.startsWith("seq "));
 const NO_RECEIPT = (at: number) => `seq ${String(at)}: the observed entry summarises the disclosure at seq 1, which has no verified receipt before it`;
 
 describe("runVerify: observations", () => {
@@ -80,7 +80,7 @@ describe("runVerify: observations", () => {
     const report = await verify(dir);
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);
     expect(report.counts).toEqual({ disclosures: 1, receipts: 1, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 0, outcomes: 0, flags: 0 });
-    expect(check(report, "disclosures")?.details).toContain("answers summarised locally (observed, never sent): 1");
+    expect(check(report, "requests")?.details).toContain("answers summarised in the log (kept here, never sent): 1");
   });
 
   it("attack: an observation never answers a request: one in place of the receipt fails, and the request stays unanswered", async () => {
@@ -175,6 +175,6 @@ describe("runVerify: observations", () => {
     await writeFile(file, (await readFile(file, "utf8")).replace('"offers_count":1', '"offers_count":7'));
     const report = await verify(dir);
     expect(report.exitCode).toBe(1);
-    expect(check(report, "chain")?.details[0]).toBe("broken at seq 3: hash does not match the entry");
+    expect(check(report, "log")?.details[0]).toBe("broken at entry #3: hash does not match the entry");
   });
 });

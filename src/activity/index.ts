@@ -24,6 +24,8 @@ export {
   filterActivity,
   type IdentityFinding,
   INTENT_CLOUD,
+  MCP_CLIENT_META,
+  MCP_ENVELOPE,
   leafFields,
   loggedValues,
   type Outcome,

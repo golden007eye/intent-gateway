@@ -135,7 +135,7 @@ describe("buildModel: purchases", () => {
 
   it("a step's drawer shows the values sent field by field, what came back, the receipt kid and the digest", () => {
     const cart = m.drawers.find((d) => d.id === "a-6");
-    expect(cart?.seqs).toBe("seq 6–10");
+    expect(cart?.seqs).toBe("entries #6–10");
     expect(cart?.requests[0]).toMatchObject({
       endpoint: "createCart",
       sent: [
@@ -282,7 +282,7 @@ describe("buildModel: wallet destinations, refusals and wallet entries (ADR-0014
 
   it("the overview counts Intent Cloud's requests only, and each wallet destination apart: answered, never acknowledged", () => {
     expect(m.kpis).toMatchObject({ sent: 1, acknowledged: 1, maybeSent: 0, elsewhere: [{ destination: "Shop", sent: 2, answered: 2, maybeSent: 0 }] });
-    expect(html).toContain("Also sent to Shop: 2 (2 answered, unsigned)</p>");
+    expect(html).toContain("Also sent to Shop: 2 (2 answered, no signed receipt)</p>");
     expect(html).not.toMatch(/maybe sent/);
   });
 
@@ -292,8 +292,8 @@ describe("buildModel: wallet destinations, refusals and wallet entries (ADR-0014
       ["wallet", "plain", "Shop wallet unlinked · token revoked at Shop"],
       ["refused", "bad", "Shop search refused before sending: not logged as sent: a credential in the query (access_token), which the log cannot digest · nothing sent"],
       ["refused", "bad", "Shop search refused before sending: buyer identity held back · nothing sent"],
-      ["call", "warn", "Shop refresh · answered 401, unsigned"],
-      ["call", "plain", "Shop get_checkout · answered 200, unsigned"],
+      ["call", "warn", "Shop refresh · answered 401, no signed receipt"],
+      ["call", "plain", "Shop get_checkout · answered 200, no signed receipt"],
       ["start", "plain", "Gateway started"],
       ["wallet", "plain", "Shop wallet linked"],
       ["search", "plain", "Search · lamps · ZIP 94103 · receipt ✓"],
@@ -303,7 +303,7 @@ describe("buildModel: wallet destinations, refusals and wallet entries (ADR-0014
 
   it("the server log words the response, a Shop disclosure, a Shop block and a wallet entry", () => {
     const summaries = m.log.map((r) => [r.kind, r.tone, r.summary]);
-    expect(summaries).toContainEqual(["response", "ok", "answer to #4 · status 200 · 31 bytes · unsigned"]);
+    expect(summaries).toContainEqual(["response", "ok", "answer to #4 · status 200 · 31 bytes · no signed receipt"]);
     expect(summaries).toContainEqual(["disclosure", "plain", "logged to Shop get_checkout  id, jsonrpc, method, params.arguments.checkout_id, params.name"]);
     expect(summaries).toContainEqual(["block", "bad", "refused before sending to Shop search · email at $.params.arguments.note"]);
     expect(summaries).toContainEqual(["wallet", "plain", "Shop wallet unlinked · token revoked"]);

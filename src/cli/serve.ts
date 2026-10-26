@@ -21,7 +21,7 @@ import { accountKeyFor } from "./pause.ts";
 export async function serve(io: Io, config: Config, options: { http: boolean; demo: Demo | null }): Promise<Outcome> {
   const { demo } = options;
   const say = (text: string): void => {
-    line(io.stderr, `intent-gateway: ${text}`);
+    line(io.stderr, `intent: ${text}`);
   };
   const log = (text: string): void => {
     line(io.stderr, text);
@@ -67,7 +67,7 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       { store, accountKey: accountKeyFor(io, dataDir), connect: () => Promise.resolve((request, unless) => gateway.sendPause(request, unless)), now: io.now ?? Date.now },
       {
         onError: (error) => {
-          log(`intent-gateway: the pause could not be sent: ${error instanceof Error ? error.message : String(error)}`);
+          log(`intent: the pause could not be sent: ${error instanceof Error ? error.message : String(error)}`);
         },
       },
     );

@@ -107,8 +107,7 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
   } catch (error) {
     const described = describeError(error, ctx);
     line(io.stderr, `intent: ${printable(described)}`);
-    if (mcpOverStdio) await answerStdioWithError(`intent-gateway could not start: ${described}`, io);
-    if (error instanceof CliError && error.code === 2 && error.message.startsWith("unknown command")) io.stderr.write(`\n${help()}`);
+    if (mcpOverStdio) await answerStdioWithError(`intent could not start: ${described}`, io);
     const debug = config?.debug ?? io.env.INTENT_DEBUG === "1";
     if (debug && error instanceof Error && error.stack !== undefined) line(io.stderr, error.stack);
     return { code: error instanceof CliError ? error.code : 1 };
@@ -127,7 +126,7 @@ function parse(argv: readonly string[]): "help" | { command: string; args: strin
   const command = first === undefined ? "serve" : group !== null ? `${group} ${second ?? ""}`.trim() : first;
   if (!Object.hasOwn(COMMANDS, command)) {
     const what = group !== null ? `${command} needs one of: ${subcommands(group).join(", ")}` : `unknown command "${command}"`;
-    throw new CliError(group !== null ? `${what}; run ${INTENT} --help` : what, 2);
+    throw new CliError(`${what}; run ${INTENT} --help for the list`, 2);
   }
   // Second pass, strict: only the options this command takes.
   let parsed;
@@ -269,7 +268,7 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
     case "wallet check":
       return { code: await walletCheck(io, config, arg(0), str("since")) };
     default:
-      throw new CliError(`unknown command "${command}"`, 2);
+      throw new CliError(`unknown command "${command}"; run ${INTENT} --help for the list`, 2);
   }
 }
 

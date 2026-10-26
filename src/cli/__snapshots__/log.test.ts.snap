@@ -104,6 +104,6 @@ exports[`intent log --verbose and --json (golden) > --verbose groups the entries
                       content-digest sha-256=:x:
                       keyid gw-k
 
-18 entries, every hash links, head seq 17. intent verify re-checks the receipts and approvals.
+18 entries, each linked to the one before; last entry #17. intent verify re-checks the receipts and approvals.
 "
 `;

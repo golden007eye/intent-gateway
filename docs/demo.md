@@ -86,14 +86,14 @@ One-tap: ordered (read from Shop), order gid://shopify/Order/5001
 `intent log --demo` then lists each step. The submit is listed with the cart:
 
 ```text
-call      Shop search_catalog · …                                ✓ answered 200 (no receipt: unsigned)
-call      Shop create_checkout · …                               ✓ answered 200 (no receipt: unsigned)
-call      Shop get_checkout · …                                  ✓ answered 200 (no receipt: unsigned)
-call      Shop get_account · …                                   ✓ answered 200 (no receipt: unsigned)
+call      Shop search_catalog · …                                ✓ answered 200 (no signed receipt)
+call      Shop create_checkout · …                               ✓ answered 200 (no signed receipt)
+call      Shop get_checkout · …                                  ✓ answered 200 (no signed receipt)
+call      Shop get_account · …                                   ✓ answered 200 (no signed receipt)
 cart      submit checkout · Holographic sticker ×1 · $8.99 · stickers.example  → approval link  ✓ receipt
 status    approval ap_3jnL…VYQs                                  → Intent Cloud says approved · ✓ receipt
 approved  $8.99 · passkey efed…c048 (pinned now)                 ✓ passkey proof checked
-call      Shop complete_checkout · …                             ✓ answered 200 (no receipt: unsigned)
+call      Shop complete_checkout · …                             ✓ answered 200 (no signed receipt)
 outcome   outcome report sent to Intent Cloud · approval ap_3jnL…VYQs  ✓ receipt
 ```
 

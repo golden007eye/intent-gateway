@@ -112,7 +112,7 @@ describe("intent log --verbose and --json (golden)", () => {
     const result = await s.run(["log", "--utc"]);
     expect(result).toMatchObject({ code: 0, err: "" });
     expect(result.out.replace(s.dir, "<data>")).toMatchInlineSnapshot(`
-      "intent log · real chain · <data> · 18 entries
+      "intent log · real · <data> · 18 entries
 
       Friday 16 October 2026 (UTC)
       17:26:37  keys      keys signed by cloud-root-1 · valid until 2027-01-14  ✓ recorded
@@ -141,7 +141,7 @@ describe("intent log --verbose and --json (golden)", () => {
     await store.append("receipt", { disclosure_seq: 0, status: 200, verified: true });
     await store.close();
     const result = await s.run(["log"]);
-    expect(result.out).toContain("✗ Buyer identity in what was sent: seq 0 (email); run intent verify\n");
+    expect(result.out).toContain("✗ Buyer identity in what was sent: entry #0 (email); run intent verify\n");
     expect(result.out).not.toContain("Never sent");
   });
 

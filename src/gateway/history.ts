@@ -1,5 +1,6 @@
 // What the gateway reads back from its own chain: the spend history for the policy's daily and weekly caps, and
 // the "Sent: … / Blocked: …" summary of one tool call. Pure; the chain is passed in.
+import { destinationLabel, MCP_CLIENT_META, MCP_ENVELOPE } from "../activity/index.ts";
 import { chargedNothing } from "../outcome/index.ts";
 import type { Purchase } from "../policy/index.ts";
 import { type Entry, neverLeft } from "../store/index.ts";
@@ -105,10 +106,13 @@ export function disclosedSince(chain: readonly Entry[], fromSeq: number): Disclo
  * entry answers is listed apart, as `intent log` does: "Logged, maybe sent; no answer recorded: …".
  */
 export function summaryLine(disclosed: Disclosed, extraBlocked: readonly string[] = []): string {
-  const fieldsOf = (s: Disclosed["sends"][number]) => (s.fields.length === 0 ? "no body fields" : s.fields.join(", "));
-  const nameOf = (s: Disclosed["sends"][number]) => (s.destination === null ? s.endpoint : `${s.destination} ${s.endpoint}`);
+  const fieldsOf = (s: Disclosed["sends"][number]) => {
+    const fields = s.destination === null ? s.fields : mcpFields(s.fields);
+    return fields.length === 0 ? "no body fields" : fields.join(", ");
+  };
+  const nameOf = (s: Disclosed["sends"][number]) => (s.destination === null ? s.endpoint : `${destinationLabel(s.destination)} ${s.endpoint}`);
   const answer = (s: Disclosed["sends"][number]) =>
-    s.destination !== null ? "; answered, unsigned" : s.acknowledged ? "; receipt verified" : "; no verified receipt";
+    s.destination !== null ? "; answered, no signed receipt" : s.acknowledged ? "; receipt verified" : "; no verified receipt";
   const sent = disclosed.sends.filter((s) => s.answered).map((s) => `${nameOf(s)} (${fieldsOf(s)}${answer(s)})`);
   const unanswered = disclosed.sends.filter((s) => !s.answered).map((s) => `${nameOf(s)} (${fieldsOf(s)})`);
   const blocked = [...disclosed.blocked, ...extraBlocked];
@@ -117,6 +121,23 @@ export function summaryLine(disclosed: Disclosed, extraBlocked: readonly string[
     ...(unanswered.length === 0 ? [] : [`Logged, maybe sent; no answer recorded: ${unanswered.join("; ")}`]),
     `Blocked: ${blocked.length === 0 ? "nothing" : blocked.join("; ")}`,
   ].join(" / ");
+}
+
+/**
+ * A wallet's MCP request fields, as the agent reads them: the tool's arguments by name (`params.arguments.` dropped),
+ * then any other field, then the protocol fields every MCP request carries, counted. Every logged field is still
+ * named or counted (invariant 5); `intent log -v` lists each one.
+ */
+function mcpFields(fields: readonly string[]): string[] {
+  const args: string[] = [];
+  const other: string[] = [];
+  let protocol = 0;
+  for (const field of fields) {
+    if (field.startsWith("params.arguments.")) args.push(field.slice("params.arguments.".length));
+    else if (MCP_ENVELOPE.has(field) || MCP_CLIENT_META.has(field)) protocol++;
+    else other.push(field);
+  }
+  return [...args, ...other, ...(protocol === 0 ? [] : [`${String(protocol)} MCP protocol field${protocol === 1 ? "" : "s"}`])];
 }
 
 function strings(value: unknown): string[] {

@@ -46,7 +46,7 @@ describe("intent pause", () => {
     const result = await s.run(["pause"]);
     expect(result.code).toBe(0);
     expect(result.out).toContain("Paused: from now on the gateway refuses create_cart and complete_checkout.");
-    expect(result.out).toContain("`intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.");
+    expect(result.out).toContain("`intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.");
     expect(result.out).toContain("Not sent to Intent Cloud: no account key on this machine, so the pause holds here only.");
     expect(kinds(s.dir)).toEqual(["pause", "pause_sent"]);
     const status = await s.run(["status"]);

@@ -95,6 +95,6 @@ exports[`intent log with observations (golden) > -v lists each observation as re
   #26   receipt        #25: the local demo Intent Cloud acknowledged receiving it (demo chain, test keys) (status 200, signature verified)
   #27   returned       #25, returned by Intent Cloud (recorded here, never sent): approval ap_po2000000000qmW2 rejected: Road Runner 2, $64.99, Road Runners
 
-28 entries, every hash links, head seq 27. intent verify re-checks the receipts and approvals.
+28 entries, each linked to the one before; last entry #27. intent verify re-checks the receipts and approvals.
 "
 `;

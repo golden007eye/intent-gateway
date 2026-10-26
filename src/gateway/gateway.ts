@@ -432,7 +432,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   try {
     wallet = options.oneTap?.connect(cloud) ?? null;
   } catch (error) {
-    logger.warn(`intent-gateway: the linked wallet cannot be used, so purchases are handed off: ${(error as Error).message}`);
+    logger.warn(`intent: the linked wallet cannot be used, so purchases are handed off: ${(error as Error).message}`);
   }
   // The store pair check's storefront, behind the same disclosure core (log before send to every destination).
   const storefront: StorefrontPort | null = wallet === null ? null : (options.oneTap?.storefront ?? connectStorefront)(cloud);
@@ -549,7 +549,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       if (error instanceof DisclosureRefusedError) return refuse("blocked", `Not sent: ${error.reasons.join("; ")}.`);
       if (error instanceof DisclosureStoppedError) {
         // Said once on the terminal too: the developer must restart the gateway, the agent cannot fix it.
-        if (!stopReported) logger.warn(`intent-gateway: ${error.message}. Restart the gateway, then run ${INTENT} verify.`);
+        if (!stopReported) logger.warn(`intent: ${error.message}. Restart the gateway, then run ${INTENT} verify.`);
         stopReported = true;
         return refuse("error", `Not sent: ${error.message}. The developer must restart the gateway.`);
       }
@@ -665,7 +665,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       const keys = await completerKeys.list();
       for (const keyid of expiredCompleterKeys(store.entries(), keys, now())) await completerKeys.remove(keyid);
     } catch (error) {
-      logger.warn(`intent-gateway: could not tidy the completer keys in ${completerKeys.dir}: ${(error as Error).message}`);
+      logger.warn(`intent: could not tidy the completer keys in ${completerKeys.dir}: ${(error as Error).message}`);
     }
   }
 
@@ -705,7 +705,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       const verified = fetched.ok ? await chainStatement(fetched.body) : fetched.refused.message;
       if (typeof verified !== "string") {
         keySet = verified;
-        logger.warn(`intent-gateway: the key statement expired on ${expiredOn}; fetched and chained a fresh one.`);
+        logger.warn(`intent: the key statement expired on ${expiredOn}; fetched and chained a fresh one.`);
         return { ok: true, keys: verified };
       }
       why = verified;
@@ -938,7 +938,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (known === undefined) {
       return {
         status: "invalid",
-        message: "Not sent: this offer did not come from a search through this gateway. Call find_offers first.",
+        message: "Not sent: this gateway has no such offer (it keeps offers only while it runs). Call find_offers again and use an offer_handle from that result.",
         summary: summary(fromSeq),
       };
     }
@@ -1116,7 +1116,7 @@ export function createGateway(options: GatewayOptions): Gateway {
           ? `Ask the buyer to open ${approvalUrl} (or scan the QR code) and approve with their passkey; ` +
             `the page shows check code ${created.check_code}. Then call get_approval_status.`
           : `Demo: ask the user to open the approval link ${approvalUrl} and click "${approveLabel(created.snapshot.total.amount_minor)}" ` +
-            `(enter the code shown in the gateway's terminal); the page shows check code ${created.check_code}. ` +
+            `(enter the demo code: the page shows the command that prints it); the page shows check code ${created.check_code}. ` +
             "Then call get_approval_status.",
       summary: summary(fromSeq),
     };
@@ -1246,7 +1246,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       const why = !allowed.includes("one_tap")
         ? "the gateway policy does not allow one tap, and Shop gave no checkout page on the store's own hosts to hand off to"
         : !budgetCovers || !checkout.budgetOffered
-          ? 'the Shop agent budget does not cover this checkout (turn on "Allow agent to pay" with a budget in the Shop app), and no hand-off page is allowed'
+          ? 'Shop agent payments do not cover this checkout (turn on "Allow agent to pay" with a budget in the Shop app), and no hand-off page is allowed'
           : "Shop asks the buyer to finish this checkout, and gave no checkout page on the store's own hosts to hand off to";
       return refuse("completion: none", `Not sent: ${why}.`, "blocked");
     }
@@ -1365,7 +1365,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     }
     createdHere.add(created.approval_handle);
     const total = formatMinor(s.totals.total, s.currency);
-    const how = mode === "shop_agent" ? "approving pays at once from the buyer's Shop agent budget" : "after approving, the buyer pays on Shop's checkout page";
+    const how = mode === "shop_agent" ? "approving pays at once through the buyer's Shop agent payments" : "after approving, the buyer pays on Shop's checkout page";
     return {
       status: "approval_needed",
       approval_handle: created.approval_handle,
@@ -1386,7 +1386,7 @@ export function createGateway(options: GatewayOptions): Gateway {
           ? `Ask the buyer to open ${approvalUrl} (or scan the QR code) and approve ${total} with their passkey; ${how}. ` +
             `The page shows check code ${created.check_code}. Then call get_approval_status.`
           : `Demo: ask the user to open the approval link ${approvalUrl} and click "${approveLabel(s.totals.total, s.currency)}" ` +
-            `(enter the code shown in the gateway's terminal); ${how}. The page shows check code ${created.check_code}. ` +
+            `(enter the demo code: the page shows the command that prints it); ${how}. The page shows check code ${created.check_code}. ` +
             "Then call get_approval_status."),
       summary: summary(fromSeq),
     };
@@ -1431,7 +1431,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         status.state === "pending"
           ? options.demo === undefined
             ? "Waiting for the buyer to approve with their passkey."
-            : `Waiting for the user to click "${approveLabel(bodyOf(pending).total_minor, bodyOf(pending).currency)}" on the approval link (with the code shown in the gateway's terminal).`
+            : `Waiting for the user to click "${approveLabel(bodyOf(pending).total_minor, bodyOf(pending).currency)}" on the approval link (with the demo code: the page shows the command that prints it).`
           : status.state === "rejected"
             ? "The buyer rejected this purchase."
             : "This approval expired. Create a new cart to try again.";
@@ -1470,7 +1470,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (check.entry !== null) await store.append(check.entry.kind, check.entry.body);
     await store.append("approval", { handle, proof: status.proof, sign_count: verified.credential.signCount });
     if (check.decision === "pin") {
-      logger.warn(`intent-gateway: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
+      logger.warn(`intent: pinned the first approving passkey. Fingerprint: ${check.fingerprint}`);
     }
     const shown = await recordOutcome(handle, status, verified.snapshot, verified.snapshotHash, keys);
     const parsedProof = BindableApprovalProof.safeParse(status.proof);
@@ -1606,7 +1606,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         : { ...words, state_shown: adopted.state_shown, kept_earlier: true, ...(adopted.order_ref === undefined ? {} : { order_ref: adopted.order_ref }) };
     if (shownState !== null && adopted?.cloud != null && !replaces(adopted.cloud, cloud)) {
       logger.warn(
-        `intent-gateway: Intent Cloud reported outcome ${cloud.state} for ${handle} after it reported the final outcome ${adopted.cloud.state} (Appendix G R5a); the gateway keeps the earlier one.`,
+        `intent: Intent Cloud reported outcome ${cloud.state} for ${handle} after it reported the final outcome ${adopted.cloud.state} (Appendix G R5a); the gateway keeps the earlier one.`,
       );
       return keep();
     }
@@ -1639,7 +1639,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     // Intent Cloud's word is repeated only when its state and outcome agree (Appendix G; never more than the outcome).
     const inconsistent = status === null ? null : statusProblem(status.state, status.outcome, mode);
     if (inconsistent !== null) {
-      logger.warn(`intent-gateway: Intent Cloud reported an approval state and an outcome that disagree (${inconsistent}); the gateway does not repeat them.`);
+      logger.warn(`intent: Intent Cloud reported an approval state and an outcome that disagree (${inconsistent}); the gateway does not repeat them.`);
       // The structured reading (never more than the verified statement) is still given; the sentence repeats nothing.
       return {
         status: "approved",
@@ -1868,7 +1868,7 @@ const SHOP_ERROR_CODES: ReadonlySet<string> = new Set(["checkout_completion_inel
 /** What the developer can do about a one-tap refusal the gateway made before paying (complete.ts reasons). */
 const REFUSAL_WORDS: Readonly<Record<string, string>> = {
   budget_unknown: 'Shop shows no budget for this connection: turn on "Allow agent to pay" with a budget in the Shop app.',
-  no_budget_instrument: 'Shop offered no agent budget to pay this checkout with, and the gateway never pays with the card: turn on "Allow agent to pay" with a budget in the Shop app.',
+  no_budget_instrument: 'Shop offered no agent payments to pay this checkout with, and the gateway never pays with the card: turn on "Allow agent to pay" with a budget in the Shop app.',
   wallet_disconnected: "Shop answered that this connection can no longer read the account (as when it is removed in the Shop app): run intent wallet unlink shop, then intent wallet link shop.",
   create_unconfirmed: "Shop gave no usable answer to the checkout request, and the gateway never sends it twice.",
   // A refusal of the completing report that names no code the contract lists (a 403 the vendored spec does not list).

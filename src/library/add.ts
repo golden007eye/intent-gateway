@@ -248,7 +248,7 @@ async function readBundled(name: string, opts: AddOptions): Promise<Fetched> {
   else if (build.dirty) commit = "uncommitted";
   else throw new LibraryError("NO_BUILD_COMMIT", `${noCommitReason(build)}, so its bundled policies have no build commit to record`);
   const root = opts.bundledRoot ?? BUNDLED_ROOT;
-  const expected = indexHash(name, await readFile(new URL("index.json", root), "utf8"), "the bundled index");
+  const expected = indexHash(name, await readFile(new URL("index.json", root), "utf8"), "the library bundled with this gateway");
   const bytes = await readFile(new URL(`${name}/policy.yaml`, root));
   return { ...checked(name, bytes, expected, "bundled"), commit, source: "bundled" };
 }
@@ -336,7 +336,7 @@ function indexHash(name: string, text: string, where: string): string {
     throw new LibraryError("INDEX_INVALID", `${where} is not a version 1 policy index`);
   }
   const entry = Object.hasOwn(policies, name) ? (policies as Record<string, { sha256?: unknown }>)[name] : undefined;
-  if (entry === undefined) throw new LibraryError("UNKNOWN_POLICY", `${name} is not in ${where}`);
+  if (entry === undefined) throw new LibraryError("UNKNOWN_POLICY", `${name} is not in ${where}, which has ${Object.keys(policies).sort().join(", ")}`);
   if (typeof entry.sha256 !== "string" || !SHA256.test(entry.sha256)) {
     throw new LibraryError("INDEX_INVALID", `${where} has no sha256 for ${name}`);
   }

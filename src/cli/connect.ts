@@ -51,19 +51,19 @@ export function containerConnect(input: ConnectInput): string[] {
   if (fromFile && !input.quiet && readText(unshownMarker(tokenFile)) !== null) {
     (input.remove ?? removeFile)(unshownMarker(tokenFile));
     return [
-      "intent-gateway: Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787):",
+      "intent: Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787):",
       line(token),
-      "intent-gateway: The connect line above holds the token, so it is also kept in this container's log (docker logs). Later starts reuse the token and do not print it again; set INTENT_QUIET_TOKEN=1 to never print it.",
+      "intent: The connect line above holds the token, so it is also kept in this container's log (docker logs). Later starts reuse the token and do not print it again; set INTENT_QUIET_TOKEN=1 to never print it.",
     ];
   }
   if (fromFile) {
     return [
-      "intent-gateway: Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787; the line reads the token from the container):",
+      "intent: Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787; the line reads the token from the container):",
       line(`$(${dockerExec} cat ${tokenFile})`),
     ];
   }
   return [
-    "intent-gateway: Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787; the line reads your INTENT_HTTP_TOKEN from the container):",
+    "intent: Connect Claude Code (with the port mapped as -p 127.0.0.1:8787:8787; the line reads your INTENT_HTTP_TOKEN from the container):",
     line(`$(${dockerExec} printenv INTENT_HTTP_TOKEN)`),
   ];
 }

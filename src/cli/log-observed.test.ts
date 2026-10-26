@@ -80,7 +80,7 @@ describe("intent log with observations (golden)", () => {
   it("the timeline shows what came back: offers, product, merchant, total, the approval state and a rejection", async () => {
     const { items } = await observedChain();
     expect(formatLog(items, { style: PLAIN, dataDir: "/home/u/.local/share/intent-gateway/demo", home: "/home/u", intent: "intent" })).toMatchInlineSnapshot(`
-      "intent log · DEMO chain (test keys) · ~/.local/share/intent-gateway/demo · 28 entries
+      "intent log · DEMO (test keys) · ~/.local/share/intent-gateway/demo · 28 entries
 
       Friday 16 October 2026 (UTC)
       17:26:45  keys      keys signed by cloud-root-1 · valid until 2027-01-14  ✓ recorded

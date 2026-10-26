@@ -77,7 +77,7 @@ describe("intent log on the 1.7.0 checkout submit", () => {
     expect(out).not.toContain("Buyer identity");
     expect(out).not.toContain("key reads");
     expect(out).toMatchInlineSnapshot(`
-      "intent log · DEMO chain (test keys) · ~/.local/share/intent-gateway/demo · 5 entries
+      "intent log · DEMO (test keys) · ~/.local/share/intent-gateway/demo · 5 entries
 
       Sunday 18 October 2026 (UTC)
       17:00:08  keys      keys signed by cloud-root-1 · valid until 2027-01-16  ✓ recorded
@@ -102,7 +102,7 @@ describe("intent log on the 1.7.0 checkout submit", () => {
     it(`attack: ${what} in the submit is still reported`, async () => {
       const items = await submitChain(body);
       expect(identity(items).findings).toEqual([{ seq: 2, kinds: [kind] }]);
-      expect(log(items)).toMatch(new RegExp(`Buyer identity in what was sent: seq 2 \\(${kind}\\)`));
+      expect(log(items)).toMatch(new RegExp(`Buyer identity in what was sent: entry #2 \\(${kind}\\)`));
     });
   }
 });

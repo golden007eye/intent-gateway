@@ -93,13 +93,87 @@ async function writeWalletFlow(): Promise<string> {
 
 const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 
+describe("intent log: repeated calls", () => {
+  it("shows the same call answered the same way back to back as one line with its count; -v and --json keep each", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "log-repeat-")), "data");
+    let second = 0;
+    store = await openStore(dir, { clock: () => TS + (second += 5000) });
+    const cloud = createDisclosedCloud(unreachableCloud, store, { keySet: () => null });
+    // A Shop sign-in waits: the token request is polled, answered 400 until the person approves, then 200.
+    let polls = 0;
+    const shop = createDisclosedWallet(shopTransport((op) => (op === "token" && ++polls <= 3 ? 400 : 200)), cloud, { destination: "shop" });
+    for (let i = 0; i < 4; i++) await shop.call("token", rpc("token", { device_code: "d" }));
+    await shop.call("get_checkout", rpc("get_checkout", { checkout_id: "co_1" }));
+    await store.close();
+    store = null;
+    const items = readLog(dir);
+    const out = formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data" });
+    const calls = out.split("\n").filter((l) => l.includes("  call  "));
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toMatch(/Shop token · device_code +⚠ answered 400 \(no signed receipt\) ×3, until \d\d:\d\d:\d\d$/);
+    // The 200 that ended the wait is its own line, and so is a different call.
+    expect(calls[1]).toMatch(/Shop token · device_code +✓ answered 200 \(no signed receipt\)$/);
+    expect(calls[2]).toMatch(/Shop get_checkout · checkout_id +✓ answered 200 \(no signed receipt\)$/);
+    // The counts still count each call.
+    expect(out).toContain("5 wallet calls");
+    expect(formatJson(items).trim().split("\n").filter((l) => l.includes('"action":"call"'))).toHaveLength(5);
+  });
+
+  /** Two identical token calls (answered 400), with `between` appended after the first. */
+  async function twoCalls(between: (s: Store) => Promise<unknown>, destinations: readonly [string, string] = ["shop", "shop"]): Promise<unknown[]> {
+    const dir = join(mkdtempSync(join(tmpdir(), "log-repeat-")), "data");
+    let second = 0;
+    store = await openStore(dir, { clock: () => TS + (second += 5000) });
+    const cloud = createDisclosedCloud(unreachableCloud, store, { keySet: () => null });
+    const [first, other] = destinations;
+    await createDisclosedWallet(shopTransport(() => 400), cloud, { destination: first }).call("token", rpc("token", { device_code: "d" }));
+    await between(store);
+    await createDisclosedWallet(shopTransport(() => 400), cloud, { destination: other }).call("token", rpc("token", { device_code: "d" }));
+    await store.close();
+    store = null;
+    return readLog(dir);
+  }
+  const callRows = (out: string) => out.split("\n").filter((l) => l.includes("  call  "));
+
+  it("attack: two identical calls with another entry between them stay two rows, also when that entry shows no row", async () => {
+    // A demo session entry opens no row of its own: on screen the calls are back to back, in the log they are not.
+    const items = await twoCalls((s) => s.append("session", { mode: "demo", id: "x" }));
+    const rows = callRows(formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data" }));
+    expect(rows).toHaveLength(2);
+    expect(rows.join("\n")).not.toContain("×");
+  });
+
+  it("attack: two identical calls that a filter puts side by side stay two rows", async () => {
+    const items = await twoCalls((s) => s.append("wallet", { rail: "shop", action: "linked", revoked: false }));
+    // Unfiltered, the wallet row sits between them; --action call hides it.
+    const out = formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data", actions: new Set(["call"]) });
+    expect(out).not.toContain("wallet linked");
+    expect(callRows(out)).toHaveLength(2);
+    expect(out).not.toContain("×");
+  });
+
+  it("attack: identical calls to two destinations that read alike in words stay two rows", async () => {
+    // `shop_accounts` and `Shop accounts` are both written "Shop accounts"; they are still two destinations. The gateway
+    // writes only lower-case names, so the second comes from a chain edited by hand, which `intent log` still reads.
+    const items = (await twoCalls(() => Promise.resolve(), ["shop_accounts", "shop_accounts"])) as { kind: string; body: Record<string, unknown> }[];
+    const disclosures = items.filter((i) => i.kind === "disclosure");
+    expect(disclosures).toHaveLength(2);
+    const edited = disclosures[1];
+    if (edited !== undefined) edited.body.destination = "Shop accounts";
+    const rows = callRows(formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data" }));
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.includes("Shop accounts token"))).toBe(true);
+    expect(rows.join("\n")).not.toContain("×");
+  });
+});
+
 describe("intent log: wallet destinations, refusals and wallet entries", () => {
   it("the timeline: a Shop call is answered with its status, blocks say nothing sent, each destination has its own Sent line", async () => {
     const items = readLog(await writeWalletFlow());
     const out = formatLog(items, { style: STYLE, intent: "intent", dataDir: "/data" });
     expect(out).toContain("call      Shop get_checkout · checkout_id");
-    expect(out).toContain("✓ answered 200 (no receipt: unsigned)");
-    expect(out).toContain("⚠ answered 401 (no receipt: unsigned)");
+    expect(out).toContain("✓ answered 200 (no signed receipt)");
+    expect(out).toContain("⚠ answered 401 (no signed receipt)");
     expect(out).toContain("Shop search: an email address in params.arguments.note");
     expect(out).toContain("Shop search: not logged as sent: a credential in the query (access_token), which the log cannot digest");
     expect(out).toContain("Shop wallet linked");

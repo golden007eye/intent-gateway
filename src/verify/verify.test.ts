@@ -108,9 +108,9 @@ describe("runVerify: a clean chain", () => {
     expect(report).toMatchObject({ ok: true, exitCode: 0, head: { seq: 5, hash: head.hash } });
     expect(report.counts).toEqual({ disclosures: 1, receipts: 1, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 1, outcomes: 0, flags: 0 });
     const text = formatReport(report);
-    expect(text).toContain(`head: seq 5 hash ${head.hash}\n`);
+    expect(text).toContain(`last entry: #5, hash ${head.hash}\n`);
     expect(text).toContain("sent, not acknowledged: 0\n");
-    expect(text).toContain("acknowledged by a receipt from Intent Cloud's public edge: 1\n");
+    expect(text).toContain("acknowledged by a receipt from Intent Cloud: 1\n");
     expect(text).toMatch(/verify: ok\n$/);
   });
 
@@ -243,7 +243,7 @@ describe("runVerify: a gateway that stopped mid-request (F-l)", () => {
     });
     const report = await verify(dir);
     expect(report.exitCode).toBe(0);
-    expect(check(report, "disclosures")?.details).toContain(
+    expect(check(report, "requests")?.details).toContain(
       "logged, maybe sent, no answer recorded (the gateway stopped before it finished, or is still waiting): 1 (seq 3)",
     );
   });
@@ -254,7 +254,7 @@ describe("runVerify: a gateway that stopped mid-request (F-l)", () => {
     });
     const report = await verify(dir);
     expect(report.exitCode).toBe(1);
-    expect(check(report, "disclosures")?.details).toContain(
+    expect(check(report, "requests")?.details).toContain(
       "seq 5: discarded: a response to the disclosure at seq 4 came without a valid receipt (200 without a receipt)",
     );
   });
@@ -266,7 +266,7 @@ describe("runVerify: a gateway that stopped mid-request (F-l)", () => {
     await writeFile(join(dir, "audit.jsonl"), `${canonicalize({ ...fields, hash: sha256Hex(canonicalize(fields)) })}\n`, { flag: "a" });
     const report = await verify(dir);
     expect(report.exitCode).toBe(1);
-    expect(check(report, "chain")?.details[0]).toBe("broken at seq 4: unknown kind");
+    expect(check(report, "log")?.details[0]).toBe("broken at entry #4: unknown kind");
   });
 
   it("attack: a forged follow-up cannot turn a discarded response into ok: two follow-ups fail", async () => {
@@ -276,7 +276,7 @@ describe("runVerify: a gateway that stopped mid-request (F-l)", () => {
       await followUp(s, "discarded", d, "200 without a receipt");
       await followUp(s, "unacknowledged", d, "the gateway stopped");
     });
-    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    const details = check(await verify(dir), "requests")?.details ?? [];
     expect(details).toContain("seq 1: the disclosure has 2 follow-up entries (seq 2, 3); expected one");
     expect(details).toContain("seq 2: discarded: a response to the disclosure at seq 1 came without a valid receipt (200 without a receipt)");
   });
@@ -288,7 +288,7 @@ describe("runVerify: a gateway that stopped mid-request (F-l)", () => {
     await writeFile(file, text.replace('"fields":["query"]', '"fields":["nothing"]'));
     const report = await verify(dir);
     expect(report.exitCode).toBe(1);
-    expect(check(report, "chain")?.ok).toBe(false);
+    expect(check(report, "log")?.ok).toBe(false);
   });
 
   it("dropping an answer from the end leaves an unanswered disclosure, and a head that no longer matches an earlier copy", async () => {
@@ -316,8 +316,8 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
     await writeFile(file, (await readFile(file, "utf8")).replace('"fields":["query"]', '"fields":["zip"]'));
     const report = await verify(dir);
     expect(report).toMatchObject({ ok: false, exitCode: 1, head: { seq: 0 } });
-    expect(check(report, "chain")?.details[0]).toBe("broken at seq 1: hash does not match the entry");
-    expect(formatReport(report)).toContain("chain: FAILED\n  broken at seq 1:");
+    expect(check(report, "log")?.details[0]).toBe("broken at entry #1: hash does not match the entry");
+    expect(formatReport(report)).toContain("log: FAILED\n  broken at entry #1:");
   });
 
   it("a rechained disclosure whose logged request was edited no longer matches its receipt", async () => {
@@ -328,8 +328,8 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
     });
     const report = await verify(dir);
     expect(report.exitCode).toBe(1);
-    expect(check(report, "disclosures")?.details).toContain("seq 2: the receipt for the disclosure at seq 1 does not verify (step 4: path_mismatch)");
-    expect(check(report, "disclosures")?.details).toContain("seq 4: the receipt for the disclosure at seq 3 does not verify (step 4: digest_mismatch)");
+    expect(check(report, "requests")?.details).toContain("seq 2: the receipt for the disclosure at seq 1 does not verify (step 4: path_mismatch)");
+    expect(check(report, "requests")?.details).toContain("seq 4: the receipt for the disclosure at seq 3 does not verify (step 4: digest_mismatch)");
   });
 
   it("a rechained disclosure whose logged body was edited no longer matches its content_digest", async () => {
@@ -338,7 +338,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
       await receipt(s, await disclose(s, 1, { body_b64: bodyOf(2).toString("base64") }), response(sent(1)));
       await receipt(s, await disclose(s, 2, { body_b64: "not base64!" }), response(sent(2)));
     });
-    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    const details = check(await verify(dir), "requests")?.details ?? [];
     expect(details).toContain("seq 1: the disclosure body does not match its content_digest");
     expect(details).toContain("seq 3: the disclosure body_b64 is not base64");
   });
@@ -355,7 +355,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
     await writeFile(file, lines.join("\n"));
     const report = await verify(dir);
     expect(report.exitCode).toBe(1);
-    expect(check(report, "chain")?.details[0]).toBe("broken at seq 2: seq is 3, expected 2");
+    expect(check(report, "log")?.details[0]).toBe("broken at entry #2: seq is 3, expected 2");
   });
 
   it("swapped receipts each fail against the other disclosure", async () => {
@@ -366,7 +366,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
       await receipt(s, d1, response(sent(2)));
       await receipt(s, d2, response(sent(1)));
     });
-    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    const details = check(await verify(dir), "requests")?.details ?? [];
     expect(details).toContain("seq 3: the receipt for the disclosure at seq 1 does not verify (step 4: digest_mismatch)");
     expect(details).toContain("seq 4: the receipt for the disclosure at seq 2 does not verify (step 4: digest_mismatch)");
   });
@@ -378,7 +378,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
       await receipt(s, await disclose(s, 1), response(sent(1), { kid: "cloud-receipt-202612", key: outsider }));
       await receipt(s, await disclose(s, 2), response(sent(2), { key: outsider }));
     });
-    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    const details = check(await verify(dir), "requests")?.details ?? [];
     expect(details).toContain("seq 2: the receipt for the disclosure at seq 1 does not verify (step 3: unknown_kid)");
     expect(details).toContain("seq 4: the receipt for the disclosure at seq 3 does not verify (step 3: bad_signature)");
   });
@@ -390,7 +390,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
       await receipt(s, d, { ...response(sent(1), { status: 201 }), status: 200 });
       await s.append("receipt", { disclosure_seq: 0, reason: "received", response: response(sent(1)) });
     });
-    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    const details = check(await verify(dir), "requests")?.details ?? [];
     expect(details).toContain("seq 2: the receipt for the disclosure at seq 1 does not verify (step 5: status_mismatch)");
     expect(details).toContain("seq 3: receipt names disclosure_seq 0, which is not an earlier disclosure");
   });
@@ -402,7 +402,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
       await receipt(s, d, response(sent(1)));
       await followUp(s, "unacknowledged", d, "no response");
     });
-    expect(check(await verify(dir), "disclosures")?.details).toContain(
+    expect(check(await verify(dir), "requests")?.details).toContain(
       "seq 1: the disclosure has 2 follow-up entries (seq 2, 3); expected one",
     );
   });
@@ -415,7 +415,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
       await s.append("receipt", { disclosure_seq: (await disclose(s, 2)).seq });
       await receipt(s, await disclose(s, 3), { status: 200 });
     });
-    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    const details = check(await verify(dir), "requests")?.details ?? [];
     expect(details).toContain("seq 1: the disclosure holds no body_b64 and content_digest");
     expect(details).toContain("seq 2: the receipt for the disclosure at seq 1 cannot be checked: the disclosure holds no logged request");
     expect(details).toContain("seq 4: the receipt for the disclosure at seq 3 holds no status");
@@ -432,7 +432,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
     expect(check(report, "key statements")?.details).toContain(
       "seq 0: the recorded key statement does not verify against the pinned root (step 2: bad_signature)",
     );
-    expect(check(report, "disclosures")?.details).toContain(
+    expect(check(report, "requests")?.details).toContain(
       "seq 2: the receipt for the disclosure at seq 1 cannot be checked: the key statement at seq 0 did not verify",
     );
   });
@@ -450,7 +450,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
     const dir = await chain(async (s) => {
       await receipt(s, await disclose(s, 1), response(sent(1)));
     });
-    expect(check(await verify(dir), "disclosures")?.details).toContain(
+    expect(check(await verify(dir), "requests")?.details).toContain(
       "seq 1: the receipt for the disclosure at seq 0 cannot be checked: the chain records no key statement",
     );
   });
@@ -466,7 +466,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
       await receipt(s, await disclose(s, 1), { ...response(sent(1), { key: outsider }), verified: false });
       await keys(s);
     });
-    expect(check(await verify(forged), "disclosures")?.details).toContain(
+    expect(check(await verify(forged), "requests")?.details).toContain(
       "seq 1: the receipt for the disclosure at seq 0 does not verify (step 3: bad_signature)",
     );
   });
@@ -478,7 +478,7 @@ describe("runVerify: tampered chains exit non-zero with a named failure", () => 
     });
     const report = await verify(dir);
     expect(report).toMatchObject({ exitCode: 1, counts: { discarded: 1 } });
-    expect(check(report, "disclosures")?.details).toContain(
+    expect(check(report, "requests")?.details).toContain(
       "seq 2: discarded: a response to the disclosure at seq 1 came without a valid receipt (2xx without a receipt)",
     );
   });
@@ -628,8 +628,8 @@ describe("runVerify: no chain yet", () => {
       const report = await verify(dir);
       expect(report).toMatchObject({ ok: true, exitCode: 0, head: { seq: -1 } });
       expect(check(report, "usage")).toBeUndefined();
-      expect(check(report, "chain")).toMatchObject({ ok: true });
-      expect(check(report, "chain")?.details[0]).toMatch(/^No entries yet: the gateway has sent nothing\. Start it with .* serve, or try .* demo\.$/);
+      expect(check(report, "log")).toMatchObject({ ok: true });
+      expect(check(report, "log")?.details[0]).toMatch(/^No entries yet: the gateway has sent nothing\. Start it with .* serve, or try .* demo\.$/);
       expect(formatReport(report)).not.toMatch(/ENOENT|FAILED|usage/);
     }
   });
@@ -639,7 +639,7 @@ describe("runVerify: no chain yet", () => {
     await writeFile(join(dir, "audit.jsonl"), "");
     const report = await verify(dir);
     expect(report).toMatchObject({ ok: true, exitCode: 0 });
-    expect(check(report, "chain")?.details[0]).toMatch(/^No entries yet/);
+    expect(check(report, "log")?.details[0]).toMatch(/^No entries yet/);
   });
 });
 
@@ -746,7 +746,7 @@ describe("runVerify: the supply-chain self-check", () => {
     await writeFile(file, (await readFile(file, "utf8")).replace('"kind":"keys"', '"kind":"keyz"'));
     const broken = await verify(dir, opts);
     expect(broken.exitCode).toBe(1);
-    expect(check(broken, "chain")?.ok).toBe(false);
+    expect(check(broken, "log")?.ok).toBe(false);
   });
 
   it("attack: a tampered published install still fails, and so does a registry that is reachable but broken", async () => {
@@ -819,8 +819,8 @@ describe("runVerify: a disclosure with no follow-up inside its gateway session (
     });
     const report = await verify(dir);
     expect(report.exitCode).toBe(1);
-    expect(failed(report)).toEqual(["disclosures"]);
-    expect(check(report, "disclosures")?.details).toContain(
+    expect(failed(report)).toEqual(["requests"]);
+    expect(check(report, "requests")?.details).toContain(
       "seq 4: the disclosure has no follow-up entry, but the disclosure at seq 5 of the same gateway session counts it as answered: its answer is missing from the chain",
     );
   });
@@ -837,7 +837,7 @@ describe("runVerify: a disclosure with no follow-up inside its gateway session (
     const report = await verify(dir);
     expect(failed(report)).toEqual([]);
     expect(report.counts).toMatchObject({ disclosures: 3, unanswered: 1 });
-    expect(check(report, "disclosures")?.details).toContain(unansweredLine("1 (seq 4)"));
+    expect(check(report, "requests")?.details).toContain(unansweredLine("1 (seq 4)"));
   });
 
   it("passes when a later disclosure of the session was sent while the unanswered one was still open (stopped with two in flight)", async () => {
@@ -849,7 +849,7 @@ describe("runVerify: a disclosure with no follow-up inside its gateway session (
     });
     const report = await verify(dir);
     expect(failed(report)).toEqual([]);
-    expect(check(report, "disclosures")?.details).toContain(unansweredLine("1 (seq 2)"));
+    expect(check(report, "requests")?.details).toContain(unansweredLine("1 (seq 2)"));
   });
 
   it("passes when two sessions on one data dir interleave and one is still waiting", async () => {
@@ -876,7 +876,7 @@ describe("runVerify: a disclosure with no follow-up inside its gateway session (
       await answered(s, 1, A, 0);
       await answered(s, 3, A, 2);
     });
-    expect(check(await verify(dir), "disclosures")?.details).toContain(
+    expect(check(await verify(dir), "requests")?.details).toContain(
       "seq 4: the disclosure is number 2 of its gateway session, expected 1: a disclosure of that session is missing from the chain",
     );
   });
@@ -889,7 +889,7 @@ describe("runVerify: a disclosure with no follow-up inside its gateway session (
       await start(s, B);
       await start(s, B);
     });
-    const details = check(await verify(dir), "disclosures")?.details ?? [];
+    const details = check(await verify(dir), "requests")?.details ?? [];
     expect(details).toContain(`seq 1: the disclosure names gateway session ${A}, which no earlier session entry starts`);
     expect(details).toContain("seq 3: the disclosure's session is not {id, n, open}");
     expect(details).toContain(`seq 5: the session entry repeats the id of an earlier gateway session (${B})`);
@@ -915,7 +915,7 @@ describe("runVerify: a disclosure with no follow-up inside its gateway session (
       await writeFile(file, forged);
       const report = await verify(dir);
       expect(report.exitCode).toBe(1);
-      expect(check(report, "chain")?.ok).toBe(false);
+      expect(check(report, "log")?.ok).toBe(false);
     }
   });
 
@@ -936,7 +936,7 @@ describe("runVerify: a disclosure with no follow-up inside its gateway session (
     await rehash(dir, entries.filter((_, i) => i !== receiptOf(2)).map((e) => fixRef(e, 3)));
     const mid = await verify(dir);
     expect(mid.exitCode).toBe(1);
-    expect(check(mid, "disclosures")?.details).toContain(
+    expect(check(mid, "requests")?.details).toContain(
       "seq 2: the disclosure has no follow-up entry, but the disclosure at seq 3 of the same gateway session counts it as answered: its answer is missing from the chain",
     );
     expect(mid.head.hash).not.toBe(saved.hash);
@@ -945,7 +945,7 @@ describe("runVerify: a disclosure with no follow-up inside its gateway session (
     await rehash(dir, entries.filter((_, i) => i !== receiptOf(4)).map((e) => fixRef(e, 5)));
     const last = await verify(dir);
     expect(last.exitCode).toBe(0);
-    expect(check(last, "disclosures")?.details).toContain(unansweredLine("1 (seq 4)"));
+    expect(check(last, "requests")?.details).toContain(unansweredLine("1 (seq 4)"));
     expect(last.head.seq).toBe(saved.seq - 1);
     expect(last.head.hash).not.toBe(saved.hash);
   });

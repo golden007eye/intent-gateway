@@ -77,7 +77,7 @@ export function noShipToNote(policy: Policy): string | null {
 
 /** How to get search back: a policy only narrows, so the file goes and a library policy that keeps the ZIP comes in. */
 export function shipToFix(policyPath: string): string {
-  return `to search again, delete ${policyPath} and run ${INTENT} policy add per-order-60 (or another library policy that keeps the ZIP)`;
+  return `to search again, delete ${policyPath} and run ${INTENT} policy add per-order-20 (or another library policy that keeps the ZIP)`;
 }
 
 export interface AddFlags {
@@ -123,7 +123,8 @@ export async function policyAdd(io: Io, config: Config, name: string, flags: Add
   const lock = await plan.apply();
   line(io.stdout, `applied: ${policyPath} now includes ${name}; policy.lock records ${lockOrigin(lock)}`);
   // In the image the gateway is the container's own process, so the restart is the container's, not a command in it.
-  const restart = config.runtime === "container" ? `run docker restart ${containerRef(io.env)}` : `restart ${INTENT} serve`;
+  // Most gateways are started by the agent (`claude mcp add`), so restarting the agent restarts the gateway.
+  const restart = config.runtime === "container" ? `run docker restart ${containerRef(io.env)}` : `restart Claude Code (or whatever runs ${INTENT} serve)`;
   line(io.stdout, `a running gateway reads its policy at start: ${restart} to use it`);
   return 0;
 }
