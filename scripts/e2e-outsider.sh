@@ -501,10 +501,10 @@ t_code() {
 
 # ------------------------------------------------------------------------------------------------- scenarios
 # shellcheck disable=SC2016 # the dollar signs are the prompt's own
-PROMPT_CART='Find stickers to ZIP 94107, under $20, and prepare a cart for the cheapest.'
+PROMPT_CART='Find stickers to ZIP 94107 in the US, under $20, and prepare a cart for the cheapest.'
 PROMPT_STATUS='Check the approval status.'
 # shellcheck disable=SC2016
-PROMPT_BLOCKED='Find a bottle of alcohol to ZIP 94103, under $40.'
+PROMPT_BLOCKED='Find a bottle of alcohol to ZIP 94103 in the US, under $40.'
 
 scenario_a() {
   local f
@@ -1019,7 +1019,7 @@ evidence_roundtrip() {
 
 J_T0=0
 # shellcheck disable=SC2016
-PROMPT_STAGING_CART='Find a '"$STAGING_PRODUCT"' ('"$STAGING_CATEGORY"') to ZIP '"$STAGING_ZIP"', under $'"$STAGING_BUDGET"', and prepare a cart for the cheapest.'
+PROMPT_STAGING_CART='Find a '"$STAGING_PRODUCT"' ('"$STAGING_CATEGORY"') to ZIP '"$STAGING_ZIP"' in the US, under $'"$STAGING_BUDGET"', and prepare a cart for the cheapest.'
 scenario_j() {
   if [ "${E2E_STAGING:-0}" != 1 ]; then
     SKIPPED=1

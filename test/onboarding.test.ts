@@ -505,6 +505,9 @@ describe("onboarding prompt and policy-advisor skill", () => {
     // No amount to suggest (a currency the table lacks, or no ceilings read): the success line plus a Note line.
     expect(step5).toContain("or `Note:` (why it names no amount)");
     expect(wallet).toContain("line(io.stdout, printable(`Note: ${advice}`));");
+    // The ceilings not read: --finish and --wait-budget both exit 1 with the one try-again line.
+    expect(step5).toContain("prints a line that starts `intent: the ceilings Intent Cloud returns could not be read`, it exits 1");
+    expect(wallet).toContain("`the ceilings Intent Cloud returns could not be read from ${host} (${why}), so the amount left was not checked; try again`");
     expect(step5).not.toContain("INTENT_SHOP_CLIENT_ID");
   });
 

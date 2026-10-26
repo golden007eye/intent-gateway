@@ -664,6 +664,8 @@ async function finishLink(io: Io, config: Config, rail: WalletRail): Promise<num
   }
   let terminal = false;
   let failed = false;
+  // 1 when the link is made but the amount left could not be checked (the ceilings were not read).
+  let code = 0;
   try {
     const store = await openLinkStore(io, config);
     try {
@@ -683,7 +685,7 @@ async function finishLink(io: Io, config: Config, rail: WalletRail): Promise<num
       // The device code is spent: whatever happens to the tokens now, it cannot be redeemed again.
       terminal = true;
       await grant.discard();
-      await keepLink(io, config, rail, { store, session, key, linked, relink, nextStep: true });
+      if (!(await keepLink(io, config, rail, { store, session, key, linked, relink, nextStep: true }))) code = 1;
     } finally {
       await store.close();
     }
@@ -699,24 +701,27 @@ async function finishLink(io: Io, config: Config, rail: WalletRail): Promise<num
       });
     } else await letGo;
   }
-  return 0;
+  return code;
 }
 
 /**
  * After a link: agent payments already on, in the --wait-budget line; otherwise the two lines of the next step, the
  * connections page from Shop's answer (only an https page on shop.app; S1's page when Shop names none), then what to
  * tap, with the connection named by the client recorded in the vault and the suggested limit, in the account's
- * currency. With no advice in it, the tap line names no amount, and a note says why.
+ * currency. With no advice in it, the tap line names no amount, and a note says why. False when the ceilings could not
+ * be read: then the page and the tap line with no amount, and the one "try again" line (the caller exits 1).
  */
-async function nextStep(io: Io, config: Config, rail: WalletRail, account: WalletAccount, vaultText: string, store: Store): Promise<void> {
+async function nextStep(io: Io, config: Config, rail: WalletRail, account: WalletAccount, vaultText: string, store: Store): Promise<boolean> {
   const adviser = await (await budgetAdviser(io, config))(store);
-  if (adviser.unread !== undefined) {
-    // Agent payments may be on or low: neither is said without the ceilings. --wait-budget says the same and exits 1.
-    line(io.stderr, printable(`intent: ${adviser.unread}`));
-    return;
-  }
   const connection = connectionName(linkedShopClientId(vaultText));
-  if (agentPaymentsOn(io, rail, account, adviser, { page: account.manageUrl, connection })) return;
+  if (adviser.unread !== undefined) {
+    // Agent payments may be on or low: neither is said without the ceilings, only where to turn them on.
+    if (account.manageUrl !== null) line(io.stdout, printable(account.manageUrl));
+    line(io.stdout, printable(`Tap ${connection}, turn on Allow agent to pay for me.`));
+    line(io.stderr, printable(`intent: ${adviser.unread}`));
+    return false;
+  }
+  if (agentPaymentsOn(io, rail, account, adviser, { page: account.manageUrl, connection })) return true;
   // A page Shop names off shop.app is never printed: then only what to tap.
   if (account.manageUrl !== null) line(io.stdout, printable(account.manageUrl));
   const currency = account.budgetRemaining?.currency ?? account.currency ?? null;
@@ -724,9 +729,10 @@ async function nextStep(io: Io, config: Config, rail: WalletRail, account: Walle
   if (typeof advice === "string") {
     line(io.stdout, printable(`Tap ${connection}, turn on Allow agent to pay for me.`));
     line(io.stdout, printable(`Note: ${advice}`));
-    return;
+    return true;
   }
   line(io.stdout, printable(`Tap ${connection}, turn on Allow agent to pay for me, enter ${capText(advice.maxMinor, advice.currency)}.`));
+  return true;
 }
 
 /** A flow that ended without tokens, in one line: the refused client named, or how to try again. */
@@ -747,7 +753,7 @@ async function keepLink(
   config: Config,
   rail: WalletRail,
   link: { store: Store; session: WalletSession; key: WalletKey; linked: LinkedShopVault; relink: boolean; nextStep?: boolean },
-): Promise<void> {
+): Promise<boolean> {
   const { store, session, key, linked, relink } = link;
   const name = RAIL_NAMES[rail];
   if (relink) {
@@ -778,7 +784,7 @@ async function keepLink(
     for (const text of accountLines(name, rail, account)) line(io.stdout, text);
     if (link.nextStep === true && account.connected) {
       try {
-        await nextStep(io, config, rail, account, linked.vaultText, store);
+        if (!(await nextStep(io, config, rail, account, linked.vaultText, store))) return false;
       } catch (error) {
         // The link is made and the budget read; only the suggestion is missing (the policy did not load).
         line(io.stderr, printable(`intent: linked, but the next step could not be worked out: ${error instanceof Error ? error.message : String(error)}`));
@@ -788,6 +794,7 @@ async function keepLink(
     // The link is made; only the budget line is missing. The message is the gateway's own, never Shop's text.
     line(io.stderr, printable(`intent: linked, but the ${name} budget could not be read: ${error instanceof Error ? error.message : String(error)}`));
   }
+  return true;
 }
 
 /**

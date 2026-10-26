@@ -361,6 +361,18 @@ describe("the next step after --finish: turn on agent payments", () => {
     expect(tail(await finished())).toBe(`${NONE}https://shop.app/account/connections\nTap intent, turn on Allow agent to pay for me, enter $400.\n`);
   });
 
+  it("the ceilings cannot be read: the page and what to tap with no amount, then the one try-again line, exit 1; the link stands", async () => {
+    const s = await setup({ budgetMinor: null });
+    expect((await s.run(START)).code).toBe(0);
+    // A port nothing listens on: the connection is refused.
+    const r = await s.run(FINISH, { env: { ...s.env, INTENT_CLOUD_URL: `http://127.0.0.1:${String(await freePort())}` } });
+    expect(r.code).toBe(1);
+    expect(tail(r)).toBe(`${NONE}https://shop.app/account/connections\nTap intent, turn on Allow agent to pay for me.\n`);
+    expect(r.err).toMatch(/^intent: the ceilings Intent Cloud returns could not be read from http:\/\/127\.0\.0\.1:\d+ \(.+\), so the amount left was not checked; try again\n$/);
+    // Linked all the same: the tokens are kept and the link chained.
+    expect(chain(s).filter((e) => e.kind === "wallet").map((e) => e.body)).toEqual([{ rail: "shop", action: "linked", revoked: false }]);
+  });
+
   it("Shop's public client, recorded in the vault: Tap Personal Agent; weekly-40 suggests $160", async () => {
     const r = await finished({}, SHOP_PUBLIC_CLIENT_ID, "version: 1\napproval: passkey\nspend:\n  per_order_usd: 20\n  per_week_usd: 40\n");
     expect(tail(r)).toBe(`${NONE}https://shop.app/account/connections\nTap Personal Agent, turn on Allow agent to pay for me, enter $160.\n`);

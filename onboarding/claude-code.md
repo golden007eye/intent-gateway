@@ -126,7 +126,7 @@ This step is required: never skip it, also when the developer says they already 
 
    If it prints a line that starts `intent: no Shop agent payments seen after` or `intent: Shop agent payments are still low after`, say that line and ask whether to wait again; if yes, run `intent wallet status --wait-budget --timeout 540` again. If the developer would rather not turn on agent payments, go on: every order then goes to Shop's checkout page.
 
-   If `--finish` or `--wait-budget` prints a line that starts `intent: the ceilings Intent Cloud returns could not be read` (it exits 1), the amount left was not checked: say that line, then run `intent wallet status --wait-budget --timeout 540` once more. If it prints the same line again, say in one line that the amount could not be checked right now, and go on to step 6; run it again before the first purchase.
+   If `--finish` or `--wait-budget` prints a line that starts `intent: the ceilings Intent Cloud returns could not be read`, it exits 1 and the amount left was not checked. `--finish` has still linked Shop, and prints the Shop page and what to tap, with no amount: show those two lines as the **Your turn** block above. Say that line, then run `intent wallet status --wait-budget --timeout 540` once more. If it prints the same line again, say in one line that the amount could not be checked right now, and go on to step 6; run it again before the first purchase.
 
 ## Step 6: the policy
 
