@@ -322,7 +322,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     // The developer matches the check code the agent shows with the one on the confirm page; create_cart returns it.
     expect(prompt).toContain("> Open the page, check the item, total and check code, then approve with your passkey.\n>\n> <the approval link, as a clickable link>\n>\n> Check code: <the check code>\n");
     expect(read("src/mcp/tools.ts")).toContain("Check code: ${result.check_code}");
-    expect(prompt).toContain("> Open this link and approve intent in Shop; the code is already filled in.\n>\n> <the link, as a clickable link>\n>\n> Code: <the code>\n");
+    expect(prompt).toContain("> Open this link and approve Personal Agent in Shop; the code is filled in.\n>\n> <the link, as a clickable link>\n>\n> Code: <the code>\n");
     expect(prompt).toContain("When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (why it names no amount), and this note");
     expect(prompt).toContain("send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.");
     const shop = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));

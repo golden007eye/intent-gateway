@@ -99,7 +99,7 @@ This step is required: never skip it, also when the developer says they already 
 
 > **Your turn:** approve the Shop link
 >
-> Open this link and approve intent in Shop; the code is already filled in.
+> Open this link and approve Personal Agent in Shop; the code is filled in.
 >
 > <the link, as a clickable link>
 >
