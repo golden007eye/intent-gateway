@@ -30,7 +30,7 @@ import { ask } from "./prompt.ts";
 import { activePolicy, cloudFor, rootKeys, startDemoFor } from "./setup.ts";
 
 /** The line every pause output carries (answer 25): what a pause stops, and the only hard stop. */
-export const HONEST_LINE = "`intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.";
+export const HONEST_LINE = "`intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.";
 
 /**
  * The account key `intent init` makes in `dataDir` (src/account, ADR-0022). Without one the pause holds locally only,
@@ -101,7 +101,7 @@ function cloudLine(state: PauseState): string {
   if (c.result === "acknowledged") return "Intent Cloud: acknowledged the pause.";
   if (c.reason === "no_account_key") return `Not sent to Intent Cloud: ${pauseReasonWords(c.reason)}.`;
   if (c.result === "failed") return `A refusal of the pause was received from Intent Cloud (${pauseReasonWords(c.reason)}); it holds on this machine only. Run \`${INTENT} pause\` again to resend.`;
-  return `Intent Cloud: not acknowledged yet (${pauseReasonWords(c.reason)}); retrying while \`${INTENT} serve\` runs. The pause holds here meanwhile.`;
+  return `Intent Cloud: not acknowledged yet (${pauseReasonWords(c.reason)}). The pause holds here; the gateway resends it while it runs.`;
 }
 
 export async function pauseCommand(io: Io, config: Config): Promise<number> {

@@ -46,7 +46,7 @@ describe("intent evidence, then intent verify --evidence, offline", () => {
     expect(exported.code).toBe(0);
     const file = join(work, `evidence-${handle}.json`);
     expect(exported.out).toContain(`evidence: wrote ${file}\n`);
-    expect(exported.out).toMatch(new RegExp(`purchase ${handle}: \\d+ of the \\d+ entries of the chain; head seq \\d+ hash [0-9a-f]{64}\\n`));
+    expect(exported.out).toMatch(new RegExp(`purchase ${handle}: \\d+ of the \\d+ entries of the chain; last entry #\\d+, hash [0-9a-f]{64}\\n`));
     expect(exported.out).toContain(`Anyone can check it offline: intent verify --evidence ${file}`);
 
     // The verifier has no chain at all: a data dir that does not exist.
@@ -58,7 +58,7 @@ describe("intent evidence, then intent verify --evidence, offline", () => {
     // Invariant 5: the report claims no more than the offline checks show.
     expect(verified.out).toContain("  every entry hashes to its row; rows outside the pack are the exporter's account\n");
     expect(verified.out).toContain("  an entry of the purchase left out of the pack cannot be detected\n");
-    expect(verified.out).toContain("  Compare this head with one saved earlier, or with another pack from the same chain.\n");
+    expect(verified.out).toContain("  Compare this hash with one saved earlier, or with another pack from the same log.\n");
     expect(verified.out).not.toContain("your receipts");
     expect(verified.out).toContain("re-checked: 2 (handed_off: 1, ordered: 1)");
     expect(verified.out).not.toContain("self-check");

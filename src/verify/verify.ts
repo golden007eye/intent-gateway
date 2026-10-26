@@ -44,7 +44,7 @@ export interface VerifyOptions {
 }
 
 export interface Check {
-  name: "usage" | "evidence pack" | "purchase" | "chain" | "key statements" | "disclosures" | "approvals" | "outcomes" | "approver flags" | "pause" | "self-check";
+  name: "usage" | "evidence pack" | "purchase" | "log" | "key statements" | "requests" | "approvals" | "outcomes" | "approver flags" | "pause" | "self-check";
   ok: boolean;
   details: string[];
 }
@@ -105,14 +105,14 @@ export async function runVerify(opts: VerifyOptions): Promise<Report> {
   const head = last === undefined ? empty : { seq: last.seq, hash: last.hash };
   const checks: Check[] = [];
   if (result.ok) {
-    const details = entries.length === 0 ? [EMPTY_CHAIN] : [`${String(entries.length)} entries, every hash links`];
-    checks.push({ name: "chain", ok: true, details });
+    const details = entries.length === 0 ? [EMPTY_CHAIN] : [`${String(entries.length)} entries, each linked to the one before`];
+    checks.push({ name: "log", ok: true, details });
     checks.push(...checkEntries(entries, opts.pinnedRootKeys, counts));
   } else {
     checks.push({
-      name: "chain",
+      name: "log",
       ok: false,
-      details: [`broken at seq ${String(result.brokenSeq)}: ${result.reason}`, "the entries after it were not checked"],
+      details: [`broken at entry #${String(result.brokenSeq)}: ${result.reason}`, "the entries after it were not checked"],
     });
   }
 
@@ -382,7 +382,7 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
       details: [`${String(statements.size)} recorded, checked offline against the pinned root key`, ...keyFailures],
     },
     {
-      name: "disclosures",
+      name: "requests",
       ok: disclosureFailures.length === 0,
       details: [
         `sent: ${String(counts.disclosures - notSent - unanswered.length)}`,
@@ -391,13 +391,13 @@ export function checkEntries(entries: readonly Entry[], pinned: readonly PinnedR
           ? []
           : [`logged, maybe sent, no answer recorded (the gateway stopped before it finished, or is still waiting): ${String(unanswered.length)} (seq ${unanswered.join(", ")})`]),
         demoChain(entries)
-          ? `acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): ${String(counts.receipts)}`
-          : `acknowledged by a receipt from Intent Cloud's public edge: ${String(counts.receipts)}`,
-        ...(counts.responses === 0 ? [] : [`answered by a destination that signs no receipt (response recorded, unsigned): ${String(counts.responses)}`]),
+          ? `acknowledged by a receipt from the local demo Intent Cloud (demo log, test keys): ${String(counts.receipts)}`
+          : `acknowledged by a receipt from Intent Cloud: ${String(counts.receipts)}`,
+        ...(counts.responses === 0 ? [] : [`answered, no signed receipt (that destination signs none; its status and a digest of the answer are logged): ${String(counts.responses)}`]),
         `sent, not acknowledged: ${String(counts.unacknowledged - notSent)}`,
         `discarded: ${String(counts.discarded)}`,
-        ...(observed.size === 0 ? [] : [`answers summarised locally (observed, never sent): ${String(observed.size)}`]),
-        ...(counts.redactions === 0 ? [] : [`credentials digested in the log (sent, kept only as sha256): ${String(counts.redactions)}`]),
+        ...(observed.size === 0 ? [] : [`answers summarised in the log (kept here, never sent): ${String(observed.size)}`]),
+        ...(counts.redactions === 0 ? [] : [`credential values sent, repeats counted (the log keeps only their sha256): ${String(counts.redactions)}`]),
         ...disclosureWarnings,
         ...disclosureFailures,
       ],

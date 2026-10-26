@@ -105,7 +105,8 @@ export async function walletStatus(io: Io, config: Config): Promise<number> {
     const name = RAIL_NAMES[rail];
     const file = vaultPath(config.dataDir, rail);
     if (!(await hasSecret(config.dataDir, rail))) {
-      line(io.stdout, `${name} wallet: not linked`);
+      // From an agent's shell (no terminal) the link that works is the two-part one.
+      line(io.stdout, `${name} wallet: not linked; link it with ${INTENT} wallet link ${rail}${io.isTTY.stdin && io.isTTY.stdout ? "" : " --start"}`);
       continue;
     }
     const fix = `unlink it with ${INTENT} wallet unlink ${rail} and link it again`;
@@ -183,7 +184,7 @@ function accountLines(name: string, rail: WalletRail, account: WalletAccount): s
   if (budget === null) {
     return [`${name} budget: ${name} shows none for this connection, so one-tap is unavailable; turn on "Allow agent to pay" with a budget in the ${name} app`];
   }
-  return [`${name} budget left for the gateway: ${amountText(budget)}`];
+  return [`${name} agent payments left for the gateway: ${amountText(budget)}`];
 }
 
 /** How often `wallet status --wait-budget` reads the account, and the longest it waits by default (and at most). */
@@ -382,7 +383,7 @@ export async function walletWaitBudget(io: Io, config: Config, timeoutText: stri
     throw new CliError(`--timeout takes whole seconds from 1 to ${String(BUDGET_WAIT_MAX_S)}`, 2);
   }
   if (!(await hasSecret(config.dataDir, rail))) {
-    line(io.stderr, `intent: no ${name} wallet is linked, so there is no budget to wait for; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail} --start`);
+    line(io.stderr, `intent: no ${name} wallet is linked, so there are no agent payments to wait for; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail} --start`);
     return 1;
   }
   warn(io, config);
@@ -393,7 +394,7 @@ export async function walletWaitBudget(io: Io, config: Config, timeoutText: stri
   if (vaultText === null) throw new CliError(`no ${name} wallet is linked; nothing was sent to ${name}. Link one with ${INTENT} wallet link ${rail} --start`);
   // Waiting cannot put a token in the vault: say so at once rather than retrying for the whole timeout.
   if (!shopVaultHasToken(vaultText)) {
-    line(io.stderr, `intent: the ${name} wallet vault holds no token, so there is no budget to read; nothing was sent to ${name}. Run ${INTENT} wallet unlink ${rail}, then ${INTENT} wallet link ${rail} --start`);
+    line(io.stderr, `intent: the ${name} wallet vault holds no token, so there are no agent payments to read; nothing was sent to ${name}. Run ${INTENT} wallet unlink ${rail}, then ${INTENT} wallet link ${rail} --start`);
     return 1;
   }
   const now = io.now ?? Date.now;
@@ -544,7 +545,7 @@ export type LinkMode = "full" | "start" | "finish";
  * developer see the code while the sign-in is still open.
  */
 export async function walletLink(io: Io, config: Config, rail: string, mode: LinkMode = "full"): Promise<number> {
-  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
+  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; the only wallet is ${WALLET_RAILS.join(", ")}`, 2);
   warn(io, config);
   if (mode === "finish") return finishLink(io, config, rail);
   // The key comes first, so a setup that cannot keep the tokens (the Docker image without a key secret) stops before
@@ -774,7 +775,7 @@ async function keepLink(
     throw error;
   }
   line(io.stdout, printable(`${name} wallet linked: tokens kept in the encrypted vault ${vaultPath(config.dataDir, rail)} (entry #${String(entry.seq)})`));
-  line(io.stdout, `One-tap with ${name} pays from the agent budget only while agent payments are on in the ${name} app and your policy allows one tap; otherwise purchases are handed off to ${name}'s checkout page`);
+  line(io.stdout, `One-tap with ${name} pays through agent payments only while they are on in the ${name} app and your policy allows one tap; otherwise purchases are handed off to ${name}'s checkout page`);
   if (!linked.refreshIssued) {
     const life = linked.expiresInS === null ? "" : ` (in about ${String(Math.max(1, Math.round(linked.expiresInS / 3600)))} h)`;
     line(io.stdout, `${name} issued no refresh token: when its access token expires${life}, run ${INTENT} wallet link ${rail} again`);
@@ -792,7 +793,7 @@ async function keepLink(
     }
   } catch (error) {
     // The link is made; only the budget line is missing. The message is the gateway's own, never Shop's text.
-    line(io.stderr, printable(`intent: linked, but the ${name} budget could not be read: ${error instanceof Error ? error.message : String(error)}`));
+    line(io.stderr, printable(`intent: linked, but the ${name} agent payments could not be read: ${error instanceof Error ? error.message : String(error)}`));
   }
   return true;
 }
@@ -813,6 +814,9 @@ function showPrompt(io: Io, name: string, prompt: DeviceGrantPrompt): void {
   line(io.stdout, `  ${printable(prompt.verificationUri)}`);
   if (io.isTTY.stdout) line(io.stdout, printableLines(approvalQr(prompt.verificationUriComplete ?? prompt.verificationUri).text.trimEnd()));
   line(io.stdout, `Waiting for you to approve it in ${name} (up to ${String(Math.ceil(prompt.expiresInS / 60))} min; Ctrl-C stops)…`);
+  // Most likely an agent's shell (it could also be a pipe such as tee, so the line asks), where this output may show only
+  // after the whole wait; --start prints the link and exits.
+  if (!io.isTTY.stdout) line(io.stdout, `Running this from an agent's shell? Stop it and use ${INTENT} wallet link ${name.toLowerCase()} --start, then --finish, so the link shows before the wait.`);
 }
 
 function delay(ms: number): Promise<void> {
@@ -821,7 +825,7 @@ function delay(ms: number): Promise<void> {
 
 /** Opens the chain, deletes the rail's vault file, then chains the unlink. Exit 0 also when nothing was linked. */
 export async function walletUnlink(io: Io, config: Config, rail: string): Promise<number> {
-  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
+  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; the only wallet is ${WALLET_RAILS.join(", ")}`, 2);
   const name = RAIL_NAMES[rail];
   const notLinked = (): number => {
     line(io.stdout, `${name} wallet: not linked; nothing to unlink`);
@@ -891,7 +895,7 @@ export const CHECK_DEFAULT_SINCE = "7d";
  * Exit 1, with nothing sent, when no wallet is linked.
  */
 export async function walletCheck(io: Io, config: Config, rail: string, sinceText: string | undefined): Promise<number> {
-  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; known: ${WALLET_RAILS.join(", ")}`, 2);
+  if (!isWalletRail(rail)) throw new CliError(`unknown wallet "${rail}"; the only wallet is ${WALLET_RAILS.join(", ")}`, 2);
   const name = RAIL_NAMES[rail];
   const since = parseSince(sinceText ?? CHECK_DEFAULT_SINCE, (io.now ?? Date.now)(), false);
   if (!(await hasSecret(config.dataDir, rail))) {

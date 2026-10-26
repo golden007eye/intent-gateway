@@ -4,27 +4,27 @@ The gateway is built so you can check what left your machine instead of taking o
 
 ```console
 $ intent verify --demo
-chain: ok
-  22 entries, every hash links
+log: ok
+  22 entries, each linked to the one before
 key statements: ok
   1 recorded, checked offline against the pinned root key
-disclosures: ok
+requests: ok
   sent: 6
-  acknowledged by a receipt from the local demo Intent Cloud (demo chain, test keys): 6
+  acknowledged by a receipt from the local demo Intent Cloud (demo log, test keys): 6
   sent, not acknowledged: 0
   discarded: 0
-  answers summarised locally (observed, never sent): 4
+  answers summarised in the log (kept here, never sent): 4
 approvals: ok
   verified: 1
 approver flags: ok
   flagged: 0
 self-check: skipped on request (demo mode); npm provenance and the image signature were not checked
-head: seq 21 hash 96e8d697…fa40
-  Compare this head with a copy of the chain taken earlier, or with your receipts.
+last entry: #21, hash 96e8d697…fa40
+  Compare this hash with a copy of the log taken earlier, or with your receipts.
 verify: ok
 ```
 
-It exits 0 when every check passes, 1 when one fails, and 2 for a usage or configuration error. On a demo chain the receipts came from the local demo Intent Cloud, and the report says so; on a real chain the line reads "acknowledged by a receipt from Intent Cloud's public edge". Without `--demo` it reads the real chain and needs the host's root key, pinned in the build or given with `--trust-keys <file>`.
+It exits 0 when every check passes, 1 when one fails, and 2 for a usage or configuration error. On a demo chain the receipts came from the local demo Intent Cloud, and the report says so; on a real chain the line reads "acknowledged by a receipt from Intent Cloud". Without `--demo` it reads the real chain and needs the host's root key, pinned in the build or given with `--trust-keys <file>`.
 
 ## How the log is kept
 
@@ -61,7 +61,7 @@ Before each request to Intent Cloud, the gateway appends the exact request to th
 
 `intent evidence <approval handle>` writes one purchase's entries, with the hashes of the rest of the chain, as an [evidence pack](evidence.md). Whoever receives it checks it offline with `intent verify --evidence <file>`, which runs the checks above on that purchase alone. It cannot prove offline that no entry of the purchase was left out until the chain's head carries a countersignature from Intent Cloud ([known risks](threat-model.md#known-risks)).
 
-## The head seq and hash
+## The last entry and its hash
 
 Dropping whole entries from the end of the file leaves a valid, shorter chain, so the file alone cannot show it. That needs evidence from outside the file:
 

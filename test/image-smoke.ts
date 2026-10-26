@@ -197,7 +197,7 @@ async function demo(): Promise<void> {
   check(!logs(id).includes("<token>") && !logs(id).includes("<container>"), "the demo log has no <token> or <container> placeholder", logs(id));
   check(logs(id).includes("Add the demo gateway to Claude Code with the claude mcp add line above."), "the demo next steps point at that line");
   check(logs(id).includes(`docker exec ${short} intent verify --demo`), "the demo log names this container by its id (HOSTNAME)");
-  check(logs(id).includes(`intent-gateway: serving; stop it with docker stop ${short}\n`) && !logs(id).includes("Ctrl-C"), "a detached container says docker stop, not Ctrl-C", logs(id));
+  check(logs(id).includes(`intent: serving; stop it with docker stop ${short}\n`) && !logs(id).includes("Ctrl-C"), "a detached container says docker stop, not Ctrl-C", logs(id));
   const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers: { authorization: `Bearer ${token}` } } });
   const client = new Client({ name: "image-smoke", version: "0" });
   await client.connect(transport as Transport);

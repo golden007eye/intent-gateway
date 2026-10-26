@@ -94,10 +94,10 @@ function entryRow(item: Item, demo: boolean, notSent: ReadonlySet<unknown>, answ
 function chainLine(items: readonly unknown[]): string {
   const chain = verifyChain(items);
   const last = asItem(items.at(-1));
-  const head = last === null ? "" : `, head seq ${String(last.seq)}`;
+  const head = last === null ? "" : `; last entry #${String(last.seq)}`;
   return chain.ok
-    ? `${String(items.length)} entries, every hash links${head}. ${INTENT} verify re-checks the receipts and approvals.`
-    : `the chain breaks at seq ${String(chain.brokenSeq)} (${printable(chain.reason)}); run ${INTENT} verify`;
+    ? `${String(items.length)} entries, each linked to the one before${head}. ${INTENT} verify re-checks the receipts and approvals.`
+    : `the log breaks at entry #${String(chain.brokenSeq)} (${printable(chain.reason)}); run ${INTENT} verify`;
 }
 
 function shown(kept: readonly Activity[], all: readonly Activity[]): string {

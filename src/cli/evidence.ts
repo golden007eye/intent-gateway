@@ -45,7 +45,7 @@ export async function evidence(io: Io, dataDir: string, handle: string, pinnedRo
   }
   const entries = report.checks.find((c) => c.name === "evidence pack")?.details[0] ?? "";
   line(io.stdout, `evidence: wrote ${printable(file)}`);
-  line(io.stdout, `  ${entries}; head seq ${String(report.head.seq)} hash ${report.head.hash}`);
+  line(io.stdout, `  ${entries}; last entry #${String(report.head.seq)}, hash ${report.head.hash}`);
   line(io.stdout, `  Anyone can check it offline: ${INTENT} verify --evidence ${printable(file)}`);
   return 0;
 }

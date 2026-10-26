@@ -20,7 +20,7 @@ The side navigation (a row of tabs on a narrow window) switches between six view
 | Approvals | `#/approvals` | Approvals waiting for you, each with **Open approval page**; approved and expired ones; the pinned approver passkey's fingerprint and any flagged passkey. Compare the fingerprint with your passkey manager before you run `intent approver accept`. |
 | Policy | `#/policy` | The active policy, rule by rule, and where it came from (your policy file, or the bundled default). A policy can only narrow the rules Intent Cloud enforces. |
 | Server log | `#/log` | The full local chain, entry by entry. Open an entry to see its body field by field, with its `prev` and `hash`. Filter by kind or by any text (a field, a value, a seq); the filter is kept in the address (`#/log?kind=disclosure&q=94103`). |
-| Verify | `#/verify` | The result of the same chain checks as `intent verify`: the hash links, the key statements, every receipt and every approval proof, with the head seq and hash. The panel runs them again whenever the chain changes. It skips the install self-check; run `intent verify` for that. |
+| Verify | `#/verify` | The result of the same chain checks as `intent verify`: the hash links, the key statements, every receipt and every approval proof, with the last entry's number and hash. The panel runs them again whenever the chain changes. It skips the install self-check; run `intent verify` for that. |
 
 A purchase's state says what the chain holds after its approval. For a [one-tap purchase](one-tap.md): **Completing with Shop**, then **Ordered** (Shop returned the order on a checkout read and the binding check passed), **Order does not match**, **Not completed**, or **Sent to Shop, result unknown: check Shop orders** when a `complete_checkout` may have left and no read has settled it. For a hand-off: **Handed off to the merchant**. **Order reported, not verified** marks an outcome whose state is `reported`: an order was reported but not verified, so it is never shown as ordered.
 
@@ -30,7 +30,7 @@ The activity feed also lists each call to a wallet destination (`Shop get_checko
 
 ## Pause
 
-Under the brand bar, the panel shows a **Pause purchases** button with the line: `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.
+Under the brand bar, the panel shows a **Pause purchases** button with the line: `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.
 
 The button does what `intent pause` does ([ADR-0023](adr/0023-pause.md)): it appends the local pause to the chain at once, so the gateway refuses `create_cart` and `complete_checkout` from then on, and then sends the pause to Intent Cloud through the log. In demo mode the panel only pauses locally; `intent demo` sends it.
 

@@ -7,7 +7,7 @@
 // a wallet destination (Shop) says "answered" with the status its `response` entry recorded, never "receipt": a wallet
 // signs none. The "Sent to … only" lines name each destination apart, from what its logged requests carried.
 // `intent verify` re-checks every signature. Pure; the golden test pins it.
-import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, INTENT_CLOUD, summarise, walletCheckWords } from "../activity/index.ts";
+import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, INTENT_CLOUD, MCP_CLIENT_META, summarise, walletCheckWords } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 import { printable } from "../ui/index.ts";
 
@@ -80,20 +80,39 @@ export function formatTimeline(context: TimelineContext, style: TimelineStyle): 
   const all = summarise(items, []);
   const lines: string[] = [];
   const dir = context.home !== undefined && context.home !== "" && context.dataDir.startsWith(`${context.home}/`) ? `~${context.dataDir.slice(context.home.length)}` : context.dataDir;
-  lines.push(paint("dim", [`intent log`, all.demo ? "DEMO chain (test keys)" : "real chain", dir, plural(items.length, "entry", "entries")].join(` ${g.dot} `)));
+  lines.push(paint("dim", [`intent log`, all.demo ? "DEMO (test keys)" : "real", dir, plural(items.length, "entry", "entries")].join(` ${g.dot} `)));
 
   const rows = shown.map((a) => row(a, g));
   const valuesWidth = Math.min(VALUES_MAX, Math.max(0, ...rows.map((r) => r.values.length)));
   let day = "";
-  for (const [index, activity] of shown.entries()) {
+  for (let index = 0; index < shown.length; index++) {
+    const activity = shown[index];
     const r = rows[index];
-    if (r === undefined) continue;
+    if (activity === undefined || r === undefined) continue;
     const date = activity.time === "" ? "" : dayHeader(activity.time, style);
     if (date !== day && date !== "") {
       lines.push("", paint("sage", date));
       day = date;
     }
-    lines.push(rowLine(activity, r, valuesWidth, style, g, paint));
+    // The same call answered the same way, back to back (Shop polled every few seconds while a sign-in waits), is
+    // one line with its count; `-v` and `--json` still list each one.
+    let repeats = 1;
+    for (let next = index + 1; activity.action === "call" && next < shown.length; next++) {
+      const later = shown[next];
+      const same = rows[next];
+      if (later?.action !== "call" || same === undefined || same.values !== r.values || same.outcome !== r.outcome) break;
+      if ((later.time === "" ? "" : dayHeader(later.time, style)) !== date) break;
+      // Back to back in the log itself, not only in a filtered view, and to the same destination (two destinations can
+      // read alike in words: `shop_accounts` and `Shop accounts`).
+      const before = shown[next - 1];
+      if (before === undefined || later.seq !== (before.seqs.at(-1) ?? before.seq) + 1 || later.facts.destination !== activity.facts.destination) break;
+      repeats++;
+    }
+    const last = shown[index + repeats - 1];
+    const until = last === undefined || last.time === "" ? "" : `, until ${clockTime(last.time, style)}`;
+    const counted = repeats === 1 ? r : { ...r, outcome: `${r.outcome} ${g.times}${String(repeats)}${until}` };
+    lines.push(rowLine(activity, counted, valuesWidth, style, g, paint));
+    index += repeats - 1;
   }
   if (shown.length === 0) lines.push("", total === 0 ? `No entries yet: the gateway has sent nothing. Start it with ${INTENT} serve, or try ${INTENT} demo.` : "No action matches the filter.");
 
@@ -258,7 +277,7 @@ function rawRow(a: Activity, g: Glyphs): Row {
       }
       const status = request.response?.status ?? null;
       const ok = status !== null && status < 400;
-      return { verb: "call", verbTone: "bold", values, outcome: `${ok ? g.ok : g.warn} answered${status === null ? "" : ` ${String(status)}`} (no receipt: unsigned)`, outcomeTone: ok ? "good" : "warn" };
+      return { verb: "call", verbTone: "bold", values, outcome: `${ok ? g.ok : g.warn} answered${status === null ? "" : ` ${String(status)}`} (no signed receipt)`, outcomeTone: ok ? "good" : "warn" };
     }
     case "pause": {
       const from = f.pause_from === "panel" ? "from the panel" : f.pause_from === "intent_cloud" ? "paused answer received from Intent Cloud" : "from the CLI";
@@ -311,7 +330,7 @@ function delivery(a: Activity, receipts: number, g: Glyphs): [string, Tone] {
     case "maybe_sent":
       return [`${g.warn} maybe sent, no answer recorded`, "warn"];
     case "answered":
-      return [`${g.ok} answered (no receipt: unsigned)`, "good"];
+      return [`${g.ok} answered (no signed receipt)`, "good"];
     case "discarded":
       return [`${g.bad} answer discarded: no valid receipt`, "bad"];
     default:
@@ -366,7 +385,7 @@ function disclosed(summary: ActivitySummary, g: Glyphs, paint: (tone: Tone, s: s
   for (const d of destinations) out.push(paint("dim", sentLine(d)));
   const { checked, unchecked, findings } = summary.identity;
   if (findings.length > 0) {
-    out.push(paint("bad", `${g.bad} Buyer identity in what was sent: ${findings.map((f) => `seq ${String(f.seq)} (${f.kinds.join(", ")})`).join(", ")}; run ${INTENT} verify`));
+    out.push(paint("bad", `${g.bad} Buyer identity in what was sent: ${findings.map((f) => `entry #${String(f.seq)} (${f.kinds.join(", ")})`).join(", ")}; run ${INTENT} verify`));
   } else if (checked > 0 || unchecked === 0) {
     const caveat = unchecked === 0 ? "" : ` (${plural(unchecked, "request", "requests")} with no logged bytes not checked)`;
     out.push(paint("dim", `Never sent: your name, postal address, card${caveat}.`));
@@ -402,13 +421,19 @@ function walletFields(fields: readonly string[]): string[] {
   const args: string[] = [];
   const rest: string[] = [];
   let envelope = false;
+  let meta = false;
+  let empty = false;
   for (const field of fields) {
     if (field.startsWith("params.arguments.")) args.push(field.slice("params.arguments.".length));
     else if (field === "params.name") rest.unshift("tool name");
     else if (field === "jsonrpc" || field === "id" || field === "method") envelope = true;
+    else if (MCP_CLIENT_META.has(field)) meta = true;
+    // The arguments object is a leaf only when it is empty: the tool was called with no arguments.
+    else if (field === "params.arguments") empty = true;
     else rest.push(field);
   }
-  return [...args, ...rest, ...(envelope ? ["MCP envelope (jsonrpc, id, method)"] : [])];
+  const parts = [...(envelope ? ["jsonrpc, id, method"] : []), ...(empty ? ["no arguments"] : []), ...(meta ? ["client name, version and capabilities"] : [])];
+  return [...args, ...rest, ...(parts.length === 0 ? [] : [`MCP envelope (${parts.join("; ")})`])];
 }
 
 /** A call's argument names (`checkout_id`), or its other field names; values are in `-v`. */
@@ -444,7 +469,7 @@ function counts(summary: ActivitySummary, shown: number, total: number, g: Glyph
   add(summary.refused, "refused", "refused", "bad");
   add(a.flagged, "flagged", "flagged", "bad");
   add(r.acknowledged, "receipt", "receipts", "good");
-  add(r.answered, "answered unsigned", "answered unsigned");
+  add(r.answered, "answered without a receipt", "answered without a receipt");
   add(r.unacknowledged, "sent without receipt", "sent without receipt", "warn");
   add(r.not_sent, "not sent", "not sent", "warn");
   add(r.maybe_sent, "maybe sent", "maybe sent", "warn");

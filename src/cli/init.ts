@@ -74,7 +74,8 @@ async function accountKeyStep(dataDir: string, report: (level: Level, text: stri
 
 /** Offers to link Shop when it can; false only when the developer said yes and the link failed. */
 async function shopStep(io: Io, config: Config, yes: boolean): Promise<boolean> {
-  const later = `link it later with ${INTENT} wallet link shop`;
+  // From an agent's shell (no terminal) the link is the two-part one: `--start` prints the code and exits.
+  const later = `link it later with ${INTENT} wallet link shop${io.isTTY.stdin && io.isTTY.stdout ? "" : " --start"}`;
   if (config.demo) {
     line(io.stdout, `Shop one-tap: not offered in demo mode; ${HANDOFF}`);
     return true;

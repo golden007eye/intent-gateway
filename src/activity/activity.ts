@@ -754,6 +754,20 @@ export function destinationLabel(destination: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/**
+ * The client fields the gateway's own Shop MCP client (src/wallet-shop/rpc.ts) writes in `params._meta` of every
+ * request. Only these are summed up as the MCP envelope; any other `_meta` field is named on its own (invariant 5).
+ */
+export const MCP_CLIENT_META: ReadonlySet<string> = new Set([
+  "params._meta.io.modelcontextprotocol/clientCapabilities",
+  "params._meta.io.modelcontextprotocol/clientInfo.name",
+  "params._meta.io.modelcontextprotocol/clientInfo.version",
+  "params._meta.io.modelcontextprotocol/protocolVersion",
+]);
+
+/** The JSON-RPC fields of every MCP request, the tool name and an empty arguments object. */
+export const MCP_ENVELOPE: ReadonlySet<string> = new Set(["jsonrpc", "id", "method", "params.name", "params.arguments"]);
+
 /** A redaction marker (`[redacted sha256:<hex>]`) in words: `redacted (sha256 1a2b3c4d…)`; null for any other value. */
 export function credentialWords(value: unknown): string | null {
   const digest = markerDigest(value);

@@ -67,7 +67,7 @@ export async function runHttp(options: HttpOptions): Promise<HttpHandle> {
   let allowedHosts: ReadonlySet<string> | null = new Set();
   const server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
-      log(`intent-gateway: MCP HTTP request failed: ${error instanceof Error ? error.message : String(error)}`);
+      log(`intent: MCP HTTP request failed: ${error instanceof Error ? error.message : String(error)}`);
       if (!res.headersSent) plain(res, 500, "internal error");
       else res.end();
     });

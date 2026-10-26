@@ -91,7 +91,7 @@ describe("intent as a process", () => {
     const reason =
       "Intent Cloud at 127.0.0.1:9 cannot be reached (connection refused); nothing was sent. " +
       `Check your connection and INTENT_CLOUD_URL, or try everything locally with node ${realpathSync(MAIN)} demo`;
-    expect(message).toContain(`intent-gateway could not start: ${reason}`);
+    expect(message).toContain(`intent could not start: ${reason}`);
     expect(stderr).toContain(`intent: ${reason}\n`);
     expect(stderr).not.toMatch(/ECONNREFUSED|\bat .+:\d+:\d+/);
   });
@@ -99,7 +99,7 @@ describe("intent as a process", () => {
   it("with an unpinned host and no --trust-keys, initialize fails naming --trust-keys and the demo", { timeout: 30_000 }, async () => {
     const { message } = await failedStart([], { INTENT_CLOUD_URL: "https://cloud.example" });
     expect(message).toContain(
-      `intent-gateway could not start: configuration: cloud.example is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key; or run node ${realpathSync(MAIN)} demo to try the gateway with no setup`,
+      `intent could not start: configuration: cloud.example is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key; or run node ${realpathSync(MAIN)} demo to try the gateway with no setup`,
     );
   });
 
@@ -111,10 +111,10 @@ describe("intent as a process", () => {
     expect(result.stderr).toMatch(/^intent: approver accept needs a person at a terminal/);
   });
 
-  it("--version prints the version; an unknown command prints the help and exits 2", { timeout: 30_000 }, async () => {
+  it("--version prints the version; an unknown command prints one line naming --help and exits 2", { timeout: 30_000 }, async () => {
     expect(await exec(["--version"])).toEqual({ code: 0, stdout: `${BUILD.version}\n`, stderr: "" });
     const unknown = await exec(["frobnicate"]);
     expect(unknown.code).toBe(2);
-    expect(unknown.stderr).toMatch(/^intent: unknown command "frobnicate"\n\nintent-gateway: /);
+    expect(unknown.stderr).toMatch(/^intent: unknown command "frobnicate"; run .+ --help for the list\n$/);
   });
 });

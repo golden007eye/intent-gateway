@@ -43,7 +43,7 @@ const ROLE_ORDER: readonly Role[] = [
 ];
 
 /** Receipts cover one request each, never the head: only a head saved elsewhere can be compared with this one. */
-const HEAD_NOTE = "Compare this head with one saved earlier, or with another pack from the same chain.";
+const HEAD_NOTE = "Compare this hash with one saved earlier, or with another pack from the same log.";
 
 export function runVerifyEvidence(opts: EvidenceVerifyOptions): Report {
   const counts = { disclosures: 0, receipts: 0, responses: 0, unacknowledged: 0, unanswered: 0, discarded: 0, redactions: 0, approvals: 0, outcomes: 0, flags: 0 };

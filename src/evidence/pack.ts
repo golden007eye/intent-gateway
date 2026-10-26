@@ -50,7 +50,7 @@ export class EvidenceError extends Error {
  */
 export function buildEvidence(chain: readonly unknown[], handle: string, pinnedRootKeys: readonly PinnedRootKey[]): EvidencePack {
   const linked = verifyChain(chain);
-  if (!linked.ok) throw new EvidenceError(`the chain is broken at seq ${String(linked.brokenSeq)} (${linked.reason})`);
+  if (!linked.ok) throw new EvidenceError(`the log is broken at entry #${String(linked.brokenSeq)} (${linked.reason})`);
   const entries = chain as Entry[];
   const { roles, missing } = purchaseEntries(entries, handle);
   if (missing.length > 0) throw new EvidenceError(`no purchase ${handle} to export: ${missing.join("; ")}`);

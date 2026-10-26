@@ -545,7 +545,7 @@ describe("verify on acquire (attack: a broken chain is not extended)", () => {
 
     const restarted = await openStore(dir, { clock, fs: fast });
     await expect(restarted.append("disclosure", {})).rejects.toThrow(
-      new StoreCorruptError("the chain is broken at seq 2: seq is 0, expected 2"),
+      new StoreCorruptError("the log is broken at entry #2: seq is 0, expected 2"),
     );
     await expect(restarted.append("disclosure", {})).rejects.toThrow(StoreCorruptError);
     expect(logText()).toBe(text);
@@ -560,13 +560,13 @@ describe("verify on acquire (attack: a broken chain is not extended)", () => {
     lines[0] = canonicalize({ ...fields, hash: sha256Hex(canonicalize(fields)) });
     await fsp.writeFile(logPath(), lines.join("\n"));
     const restarted = await openStore(dir, { clock, fs: fast });
-    await expect(restarted.append("disclosure", {})).rejects.toThrow("the chain is broken at seq 1");
+    await expect(restarted.append("disclosure", {})).rejects.toThrow("the log is broken at entry #1");
   });
 
   it("refuses a running handle when a stray line landed between its turns", async () => {
     const store = await filled(2);
     appendFileSync(logPath(), firstLine());
-    await expect(store.append("disclosure", {})).rejects.toThrow("the chain is broken at seq 2");
+    await expect(store.append("disclosure", {})).rejects.toThrow("the log is broken at entry #2");
     await expect(store.append("disclosure", {})).rejects.toThrow(StoreCorruptError);
   });
 

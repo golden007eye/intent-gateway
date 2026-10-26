@@ -13,9 +13,9 @@ You are setting up intent-gateway for the developer you are talking to. The gate
 How to work:
 
 - Do one step at a time, in order. Run the commands yourself.
-- Do not narrate commands or paste their output. Between developer actions, say only the status line: `✓ <n>/9  <what happened>. Next: <what>.` Here `<n>` is the step just finished and 9 is the number of steps. Use that mark and that form every time. The only other thing you may say is a command's error line and the fix it names.
+- Do not narrate commands, recap a step or paste command output. Between developer actions, say only the status line: `✓ <n>/9  <what happened>. Next: <what>.` Here `<n>` is the step just finished and 9 is the number of steps. Use that mark and that form every time, once per finished step, and never for a step that is not finished yet. The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.
 - Anything the developer must see, click or type (a link, a code, a choice) goes in your own reply, written out in full, never only in a command's output. Why: Claude Code does not reliably show command output to the developer.
-- Each developer action is a block in your own reply, copied from this prompt with its link or code filled in. It starts with the bold **Your turn:** marker and a short label. It gives one action, in short lines, with its link or code on its own line. It ends with "Reply done" only when no command can see that the action is done. Where a command can see it (the Shop link, agent payments, the purchase), run that command instead of asking. Say nothing after a block while the developer acts.
+- Each developer action is a block in your own reply, copied from this prompt without the `>` marks, with its link or code filled in. It starts with the bold **Your turn:** marker and a short label. It gives one action, in short lines, with its link or code on its own line. It ends your reply: run nothing after it. It ends with "Reply done", unless the developer answers it with a choice or with "continue". Where a command can see the action (the Shop link, agent payments, the purchase), run that command once the developer replies; it confirms the action or waits for it. Why: an agent that ran the waiting command in the same reply showed the block only after the wait, so the developer never saw the link. Say nothing after a block while the developer acts.
 - The commands that wait (`intent wallet link shop --finish`, `intent wallet status --wait-budget`, `get_approval_status`) send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.
 - Never ask for, type or store the developer's name, postal address or card. They give those to Shop themselves.
 - If a command fails, show its error line and the fix it names, and stop at that step. Do not work around it.
@@ -27,7 +27,7 @@ In every step, `intent <command>` means this exact command line:
 $ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} npx -y intent-gateway@0.1.0-preview.5 <command>
 ```
 
-Your first reply is this opening, and nothing else:
+Your first reply starts with this opening, word for word, and goes straight on with step 1:
 
 > Setting up intent: about 10 minutes. You'll do 8 things: sign up and create a passkey, approve the Shop link, turn on agent payments, look at your rules (optional), restart Claude Code, say what to buy, pick an offer, approve with your passkey.
 
@@ -93,19 +93,19 @@ This step is required: never skip it, also when the developer says they already 
 
 ## Step 5: link Shop and turn on agent payments
 
-1. Run `intent wallet link shop --start`. It prints one line, `Open <link> and approve the code <CODE> in Shop before <time>, then run <the --finish command>`, and exits; the command it names is the one you ran, with `--finish`. Show the link and the code from that line:
+1. Run `intent wallet link shop --start`. It prints one line, `Open <link> and approve the code <CODE> in Shop before <time>, then run <the --finish command>`, and exits; the command it names is the one you ran, with `--finish`. Show the link and the code from that line, in this block:
 
 > **Your turn:** approve the Shop link
 >
-> Open this link and approve intent in Shop.
->
-> The code is already filled in if you use this link.
+> Open this link and approve intent in Shop; the code is already filled in.
 >
 > <the link, as a clickable link>
 >
-> <the code>
+> Code: <the code>
+>
+> Reply done
 
-2. Right away, run `intent wallet link shop --finish`, with a long timeout (10 minutes): it waits for the approval. If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1. If Shop denied the link, ask the developer whether to try again. If the developer has no Shop account, they create one from that link or in the Shop app, and add a payment card in Shop.
+2. When the developer replies, run `intent wallet link shop --finish`, with a long timeout (10 minutes): it waits for the approval if it has not happened yet. If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1 once; if it expires again, ask the developer whether to try again. If Shop denied the link, ask the developer whether to try again. If the developer has no Shop account, they create one from that link or in the Shop app, and add a payment card in Shop.
 3. Agent payments are Shop's permission for the agent to pay at all: without them no purchase completes in one tap, and every order goes to Shop's checkout page, where the developer pays by hand. Once the link is approved, `--finish` prints one of four outcomes:
    - `Agent payments on: …` (they are already on): skip the block below and go to the note in 4.
    - Agent payments are on and the limit is high enough, but this period's amount is spent: one line that starts `Agent payments are on, but only <left> is left until Shop renews it` and ends `so wait for that renewal rather than raising it.` There is nothing to raise: say that line as a one-line status, not a **Your turn** block, and add in one line that until Shop renews it, purchases are handed off to Shop's checkout page. Then skip 4 and go to step 6. `intent wallet status` and `intent wallet status --wait-budget` can print the same line; say it the same way.
@@ -119,14 +119,16 @@ This step is required: never skip it, also when the developer says they already 
 > <the last line `--finish` printed>
 >
 > <the line before it, the Shop page, as a clickable link>
+>
+> Reply done
 
-4. Right away, run `intent wallet status --wait-budget --timeout 540`, with a 10-minute timeout for the command (540 s leaves time for `npx` to start, so its own timeout line is printed before the command is stopped). It waits until Shop shows agent payments on, with at least one purchase's limit left. When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (why it names no amount), and this note, in two short lines:
+4. When the developer replies to that block (or right away, if you showed none), run `intent wallet status --wait-budget --timeout 540`, with a 10-minute timeout for the command (540 s leaves time for `npx` to start, so its own timeout line is printed before the command is stopped). It waits until Shop shows agent payments on, with at least one purchase's limit left. When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (why it names no amount), and this note, in two short lines, then go on to step 6:
    - "Shop says it enforces this amount itself, as a safety net; intent's policy does the day-to-day limiting."
    - "It is the only stop an agent with shell access can't get around: any program running as you can read the Shop token on this computer."
 
    If it prints a line that starts `intent: no Shop agent payments seen after` or `intent: Shop agent payments are still low after`, say that line and ask whether to wait again; if yes, run `intent wallet status --wait-budget --timeout 540` again. If the developer would rather not turn on agent payments, go on: every order then goes to Shop's checkout page.
 
-   If `--finish` or `--wait-budget` prints a line that starts `intent: the ceilings Intent Cloud returns could not be read`, it exits 1 and the amount left was not checked. `--finish` has still linked Shop, and prints the Shop page and what to tap, with no amount: show those two lines as the **Your turn** block above. Say that line, then run `intent wallet status --wait-budget --timeout 540` once more. If it prints the same line again, say in one line that the amount could not be checked right now, and go on to step 6; run it again before the first purchase.
+   If `--finish` or `--wait-budget` prints a line that starts `intent: the ceilings Intent Cloud returns could not be read`, it exits 1 and the amount left was not checked. `--finish` has still linked Shop, and prints the Shop page and what to tap, with no amount. Say that line, then show those two lines as the **Your turn** block above; when the developer replies, run `intent wallet status --wait-budget --timeout 540` once more. If it prints the same line again, say in one line that the amount could not be checked right now, and go on to step 6; run it again before the first purchase.
 
 ## Step 6: the policy
 
@@ -140,19 +142,17 @@ $ mkdir -p .claude/skills
 $ cp -R "$tmp/package/onboarding/skills/policy-advisor" .claude/skills/
 ```
 
-Then run the skill `policy-advisor`. If it is not listed yet, read `.claude/skills/policy-advisor/SKILL.md` and follow it. It shows the rules in the gateway's panel (the "look at your rules" block), changes them only when the developer asks, and ends with `intent policy test`. The restart in step 8 picks up any change.
+Then run the skill `policy-advisor`. If it is not listed yet, read `.claude/skills/policy-advisor/SKILL.md` and follow it, without saying so. It shows the rules in the gateway's panel (the "look at your rules" block), changes them only when the developer asks, and ends with `intent policy test`. The restart in step 8 picks up any change.
 
 ## Step 7: Pause
 
-Tell the developer these two lines, exactly:
+Tell the developer these two sentences, exactly:
 
-> intent pause stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.
-
-Then add, in one line, that turning off agent payments in Shop is that hard stop.
+> intent pause stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.
 
 ## Step 8: the first purchase
 
-1. Claude Code starts the gateway only when Claude Code starts, and the gateway reads its policy and looks for the Shop wallet then. One restart now picks up the gateway, the policy, the Shop link and, if you switched it in step 1, the new Node. If you switched Node, first say in one line: "If `claude` is not found in the new terminal, reinstall Claude Code with `npm i -g @anthropic-ai/claude-code`, or with its native installer." Then show:
+1. Claude Code starts the gateway only when Claude Code starts, and the gateway reads its policy and looks for the Shop wallet then. One restart now picks up the gateway, the policy, the Shop link and, if you switched it in step 1, the new Node. When the developer says "continue" after it, go to 2 and say nothing before its block. If you switched Node, first say in one line: "If `claude` is not found in the new terminal, reinstall Claude Code with `npm i -g @anthropic-ai/claude-code`, or with its native installer." Then show:
 
 > **Your turn:** restart Claude Code
 >
@@ -174,29 +174,33 @@ Then add, in one line, that turning off agent payments in Shop is that hard stop
 >
 > Reply with the number of the offer you want.
 
-4. Call `create_cart` for the offer they picked, with its `offer_handle`. Never approve for them. Show:
+4. Call `create_cart` for the offer they picked, with its `offer_handle`. Never approve for them. Show, with the link and the check code from its result:
 
 > **Your turn:** approve with your passkey
 >
-> Open the approval page, check the item and total, and approve with your passkey.
+> Open the page, check the item, total and check code, then approve with your passkey.
 >
 > <the approval link, as a clickable link>
+>
+> Check code: <the check code>
+>
+> Reply done
 
-5. Right away, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result's own advice, such as "Check the order in the Shop app", in one line. Any other result is final: relay what it says, in one line, and no more. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that.
+5. When the developer replies, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result's own advice, such as "Check the order in the Shop app", in one line. Any other result is final: relay what it says, in one line, and no more. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that.
 
 ## Step 9: read the log together
 
-1. Run `intent log` and go through it with the developer in at most five short lines: what was sent, what came back and what was blocked. A call to Shop shows its status, with no receipt because Shop signs none.
-2. Run `intent verify`. It re-checks the local hash chain, every receipt Intent Cloud returns and every approval, and ends with `verify: ok`.
+1. Run `intent log` and go through it with the developer in at most three short lines: what was sent to Intent Cloud, what was sent to Shop, and what was blocked or never sent. A call to Shop shows its status, with no receipt because Shop signs none.
+2. Run `intent verify`. It re-checks the log, every receipt Intent Cloud returns and every approval, and ends with `verify: ok`.
 3. Tell them, in one line, what these prove: what the gateway sent, what Intent Cloud acknowledged receiving and what Shop returned. They make no claim about what happens to that data afterwards.
 
-Setup is done. To change the limits later, the developer runs the policy-advisor skill again. End with this card, and nothing after it. Fill it in from the text the tools returned, and only with what that text says:
+Setup is done. To change the limits later, the developer runs the policy-advisor skill again. Instead of a status line for step 9, end with this card, and nothing after it. Fill it in from the text the tools returned, and only with what that text says:
 
 - the outcome: `ordered`, with `order <number>` only when the `get_approval_status` result names one (`One-tap: ordered …, order <number>`, or "placed the order (order <number>)"); "handed off to Shop's checkout" when the result says the buyer pays at the checkout or was handed off; otherwise "not completed" and the reason the result gives. Never say paid or ordered unless the result says ordered.
 - the store and total: from the `create_cart` result's line `… from <store>, total <total> …`.
 
 > **Done:** <outcome>, from <store>, total <total>
 >
-> `intent log` shows what the gateway sent.
+> Ask me any time to run `intent log` (what the gateway sent) or `intent pause`.
 >
-> `intent pause` stops every purchase that goes through intent and isn't paid yet.
+> `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.

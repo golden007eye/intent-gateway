@@ -61,19 +61,19 @@ exports[`intent log: wallet destinations, refusals and wallet entries > -v lists
 2026-10-16 17:27:25 UTC  wallet  seq 11  recorded
   #11   wallet         Shop wallet unlinked, token not revoked (deleted here only)
 
-12 entries, every hash links, head seq 11. intent verify re-checks the receipts and approvals.
+12 entries, each linked to the one before; last entry #11. intent verify re-checks the receipts and approvals.
 "
 `;
 
 exports[`intent log: wallet destinations, refusals and wallet entries > the timeline: a Shop call is answered with its status, blocks say nothing sent, each destination has its own Sent line 1`] = `
-"intent log · real chain · /data · 12 entries
+"intent log · real · /data · 12 entries
 
 Friday 16 October 2026 (UTC)
 17:26:41  search    lamps · ZIP 94103                                     ✓ receipt
 17:26:49  wallet    Shop wallet linked                                    ✓ recorded
 17:26:53  start     gateway started                                       ✓ recorded
-17:26:57  call      Shop get_checkout · checkout_id                       ✓ answered 200 (no receipt: unsigned)
-17:27:05  call      Shop refresh · refresh_token                          ⚠ answered 401 (no receipt: unsigned)
+17:26:57  call      Shop get_checkout · checkout_id                       ✓ answered 200 (no signed receipt)
+17:27:05  call      Shop refresh · refresh_token                          ⚠ answered 401 (no signed receipt)
 17:27:13  blocked   Shop search: an email address in params.arguments.note  ✗ nothing sent
 17:27:17  blocked   Shop search: not logged as sent: a credential in the query (access_token), which the log cannot digest  ✗ nothing sent
 17:27:21  wallet    Shop wallet unlinked · token revoked at Shop          ✓ recorded
@@ -83,7 +83,7 @@ Sent to Intent Cloud only: category, ZIP code, country.
 Sent to Shop only: checkout_id, refresh_token, tool name, MCP envelope (jsonrpc, id, method), 2 credentials (in the log as digests).
 Never sent: your name, postal address, card.
 
-9 actions · 1 search · 2 wallet calls · 3 wallet changes · 2 blocked · 1 receipt · 2 answered unsigned
+9 actions · 1 search · 2 wallet calls · 3 wallet changes · 2 blocked · 1 receipt · 2 answered without a receipt
 Details: intent log -v · Machine-readable: intent log --json · Integrity: intent verify
 "
 `;

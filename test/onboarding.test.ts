@@ -296,9 +296,24 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain(
       "Anything the developer must see, click or type (a link, a code, a choice) goes in your own reply, written out in full, never only in a command's output.",
     );
-    expect(prompt).toContain("Do not narrate commands or paste their output. Between developer actions, say only the status line:");
-    expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names.");
-    expect(prompt).toContain("> Open this link and approve intent in Shop.\n>\n> The code is already filled in if you use this link.\n");
+    expect(prompt).toContain("Do not narrate commands, recap a step or paste command output. Between developer actions, say only the status line:");
+    expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.");
+    // One status line per finished step: a dogfood run said "✓ 8/9 (part 1)" in the middle of step 8.
+    expect(prompt).toContain("once per finished step, and never for a step that is not finished yet.");
+    // A block ends the reply, and the command that sees the action runs once the developer replies: in five dogfood
+    // runs an agent told to show the block and then run --finish (10 minutes) or get_approval_status in the same reply
+    // showed nothing before the wait, so the developer never saw the link (attack: no waiting command in the block's reply).
+    expect(prompt).toContain('It ends your reply: run nothing after it. It ends with "Reply done", unless the developer answers it with a choice or with "continue".');
+    expect(prompt).toContain("2. When the developer replies, run `intent wallet link shop --finish`");
+    expect(prompt).toContain("4. When the developer replies to that block (or right away, if you showed none), run `intent wallet status --wait-budget --timeout 540`");
+    expect(prompt).toContain("5. When the developer replies, call `get_approval_status`.");
+    expect(prompt).not.toMatch(/(Right away|In the same reply)[^.]*(--finish|get_approval_status)/);
+    // The opening does not end the turn: the developer would have to nudge the agent to start.
+    expect(prompt).not.toContain("this opening, and nothing else");
+    // The developer matches the check code the agent shows with the one on the confirm page; create_cart returns it.
+    expect(prompt).toContain("> Open the page, check the item, total and check code, then approve with your passkey.\n>\n> <the approval link, as a clickable link>\n>\n> Check code: <the check code>\n");
+    expect(read("src/mcp/tools.ts")).toContain("Check code: ${result.check_code}");
+    expect(prompt).toContain("> Open this link and approve intent in Shop; the code is already filled in.\n>\n> <the link, as a clickable link>\n>\n> Code: <the code>\n");
     expect(prompt).toContain("When it prints `Agent payments on: …`, say that line, any line it prints that starts `intent: warning: this limit is above` or `Note:` (why it names no amount), and this note");
     expect(prompt).toContain("send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.");
     const shop = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
@@ -324,10 +339,10 @@ describe("onboarding prompt and policy-advisor skill", () => {
   }
 
   /** A line of a block that carries a link, a code or a command, not words: a placeholder, a URL or a code span. */
-  const carrier = (line: string): boolean => /^> (<.*>|\{\{[A-Z_]+\}\}|https?:\/\/\S+|`[^`]+`)$/.test(line);
+  const carrier = (line: string): boolean => /^> ((?:[A-Z][a-z ]+: )?<.*>|\{\{[A-Z_]+\}\}|https?:\/\/\S+|`[^`]+`)$/.test(line);
 
-  /** The commands that see a developer action by themselves. */
-  const DETECTS = /--finish|--wait-budget|get_approval_status/;
+  /** A step that runs a command which sees a developer action by itself. */
+  const DETECTS = /(run|call) `(intent wallet link shop --finish|intent wallet status --wait-budget|get_approval_status)/;
 
   it("every developer action is a labelled **Your turn** block: one action in short lines, no numbering, done only when nothing can see it", () => {
     for (const file of FILES) {
@@ -353,8 +368,11 @@ describe("onboarding prompt and policy-advisor skill", () => {
         // Nothing after a block while the developer acts: the next line is an instruction or a heading, never prose.
         const next = after.find((l) => l.trim() !== "");
         if (next !== undefined) expect(next, `${file}: prose after\n${text}`).toMatch(/^(\d+\. |#{2,3} )/);
-        // Attack: a block that asks for "done" while a command right after it would see the action.
-        if (asksDone) expect(after.join("\n"), `${file}: asks for done though a command detects it\n${text}`).not.toMatch(DETECTS);
+        // Attack: a command that sees the action runs in the block's own reply, before the developer could read the link.
+        if (DETECTS.test(after.join("\n"))) {
+          expect(asksDone, `${file}: a detected action still ends the reply with done\n${text}`).toBe(true);
+          expect(after.find((l) => /^\d+\. /.test(l)), `${file}: the detecting command waits for the reply\n${text}`).toMatch(/^\d+\. When the developer replies/);
+        }
       }
     }
     // The developer's actions, in order.
@@ -368,18 +386,18 @@ describe("onboarding prompt and policy-advisor skill", () => {
       "pick an offer",
       "approve with your passkey",
     ]);
-    // Each detectable action is followed by the command that detects it, and asks for no done.
+    // Each detectable action is followed by the command that detects it, run once the developer replies done.
     const [, link, payments, , , pick, approval] = prompt;
     expect(link?.after.join("\n")).toContain("intent wallet link shop --finish");
     expect(payments?.after.join("\n")).toContain("intent wallet status --wait-budget");
     expect(approval?.after.join("\n")).toContain("get_approval_status");
-    for (const b of [link, payments, approval]) expect(b?.block.at(-1)).not.toBe("> Reply done");
+    for (const b of [link, payments, approval]) expect(b?.block.at(-1)).toBe("> Reply done");
     // The developer picks the offer; create_cart is for that one (src/mcp/tools.ts: "the offer the user picked").
     expect(pick?.after.join("\n")).toContain("Call `create_cart` for the offer they picked, with its `offer_handle`.");
     expect(read(PROMPT)).not.toMatch(/cheapest/);
     expect(read("src/mcp/tools.ts")).toContain("Prepare a cart for the offer the user picked");
-    // Only the sign-up asks for done in the whole prompt.
-    expect([...read(PROMPT).matchAll(/^> Reply done$/gm)]).toHaveLength(1);
+    // The sign-up and the three detected actions ask for done; the choices are answered by the reply itself.
+    expect([...read(PROMPT).matchAll(/^> Reply done$/gm)]).toHaveLength(4);
   });
 
   it("the opening names the developer's actions: their number and labels match the **Your turn** blocks", () => {
@@ -395,7 +413,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(list.split(", ")).toEqual(actions);
     expect(Number(count)).toBe(actions.length);
     // At most three lines, before step 1, and the agent's first reply.
-    expect(prompt.indexOf("Your first reply is this opening, and nothing else:")).toBeLessThan(prompt.indexOf("## Step 1"));
+    expect(prompt.indexOf("Your first reply starts with this opening, word for word, and goes straight on with step 1:")).toBeLessThan(prompt.indexOf("## Step 1"));
     expect(opening.length).toBeLessThanOrEqual(3 * 100);
   });
 
@@ -446,11 +464,12 @@ describe("onboarding prompt and policy-advisor skill", () => {
   it("ends with one card from the text the tools return: ordered only when the result says so, then intent log and intent pause", () => {
     const prompt = read(PROMPT);
     const end = prompt.slice(prompt.indexOf("Setup is done."));
-    expect(end).toMatch(/> \*\*Done:\*\* <outcome>, from <store>, total <total>\n>\n> `intent log` shows what the gateway sent\.\n>\n> `intent pause` stops every purchase that goes through intent and isn't paid yet\.\n$/);
+    // The developer runs no intent command themselves (it is an npx line); the agent does, when asked.
+    expect(end).toMatch(/> \*\*Done:\*\* <outcome>, from <store>, total <total>\n>\n> Ask me any time to run `intent log` \(what the gateway sent\) or `intent pause`\.\n>\n> `intent pause` stops every purchase that goes through intent and isn't paid yet\. For a hard stop, also turn off agent payments in the Shop app\.\n$/);
     // The Pause line is ADR-0023's honest line, as `intent pause` prints it (its first sentence), word for word.
     const honest = /export const HONEST_LINE = "([^"]*)"/.exec(read("src/cli/pause.ts"))?.[1] ?? "";
     expect(honest.startsWith("`intent pause` stops every purchase that goes through intent and isn't paid yet. ")).toBe(true);
-    expect(end).toContain(`> ${honest.slice(0, honest.indexOf(". ") + 1)}\n`);
+    expect(end).toContain(`> ${honest}\n`);
     expect(end).not.toContain("not yet approved");
     // Invariant 5: ordered (and an order number) only from the result; a hand-off is a hand-off; anything else is not completed.
     expect(end).toContain("`ordered`, with `order <number>` only when the `get_approval_status` result names one (`One-tap: ordered …, order <number>`, or \"placed the order (order <number>)\")");
@@ -473,10 +492,10 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const prompt = read(PROMPT);
     const step5 = prompt.slice(prompt.indexOf("## Step 5"), prompt.indexOf("## Step 6"));
     const wallet = read("src/cli/wallet.ts");
-    // --start: one line; the agent shows its link and code, then runs --finish at once.
+    // --start: one line; the agent shows its link and code, ends its reply, and runs --finish once the developer replies.
     expect(step5).toContain("`Open <link> and approve the code <CODE> in Shop before <time>, then run <the --finish command>`, and exits; the command it names is the one you ran, with `--finish`.");
     expect(wallet).toContain("`Open ${page} and approve the code ${prompt.userCode} in ${name} before ${isoSeconds(started.expiresAt)}, then run ${INTENT} wallet link ${rail} --finish`");
-    expect(step5).toContain("If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1.");
+    expect(step5).toContain("If it stops early, run `intent wallet link shop --finish` again. If the code expired, go back to 1 once; if it expires again, ask the developer whether to try again.");
     // 1. Already on: the block is skipped.
     expect(step5).toContain("- `Agent payments on: …` (they are already on): skip the block below");
     expect(wallet).toContain("`Agent payments on: ${moneyText(limit.amount)}${per}, ${moneyText(account.budgetRemaining)} left`");
@@ -583,7 +602,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
   it("the prompt says the Pause lines exactly, and fills hosts only through the three placeholders", () => {
     const prompt = read(PROMPT);
     expect(prompt).toContain(
-      "intent pause stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off the budget in the Shop app.",
+      "intent pause stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.",
     );
     // Exactly the three the platform fills in per invite, and no other {{…}}.
     const placeholders = new Set([...prompt.matchAll(/\{\{[^}]*\}\}/g)].map((m) => m[0]));

@@ -146,7 +146,7 @@ describe("intent wallet check shop", () => {
     const verify = await s.run(["verify", "--skip-install-check"]);
     // The wallet entry passes. The hand-written outcome stub names no verified approval, and verify fails it (ADR-0015):
     // that is its only failure.
-    expect(verify.out).toContain("disclosures: ok");
+    expect(verify.out).toContain("requests: ok");
     expect(verify.out.match(/FAILED/g)).toEqual(["FAILED", "FAILED"]);
     expect(verify.out).toContain("outcomes: FAILED");
     expect(verify.out).toContain("seq 0: the outcome for ap_TEST0001 is not an outcome entry");
