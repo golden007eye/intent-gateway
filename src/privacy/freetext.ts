@@ -6,7 +6,7 @@
 // Postcodes. A candidate is found by its written shape, then must be one whole postcode of its country by src/shipto's
 // own strict pattern (`coarsen`), so the two never disagree on what a full postcode is. Shapes that product codes
 // share ("RX 7900 XT", "1998 VW Golf", "M4 2SB screws", "R35 GTR1") count only within a few characters after a
-// delivery phrase or a postcode word ("ship to", "deliver to:", "I live on", "I'm at", "postcode", "zip"):
+// delivery phrase or a postcode word ("ship to", "deliver to:", "I live on", "postcode", "zip"):
 // - anywhere: ZIP+4 with its hyphen or an underscore ("94107-1234", "94107_1234"), a Canadian postal code ("K1A 0B1"),
 //   a UK postcode whose outward code has 3 or 4 characters ("SW1A 1AA", "LS1 1BA"), Portugal's "1000-001";
 // - after a delivery phrase only: a UK postcode with a 2-character outward code ("M1 1AE"), or whose inward letters are
@@ -17,17 +17,19 @@
 // one; `intent log` says free text is sent as written.
 //
 // Streets with no house number: street words and a street type after a delivery phrase ("deliver to Evergreen
-// Terrace", "I live on Baker Street", "I'm at Baker Street", "addr: Abbey Road") or after a bare "to" or "at" ("lamp to
-// Baker Street"), then the end, punctuation, a number, or a word that goes on the sentence rather than the name
-// ("…Terrace and wrap it", "…Terrace, flat 2", "…Street by Friday"), so "shipping to Main Street Coffee", "stand to
-// Main Street style" or "square plate" stays clean. With a house number, the UK types Crescent, Close, Mews and
-// Gardens count too ("12 Acacia Gardens", "12-14 Acacia Gardens").
+// Terrace", "I live on Baker Street", "addr: Abbey Road"), then the end, punctuation, a number, or a word that goes on
+// the sentence rather than the name ("…Terrace and wrap it", "…Terrace, flat 2", "…Street by Friday"), so "shipping to
+// Main Street Coffee" or "square plate" stays clean. Only a delivery phrase counts, never a bare "to" or "at": titles
+// say "Return to Elm Street" and "Live at Abbey Road". With a house number, the UK types Crescent, Close, Mews and
+// Gardens count too ("12 Acacia Gardens"), and so does a house-number range before any street type, at the end of the
+// address ("12-14 Baker Street", but not "ages 3-5 Cat in the Hat Dr Seuss" or "fits 2-4 Person Tent Ct"); the default
+// street_address rule (index.ts) takes single house numbers only, so verify reads old logs as before.
 //
-// Across fields: findIdentity also screens the free-text values of one input joined together (the postcode field left
-// out), so a phrase in one field and a street or a postcode in the next ({product: "lamp, deliver to", must_haves:
-// ["Evergreen Terrace"]}, "lamp SW1A" then "1AA") is found too, reported at "$". Pure.
+// Across fields (acrossFields): a delivery phrase that ends one value, then a street or a postcode that starts the
+// next ({product: "lamp, deliver to", must_haves: ["Evergreen Terrace"]}), reported at "$". Nothing else runs across
+// fields: a postcode split across fields ("lamp SW1A", "1AA") is not attempted. Pure.
 import { coarsen } from "../shipto/index.ts";
-import { HOUSE_NUMBER, QUANTITY_WORDS, STREET_WORD, SUFFIXES } from "./street.ts";
+import { QUANTITY_WORDS, STREET_WORD, SUFFIXES } from "./street.ts";
 
 type FreeTextKind = "postcode" | "street_address";
 
@@ -52,13 +54,11 @@ export function freeTextFindings(text: string, isPostcode: boolean): FreeTextKin
 
 const VERBS = String.raw`(?:deliver(?:s|ed|ing|y)?|ship(?:s|ped|ping)?|send(?:s|ing)?|sent|mail(?:s|ed|ing)?|post(?:s|ed|ing)?|bring(?:s|ing)?|brought|drop(?:s|ped|ping)?(?:[\s-]+off)?|courier(?:s|ed|ing)?|dispatch(?:es|ed|ing)?)`;
 const FILLER = String.raw`(?:\s+(?:it|them|this|these|those|one|please|for\s+me|for\s+us)){0,3}`;
-/** A delivery phrase: "ship to", "deliver it to", "drop off at", "deliver to:", "I live on", "I'm at", "addr:", "postcode". */
+/** A delivery phrase: "ship to", "deliver it to", "drop off at", "deliver to:", "I live on", "addr:", "postcode". */
 const DELIVERY = new RegExp(
   [
     String.raw`\b${VERBS}${FILLER}(?:[\s-]+(?:to|at|on)\b\s*[:,]?|\s*:)`,
     String.raw`\b(?:i|we)\s+live\s+(?:on|at|in)\b`,
-    String.raw`\b(?:i'?m|i\s+am|we'?re|we\s+are)\s+(?:staying\s+)?(?:on|at|in)\b`,
-    String.raw`\b(?:my\s+|our\s+)?home\s+is(?:\s+(?:on|at|in))?\b`,
     String.raw`\bmy\s+flat\s+(?:on|at|in)\b`,
     String.raw`\blocated\s+at\b`,
     String.raw`\b(?:address|addr)(?:\s+is)?\s*[:=]?`,
@@ -67,12 +67,9 @@ const DELIVERY = new RegExp(
   "giu",
 );
 
-/** A bare "to" or "at": enough before a street name ("lamp to Baker Street"), not before a postcode shape ("upgrade to RX 7900 XT"). */
-const TO_OR_AT = /\b(?:to|at)\b\s*[:,]?/giu;
-
-/** Where each match of `phrase` in `text` ends. */
-function phraseEnds(text: string, phrase: RegExp = DELIVERY): number[] {
-  return [...text.matchAll(phrase)].map((m) => m.index + m[0].length);
+/** Where each delivery phrase in `text` ends. */
+function phraseEnds(text: string): number[] {
+  return [...text.matchAll(DELIVERY)].map((m) => m.index + m[0].length);
 }
 
 /** A delivery phrase ends at most this many characters before `start` ("ship to the flat at SW1A 1AA"). */
@@ -90,20 +87,49 @@ const GOES_ON = [
   "for", "from", "via", "thanks", "thank", "asap", "today", "tomorrow", "tonight", "next", "this", "so", "then", "when",
   "if", "where", "which", "because", "until",
 ];
-/** Street words then a type, then the end of text, punctuation, a number, or a word of GOES_ON. */
+/** The address ends: the end of text, punctuation, a number, or a word of GOES_ON. */
+const ENDS = String.raw`(?=\s*(?:$|[,;:!?)\]"'/]|\d|(?:${GOES_ON.join("|")})\b))`;
+/** Street words then a type, then ENDS. */
 const STREET_AFTER_PHRASE = new RegExp(
-  String.raw`^(?:the\s+)?(?:(?!(?:${NOT_A_STREET_WORD.join("|")})\b)${STREET_WORD}\s+){1,4}(?:${ALL_TYPES})\b\.?(?=\s*(?:$|[,;:!?)\]"'/]|\d|(?:${GOES_ON.join("|")})\b))`,
+  String.raw`^(?:the\s+)?(?:(?!(?:${NOT_A_STREET_WORD.join("|")})\b)${STREET_WORD}\s+){1,4}(?:${ALL_TYPES})\b\.?${ENDS}`,
   "i",
 );
 const UK_HOUSE = new RegExp(
-  String.raw`${HOUSE_NUMBER}\s+(?!(?:${QUANTITY_WORDS.join("|")})\b)(?:${STREET_WORD}\s+){1,4}(?:${UK_STRONG.join("|")})\b`,
+  String.raw`(?<![\w-])\d{1,6}[A-Za-z]?\s+(?!(?:${QUANTITY_WORDS.join("|")})\b)(?:${STREET_WORD}\s+){1,4}(?:${UK_STRONG.join("|")})\b`,
+  "i",
+);
+/** Counted things a range is followed by ("2-4 Person Tent", "1-3 Year Old"), never house numbers. */
+const RANGE_QUANTITY = [
+  ...QUANTITY_WORDS, "person", "persons", "people", "player", "players", "seat", "seater", "man", "kids", "year", "years", "yr", "yrs",
+  "month", "months", "week", "weeks", "day", "days", "hour", "hours", "gallon", "gal", "quart", "qt", "liter", "litre", "cup",
+  "volt", "port", "way", "pound", "lbs",
+];
+/** A house-number range ("12-14 Baker Street"), not after an age, a size or a fit ("ages 3-5", "sizes 4-6", "fits 2-4"), ending the address. */
+const HOUSE_RANGE = new RegExp(
+  String.raw`(?<![\w-])(?<!\b(?:ages?|sizes?|fits?|for|up\s+to)\s+)\d{1,6}[A-Za-z]?\s*-\s*\d{1,6}[A-Za-z]?\s+(?!(?:${RANGE_QUANTITY.join("|")})\b)` +
+    String.raw`(?:${STREET_WORD}\s+){1,4}(?:${[...SUFFIXES, ...UK_STRONG].join("|")})\b\.?${ENDS}`,
   "i",
 );
 
 function hasStreet(text: string): boolean {
-  if (UK_HOUSE.test(text)) return true;
-  const ends = [...phraseEnds(text), ...phraseEnds(text, TO_OR_AT)];
-  return ends.some((end) => STREET_AFTER_PHRASE.test(text.slice(end).trimStart()));
+  if (UK_HOUSE.test(text) || HOUSE_RANGE.test(text)) return true;
+  return phraseEnds(text).some((end) => STREET_AFTER_PHRASE.test(text.slice(end).trimStart()));
+}
+
+/**
+ * A delivery phrase ending one of `texts` (the free-text values of one input, normalised, in order) and a street or a
+ * postcode starting the next: "lamp, deliver to" then "Evergreen Terrace" or "M1 1AE".
+ */
+export function acrossFields(texts: readonly string[]): FreeTextKind[] {
+  const kinds = new Set<FreeTextKind>();
+  for (let i = 0; i + 1 < texts.length; i++) {
+    const before = fold(texts[i] ?? "");
+    if (!phraseEnds(before).some((end) => /^[\s:,.-]*$/.test(before.slice(end)))) continue;
+    const next = fold(texts[i + 1] ?? "").trimStart();
+    if (STREET_AFTER_PHRASE.test(next)) kinds.add("street_address");
+    if (hasPostcode(next, [0])) kinds.add("postcode");
+  }
+  return [...kinds];
 }
 
 // ---- postcodes -------------------------------------------------------------------------------------------------
@@ -162,14 +188,15 @@ const SHAPES: readonly Shape[] = [
   { country: "PT", pattern: new RegExp(String.raw`${BEFORE}[1-9]\d{3}\s+\d{3}${AFTER}`, "gu"), needsPhrase: true },
 ];
 
-function hasPostcode(text: string): boolean {
+/** `phrased`: where a delivery phrase ends besides those in `text` (0: the field before ended with one). */
+function hasPostcode(text: string, phrased: readonly number[] = []): boolean {
   let ends: number[] | null = null;
   for (const shape of SHAPES) {
     for (const match of text.matchAll(shape.pattern)) {
       const code = match[0].toUpperCase().replace(/[^A-Z0-9]/g, "");
       if (coarsen(shape.country, code) === null || !(shape.keep?.(code) ?? true)) continue;
       if (!shape.needsPhrase && !(shape.phraseIf?.(code) ?? false)) return true;
-      ends ??= phraseEnds(text);
+      ends ??= [...phraseEnds(text), ...phrased];
       if (ends.some((end) => end <= match.index && match.index - end <= NEAR)) return true;
     }
   }

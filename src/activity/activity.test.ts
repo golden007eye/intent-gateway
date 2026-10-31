@@ -374,7 +374,7 @@ describe("wallet destinations (ADR-0014)", () => {
         reply(2),
         ["disclosure", search("phone stand to SW1A 1AA")],
         reply(4),
-        ["disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", { ...SEARCH, product: "lamp to Baker Street" })],
+        ["disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", { ...SEARCH, product: "lamp, ship to Baker Street" })],
         ["receipt", { disclosure_seq: 6, status: 200, verified: true }],
       ]),
     );

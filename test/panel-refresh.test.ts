@@ -96,7 +96,8 @@ function load(page: string) {
   const onPage = regions(page);
   const classes = new Set<string>();
   let reply: { ok: boolean; status: number; body: string } = { ok: true, status: 200, body: page };
-  const hooks: { refresh?: () => void; ready?: () => void } = {};
+  const hooks: { refresh?: () => void; ready?: () => void; click?: (e: unknown) => void } = {};
+  const pages = lookup(onPage);
   const note = { textContent: "" };
   const document = {
     hidden: false,
@@ -110,11 +111,14 @@ function load(page: string) {
         contains: (c: string) => classes.has(c),
       },
     },
-    ...lookup(onPage),
+    querySelectorAll: pages.querySelectorAll,
+    // The page's token meta, so a Pause press posts.
+    querySelector: (sel: string) => (sel === 'meta[name="intent-panel-token"]' ? { getAttribute: () => "token" } : pages.querySelector(sel)),
     getElementById: (id: string) => (id === "stale-note" ? note : null),
     importNode: (n: Node) => ({ ...n }),
     addEventListener: (type: string, fn: () => void) => {
       if (type === "DOMContentLoaded") hooks.ready = fn;
+      if (type === "click") hooks.click = fn;
     },
   };
   runInNewContext(APP_JS, {
@@ -126,7 +130,9 @@ function load(page: string) {
     setInterval: (fn: () => void) => {
       hooks.refresh = fn;
     },
-    fetch: () => Promise.resolve({ ok: reply.ok, status: reply.status, text: () => Promise.resolve(reply.body) }),
+    // POST /pause always succeeds; every other fetch is the page refresh, answered with `reply`.
+    fetch: (path: string) =>
+      path === "/pause" ? Promise.resolve({ ok: true, status: 200 }) : Promise.resolve({ ok: reply.ok, status: reply.status, text: () => Promise.resolve(reply.body) }),
     DOMParser: class {
       parseFromString(html: string) {
         return lookup(regions(html));
@@ -139,8 +145,16 @@ function load(page: string) {
     stale: () => classes.has("stale"),
     /** The stale notice's text, the words a screen reader reads (not CSS content). */
     note: () => note.textContent,
+    body: document.body,
     focusOn: (node: unknown) => {
       document.activeElement = node;
+    },
+    /** A click on the Pause button; the refresh that follows is answered with `next`. */
+    press: async (next: typeof reply) => {
+      reply = next;
+      const button = { disabled: false, focus: () => undefined };
+      hooks.click?.({ target: { closest: (sel: string) => (sel === "[data-pause]" ? button : null) } });
+      for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
     },
     tick: async (next: typeof reply) => {
       reply = next;
@@ -205,6 +219,24 @@ describe("the live refresh", () => {
     other.focusOn({ getAttribute: () => null });
     await other.tick(swapped);
     expect(other.regions[1]?.focused).toBe(0);
+    // A refresh after a Pause press moves focus only while it is lost (body); focus the user moved elsewhere stays.
+    const pressed = load(page);
+    pressed.regions[1]?.setAttribute("tabindex", "-1");
+    pressed.focusOn({ getAttribute: () => null, hasAttribute: () => false });
+    await pressed.press(swapped);
+    expect(pressed.regions[1]?.focused).toBe(0);
+    const lost = load(page);
+    lost.regions[1]?.setAttribute("tabindex", "-1");
+    lost.focusOn(lost.body);
+    await lost.press(swapped);
+    expect(lost.regions[1]?.focused).toBe(1);
+    // A failed refresh ends the press too: a later CLI pause does not take focus from body.
+    const failed = load(page);
+    failed.regions[1]?.setAttribute("tabindex", "-1");
+    failed.focusOn(failed.body);
+    await failed.press({ ok: false, status: 500, body: "" });
+    await failed.tick(swapped);
+    expect(failed.regions[1]?.focused).toBe(0);
     // A region that cannot take focus is never focused (meta changed while focus sat in it).
     const meta = load(page);
     const time = { html: "updated 10:00", getAttribute: () => null, id: "" };

@@ -20,12 +20,13 @@
 // - phone: E.164 ("+" then 8–15 digits, separators allowed), or a US number written with separators
 //   ("(415) 555-2671", "415.555.2671", "+1 415 555 2671"); area code and exchange start with 2–9. A bare
 //   10-digit run is not a phone (ISBNs and SKUs look like that).
-// - street_address: a house number or a range of them ("12-14"), one to four street-name words, then a street suffix (St, Ave, Rd, Blvd, Ln,
+// - street_address: a house number, one to four street-name words, then a street suffix (St, Ave, Rd, Blvd, Ln,
 //   Dr, Ct, Way…). "Main Street Coffee Mug" has no house number, so it is clean; a number followed by a quantity
 //   word ("4 Wheel Drive", "2 Pack Way") is a quantity, so it is clean too.
 // - free text (IdentityOptions.freeText, freetext.ts), on the agent's tool input only: a whole postcode of a ship-to
-//   country (`postcode`), and a street with no house number after a delivery phrase (`street_address`), in each value
-//   and in all the values joined (reported at `$`); a soft hyphen between digits counts as a hyphen there. Never run
+//   country (`postcode`), a street with no house number after a delivery phrase, and a house-number range
+//   ("12-14 Baker Street") (`street_address`), in each value and from a delivery phrase ending one value into the next
+//   (reported at `$`); a soft hyphen between digits counts as a hyphen there. Never run
 //   on what a destination returned or by `intent verify`, so merchant text ("AMD Radeon RX 7900 XT") cannot trip them.
 // - banned_key: an object key naming identity, compared case-insensitively after splitting into words on "_",
 //   "-", spaces and camelCase. Banned: the key "pan", any key starting with "card", and any key containing one
@@ -67,8 +68,8 @@ export {
   valueAt,
 } from "./credentials.ts";
 import { SCAN_DEPTH } from "./credentials.ts";
-import { freeTextFindings } from "./freetext.ts";
-import { HOUSE_NUMBER, QUANTITY_WORDS, STREET_WORD, SUFFIXES } from "./street.ts";
+import { acrossFields, freeTextFindings } from "./freetext.ts";
+import { QUANTITY_WORDS, STREET_WORD, SUFFIXES } from "./street.ts";
 
 /** `too_deep`: a value nested deeper than SCAN_DEPTH, not walked (so it cannot exhaust the stack) and so not cleared. */
 export type FindingKind = "card" | "email" | "phone" | "street_address" | "postcode" | "banned_key" | "too_deep";
@@ -152,10 +153,8 @@ export function findIdentity(value: unknown, options: IdentityOptions = {}): Fin
   const freeText = options.freeText === true;
   const texts: string[] = [];
   walk(value, "$", findings, { orderRefAt: new Set(options.orderRefAt ?? []), freeText, postcodeAt: new Set(freeText ? (options.postcodeAt ?? []) : []), texts });
-  // A phrase in one field and a street or postcode in the next ("lamp, deliver to", then "Evergreen Terrace").
-  if (texts.length > 1) {
-    for (const kind of freeTextFindings(texts.join("\n"), false)) if (!findings.some((f) => f.kind === kind)) findings.push({ path: "$", kind });
-  }
+  // A delivery phrase ending one field, and a street or postcode starting the next ("lamp, deliver to", then "Evergreen Terrace").
+  for (const kind of acrossFields(texts)) if (!findings.some((f) => f.kind === kind)) findings.push({ path: "$", kind });
   if (options.mcpEnvelope !== true) return findings;
   const toolName = isToolCall(value);
   const clientName = isClientNamed(value);
@@ -275,7 +274,7 @@ const EMAIL = /[\p{L}\p{M}\p{N}._%+-]+@[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-
 const E164 = /(?<![\w+])\+[1-9](?:[ .()-]{0,2}\d){7,14}(?!\d)/;
 const US_PHONE = /(?<![\w+])(?:\+?1[ .-]?)?(?:\([2-9]\d{2}\) ?|[2-9]\d{2}[ .-])[2-9]\d{2}[ .-]\d{4}(?![\w])/;
 const STREET = new RegExp(
-  String.raw`${HOUSE_NUMBER}\s+(?!(?:${QUANTITY_WORDS.join("|")})\b)(?:${STREET_WORD}\s+){1,4}(?:${SUFFIXES.join("|")})\b`,
+  String.raw`(?<![\w-])\d{1,6}[A-Za-z]?\s+(?!(?:${QUANTITY_WORDS.join("|")})\b)(?:${STREET_WORD}\s+){1,4}(?:${SUFFIXES.join("|")})\b`,
   "i",
 );
 

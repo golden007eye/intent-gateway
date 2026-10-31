@@ -140,7 +140,9 @@ export const APP_JS = `"use strict";
           var old = document.querySelector('[data-live="' + fresh.getAttribute("data-live") + '"]');
           if (!old || old.getAttribute("data-v") === fresh.getAttribute("data-v")) return;
           var active = document.activeElement;
-          var inside = (active && old.contains(active)) || (pausing && old.getAttribute("data-live") === "pause");
+          // After a Pause press, focus is lost (on body) or still on the disabled button; anywhere else, it stays put.
+          var lost = !active || active === document.body || (typeof active.hasAttribute === "function" && active.hasAttribute("data-pause"));
+          var inside = (active && old.contains(active)) || (pausing && lost && old.getAttribute("data-live") === "pause");
           var keep = active && old.contains(active) ? active.getAttribute("href") || active.id : null;
           var opened = [];
           old.querySelectorAll("details[open]").forEach(function (d) { opened.push(d.parentNode.textContent.slice(0, 40)); });
@@ -155,13 +157,17 @@ export const APP_JS = `"use strict";
             var again = node.querySelector('[href="' + keep + '"]') || document.getElementById(keep);
             if (again) again.focus({ preventScroll: true });
           }
-          if (node.getAttribute("data-live") === "pause") pausing = false;
           if (inside && !node.contains(document.activeElement) && node.hasAttribute("tabindex")) node.focus({ preventScroll: true });
         });
+        // Only the refresh right after a press may move focus for it, whether or not it swapped the region.
+        pausing = false;
         stale(false);
         apply(false);
       })
-      .catch(function () { stale(true); });
+      .catch(function () {
+        pausing = false;
+        stale(true);
+      });
   }
 
   document.addEventListener("DOMContentLoaded", function () {
