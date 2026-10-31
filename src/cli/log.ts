@@ -373,7 +373,9 @@ function observedOffers(b: Body): string[] {
   const kept = b.offers.map((raw, i) => {
     const o = record(raw);
     const at = `$.offers[${String(i)}]`;
-    return `offer ${text(o.offer_handle)}: ${text(o.title)}, ${text(o.merchant)}, ${money(o.price_minor, `${at}.price_minor`)} + ${money(o.shipping_minor, `${at}.shipping_minor`)} shipping`;
+    // A `max` offer's shipping is no quote (the tool says so too): shown as quoted at the cart, never as $0.00.
+    const shipping = o.total_kind === "max" ? "shipping quoted at cart" : `${money(o.shipping_minor, `${at}.shipping_minor`)} shipping`;
+    return `offer ${text(o.offer_handle)}: ${text(o.title)}, ${text(o.merchant)}, ${money(o.price_minor, `${at}.price_minor`)} + ${shipping}`;
   });
   const count = typeof b.offers_count === "number" ? b.offers_count : kept.length;
   return count > kept.length ? [...kept, `(${String(count - kept.length)} more not recorded)`] : kept;

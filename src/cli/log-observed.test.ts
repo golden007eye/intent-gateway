@@ -182,3 +182,25 @@ describe("the footer prints the real invocation", () => {
     expect(long.split("\n").find((l) => l.includes("blocked"))?.length).toBeLessThanOrEqual(90);
   });
 });
+
+describe("intent log -v on an offer whose shipping is quoted at the cart", () => {
+  it("says shipping is quoted at the cart for a max offer, never $0.00, and keeps the amount for an exact one", async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "log-max-")), "data");
+    const store = await openStore(dir, { clock: () => TS });
+    await store.append("session", DEMO_SESSION);
+    const search = await store.append("disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", SEARCH, SEARCH_FIELDS));
+    await store.append("receipt", { disclosure_seq: search.seq, status: 200, verified: true });
+    await store.append("observed", {
+      disclosure_seq: search.seq,
+      endpoint: "searchCatalog",
+      offers_count: 2,
+      offers_hidden: 0,
+      offers: [{ ...offer(1, "Test Tee", "tees.example", 100), shipping_minor: 0, total_kind: "max" }, offer(2, "Road Runner 2", "Road Runners", 6300)],
+    });
+    await store.close();
+    const out = formatVerbose(readLog(dir));
+    expect(out).toContain("Test Tee, tees.example, $1.00 + shipping quoted at cart");
+    expect(out).not.toContain("$1.00 + $0.00 shipping");
+    expect(out).toContain("Road Runner 2, Road Runners, $63.00 + $1.99 shipping");
+  });
+});
