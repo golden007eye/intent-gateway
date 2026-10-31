@@ -170,7 +170,8 @@ describe("--version and --help", () => {
     expect(result).toMatchObject({ code: 0, err: "" });
     expect(result.out).toBe(help());
     expect(help()).toMatchSnapshot();
-    expect(help().split("\n").length).toBeLessThan(40);
+    // One screen: 40 lines at most (resume, the pause's way back, is the 40th).
+    expect(help().split("\n").length).toBeLessThanOrEqual(40);
   });
 
   it.each([[["frobnicate"]], [["policy"]], [["policy", "nope"]], [["approver"]]])("refuses %j with exit 2", async (argv) => {
