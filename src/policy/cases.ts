@@ -15,6 +15,7 @@ const text = z.string().max(1000);
 const outbound = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("search"),
+    product: text.optional(),
     category: text.optional(),
     must_haves: z.array(text).max(50).optional(),
     budget_usd: z.number().optional(),

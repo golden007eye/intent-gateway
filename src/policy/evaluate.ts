@@ -1,11 +1,14 @@
 // Decides whether one outbound request may leave the gateway under a policy. The input types are the policy's
 // own small view of a request; the gateway maps the contract's request and offer types onto them.
 import { isCoarse } from "../shipto/index.ts";
-import { CLOUD_BASELINE, categoryBlocked, type CompletionMode, meet, merchantMatches, normalizeMerchant, type Policy, type Spend } from "./policy.ts";
+import { excludedKeyword, foldText } from "./keywords.ts";
+import { CLOUD_BASELINE, categoryBlocked, type CompletionMode, EXCLUDED_CATEGORIES, meet, merchantMatches, normalizeMerchant, type Policy, type Spend } from "./policy.ts";
 
 /** A search the agent asks the gateway to send to Intent Cloud. */
 export interface SearchRequest {
   readonly kind: "search";
+  /** The exact product asked for: free text, checked for a blocked category's words like the category. */
+  readonly product?: string;
   readonly category?: string;
   readonly must_haves?: readonly string[];
   readonly budget_usd?: number;
@@ -158,9 +161,42 @@ function checkHistory(history: readonly Purchase[], out: Blocked[]): void {
   });
 }
 
+/**
+ * The blocked category a free-text field names, or null: an excluded category's keyword (the list the search seam
+ * screens results with, an accessory such as a "wine glass" aside), or the words of a single-level category the
+ * policy itself blocks (`electronics`, `power-tools` as "power tools"), each as a whole word with a plural ending.
+ */
+function namedCategory(text: string, blocked: readonly string[]): string | null {
+  const group = excludedKeyword(text, { accessories: true });
+  if (group !== null) return group;
+  const folded = foldText(text);
+  for (const category of blocked) {
+    if (category.includes("/") || EXCLUDED_CATEGORIES.includes(category)) continue;
+    const words = category.split("-").map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s_-]+");
+    if (new RegExp(`(?<![\\p{L}\\p{N}])${words}(?:e?s)?(?![\\p{L}\\p{N}])`, "u").test(folded)) return category;
+  }
+  return null;
+}
+
+/**
+ * A search is refused when its category is blocked (or under a blocked one), or when its category, product or any
+ * must-have names a blocked category in words (namedCategory): a rephrased "single malt whisky" never leaves. The
+ * reason names the category group only, never the free text.
+ */
 function checkSearch(p: Policy, s: SearchRequest, out: Blocked[]): void {
   if (s.category !== undefined && categoryBlocked(s.category, p.categories.block)) {
     out.push({ path: "category", rule: "categories.block", reason: `category "${s.category}" is blocked` });
+  } else if (s.category !== undefined) {
+    const named = namedCategory(s.category, p.categories.block);
+    if (named !== null) out.push({ path: "category", rule: "categories.block", reason: `the category names ${named}, a blocked category` });
+  }
+  const free: [string, string][] = [
+    ...(s.product === undefined ? [] : [["product", s.product] as [string, string]]),
+    ...(s.must_haves ?? []).map((m, i): [string, string] => [`must_haves[${String(i)}]`, m]),
+  ];
+  for (const [path, text] of free) {
+    const named = namedCategory(text, p.categories.block);
+    if (named !== null) out.push({ path, rule: "categories.block", reason: `the ${path.startsWith("must") ? "must-have" : "product"} names ${named}, a blocked category` });
   }
   if (s.ship_to_zip !== undefined) {
     const country = s.ship_to_country ?? "US";

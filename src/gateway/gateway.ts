@@ -811,6 +811,34 @@ export function createGateway(options: GatewayOptions): Gateway {
 
     const product = blankToUndefined(input.product);
     const category = blankToUndefined(input.category);
+    // A blocked category is refused first, before any detail is asked for: a search for it would never be sent,
+    // whatever the user answers, and words that name it in the product or must-haves count too (invariant 1).
+    const blockedCategory = evaluate(
+      policy,
+      { kind: "search", ...(product === undefined ? {} : { product }), ...(category === undefined ? {} : { category }), ...(input.must_haves === undefined ? {} : { must_haves: input.must_haves }) },
+      [],
+      now(),
+    ).blocked.filter((b) => b.rule === "categories.block");
+    if (blockedCategory.length > 0) {
+      return block(
+        "searchCatalog",
+        // The fields the search would have sent, by the request's names (never their values).
+        inputFields({
+          ...(category === undefined ? {} : { category }),
+          ...(product === undefined ? {} : { product }),
+          ...(input.must_haves === undefined ? {} : { must_haves: input.must_haves }),
+          ...(input.budget === undefined ? {} : { budget_max: { amount_minor: 0, currency: "" } }),
+          ...(input.country === undefined && input.postcode === undefined ? {} : { ship_to: { country: "", postal_code: "" } }),
+        }),
+        blockedCategory.map((b) => `${b.rule} at ${b.path}`),
+        fromSeq,
+        "blocked",
+        `Not sent: this search is for a blocked category (${blockedCategory.map((b) => b.reason).join("; ")}). Nothing was searched. ` +
+          "Tell the user this cannot be bought through intent. Do not search again for it with other words.",
+        // Structured values only: never the free-text product or must-haves, whose words findIdentity cannot vet.
+        category === undefined ? {} : { category },
+      );
+    }
     const missing: MissingDetail[] = [];
     if (product === undefined && category === undefined) {
       missing.push({ field: "product_or_category", ask: "What should I look for: an exact product, or a kind of product?" });
@@ -869,6 +897,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       policy,
       {
         kind: "search",
+        ...(product === undefined ? {} : { product }),
         ...(category === undefined ? {} : { category }),
         ...(mustHaves === undefined ? {} : { must_haves: mustHaves }),
         budget_usd: budget,

@@ -33,4 +33,5 @@ export {
   type Purchase,
   type SearchRequest,
 } from "./evaluate.ts";
+export { ACCESSORY_WORDS, EXCLUDED_KEYWORDS, excludedKeyword, foldText } from "./keywords.ts";
 export { runCases, type CaseResult } from "./cases.ts";

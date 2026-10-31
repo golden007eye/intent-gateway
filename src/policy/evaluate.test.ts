@@ -155,6 +155,70 @@ describe("evaluate: searches", () => {
   });
 });
 
+describe("evaluate: a search that names a blocked category in words (invariant 1)", () => {
+  const search = (fields: Omit<Extract<Outbound, { kind: "search" }>, "kind">): Outbound => ({ kind: "search", ...fields });
+  const ALCOHOL = policy("categories: {block: [alcohol]}\n");
+
+  it("refuses the category QA saw leave the machine: \"single malt whisky\" under categories.block [alcohol]", () => {
+    expect(evaluate(ALCOHOL, search({ category: "single malt whisky" }), [], NOW).blocked).toEqual([
+      { path: "category", rule: "categories.block", reason: "the category names alcohol, a blocked category" },
+    ]);
+    // The Cloud baseline excludes alcohol whatever the policy names.
+    expect(rules(policy(""), search({ category: "single malt whisky" }))).toEqual(["categories.block"]);
+  });
+
+  it("attack: rephrase to get around it; the product, a must-have, plurals, case, full-width and zero-width forms are all refused", () => {
+    const attempts: Omit<Extract<Outbound, { kind: "search" }>, "kind">[] = [
+      { category: "gifts", product: "Islay single malt whisky" },
+      { category: "gifts", product: "two single malt whiskies" },
+      { category: "drinks/spirits/Whisky-Single-Malt" },
+      { category: "SCOTCH WHISKY" },
+      { category: "ｗｈｉｓｋｙ" },
+      { category: `whis${ZWSP}ky` },
+      { category: "gifts", must_haves: ["aged 12 years", "bourbon"] },
+      { category: "gifts", product: "red wines" },
+      { category: "kitchen", product: "whisky stones and a bottle of whisky" },
+      { category: "home", product: "disposable vapes" },
+      { category: "outdoors", product: "hunting rifles" },
+      { category: "gifts", product: "$50 gift card" },
+    ];
+    for (const fields of attempts) expect(rules(ALCOHOL, search(fields)), JSON.stringify(fields)).toContain("categories.block");
+  });
+
+  it("names the field and the group, never the free text", () => {
+    const d = evaluate(ALCOHOL, search({ category: "gifts", product: "Lagavulin single malt whisky", must_haves: ["peaty", "bourbon cask"] }), [], NOW);
+    expect(d.blocked).toEqual([
+      { path: "product", rule: "categories.block", reason: "the product names alcohol, a blocked category" },
+      { path: "must_haves[1]", rule: "categories.block", reason: "the must-have names alcohol, a blocked category" },
+    ]);
+    expect(JSON.stringify(d)).not.toMatch(/Lagavulin|peaty/);
+  });
+
+  it("refuses the words of a category the policy itself blocks, in the product too", () => {
+    const p = policy("categories: {block: [electronics, power-tools]}\n");
+    expect(rules(p, search({ category: "gifts", product: "cheap electronics gadget" }))).toEqual(["categories.block"]);
+    expect(rules(p, search({ category: "garden", must_haves: ["Power Tools"] }))).toEqual(["categories.block"]);
+    expect(rules(p, search({ category: "gifts", product: "electronic music vinyl" }))).toEqual([]);
+  });
+
+  it("benign corpus: accessories and look-alike words are sent", () => {
+    const benign: Omit<Extract<Outbound, { kind: "search" }>, "kind">[] = [
+      { category: "kitchen", product: "whisky stones" },
+      { category: "garden", product: "whiskey barrel planter" },
+      { category: "kitchen", product: "wine glass" },
+      { category: "kitchen/wine-glasses" },
+      { category: "kitchen", product: "beer koozie" },
+      { category: "clothing", product: "cigarette pants" },
+      { category: "home", must_haves: ["vape-free", "smoke-free"] },
+      { category: "toys", product: "swine plush toy" },
+      { category: "books", product: "winery history" },
+      { category: "running-shoes", must_haves: ["trail", "waterproof"] },
+      { category: "stickers", product: "holographic sticker" },
+    ];
+    for (const fields of benign) expect(rules(ALCOHOL, search(fields)), JSON.stringify(fields)).toEqual([]);
+  });
+});
+
 describe("evaluate: bad purchase history fails closed", () => {
   const p = policy("spend: {per_day_usd: 40}\n");
   const bad: [string, unknown][] = [

@@ -148,6 +148,17 @@ describe("find_offers with a linked Shop wallet", () => {
     expect(h.shop.searches).toEqual([]);
   });
 
+  it("attack: a product that names an excluded category is never searched at Shop either, whatever the category says", async () => {
+    const h = await setup({ policy: `${BASE_POLICY}categories:\n  block: [alcohol]\n` });
+    for (const product of ["single malt whisky", "craft beers"]) {
+      const result = await h.gateway.findOffers({ ...STICKERS, category: "gifts", product });
+      expect(result.status).toBe("blocked");
+      expect(result.message).toContain("blocked category");
+    }
+    expect(h.shop.searches).toEqual([]);
+    expect(h.cloudSearches()).toBe(0);
+  });
+
   it("attack: identity in the input sends nothing to Shop or Intent Cloud", async () => {
     const h = await setup();
     const result = await h.gateway.findOffers({ ...STICKERS, product: `sticker for ${FAKE_BUYER.email}` });

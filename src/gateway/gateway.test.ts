@@ -460,6 +460,56 @@ describe("policy", () => {
     });
   });
 
+  describe("invariant 1: a search whose words name a blocked category never leaves (QA: \"single malt whisky\" was sent)", () => {
+    const ALCOHOL = `${BASE_POLICY}categories:\n  block: [alcohol]\n`;
+    const WHISKY = { category: "single malt whisky", budget: 20, country: "US", postcode: "10001" };
+    const PLAIN =
+      "Not sent: this search is for a blocked category (the category names alcohol, a blocked category). Nothing was searched. " +
+      "Tell the user this cannot be bought through intent. Do not search again for it with other words.";
+
+    it("refused before it is sent, in plain words, with a block entry that keeps only the category", async () => {
+      const h = await setup({ policy: ALCOHOL });
+      const result = await h.gateway.findOffers(WHISKY);
+      expect(result).toMatchObject({ status: "blocked", message: PLAIN, summary: "Sent: nothing / Blocked: categories.block at category" });
+      expect(h.sends.search).toBe(0);
+      expect(bodies(h, "disclosure")).toHaveLength(2); // meta and key statement at start, nothing since
+      expect(bodies(h, "block").at(-1)).toMatchObject({ endpoint: "searchCatalog", blocked: ["categories.block at category"], held: { category: "single malt whisky" } });
+    });
+
+    it("refused first, before any missing detail is asked for", async () => {
+      const h = await setup({ policy: ALCOHOL });
+      const result = await h.gateway.findOffers({ category: "single malt whisky" });
+      expect(result.status).toBe("blocked");
+      expect(result.message).toBe(PLAIN);
+      expect(h.sends.search).toBe(0);
+    });
+
+    it("attack: rephrase to get around it; moved to the product or a must-have, or re-spelled, it is still not sent", async () => {
+      const h = await setup({ policy: ALCOHOL });
+      const attempts = [
+        { ...WHISKY, category: "gifts", product: "Islay single malt whiskies" },
+        { ...WHISKY, category: "gifts", must_haves: ["12 year", "Bourbon"] },
+        { ...WHISKY, category: "ＷＨＩＳＫＹ" },
+        { ...WHISKY, category: "gifts", product: "whisky stones, and a bottle of whisky" },
+      ];
+      for (const attempt of attempts) {
+        const result = await h.gateway.findOffers(attempt);
+        expect(result.status, JSON.stringify(attempt)).toBe("blocked");
+        expect(result.message).toContain("Do not search again for it with other words.");
+        // The free text is never kept: only the structured category.
+        expect(JSON.stringify(bodies(h, "block").at(-1))).not.toMatch(/Islay|whiskies|stones/);
+      }
+      expect(h.sends.search).toBe(0);
+    });
+
+    it("an accessory is still searched: whisky stones under kitchen", async () => {
+      const h = await setup({ policy: ALCOHOL });
+      const result = await h.gateway.findOffers({ ...WHISKY, category: "kitchen", product: "whisky stones" });
+      expect(result.status).toBe("offers");
+      expect(h.sends.search).toBe(1);
+    });
+  });
+
   it("the Cloud baseline holds under a policy that names nothing: an excluded category is never searched", async () => {
     const h = await setup();
     const result = await h.gateway.findOffers({ category: "health", budget: 50, country: "US", postcode: "94103" });
