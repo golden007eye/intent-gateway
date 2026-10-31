@@ -750,6 +750,36 @@ export function walletCheckWords(f: Readonly<ActivityFacts>): string[] {
   ].filter((p) => p !== "");
 }
 
+const IDENTITY_WORDS: Readonly<Record<string, string>> = {
+  card: "a card number",
+  email: "an email address",
+  phone: "a phone number",
+  street_address: "a street address",
+  postcode: "a full postcode",
+  banned_key: "an identity field",
+  too_deep: "a value nested too deep to check",
+};
+
+/** Field names whose words differ from the name with `_` read as a space. */
+const FIELD_WORDS: Readonly<Record<string, string>> = { must_haves: "must-haves", postal_code: "postcode" };
+
+/**
+ * A logged JSON path as the field a person typed it in: `$.must_haves[0]` → `must-haves`, `$.params.arguments.note`
+ * → `note`, `$` → `the request`. The exact path stays in `intent log -v` and the panel's server log.
+ */
+export function fieldWords(path: string): string {
+  const last = path.replace(/\[\d+\]/g, "").split(".").filter((s) => s !== "" && s !== "$").at(-1);
+  if (last === undefined) return "the request";
+  return FIELD_WORDS[last] ?? last.replaceAll("_", " ");
+}
+
+/** An identity block reason in plain words, `postcode at $.must_haves[0]` → `a full postcode (in must-haves)`; null for any other reason. */
+export function identityWords(reason: string): string | null {
+  const match = /^(.+?) at (.+)$/.exec(reason);
+  const words = match === null ? undefined : IDENTITY_WORDS[match[1] ?? ""];
+  return words === undefined ? null : `${words} (in ${fieldWords(match?.[2] ?? "")})`;
+}
+
 /** `intent_cloud` → `Intent Cloud`, `shop` → `Shop`, `shop_accounts` → `Shop accounts`: a destination in words. */
 export function destinationLabel(destination: string): string {
   if (destination === INTENT_CLOUD) return "Intent Cloud";

@@ -174,7 +174,7 @@ describe("intent log: wallet destinations, refusals and wallet entries", () => {
     expect(out).toContain("call      Shop get_checkout · checkout_id");
     expect(out).toContain("✓ answered 200 (no signed receipt)");
     expect(out).toContain("⚠ answered 401 (no signed receipt)");
-    expect(out).toContain("Shop search: an email address in params.arguments.note");
+    expect(out).toContain("Shop search: an email address (in note)");
     expect(out).toContain("Shop search: not logged as sent: a credential in the query (access_token), which the log cannot digest");
     expect(out).toContain("Shop wallet linked");
     expect(out).toContain("Shop wallet unlinked · token revoked at Shop");
@@ -367,7 +367,7 @@ describe("intent log: form bodies and the block's rule", () => {
       .map((l) => JSON.parse(l) as { action: string; facts: Record<string, unknown> })
       .filter((a) => a.action === "blocked");
     expect(blocks.map((b) => [b.facts.block_kind, b.facts.held])).toEqual([["identity", undefined]]);
-    expect(formatLog(old, { style: STYLE })).toContain("search: an email address in product");
+    expect(formatLog(old, { style: STYLE })).toContain("search: an email address (in product)");
   });
 
   it("a block's rule wins over its wording; an unknown rule shows no value; a block without rule is read from its reasons", () => {

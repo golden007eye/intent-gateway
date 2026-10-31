@@ -16,6 +16,7 @@ import {
   credentialWords,
   type Delivery,
   destinationLabel,
+  identityWords,
   INTENT_CLOUD,
   leafFields,
   loggedValues,
@@ -780,6 +781,8 @@ export function refusalWords(blocked: readonly string[], held?: Readonly<Record<
   const category = typeof held?.category === "string" ? held.category : null;
   const words = blocked.map((b) => {
     if (kind === "logging") return `not logged as sent: ${b}`;
+    const identity = identityWords(b);
+    if (identity !== null) return `it contained ${identity}`;
     if (b.startsWith("categories.block")) return category === null ? "excluded or blocked category" : `category "${category}" excluded`;
     if (b.startsWith("spend.")) return "over a spend limit";
     if (b.startsWith("merchants.")) return "merchant not allowed";

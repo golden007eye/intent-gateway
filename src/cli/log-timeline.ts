@@ -7,7 +7,7 @@
 // a wallet destination (Shop) says "answered" with the status its `response` entry recorded, never "receipt": a wallet
 // signs none. The "Sent to … only" lines name each destination apart, from what its logged requests carried.
 // `intent verify` re-checks every signature. Pure; the golden test pins it.
-import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, INTENT_CLOUD, MCP_CLIENT_META, summarise, walletCheckWords } from "../activity/index.ts";
+import { type Activity, type ActivitySummary, type DestinationSummary, destinationLabel, fieldWords, identityWords, INTENT_CLOUD, MCP_CLIENT_META, summarise, walletCheckWords } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 import { printable } from "../ui/index.ts";
 
@@ -394,24 +394,14 @@ const ENDPOINT_WORDS: Readonly<Record<string, string>> = { searchCatalog: "searc
 /** What the identity check cannot see, said next to its result (the panel's drawer says the same). */
 const NAME_CAVEAT = "Free text is sent as written: a name in it cannot be detected.";
 
-const IDENTITY_WORDS: Readonly<Record<string, string>> = {
-  card: "a card number",
-  email: "an email address",
-  phone: "a phone number",
-  street_address: "a street address",
-  postcode: "a full postcode",
-  banned_key: "an identity field",
-  too_deep: "a value nested too deep to check",
-};
-
-/** `categories.block at category` → `category excluded by your gateway policy`; `email at $.note` → `an email address in note`. */
+/** `categories.block at category` → `category excluded by your gateway policy`; `email at $.note` → `an email address (in note)`. */
 function reason(text: string): string {
+  const identity = identityWords(text);
+  if (identity !== null) return identity;
   const match = /^(.+?) at (.+)$/.exec(text);
   if (match === null) return text;
   const [, rule = "", path = ""] = match;
-  const where = path.replace(/^\$\.?/, "") || "the request";
-  const identity = IDENTITY_WORDS[rule];
-  if (identity !== undefined) return `${identity} in ${where}`;
+  const where = fieldWords(path);
   if (rule === "categories.block") return "category excluded by your gateway policy";
   if (rule === "merchants.block" || rule === "merchants.allow") return "merchant not allowed by your gateway policy";
   return `${rule} (${where}) by your gateway policy`;

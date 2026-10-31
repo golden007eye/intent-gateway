@@ -303,7 +303,7 @@ describe("intent log (golden)", () => {
       Thursday 15 October 2026 (UTC)
       12:00:00  keys      keys signed by cloud-root-1 · valid until 2027-01-13  ✓ recorded
       12:00:00  search    budget_max.amount_minor, budget_max.currency, category, ship_to.country, ship_to.postal_code  ✓ receipt
-      12:00:00  blocked   search: an email address in note                      ✗ nothing sent
+      12:00:00  blocked   search: an email address (in note)                    ✗ nothing sent
       12:00:00  cart      at most $45.99                                        ✗ answer discarded: no valid receipt
       12:00:00  pinned    passkey aaaa…1111 is the approver now                 ✓ pinned
       12:00:00  approved  $45.99 · passkey aaaa…1111 (pinned)                   ✓ passkey proof checked
@@ -371,7 +371,7 @@ describe("intent log (golden)", () => {
     await writeChain(s.dir);
     const ascii = await s.run(["log"], { io: { env: { ...s.env, LANG: "C" } } });
     expect(ascii.out).not.toMatch(/[✓⚠✗→·…]/);
-    expect(ascii.out).toMatch(/ blocked {3}search: an email address in note +x nothing sent\n/);
+    expect(ascii.out).toMatch(/ blocked {3}search: an email address \(in note\) +x nothing sent\n/);
     const narrow = await s.run(["log", "--no-color"], { tty: true, io: { columns: 60 } });
     const lines = narrow.out.trimEnd().split("\n");
     expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(60);
