@@ -250,7 +250,10 @@ export const FindOffersInput = z.strictObject({
     .string()
     .max(60)
     .optional()
-    .describe("The ship-to country as an ISO 3166 alpha-2 code (US, CA, GB, DE, ...), from what the user said. Never guess it."),
+    .describe(
+      "The ship-to country as an ISO 3166 alpha-2 code (US, CA, GB, DE, ...), from what the user said. Never guess it, " +
+        "except US for a 5-digit ZIP code or ZIP+4 with a budget in dollars and no other country named.",
+    ),
   postcode: z.string().max(40).optional().describe("The postcode (ZIP code in the US) the user said to ship to. Never guess it."),
 });
 export type FindOffersInput = z.input<typeof FindOffersInput>;
@@ -532,10 +535,15 @@ export function createGateway(options: GatewayOptions): Gateway {
     );
   }
 
-  /** Runs one disclosed call; a failure becomes a Refused naming what happened, never Cloud's content. */
+  /**
+   * Runs one disclosed call; a failure becomes a Refused naming what happened, never Cloud's content. `next` is the
+   * step's next step, added where no more specific line names one (an answer with no refusal code, a malformed or
+   * unreceipted answer), so every refusal the agent relays names what to do.
+   */
   async function call<T>(
     run: () => Promise<DisclosedResult<T>>,
     fromSeq: number,
+    next: string = "",
   ): Promise<{ ok: true; body: T; seq: number } | { ok: false; refused: Refused; paused?: true }> {
     const refuse = (status: Refused["status"], message: string) => ({ ok: false as const, refused: { status, message, summary: summary(fromSeq) } });
     let result: DisclosedResult<T>;
@@ -554,7 +562,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         return refuse("error", `Not sent: ${error.message}. The developer must restart the gateway.`);
       }
       if (error instanceof DisclosureDiscardedError) {
-        return refuse("error", "Intent Cloud's answer carried no valid receipt, so the gateway discarded it.");
+        return refuse("error", `Intent Cloud's answer carried no valid receipt, so the gateway discarded it.${next}`);
       }
       if (error instanceof DisclosureKeysExpiredError) {
         return refuse("error", `Not sent: the key statement expired on ${error.expiresAt.toISOString()}; restart the gateway to fetch a fresh one.`);
@@ -563,9 +571,9 @@ export function createGateway(options: GatewayOptions): Gateway {
       if (error instanceof CloudNetworkError) {
         // Invariant 5: with no connection made, the logged request never left, and the summary does not list it as sent.
         if (error.neverLeft) return refuse("error", `Not sent: ${error.message}, so the request never left this machine. Try again later.`);
-        return refuse("error", `${error.message}; the request may have reached it, and is logged as sent but not acknowledged.`);
+        return refuse("error", `${error.message}; the request may have reached it, and is logged as sent but not acknowledged.${next}`);
       }
-      if (error instanceof CloudResponseError) return refuse("error", `Intent Cloud's answer was malformed (${error.reason}).`);
+      if (error instanceof CloudResponseError) return refuse("error", `Intent Cloud's answer was malformed (${error.reason}).${next}`);
       if (error instanceof CloudRequestError) return refuse("invalid", `Not sent: ${error.message}`);
       throw error;
     }
@@ -591,8 +599,16 @@ export function createGateway(options: GatewayOptions): Gateway {
       return refuse("refused", `Refused: Intent Cloud answered that this network has submitted too many checkouts this hour. Nothing was bought, and the gateway does not resubmit by itself.${retry}`);
     }
     const said = result.body === null ? "" : `: ${result.body.message}`;
-    return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}`);
+    return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}${next}`);
   }
+
+  /** The next step for each call the agent's tools make, for `call`. Nothing here names a cause the answer did not. */
+  const NEXT = {
+    search: " Search again, or change the search.",
+    cart: " Nothing was bought: no approval was made. Pick another offer, or search again, for example to another postcode.",
+    approval: " Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
+    status: " The gateway changed nothing; call get_approval_status again in a minute.",
+  } as const;
 
   /** Chains Intent Cloud's `paused` refusal of a request sent since `fromSeq`, and what it says about the pause. */
   async function pausedByCloud(step: "create_cart" | "create_approval", endpoint: string, fromSeq: number): Promise<void> {
@@ -835,7 +851,7 @@ export function createGateway(options: GatewayOptions): Gateway {
 
     const keys = await currentKeys(fromSeq);
     if (!keys.ok) return keys.refused;
-    const sent = await call(() => cloud.search(request), fromSeq);
+    const sent = await call(() => cloud.search(request), fromSeq, NEXT.search);
     if (!sent.ok) return sent.refused;
     const history = spendHistory(store.entries(), now());
     const kept: CloudOffer[] = [];
@@ -1007,7 +1023,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   ): Promise<CreateCartResult> {
     const { quantity } = request;
     const domain = known.offer.merchant.domain;
-    const cartCall = await call(() => cloud.createCart(request), fromSeq);
+    const cartCall = await call(() => cloud.createCart(request), fromSeq, NEXT.cart);
     if (!cartCall.ok) {
       if (cartCall.paused === true) await pausedByCloud("create_cart", "createCart", fromSeq);
       return cartCall.refused;
@@ -1055,7 +1071,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_approval", source: "gateway" }))) {
       return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
     }
-    const approvalCall = await call(() => cloud.createApproval(cart.cart_handle), fromSeq);
+    const approvalCall = await call(() => cloud.createApproval(cart.cart_handle), fromSeq, NEXT.approval);
     if (!approvalCall.ok) {
       if (approvalCall.paused === true) await pausedByCloud("create_approval", "createApproval", fromSeq);
       return approvalCall.refused;
@@ -1314,7 +1330,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_cart", source: "gateway" }))) {
       return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
     }
-    const submitted = await call(() => cloud.createCheckout(request), fromSeq);
+    const submitted = await call(() => cloud.createCheckout(request), fromSeq, NEXT.cart);
     if (!submitted.ok) {
       if (submitted.paused === true) await pausedByCloud("create_cart", "createCheckout", fromSeq);
       return submitted.refused;
@@ -1421,7 +1437,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (!fresh.ok) return fresh.refused;
     const keys = fresh.keys;
     const signer = await readSigner(handle, bodyOf(pending));
-    const fetched = await call(() => cloud.getApproval(handle, signer), fromSeq);
+    const fetched = await call(() => cloud.getApproval(handle, signer), fromSeq, NEXT.status);
     if (fetched.ok) await store.append("observed", observeStatus(fetched.seq, handle, fetched.body));
     const mode = bodyOf(pending).completion_mode === "shop_agent" ? "shop_agent" : "handoff";
     if (chained !== undefined) return reportChained(chained, pending, fetched.ok ? fetched.body : null, mode, keys, fromSeq);

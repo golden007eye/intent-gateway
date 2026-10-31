@@ -277,7 +277,7 @@ describe("findOffers when Intent Cloud cannot be reached", () => {
     const timeout = "Intent Cloud at cloud.example cannot be reached (no complete response within 30 s)";
     h.patch.search = () => Promise.reject(new CloudNetworkError("timeout", {} as never, timeout));
     const result = await h.gateway.findOffers(SHOES);
-    expect(result).toMatchObject({ status: "error", message: `${timeout}; the request may have reached it, and is logged as sent but not acknowledged.` });
+    expect(result).toMatchObject({ status: "error", message: `${timeout}; the request may have reached it, and is logged as sent but not acknowledged. Search again, or change the search.` });
     expect(result.message).not.toMatch(/not sent|never left/i);
   });
 
@@ -648,7 +648,55 @@ describe("createCart snapshot checks", () => {
   });
 });
 
-// ---- invariant 3 --------------------------------------------------------------------------------------------------
+// ---- every refusal names a next step -----------------------------------------------------------------------------
+
+describe("an answer with no refusal code still names what to do next", () => {
+  const CART_NEXT = "Nothing was bought: no approval was made. Pick another offer, or search again, for example to another postcode.";
+
+  it("create_cart 409 not enough stock (the fake's own answer): Intent Cloud's words, nothing bought, a next step", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Road Runner 2"); // stock 2
+    const result = await h.gateway.createCart({ offer_handle: handle, quantity: 3 });
+    expect(result).toMatchObject({ status: "error", message: `Intent Cloud answered 409: not enough stock. ${CART_NEXT}` });
+    expect(h.sends.createApproval).toBe(0);
+    expect(h.kinds()).not.toContain("approval_pending");
+  });
+
+  it("create_cart 409 with no final total quoted: quoted, never a cause it did not state (a dogfood agent stopped at 'names no fix')", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    h.patch.createCart = async (r) => {
+      const res = await h.real.createCart(r);
+      return { ...res, ok: false as const, status: 409, body: { error: "conflict" as const, message: "the merchant did not quote a final total" } };
+    };
+    const result = await h.gateway.createCart({ offer_handle: handle });
+    expect(result).toMatchObject({ status: "error", message: `Intent Cloud answered 409: the merchant did not quote a final total. ${CART_NEXT}` });
+    // Attack: no cause the answer did not give (the store's shipping options, the ZIP code).
+    expect(result.message).not.toMatch(/shipping option|ZIP|because/i);
+    expect(h.sends.createApproval).toBe(0);
+  });
+
+  it("create_approval, search and status fall-throughs each name their own next step", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    const bad = { ok: false as const, status: 502, body: null, contractVersion: null, receipt: null, retryAfter: null };
+    h.patch.createApproval = async (c) => ({ ...(await h.real.createApproval(c)), ...bad });
+    expect((await h.gateway.createCart({ offer_handle: handle })).message).toBe(
+      "Intent Cloud answered 502. Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
+    );
+    h.patch.search = async (r) => ({ ...(await h.real.search(r)), ...bad });
+    expect((await h.gateway.findOffers(SHOES)).message).toBe("Intent Cloud answered 502. Search again, or change the search.");
+    delete h.patch.search;
+    delete h.patch.createApproval;
+    const approval = await pendingPurchase(h, "Trail Runner 3");
+    h.patch.getApproval = async (a, s) => ({ ...(await h.real.getApproval(a, s)), ...bad });
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).message).toBe(
+      "Intent Cloud answered 502. The gateway changed nothing; call get_approval_status again in a minute.",
+    );
+  });
+});
+
+// ---- invariant 3--------------------------------------------------------------------------------------------------
 
 describe("invariant 3: buyer identity in a tool input is never sent", () => {
   const ATTACKS: [string, Record<string, unknown>][] = [

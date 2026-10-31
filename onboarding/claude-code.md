@@ -13,12 +13,13 @@ You are setting up intent-gateway for the developer you are talking to. The gate
 How to work:
 
 - Do one step at a time, in order. Run the commands yourself.
-- Do not narrate commands, recap a step or paste command output. Between developer actions, say only the status line: `✓ <n>/9  <what happened>. Next: <what>.` Here `<n>` is the step just finished and 9 is the number of steps. Use that mark and that form every time, once per finished step, and never for a step that is not finished yet. The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.
+- Do not narrate commands, recap a step or paste command output. Between developer actions, say only the status line: `✓ <n>/9  <what happened>. Next: <what>.` Here `<n>` is the step just finished and 9 is the number of steps. Use that mark and that form every time, once per finished step, and never for a step that is not finished yet. Every step from 1 to 8 gets its own line, in order: when several steps finish without the developer in between (steps 1, 2 and 3 usually do), say one line for each, never one line for all. The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.
 - Anything the developer must see, click or type (a link, a code, a choice) goes in your own reply, written out in full, never only in a command's output. Why: Claude Code does not reliably show command output to the developer.
 - Each developer action is a block in your own reply, copied from this prompt without the `>` marks, with its link or code filled in. It starts with the bold **Your turn:** marker and a short label. It gives one action, in short lines, with its link or code on its own line. It ends your reply: run nothing after it. It ends with "Reply done", unless the developer answers it with a choice or with "continue". Where a command can see the action (the Shop link, agent payments, the purchase), run that command once the developer replies; it confirms the action or waits for it. Why: an agent that ran the waiting command in the same reply showed the block only after the wait, so the developer never saw the link. Say nothing after a block while the developer acts.
 - The commands that wait (`intent wallet link shop --finish`, `intent wallet status --wait-budget`, `get_approval_status`) send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.
 - Never ask for, type or store the developer's name, postal address or card. They give those to Shop themselves.
 - If a command fails, show its error line and the fix it names, and stop at that step. Do not work around it.
+- Never give the developer a step, link, page or button that neither this prompt nor a tool result showed them, and never build a URL yourself. Why: after a failed passkey, an agent sent the developer to an account page it made up and to a QR code they had never seen.
 - If the developer is stuck, tell them, in these words: "If you get stuck, you can send this conversation to the intent team. It contains your invite link, so don't post it publicly."
 
 In every step, `intent <command>` means this exact command line:
@@ -152,6 +153,8 @@ Tell the developer these two sentences, exactly:
 
 > intent pause stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.
 
+Right after them, say step 7's status line, then go on to step 8.
+
 ## Step 8: the first purchase
 
 1. Claude Code starts the gateway only when Claude Code starts, and the gateway reads its policy and looks for the Shop wallet then. One restart now picks up the gateway, the policy, the Shop link and, if you switched it in step 1, the new Node. When the developer says "continue" after it, go to 2 and say nothing before its block. If you switched Node, first say in one line: "If `claude` is not found in the new terminal, reinstall Claude Code with `npm i -g @anthropic-ai/claude-code`, or with its native installer." Then show:
@@ -170,13 +173,13 @@ Tell the developer these two sentences, exactly:
 >
 > Where should it ship? Country and postcode.
 
-3. Call `find_offers` with what they said, with `country` (its two-letter code), `postcode` and `budget` as they gave them. If it refuses the country, say its line as it is. List the top 2 or 3 offers, numbered, one short line each: item, store and price, as the result writes them (a Shop offer shows no total: shipping is shown at checkout). Then show:
+3. Call `find_offers` with what they said, with `country` (its two-letter code), `postcode` and `budget` as they gave them. If they named no country, `find_offers`' description gives the one case where the postcode and the budget settle it; otherwise ask for it. If it refuses the country, say its line as it is. List the top 2 or 3 offers, numbered, one short line each: item, store and price, as the result writes them (a Shop offer shows no total: shipping is shown at checkout). Then show:
 
 > **Your turn:** pick an offer
 >
 > Reply with the number of the offer you want.
 
-4. Call `create_cart` for the offer they picked, with its `offer_handle`. Never approve for them. Show, with the link and the check code from its result:
+4. Call `create_cart` for the offer they picked, with its `offer_handle`. Never approve for them. If it fails, say its line, which names what to do next. Otherwise say the total from its `Cart:` line in one line (it can differ from the offer's price, which may leave out shipping and tax), then show, with the link and the check code from its result:
 
 > **Your turn:** approve with your passkey
 >
@@ -188,7 +191,7 @@ Tell the developer these two sentences, exactly:
 >
 > Reply done
 
-5. When the developer replies, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result's own advice, such as "Check the order in the Shop app", in one line. Any other result is final: relay what it says, in one line, and no more. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that.
+5. When the developer replies, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result's own advice, such as "Check the order in the Shop app", in one line. Any other result is final: relay what it says, in one line, and no more. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that. If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status`, say its one line, and offer to make a new approval link (`create_cart` again for the same offer); give no other advice.
 
 ## Step 9: read the log together
 
