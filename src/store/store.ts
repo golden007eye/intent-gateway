@@ -25,7 +25,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { constants, openSync, readFileSync } from "node:fs";
+import { constants, existsSync, openSync, readFileSync } from "node:fs";
 import * as nodeFs from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
@@ -138,16 +138,47 @@ const LOCK = "audit.lock";
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_WAIT_NOTICE_MS = 1000;
 const POLL_MS = 2;
+/** How long readChain waits for an unterminated last line to be completed by a writer before returning it as torn. */
+const TORN_TAIL_SETTLE_MS = 1000;
+/** Never notified: Atomics.wait on it is a synchronous sleep, for readChain's retry. */
+const SLEEP = new Int32Array(new SharedArrayBuffer(4));
+/** Per log file, the text readChain last returned with an unterminated last line after waiting for it. */
+const settledTorn = new Map<string, string>();
 // O_NOFOLLOW makes open() fail on a symbolic link; Windows has no such flag, and there the lstat checks in
 // openStore are the only guard.
 const NOFOLLOW = (constants as Partial<typeof constants>).O_NOFOLLOW ?? 0;
 const READ = constants.O_RDONLY | NOFOLLOW;
 const APPEND = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | NOFOLLOW;
 
-/** Reads the chain in `dir` as `parseLines` items, for verifyChain, without opening a store. */
+/**
+ * Reads the chain in `dir` as `parseLines` items, for verifyChain, without opening a store or taking the lease.
+ *
+ * A reader without the lease can catch another writer's append mid-copy: the kernel makes a write(2) visible page by
+ * page, so the file can end in the first bytes of a line whose "\n" is not there yet. That tail is an append in
+ * flight, not corruption, so the read is retried while it changes or while a writer holds the lease, for at most
+ * TORN_TAIL_SETTLE_MS. A fragment that stays (unchanged with no lease held, or past the deadline) is returned as it
+ * is, and the caller reports it as corruption: a crashed writer's torn line is never hidden.
+ */
 export function readChain(dir: string): unknown[] {
   const file = join(dir, LOG);
-  return parseLines(readFileSync(noFollowSync(() => openSync(file, READ), file), "utf8"));
+  const read = () => readFileSync(noFollowSync(() => openSync(file, READ), file), "utf8");
+  const deadline = Date.now() + TORN_TAIL_SETTLE_MS;
+  let text = read();
+  // A file whose fragment was already waited out, unchanged since, is reported at once: a crashed writer's lease stays behind until
+  // the next writer takes over, and every read meanwhile must not wait again.
+  if (settledTorn.get(file) === text) return parseLines(text);
+  while (text !== "" && !text.endsWith("\n") && Date.now() < deadline) {
+    // Checked before the re-read: a writer releases the lease only after its write returned, so a lock absent here
+    // means the append in flight at the first read is complete by the second.
+    const held = existsSync(join(dir, LOCK));
+    Atomics.wait(SLEEP, 0, 0, 1);
+    const again = read();
+    if (!held && again === text) break;
+    text = again;
+  }
+  if (text !== "" && !text.endsWith("\n")) settledTorn.set(file, text);
+  else settledTorn.delete(file);
+  return parseLines(text);
 }
 
 export async function openStore(dir: string, opts: StoreOptions = {}): Promise<Store> {
