@@ -68,12 +68,13 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
     });
     const describe = (error: unknown): string => describeError(error, errorContext(config, io.env));
     const started = startOnce(gateway, describe);
+    let startFailed = false;
     if (options.lazyStart === true) {
       try {
         await gateway.start();
       } catch (error) {
+        startFailed = true;
         say(describe(error));
-        say("the MCP server runs anyway: each tool call tries the start again and, until it succeeds, tells the agent why");
       }
     } else {
       await gateway.start();
@@ -121,7 +122,8 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
     } else {
       transport = await runStdio({ gateway: options.lazyStart === true ? started.gateway : gateway, ...banner });
       policyLine();
-      if (demo === null) say(`MCP over stdio is ready; data dir ${dataDir}`);
+      if (startFailed) say(`MCP over stdio is up, but the gateway could not start: each tool call tries again until Intent Cloud returns a contract and key statement the gateway accepts, and until then tells the agent why; data dir ${dataDir}`);
+      else if (demo === null) say(`MCP over stdio is ready; data dir ${dataDir}`);
       else for (const text of nextSteps({ code: { code: demo.code, file: demo.codeFile }, confirm: confirmOf(demo) })) log(text);
     }
     const stop = async (): Promise<void> => {

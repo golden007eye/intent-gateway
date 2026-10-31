@@ -31,32 +31,3 @@ export async function runStdio(options: StdioOptions): Promise<McpHandle> {
   await server.connect(new StdioServerTransport());
   return { close: () => server.close() };
 }
-
-/** The JSON-RPC error code the gateway answers with when it could not start (an implementation-defined server error). */
-export const START_FAILED_CODE = -32000;
-
-/**
- * When the gateway could not start but an MCP client launched it over stdio, the client would otherwise see only a
- * closed pipe. This answers every request (initialize first) with a JSON-RPC error whose message is `message`, so
- * the agent sees the reason and the next step, then resolves once initialize was answered or stdin ended.
- */
-export async function answerStdioWithError(
-  message: string,
-  streams: { stdin: NodeJS.ReadableStream; stdout: { write(text: string): unknown } },
-): Promise<void> {
-  const transport = new StdioServerTransport(streams.stdin as NodeJS.ReadStream, streams.stdout as unknown as NodeJS.WriteStream);
-  await new Promise<void>((resolve) => {
-    const done = (): void => {
-      streams.stdin.off("end", done);
-      void transport.close().finally(resolve);
-    };
-    streams.stdin.once("end", done);
-    transport.onmessage = (msg) => {
-      if (!("id" in msg) || !("method" in msg)) return;
-      void transport.send({ jsonrpc: "2.0", id: msg.id, error: { code: START_FAILED_CODE, message } }).then(() => {
-        if (msg.method === "initialize") done();
-      });
-    };
-    void transport.start();
-  });
-}
