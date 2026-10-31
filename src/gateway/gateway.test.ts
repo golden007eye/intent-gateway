@@ -1911,10 +1911,10 @@ describe("get_approval_status without a handle: the waiting purchases, from the 
     // The words claim no state: not approved, pending at Intent Cloud, ordered or paid.
     expect(result.message).not.toMatch(/\b(approved|pending|ordered|paid)\b/i);
     h.advance(16 * 60_000);
-    expect((await h.gateway.getApprovalStatus({})).message).toBe("No approval_handle was given. This gateway's log has no unexpired purchase with no approval chained.");
+    expect((await h.gateway.getApprovalStatus({})).message).toBe("No approval_handle was given. This gateway's log has no purchase still open.");
     const unknown = await h.gateway.getApprovalStatus({ approval_handle: "ap_NOTINTHISCHAIN0000" });
     expect(unknown.message).toBe(
-      "That approval_handle is not known: this gateway did not ask for that approval, so it cannot report on it. This gateway's log has no unexpired purchase with no approval chained.",
+      "That approval_handle is not known: this gateway did not ask for that approval, so it cannot report on it. This gateway's log has no purchase still open.",
     );
     expect(unknown.message).not.toContain("Waiting for");
   });

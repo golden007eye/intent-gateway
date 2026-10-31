@@ -1603,7 +1603,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       })
       .reverse()
       .slice(0, MAX_WAITING_LISTED);
-    if (waiting.length === 0) return "This gateway's log has no unexpired purchase with no approval chained.";
+    if (waiting.length === 0) return "This gateway's log has no purchase still open.";
     const lines = waiting.map((e) => {
       const b = bodyOf(e);
       const item = shown.get(b.handle);
