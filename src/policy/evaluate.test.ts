@@ -255,7 +255,7 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
   it("sends a benign compound whose last word is a keyword, as a product, a must-have or a category", () => {
     const compounds = [
       "root beer", "ginger beer", "birch beer", "butterbeer", "Root Beer 12 pack", "rubbing alcohol", "isopropyl alcohol 70%",
-      "candy cigarettes", "chocolate cigars", "bubble gum cigars", "bubblegum cigar", "wine gums", "red wine vinegar",
+      "candy cigarettes", "chocolate cigars", "bubble gum cigars", "bubblegum cigar", "wine gums", "red wine vinegar", "A&W Root Beer 12 pack", "rubbing alcohol 70%", "root beer and ginger ale",
       ...BENIGN_COMPOUNDS,
     ];
     for (const product of compounds) {
@@ -266,7 +266,9 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
   });
 
   it("attack: a compound never unblocks its keyword, an alcoholic qualifier, or a keyword elsewhere", () => {
-    const attempts = ["root beer vodka", "vodka and root beer", "hard root beer", "alcoholic ginger beer", "spiked root beer", "non-alcoholic beer", "beer", "alcohol", "cigars", "candy cigarettes and nicotine"];
+    const attempts = ["root beer vodka", "vodka and root beer", "hard root beer", "alcoholic ginger beer", "spiked root beer", "non-alcoholic beer", "beer", "alcohol", "cigars", "candy cigarettes and nicotine",
+      "Not Your Father's Root Beer 5.9% ABV", "Crabbie's Ginger Beer 4% ABV", "Root Beer Moonshine", "Root beer schnapps", "ginger beer rum kit", "Everclear Rubbing Alcohol",
+    ];
     for (const product of attempts) expect(rules(ALCOHOL, search({ category: "grocery", product })), product).toContain("categories.block");
     // The developer's own narrowing still applies to a compound.
     expect(rules(policy("categories: {block: [soda, root-beer]}\n"), search({ category: "grocery", product: "root beer" }))).toEqual(["categories.block"]);

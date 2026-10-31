@@ -63,6 +63,21 @@ const COMPOUNDS = new RegExp(
   }).join("|")})(?![\\p{L}\\p{N}])`,
   "gu",
 );
+/**
+ * Words that say a text is about an alcoholic drink although no keyword names it: a strength (`5.9% ABV`, `80 proof`,
+ * `4% alc/vol`, `40% vol`), a spirit, beer style or brand the keyword lists leave out, or a qualifier. Where one is
+ * present no compound is taken out, so "Root beer schnapps" and "Crabbie's Ginger Beer 4% ABV" read as beer. A
+ * spirit the lists already name (vodka, whisky, bourbon) blocks on its own. Not here on purpose: a bare `%` (`rubbing
+ * alcohol 70%`), `ale` (ginger ale) and bare `cider` (apple cider vinegar, sweet cider); `hard cider` is.
+ */
+const ALCOHOL_MARKERS = new RegExp(
+  `(?<![\\p{L}\\p{N}])(?:abv|alc|${[
+    "rum", "rums", "gin", "gins", "moonshine", "schnapps", "liqueur", "liqueurs", "brandy", "brandies", "cognac", "mezcal",
+    "scotch", "everclear", "hard cider", "lager", "lagers", "stout", "stouts", "ipa", "ipas", "mead", "sangria", "prosecco",
+    "alcoholic", "spiked", "boozy", "not your father's", "crabbie's", "crabbies",
+  ].map(escape).join("|")})(?![\\p{L}])|(?<![\\p{L}\\p{N}-])proof(?![\\p{L}])|%\\s*vol(?![\\p{L}])`,
+  "u",
+);
 const FORM = new RegExp(`[\\s-]+(?:${FORM_WORDS.map(escape).join("|")})$`, "u");
 
 /** The excluded group a text names anywhere, as a whole word in the folded text, or null: the results screen. */
@@ -72,9 +87,14 @@ export function excludedKeyword(text: string): string | null {
   return null;
 }
 
-/** The folded text with each benign compound taken out, leaving a space so the words around it stay apart. */
+/**
+ * The folded text with each benign compound taken out, leaving a space so the words around it stay apart; unchanged
+ * when an alcohol marker is anywhere in it (ALCOHOL_MARKERS).
+ */
 export function withoutCompounds(text: string): string {
-  return foldText(foldText(text).replace(COMPOUNDS, " "));
+  const folded = foldText(text);
+  if (ALCOHOL_MARKERS.test(folded)) return folded;
+  return foldText(folded.replace(COMPOUNDS, " "));
 }
 
 /**
@@ -97,8 +117,11 @@ export function headText(text: string): string {
 export function excludedHead(text: string): string | null {
   // A text that holds a compound is refused on a keyword anywhere else in it, so "vodka and root beer" never reads
   // as the head noun "and": a compound loosens nothing but its own words.
+  // A compound beside an alcohol marker ("Root beer moonshine", "Everclear rubbing alcohol") is alcohol.
+  const folded = foldText(text);
+  if (folded.search(COMPOUNDS) !== -1 && ALCOHOL_MARKERS.test(folded)) return "alcohol";
   const stripped = withoutCompounds(text);
-  if (stripped !== foldText(text)) return excludedKeyword(stripped);
+  if (stripped !== folded) return excludedKeyword(stripped);
   const head = headText(text);
   for (const [group, pattern] of HEADS) if (pattern.test(head)) return group;
   return null;

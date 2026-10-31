@@ -163,6 +163,7 @@ describe("excluded categories", () => {
     const titles = [
       "A&W Root Beer, 12 cans", "Fever-Tree ginger beer", "Birch beer soda", "Butterbeer fudge", "Rubbing alcohol 70%", "Isopropyl Alcohol 99%",
       "Retro candy cigarettes", "Milk chocolate cigars", "Bubble gum cigars, pink", "Wine gums 1kg", "Red wine vinegar", "Root-beer barrels candy",
+      "A&W Root Beer 12 pack", "rubbing alcohol 70%", "70% isopropyl alcohol", "Root beer and ginger ale variety pack", "Leak-proof root beer bottle",
     ];
     for (const title of titles) expect(group({ title, categories: [] }), title).toBeNull();
     expect(group({ title: "Soda", variantTitle: "Root beer", categories: ["Root Beer"] })).toBeNull();
@@ -180,6 +181,16 @@ describe("excluded categories", () => {
       ["Non-alcoholic beer", "alcohol"],
       ["Candy cigarettes with nicotine", "tobacco"],
       ["Wine gums and red wine", "alcohol"],
+      // The security review's titles: an alcohol marker means no compound is taken out.
+      ["Not Your Father's Root Beer 5.9% ABV", "alcohol"],
+      ["Crabbie's Ginger Beer 4% ABV", "alcohol"],
+      ["Root Beer Moonshine", "alcohol"],
+      ["Root beer schnapps", "alcohol"],
+      ["ginger beer rum kit", "alcohol"],
+      ["Everclear Rubbing Alcohol", "alcohol"],
+      ["Ginger beer 4% alc/vol", "alcohol"],
+      ["Root beer 5% vol", "alcohol"],
+      ["80 proof root beer", "alcohol"],
     ];
     for (const [title, expected] of cases) expect(group({ title, categories: [] }), title).toBe(expected);
     expect(group({ title: "Candy cigarettes", categories: ["nicotine"] })).toBe("tobacco");
