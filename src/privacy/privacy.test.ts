@@ -351,6 +351,12 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
     "Kingston KC3000 2048G", "Levi's 501 W32 L34", "Dewalt DCD791D2 20V drill", "1/4-20 bolts", "ISBN 978-0-13-468599-1",
     "square plate set of 4", "Crescent wrench 10 inch", "Hill climb bike tyre", "deliver to the office", "shipping to Main Street Coffee",
     "Walk-in tub 2 seat", "1984 Orwell paperback", "Corsair 2x16GB 3600 CL18",
+    // Review of #134 follow-up: a bare "to" or "at", "I'm …" and "home is" now start a street; none of these is one.
+    "adapter to USB-C", "gift to my mom", "gift to my mom at work", "stand to Main Street style", "lamp to match my desk",
+    "upgrade to RX 7900 XT", "adapter to M2 2TB SSD", "Welcome to Main Street sign", "Back to the Future Drive-in poster",
+    "Road to Perdition DVD", "Ticket to Ride board game", "guide to Central Park", "set up at Union Square Market", "I'm at home",
+    "I'm on a budget", "home is where the heart is sign", "USB to HDMI 2.1 cable", "lamp to Baker Street Sherlock fans",
+    "cake stand at 12 inch", "Miracle on 34th Street DVD", "2-4 Way splitter",
   ];
   it("keeps at least 100 realistic product strings", () => {
     expect(products.length).toBeGreaterThanOrEqual(100);
@@ -398,6 +404,14 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
     ["US ZIP+4, spaced hyphen", "94107 - 1234"],
     ["US ZIP+4 without hyphen, after zip", "ZIP 941071234"],
     ["US ZIP+4 with space, after zip", "zip 94107 1234"],
+    // Review of #134 follow-up.
+    ["UK, unit-like inward letters after deliver to", "deliver to SW1A 1ST"],
+    ["UK, unit-like inward letters after ship to", "ship to LS1 1TB"],
+    ["US ZIP+4, underscore", "lamp 94107_1234"],
+    ["US ZIP+4, soft hyphen", "lamp 94107\u00AD1234"],
+    ["US ZIP+4, soft hyphen, full-width digits", "lamp \uFF19\uFF14\uFF11\uFF10\uFF17\u00AD\uFF11\uFF12\uFF13\uFF14"],
+    ["Portugal, underscore", "1000_001 Lisboa"],
+    ["UK after I'm at", "I'm at M1 1AE"],
   ];
   it.each(postcodes)("finds a full postcode: %s", (_label, text) => {
     expect(findIdentity({ product: text }, { freeText: true })).toContainEqual({ path: "$.product", kind: "postcode" });
@@ -437,9 +451,55 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
     ["UK Walk", "ship to Riverside Walk."],
     ["UK type with a house number", "12 Acacia Gardens"],
     ["full width", "ship to Ａｂｂｅｙ Ｒｏａｄ"],
+    // Review of #134 follow-up: text after the street, and wider phrases.
+    ["then and", "deliver to Evergreen Terrace and wrap it"],
+    ["then by", "ship to Baker Street by Friday please"],
+    ["then on", "send it to Abbey Road on Monday"],
+    ["bare to", "lamp to Baker Street"],
+    ["bare at", "pick up at Baker Street"],
+    ["I'm at", "I'm at Baker Street"],
+    ["I'm at, curly quote", "I’m at Baker Street"],
+    ["we are on", "we are on Evergreen Terrace"],
+    ["home is", "home is Baker Street"],
+    ["my home is on", "my home is on Baker Street, flat 2"],
+    ["house number range", "12-14 Acacia Gardens"],
   ];
   it.each(streets)("finds a street with no house number after a delivery phrase: %s", (_label, text) => {
     expect(findIdentity({ must_haves: [text] }, { freeText: true })).toContainEqual({ path: "$.must_haves[0]", kind: "street_address" });
+  });
+
+  it("still clears a unit-like UK code with no delivery phrase, and a bare to or at before a postcode shape", () => {
+    for (const text of ["S24 1TB", "LS1 1TB", "B12 3HP motor", "upgrade to RX 7900 XT", "adapter to M2 2TB SSD"]) expect(input(text)).toEqual([]);
+  });
+
+  it("finds a house number range with a US suffix, with or without free text", () => {
+    expect(findIdentity({ product: "12-14 Baker Street" })).toEqual([{ path: "$.product", kind: "street_address" }]);
+    expect(findIdentity({ product: "12 – 14 Baker St" })).toEqual([{ path: "$.product", kind: "street_address" }]);
+    // A quantity is still a quantity: "2-4 Way splitter" has no street word before Way.
+    expect(findIdentity({ product: "2-4 Way splitter" })).toEqual([]);
+  });
+
+  // Review of #134 follow-up, item 3: the phrase in one field, the street or the postcode in the next.
+  const split: [label: string, input: Record<string, unknown>, kind: Finding["kind"]][] = [
+    ["street after a phrase in the field before", { product: "lamp, deliver to", must_haves: ["Evergreen Terrace"] }, "street_address"],
+    ["street after a phrase in an earlier array item", { must_haves: ["warm white", "ship to", "Baker Street"] }, "street_address"],
+    ["2-character UK outward code after a phrase in another field", { product: "lamp, ship to", must_haves: ["M1 1AE"] }, "postcode"],
+    ["UK postcode split across fields", { product: "lamp SW1A", must_haves: ["1AA"] }, "postcode"],
+    ["UK postcode split across array items", { must_haves: ["SW1A", "1AA"] }, "postcode"],
+    ["ZIP+4 split across fields", { product: "lamp 94107", must_haves: ["-1234"] }, "postcode"],
+  ];
+  it.each(split)("attack: finds identity split across fields, at $: %s", (_label, value, kind) => {
+    expect(findIdentity(value, { freeText: true, postcodeAt: TOOL_POSTCODE_AT })).toEqual([{ path: "$", kind }]);
+  });
+
+  it("the joined screen leaves the postcode field out and repeats no finding a field already has", () => {
+    const options = { freeText: true, postcodeAt: TOOL_POSTCODE_AT };
+    expect(findIdentity({ product: "lamp", postcode: "SW1A 1AA", must_haves: ["warm white"] }, options)).toEqual([]);
+    expect(findIdentity({ product: "Galaxy S24", must_haves: ["1TB"] }, options)).toEqual([]);
+    expect(findIdentity({ product: "PS5", must_haves: ["2TB", "ship to me"] }, options)).toEqual([]);
+    expect(findIdentity({ product: "SW1A 1AA", must_haves: ["1AA"] }, options)).toEqual([{ path: "$.product", kind: "postcode" }]);
+    // Without freeText nothing is joined: merchant text side by side never meets these rules.
+    expect(findIdentity({ product: "lamp, deliver to", must_haves: ["Evergreen Terrace"] })).toEqual([]);
   });
 
   it("lets a whole postcode through only in the tool's own postcode field, and only from the postcode check", () => {

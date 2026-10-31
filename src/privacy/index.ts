@@ -20,12 +20,13 @@
 // - phone: E.164 ("+" then 8–15 digits, separators allowed), or a US number written with separators
 //   ("(415) 555-2671", "415.555.2671", "+1 415 555 2671"); area code and exchange start with 2–9. A bare
 //   10-digit run is not a phone (ISBNs and SKUs look like that).
-// - street_address: a house number, one to four street-name words, then a street suffix (St, Ave, Rd, Blvd, Ln,
+// - street_address: a house number or a range of them ("12-14"), one to four street-name words, then a street suffix (St, Ave, Rd, Blvd, Ln,
 //   Dr, Ct, Way…). "Main Street Coffee Mug" has no house number, so it is clean; a number followed by a quantity
 //   word ("4 Wheel Drive", "2 Pack Way") is a quantity, so it is clean too.
 // - free text (IdentityOptions.freeText, freetext.ts), on the agent's tool input only: a whole postcode of a ship-to
-//   country (`postcode`), and a street with no house number after a delivery phrase (`street_address`). Never run on
-//   what a destination returned or by `intent verify`, so merchant text ("AMD Radeon RX 7900 XT") cannot trip them.
+//   country (`postcode`), and a street with no house number after a delivery phrase (`street_address`), in each value
+//   and in all the values joined (reported at `$`); a soft hyphen between digits counts as a hyphen there. Never run
+//   on what a destination returned or by `intent verify`, so merchant text ("AMD Radeon RX 7900 XT") cannot trip them.
 // - banned_key: an object key naming identity, compared case-insensitively after splitting into words on "_",
 //   "-", spaces and camelCase. Banned: the key "pan", any key starting with "card", and any key containing one
 //   of the words name, surname, recipient, address, addr, street, email, phone, card, cvv, cvv2, cvc
@@ -67,7 +68,7 @@ export {
 } from "./credentials.ts";
 import { SCAN_DEPTH } from "./credentials.ts";
 import { freeTextFindings } from "./freetext.ts";
-import { QUANTITY_WORDS, STREET_WORD, SUFFIXES } from "./street.ts";
+import { HOUSE_NUMBER, QUANTITY_WORDS, STREET_WORD, SUFFIXES } from "./street.ts";
 
 /** `too_deep`: a value nested deeper than SCAN_DEPTH, not walked (so it cannot exhaust the stack) and so not cleared. */
 export type FindingKind = "card" | "email" | "phone" | "street_address" | "postcode" | "banned_key" | "too_deep";
@@ -149,7 +150,12 @@ const CLIENT_NAME_PATH = `$.params._meta[${JSON.stringify(CLIENT_INFO)}].name`;
 export function findIdentity(value: unknown, options: IdentityOptions = {}): Finding[] {
   const findings: Finding[] = [];
   const freeText = options.freeText === true;
-  walk(value, "$", findings, { orderRefAt: new Set(options.orderRefAt ?? []), freeText, postcodeAt: new Set(freeText ? (options.postcodeAt ?? []) : []) });
+  const texts: string[] = [];
+  walk(value, "$", findings, { orderRefAt: new Set(options.orderRefAt ?? []), freeText, postcodeAt: new Set(freeText ? (options.postcodeAt ?? []) : []), texts });
+  // A phrase in one field and a street or postcode in the next ("lamp, deliver to", then "Evergreen Terrace").
+  if (texts.length > 1) {
+    for (const kind of freeTextFindings(texts.join("\n"), false)) if (!findings.some((f) => f.kind === kind)) findings.push({ path: "$", kind });
+  }
   if (options.mcpEnvelope !== true) return findings;
   const toolName = isToolCall(value);
   const clientName = isClientNamed(value);
@@ -186,6 +192,8 @@ interface Exempt {
   readonly orderRefAt: ReadonlySet<string>;
   readonly freeText: boolean;
   readonly postcodeAt: ReadonlySet<string>;
+  /** With freeText, every string value outside postcodeAt, in walk order, for the joined screen. */
+  readonly texts: string[];
 }
 
 function walk(value: unknown, path: string, out: Finding[], exempt: Exempt, depth = 0): void {
@@ -193,7 +201,9 @@ function walk(value: unknown, path: string, out: Finding[], exempt: Exempt, dept
     out.push({ path, kind: "too_deep" });
   } else if (typeof value === "string") {
     const notCard = isUuid(value) || (exempt.orderRefAt.has(path) && SHOPIFY_ORDER_GID.test(value));
-    for (const kind of scanText(normalize(value), notCard, exempt.freeText, exempt.postcodeAt.has(path))) out.push({ path, kind });
+    const isPostcode = exempt.postcodeAt.has(path);
+    for (const kind of scanText(value, notCard, exempt.freeText, isPostcode)) out.push({ path, kind });
+    if (exempt.freeText && !isPostcode) exempt.texts.push(freeTextNormal(value));
   } else if (typeof value === "bigint" || (typeof value === "number" && Number.isInteger(value))) {
     if (isCardDigits(value.toString())) out.push({ path, kind: "card" });
   } else if (Array.isArray(value)) {
@@ -208,11 +218,16 @@ function walk(value: unknown, path: string, out: Finding[], exempt: Exempt, dept
       const keyPath = path + (/^[A-Za-z_$][\w$]*$/.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`);
       const normalKey = normalize(key);
       if (isBannedKey(normalKey)) out.push({ path: keyPath, kind: "banned_key" });
-      for (const kind of scanText(normalKey, isUuid(key), exempt.freeText)) out.push({ path: keyPath, kind });
+      for (const kind of scanText(key, isUuid(key), exempt.freeText)) out.push({ path: keyPath, kind });
       walk(item, keyPath, out, exempt, depth + 1);
     }
     if (hasSplitCard(entries.map(([, item]) => item))) out.push({ path, kind: "card" });
   }
+}
+
+/** As `normalize`, but a soft hyphen (U+00AD, a format character) between digits is a hyphen: "94107\u00AD1234" is a ZIP+4. */
+function freeTextNormal(text: string): string {
+  return normalize(text.replace(/(?<=\p{Nd})\u00AD+(?=\p{Nd})/gu, "-"));
 }
 
 function normalize(text: string): string {
@@ -245,13 +260,14 @@ function isUuid(raw: string): boolean {
  * value is the agent's tool input (IdentityOptions.freeText), so the free-text rules run too; `isPostcode`: it sits in
  * the postcode field (IdentityOptions.postcodeAt), so it is not scanned for a whole postcode.
  */
-function scanText(text: string, notCard: boolean, freeText = false, isPostcode = false): FindingKind[] {
+function scanText(raw: string, notCard: boolean, freeText = false, isPostcode = false): FindingKind[] {
+  const text = normalize(raw);
   const kinds: FindingKind[] = [];
   if (!notCard && hasCard(text)) kinds.push("card");
   if (EMAIL.test(text)) kinds.push("email");
   if (E164.test(text) || US_PHONE.test(text)) kinds.push("phone");
   if (STREET.test(text)) kinds.push("street_address");
-  if (freeText) for (const kind of freeTextFindings(text, isPostcode)) if (!kinds.includes(kind)) kinds.push(kind);
+  if (freeText) for (const kind of freeTextFindings(freeTextNormal(raw), isPostcode)) if (!kinds.includes(kind)) kinds.push(kind);
   return kinds;
 }
 
@@ -259,7 +275,7 @@ const EMAIL = /[\p{L}\p{M}\p{N}._%+-]+@[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-
 const E164 = /(?<![\w+])\+[1-9](?:[ .()-]{0,2}\d){7,14}(?!\d)/;
 const US_PHONE = /(?<![\w+])(?:\+?1[ .-]?)?(?:\([2-9]\d{2}\) ?|[2-9]\d{2}[ .-])[2-9]\d{2}[ .-]\d{4}(?![\w])/;
 const STREET = new RegExp(
-  String.raw`(?<![\w-])\d{1,6}[A-Za-z]?\s+(?!(?:${QUANTITY_WORDS.join("|")})\b)(?:${STREET_WORD}\s+){1,4}(?:${SUFFIXES.join("|")})\b`,
+  String.raw`${HOUSE_NUMBER}\s+(?!(?:${QUANTITY_WORDS.join("|")})\b)(?:${STREET_WORD}\s+){1,4}(?:${SUFFIXES.join("|")})\b`,
   "i",
 );
 
