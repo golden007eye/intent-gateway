@@ -602,8 +602,9 @@ export function summarise(items: readonly unknown[], activities: readonly Activi
       // name key, and a wallet's `params.name` loses its MCP exemption.
       bodies ??= bodiesBySeq(items);
       const toCloud = r.destination === INTENT_CLOUD;
-      // A search to Intent Cloud carries the agent's free text (product, must-haves): the free-text rules run on it too.
-      const freeText = toCloud && r.endpoint === "searchCatalog";
+      // A search carries the agent's free text (product, must-haves), to Intent Cloud and to a wallet's catalog search
+      // (Shop's search_catalog query): the free-text rules run on it too.
+      const freeText = toCloud ? r.endpoint === "searchCatalog" : r.endpoint === "search_catalog";
       const found = findIdentity(bodies.get(r.seq) ?? null, { mcpEnvelope: !toCloud, orderRefAt: sentOrderRefAt(r.endpoint, toCloud), freeText });
       if (found.length > 0) findings.push({ seq: r.seq, kinds: [...new Set(found.map((f) => f.kind))].sort() });
     }

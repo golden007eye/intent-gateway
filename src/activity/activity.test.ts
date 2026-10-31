@@ -346,4 +346,52 @@ describe("wallet destinations (ADR-0014)", () => {
     expect(summary.identity).toEqual({ checked: 3, unchecked: 0, findings: [] });
     expect(summary.actions).toMatchObject({ call: 2, wallet: 1, blocked: 3 });
   });
+
+  // Review of #134 follow-up: Shop's search_catalog query is the agent's text too, so `intent log` screens it as the
+  // gateway's input screen does; any other wallet call, and verify, still never meet the free-text rules.
+  const search = (query: string): Record<string, unknown> => ({
+    ...disclosure("search_catalog", "POST", "/api/mcp", {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "search_catalog",
+        arguments: { catalog: { query, context: { address_country: "GB", currency: "GBP" }, filters: { ships_to: { country: "GB" } }, pagination: { limit: 10 } } },
+        _meta: { "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientInfo": { name: "intent-gateway", version: "0.1.0-preview.6" } },
+      },
+    }),
+    destination: "shop",
+    keyid: null,
+  });
+  const reply = (seq: number): Spec => ["response", { disclosure_seq: seq, status: 200, body_sha256: "a".repeat(64), bytes: 12 }];
+
+  it("screens the free text of a wallet catalog search, as of a search to Intent Cloud", () => {
+    const { summary } = buildActivity(
+      chain([
+        ["disclosure", search("desk lamp warm white")],
+        reply(0),
+        ["disclosure", search("lamp, deliver to Evergreen Terrace and wrap it")],
+        reply(2),
+        ["disclosure", search("phone stand to SW1A 1AA")],
+        reply(4),
+        ["disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", { ...SEARCH, product: "lamp, ship to Baker Street" })],
+        ["receipt", { disclosure_seq: 6, status: 200, verified: true }],
+      ]),
+    );
+    expect(summary.identity).toEqual({
+      checked: 4,
+      unchecked: 0,
+      findings: [
+        { seq: 2, kinds: ["street_address"] },
+        { seq: 4, kinds: ["postcode"] },
+        { seq: 6, kinds: ["street_address"] },
+      ],
+    });
+  });
+
+  it("attack on the scope: the same text in another wallet call is not screened as free text", () => {
+    const other = shop(0, { note: "lamp, deliver to Evergreen Terrace" });
+    const { summary } = buildActivity(chain([["disclosure", other], reply(0)]));
+    expect(summary.identity.findings).toEqual([]);
+  });
 });

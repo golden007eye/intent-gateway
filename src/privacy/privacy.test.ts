@@ -351,6 +351,37 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
     "Kingston KC3000 2048G", "Levi's 501 W32 L34", "Dewalt DCD791D2 20V drill", "1/4-20 bolts", "ISBN 978-0-13-468599-1",
     "square plate set of 4", "Crescent wrench 10 inch", "Hill climb bike tyre", "deliver to the office", "shipping to Main Street Coffee",
     "Walk-in tub 2 seat", "1984 Orwell paperback", "Corsair 2x16GB 3600 CL18",
+    // Review of #134 follow-up: only a delivery phrase starts a street, never a bare "to" or "at" in a title.
+    "adapter to USB-C", "gift to my mom", "gift to my mom at work", "stand to Main Street style", "lamp to match my desk",
+    "upgrade to RX 7900 XT", "adapter to M2 2TB SSD", "Welcome to Main Street sign", "Back to the Future Drive-in poster",
+    "Road to Perdition DVD", "Ticket to Ride board game", "guide to Central Park", "set up at Union Square Market", "I'm at home",
+    "I'm on a budget", "home is where the heart is sign", "USB to HDMI 2.1 cable", "lamp to Baker Street Sherlock fans",
+    "cake stand at 12 inch", "Miracle on 34th Street DVD", "2-4 Way splitter",
+    "guide to Abbey Road", "Welcome to Sesame Street", "Road to Abbey Road", "trip to Abbey Road book", "a walk down to Penny Lane poster",
+    "tribute to Electric Avenue tee", "Ramones Live at Abbey Road", "Live at Abbey Road Studios vinyl", "Recorded at Abbey Road box set",
+    "Beatles Live at Abbey Road", "Christmas at Sesame Street dvd", "Elmo comes to Sesame Street", "Big Bird moves to Sesame Street book",
+    "Return to Sesame Street", "Fun at Sesame Street puzzle", "Murder at Baker Street novel", "Mystery at Baker Street board game",
+    "Sherlock returns to Baker Street", "Back to Baker Street", "Escape to Wall Street book", "Welcome to Wall Street",
+    "Christmas at Downing Street", "Return to Coronation Street dvd", "Trouble at Coronation Street", "Holiday at Mulholland Drive",
+    "Night at Sunset Boulevard print", "Dancing at Penny Lane", "Coming to Electric Avenue", "Journey to Easy Street",
+    "Road to Easy Street", "On the Road to Easy Street", "Moving to Easy Street book", "A Night at Rodeo Drive perfume",
+    "Sunset at Ocean Drive poster", "Weekend at Lombard Street puzzle", "Christmas at Carnaby Street",
+    "Welcome to Main Street lego", "Return to Main Street", "Fun at Main Street Disney pin", "Disneyland Main Street pin",
+    "Arrival at Grand Central Parkway", "Back to Bourbon Street mardi gras", "Trip to Bourbon Street", "Nights at Bourbon Street vinyl",
+    "Ghosts at Elm Street", "Freddy returns to Elm Street", "Return to Elm Street", "Back to Elm Street blu-ray",
+    "Down to Cannery Row book", "Cannery Row book", "Trip to Cannery Row", "Sunday at Cannery Row",
+    "Walk to Hollywood Boulevard puzzle", "Stars at Hollywood Boulevard", "Christmas at Rockefeller Plaza",
+    "Gift to Fifth Avenue fashion", "Shopping at Fifth Avenue book", "Live at Madison Avenue", "Welcome to Penny Lane",
+    "Visit to Abbey Road poster", "Trip to Abbey Road, London print", "Live at Abbey Road 2009 DVD", "Born at Abbey Road",
+    "charger to go", "adapter at 65W", "ship to me fast", "upgrade to Windows 11", "fits up to 15 inch", "Live at Leeds", "Breakfast at Tiffany's",
+    "I'm at home", "home is Baker Street poster", "kids books ages 3-5 Cat in the Hat Dr Seuss", "ages 2-4 Green Eggs Dr Seuss",
+    "sizes 4-6 Little Girls Pl dress", "fits 2-4 Person Tent Ct", "Toddler 2-3 Years Old Way", "1-3 Year Old Toy Rd", "10-20 Gallon Tank Way",
+    // A house-number range counts only after a delivery phrase: box sets and seasons name streets too.
+    // ("Seasons 1-4 21 Jump Street" is left out: the default rule has always read "21 Jump Street" as an address.)
+    "Seasons 1-3 Sesame Street", "Season 1-2 Coronation Street", "Vol 1-2 Abbey Road",
+    "Episodes 1-6 Sesame Street", "Sesame Street Seasons 1-3", "Books 1-3 Tobacco Road", "Series 1-5 Coronation Street",
+    "Seasons 1-3 Mulholland Drive", "Grades 3-5 Sesame Street workbook", "Season 1-2 Melrose Place", "Seasons 1-7 Melrose Place",
+    "Episodes 1-10 Sesame Street, DVD", "grades 3-5 Science Kit Dr", "12-14 Baker Street",
   ];
   it("keeps at least 100 realistic product strings", () => {
     expect(products.length).toBeGreaterThanOrEqual(100);
@@ -398,6 +429,13 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
     ["US ZIP+4, spaced hyphen", "94107 - 1234"],
     ["US ZIP+4 without hyphen, after zip", "ZIP 941071234"],
     ["US ZIP+4 with space, after zip", "zip 94107 1234"],
+    // Review of #134 follow-up.
+    ["UK, unit-like inward letters after deliver to", "deliver to SW1A 1ST"],
+    ["UK, unit-like inward letters after ship to", "ship to LS1 1TB"],
+    ["US ZIP+4, underscore", "lamp 94107_1234"],
+    ["US ZIP+4, soft hyphen", "lamp 94107\u00AD1234"],
+    ["US ZIP+4, soft hyphen, full-width digits", "lamp \uFF19\uFF14\uFF11\uFF10\uFF17\u00AD\uFF11\uFF12\uFF13\uFF14"],
+    ["Portugal, underscore", "1000_001 Lisboa"],
   ];
   it.each(postcodes)("finds a full postcode: %s", (_label, text) => {
     expect(findIdentity({ product: text }, { freeText: true })).toContainEqual({ path: "$.product", kind: "postcode" });
@@ -437,9 +475,76 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
     ["UK Walk", "ship to Riverside Walk."],
     ["UK type with a house number", "12 Acacia Gardens"],
     ["full width", "ship to Ａｂｂｅｙ Ｒｏａｄ"],
+    // Review of #134 follow-up: text after the street, and wider phrases.
+    ["then and", "deliver to Evergreen Terrace and wrap it"],
+    ["then by", "ship to Baker Street by Friday please"],
+    ["then on", "send it to Abbey Road on Monday"],
+    ["I live at, curly quote", "we live at Baker Street"],
+    ["address is, then text", "my address is Baker Street, thanks"],
+    ["house number range after deliver to, UK type", "deliver to 12-14 Acacia Gardens"],
+    ["house number range after ship to, US type", "ship to 12-14 Baker Street"],
+    ["house number range after address:, en dash", "address: 12 – 14 Baker St, London"],
+    ["house number range after a phrase, a few words on", "deliver it to the shop at 12-14 Baker Street"],
   ];
   it.each(streets)("finds a street with no house number after a delivery phrase: %s", (_label, text) => {
     expect(findIdentity({ must_haves: [text] }, { freeText: true })).toContainEqual({ path: "$.must_haves[0]", kind: "street_address" });
+  });
+
+  it("still clears a unit-like UK code with no delivery phrase, and a bare to or at before a postcode shape", () => {
+    for (const text of ["S24 1TB", "LS1 1TB", "B12 3HP motor", "upgrade to RX 7900 XT", "adapter to M2 2TB SSD"]) expect(input(text)).toEqual([]);
+  });
+
+  it("the default street rule (verify, the disclosure core, Shop's title scrub) reads as before: no house-number range", () => {
+    // The results of findIdentity without freeText on cbde312, before the free-text follow-up.
+    const base: [string, Finding[]][] = [
+      ["12-14 Baker Street", []],
+      ["kids books ages 3-5 Cat in the Hat Dr Seuss", []],
+      ["ages 2-4 Green Eggs Dr Seuss", []],
+      ["sizes 4-6 Little Girls Pl dress", []],
+      ["fits 2-4 Person Tent Ct", []],
+      ["Toddler 2-3 Years Old Way", []],
+      ["1-2 Day Ct", []],
+      ["3-4 Way Valve Dr", []],
+      ["100-240 Volt Adapter Dr", []],
+      ["14 Baker Street", [{ path: "$.title", kind: "street_address" }]],
+      ["Seasons 1-4 21 Jump Street", [{ path: "$.title", kind: "street_address" }]],
+    ];
+    for (const [text, found] of base) expect([text, findIdentity({ title: text })]).toEqual([text, found]);
+  });
+
+  // Review of #134 follow-up, item 3: a delivery phrase ending one field, the street or the postcode starting the next.
+  const split: [label: string, input: Record<string, unknown>, kind: Finding["kind"]][] = [
+    ["street after a phrase in the field before", { product: "lamp, deliver to", must_haves: ["Evergreen Terrace"] }, "street_address"],
+    ["street after a phrase in an earlier array item", { must_haves: ["warm white", "ship to", "Baker Street"] }, "street_address"],
+    ["street after a phrase with a colon", { product: "lamp, address:", must_haves: ["Abbey Road please"] }, "street_address"],
+    ["2-character UK outward code after a phrase in another field", { product: "lamp, ship to", must_haves: ["M1 1AE"] }, "postcode"],
+    ["Dutch postcode after a phrase in another field", { product: "lamp, send it to", must_haves: ["1012 AB"] }, "postcode"],
+    ["house number range after a phrase in another field", { product: "lamp, ship to", must_haves: ["12-14 Baker Street"] }, "street_address"],
+  ];
+  it.each(split)("attack: finds identity split across fields, at $: %s", (_label, value, kind) => {
+    expect(findIdentity(value, { freeText: true, postcodeAt: TOOL_POSTCODE_AT })).toEqual([{ path: "$", kind }]);
+  });
+
+  it("the joined screen leaves the postcode field out and repeats no finding a field already has", () => {
+    const options = { freeText: true, postcodeAt: TOOL_POSTCODE_AT };
+    expect(findIdentity({ product: "lamp", postcode: "SW1A 1AA", must_haves: ["warm white"] }, options)).toEqual([]);
+    expect(findIdentity({ product: "Galaxy S24", must_haves: ["1TB"] }, options)).toEqual([]);
+    expect(findIdentity({ product: "PS5", must_haves: ["2TB", "ship to me"] }, options)).toEqual([]);
+    expect(findIdentity({ product: "SW1A 1AA", must_haves: ["1AA"] }, options)).toEqual([{ path: "$.product", kind: "postcode" }]);
+    // Only a delivery phrase that ends a field carries into the next; street words never run across fields.
+    for (const value of [
+      { product: "phone stand to", must_haves: ["Main Street"] },
+      { product: "guide to", must_haves: ["Abbey Road"] },
+      { product: "Return to", must_haves: ["Elm Street"] },
+      { product: "ship to me fast", must_haves: ["Baker Street poster"] },
+      { product: "lamp, ship to the US", must_haves: ["Abbey Road vinyl"] },
+      { product: "lamp SW1A", must_haves: ["1AA"] },
+      { product: "SSD", must_haves: ["M2"], extra: "2TB" },
+    ]) {
+      expect([value, findIdentity(value, options)]).toEqual([value, []]);
+    }
+    // Without freeText nothing is joined: merchant text side by side never meets these rules.
+    expect(findIdentity({ product: "lamp, deliver to", must_haves: ["Evergreen Terrace"] })).toEqual([]);
   });
 
   it("lets a whole postcode through only in the tool's own postcode field, and only from the postcode check", () => {

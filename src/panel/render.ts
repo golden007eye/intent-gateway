@@ -57,6 +57,8 @@ function header(m: PanelModel): string {
   return (
     `<header class="bar"><a class="brand" href="#/overview">${LOGO_SVG}<span class="product">gateway</span></a>${pill}` +
     live("meta", `<p class="meta">read-only · 127.0.0.1 · updated <time>${esc(m.updated)}</time></p>`) +
+    // app.js writes the stale notice here as text, so a screen reader reads it; empty, it takes no space.
+    `<p class="stale-note" id="stale-note" role="status" aria-live="polite"></p>` +
     `</header>`
   );
 }
@@ -66,25 +68,28 @@ function header(m: PanelModel): string {
  * purchases stopped); otherwise, on a panel run with a token, the Pause button. On a panel without one the region is
  * there with only a line for screen readers, so app.js's refresh can fill it when a pause is made from the CLI and
  * empty it after a resume. The region is a status region that stays on the page while its content changes, so a
- * screen reader announces a pause or resume.
+ * screen reader announces a pause or resume. The count of steps refused since the pause is its own region inside it,
+ * left out of the outer region's version and not live itself, so a new refusal is not announced and does not re-read
+ * the banner. The region takes focus (tabindex -1) when app.js swaps out the Pause button that had it.
  */
 function pauseBar(m: PanelModel, canPause: boolean): string {
   const p = m.pause;
+  const refusals = (n: number): string =>
+    live("pause-refusals", n === 0 ? "" : `<p>${String(n)} step${n === 1 ? "" : "s"} refused since the pause.</p>`, ' aria-live="off"');
   if (p === null) {
-    if (!canPause) return status(`<p class="sr-only">Purchases not paused.</p>`);
-    return status(
-      `<div class="pause-bar"><button type="button" class="pause-button" data-pause>Pause purchases</button>` +
-        `<p>Stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.</p></div>`,
-    );
+    const html = canPause
+      ? `<div class="pause-bar"><button type="button" class="pause-button" data-pause>Pause purchases</button>` +
+        `<p>Stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.</p></div>`
+      : `<p class="sr-only">Purchases not paused.</p>`;
+    return status(html + refusals(0));
   }
   const stopped =
     p.stopped.length === 0 ? `<p>No open purchase was waiting.</p>` : `<p>Purchases stopped:</p><ul>${p.stopped.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>`;
-  const refused = p.refusals === 0 ? "" : `<p>${String(p.refusals)} step${p.refusals === 1 ? "" : "s"} refused since the pause.</p>`;
-  return status(
+  const banner = (refused: string): string =>
     `<div class="pause-banner"><strong>${esc(p.banner)}</strong>` +
-      `<p class="tone-${p.cloudTone}">${esc(p.cloud)}</p>${stopped}${refused}` +
-      `<p>To resume: run <code>${esc(m.intent)} resume</code>${p.held ? ", which opens the confirm page's /account for your passkey" : " in a terminal"}.</p></div>`,
-  );
+    `<p class="tone-${p.cloudTone}">${esc(p.cloud)}</p>${stopped}${refused}` +
+    `<p>To resume: run <code>${esc(m.intent)} resume</code>${p.held ? ", which opens the confirm page's /account for your passkey" : " in a terminal"}.</p></div>`;
+  return status(banner(refusals(p.refusals)), banner(refusals(0)));
 }
 
 function nav(m: PanelModel): string {
@@ -357,14 +362,14 @@ function verify(m: PanelModel): string {
 
 // ---- helpers ------------------------------------------------------------------------------------------------------
 
-/** A region app.js refreshes in place: its data-v changes only when its HTML does. */
-function live(id: string, html: string, attrs = ""): string {
-  const v = createHash("sha256").update(html).digest("base64url").slice(0, 12);
+/** A region app.js refreshes in place: its data-v changes only when `versioned` (its HTML, unless given) does. */
+function live(id: string, html: string, attrs = "", versioned = html): string {
+  const v = createHash("sha256").update(versioned).digest("base64url").slice(0, 12);
   return `<div class="live" data-live="${id}" data-v="${v}"${attrs}>${html}</div>`;
 }
 
-function status(html: string): string {
-  return live("pause", html, ' role="status" aria-live="polite"');
+function status(html: string, versioned = html): string {
+  return live("pause", html, ' role="status" aria-live="polite" tabindex="-1"', versioned);
 }
 
 function count(n: number, what: string): string {
