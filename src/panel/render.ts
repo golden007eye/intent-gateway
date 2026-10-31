@@ -63,12 +63,13 @@ function header(m: PanelModel): string {
 
 /**
  * The pause banner while paused ("Paused since <time>. Resume needs your passkey.", Intent Cloud's word on it, the
- * purchases stopped); otherwise, on a panel run with a token, the Pause button. Nothing on a panel without one.
+ * purchases stopped); otherwise, on a panel run with a token, the Pause button. On a panel without one the region is
+ * there but empty, so app.js's refresh can fill it when a pause is made from the CLI and empty it after a resume.
  */
 function pauseBar(m: PanelModel, canPause: boolean): string {
   const p = m.pause;
   if (p === null) {
-    if (!canPause) return "";
+    if (!canPause) return live("pause", "");
     return live(
       "pause",
       `<div class="pause-bar"><button type="button" class="pause-button" data-pause>Pause purchases</button>` +

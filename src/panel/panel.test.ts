@@ -417,4 +417,59 @@ describe("the layout", () => {
       }
     });
   }
+
+  it("narrow, the tabs wrap instead of scrolling out of sight; a heading app.js focuses gets no focus box", async () => {
+    panel = await startPanel(dir, { port: 0 });
+    const css = (await call(panel.url, "/app.css")).body;
+    expect(decl(css, false, ".nav ul", "flex-wrap")).toBe("wrap");
+    expect(decl(css, false, ".nav ul", "overflow-x")).toBeUndefined();
+    // The outline rule leaves out tabindex="-1", the headings and main that only app.js or the skip link focus.
+    expect(css).not.toContain("[tabindex]:focus-visible");
+    expect(decl(css, true, '[tabindex="-1"]:focus', "outline")).toBe("none");
+  });
+});
+
+// app.js refreshes a live region by swapping it for the same region in the freshly served page, so a region missing
+// from either page would never appear or never go. A pause or resume made at the CLI while the panel is open must
+// still show: every region is in every page, and the pause region holds the banner exactly while paused.
+describe("the live regions", () => {
+  const ids = (html: string): string[] => [...html.matchAll(/<div class="live" data-live="([^"]+)" data-v="[^"]+">/g)].map((m) => m[1] ?? "");
+  const version = (html: string): string | undefined => /data-live="pause" data-v="([^"]+)"/.exec(html)?.[1];
+
+  /** The pause region's content: everything between its opening tag and the nav, less the region's closing tag. */
+  function pauseRegion(html: string): string {
+    const start = /<div class="live" data-live="pause" data-v="[^"]+">/.exec(html);
+    if (start === null) throw new Error("no pause region");
+    const from = start.index + start[0].length;
+    return html.slice(from, html.lastIndexOf("</div>", html.indexOf('<nav class="nav"', from)));
+  }
+
+  for (const [run, pause] of [
+    ["without a pause token", undefined],
+    ["with the Pause button", () => Promise.resolve()],
+  ] as const) {
+    it(`${run}, a CLI pause and resume while the panel is open add and remove the banner, and no region comes or goes`, async () => {
+      panel = await startPanel(dir, pause === undefined ? { port: 0 } : { port: 0, pause });
+      const before = (await call(panel.url, "/")).body;
+      expect(pauseRegion(before)).not.toContain("pause-banner");
+      expect(pauseRegion(before) === "").toBe(pause === undefined);
+
+      const store = await openStore(dir, { fs: fast });
+      await store.append("pause", { from: "cli" });
+      const paused = (await call(panel.url, "/")).body;
+      expect(pauseRegion(paused)).toMatch(/^<div class="pause-banner"[^>]*><strong>Paused since /);
+
+      await store.append("resume", { from: "cli", confirmed: false, pending: "next submit" });
+      await store.close();
+      const resumed = (await call(panel.url, "/")).body;
+      expect(pauseRegion(resumed)).toBe(pauseRegion(before));
+
+      expect(ids(before)).toContain("pause");
+      expect(ids(paused)).toEqual(ids(before));
+      expect(ids(resumed)).toEqual(ids(before));
+      // The version follows the content, so app.js swaps the region in at the pause and again at the resume.
+      expect(version(paused)).not.toBe(version(before));
+      expect(version(resumed)).toBe(version(before));
+    });
+  }
 });

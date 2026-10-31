@@ -71,6 +71,7 @@ export const UI_CONTRAST_PAIRS: readonly (readonly [keyof typeof UI_TOKENS, keyo
   ["success", "card"],
   ["demo-bg", "card"],
   ["demo-bg", "ground"],
+  ["on-ground", "card-line"],
 ];
 
 const vars = Object.entries(UI_TOKENS)

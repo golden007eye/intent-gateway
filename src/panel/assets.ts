@@ -111,6 +111,13 @@ export const APP_JS = `"use strict";
       })
       .then(function (html) {
         var doc = new DOMParser().parseFromString(html, "text/html");
+        // A region the fresh page no longer has is emptied, so nothing stale stays on screen.
+        document.querySelectorAll("[data-live]").forEach(function (old) {
+          if (!doc.querySelector('[data-live="' + old.getAttribute("data-live") + '"]')) {
+            old.textContent = "";
+            old.setAttribute("data-v", "");
+          }
+        });
         doc.querySelectorAll("[data-live]").forEach(function (fresh) {
           var old = document.querySelector('[data-live="' + fresh.getAttribute("data-live") + '"]');
           if (!old || old.getAttribute("data-v") === fresh.getAttribute("data-v")) return;
@@ -165,7 +172,7 @@ export const APP_JS = `"use strict";
 `;
 
 // The panel's own rules on top of UI_CSS (tokens only). A side nav on the left; under 768px it becomes a row of
-// tabs under the brand bar. Without app.js every view is listed one after another and the nav links scroll to them.
+// tabs under the brand bar, wrapping to a second line rather than scrolling, so every tab stays in sight. Without app.js every view is listed one after another and the nav links scroll to them.
 // Rows: the brand bar, the pause region (an empty row without one), then nav and main. The pause region's grid item
 // is its live wrapper, not the bar inside it, so the wrapper is what spans; otherwise it takes the nav's cell.
 const PANEL_CSS = `.app{display:grid;grid-template-columns:220px minmax(0,1fr);grid-template-rows:auto auto 1fr;min-height:100vh}
@@ -174,14 +181,17 @@ const PANEL_CSS = `.app{display:grid;grid-template-columns:220px minmax(0,1fr);g
 .skip{position:absolute;left:8px;top:-60px;z-index:10;background:var(--sage);color:var(--ground);padding:8px 12px;border-radius:8px;font-weight:600}
 .skip:focus{top:8px}
 a{color:var(--sage)}a:hover{color:var(--on-ground)}
-a:focus-visible,summary:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--sage);outline-offset:2px}
-h1:focus,h2:focus{outline:none}
+a:focus-visible,summary:focus-visible,select:focus-visible,input:focus-visible,button:focus-visible,[tabindex]:not([tabindex="-1"]):focus-visible{outline:2px solid var(--sage);outline-offset:2px}
+[tabindex="-1"]:focus{outline:none}
 .bar{grid-column:1/-1;grid-row:1;display:flex;align-items:center;gap:14px;padding:16px 28px;border-bottom:1px solid var(--card-line);flex-wrap:wrap}
 .bar .brand{display:flex;align-items:center;gap:10px;text-decoration:none}
 .product{font-size:15px;color:var(--on-card-muted)}
 .pause-bar,.pause-banner{margin:0;padding:12px 28px;border-bottom:1px solid var(--card-line);display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
 .pause-bar p,.pause-banner p{margin:0}
-.pause-banner{display:block;border-left:4px solid var(--warn-text)}
+.pause-banner{display:block;background:var(--warn-bg);color:var(--warn-text);border:1px solid var(--demo-bg);border-left:8px solid var(--demo-bg)}
+.pause-banner strong{display:block;font-size:17px;font-weight:700;margin-bottom:2px}
+.pause-banner p+p,.pause-banner ul+p{margin-top:4px}
+.pause-banner code{font-weight:600}
 .pause-banner ul{margin:4px 0;padding-left:20px}
 .pause-button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--warn-text);background:transparent;color:inherit;cursor:pointer}
 .pause-button:disabled{opacity:.5;cursor:default}
@@ -195,7 +205,8 @@ h1:focus,h2:focus{outline:none}
 .nav a:hover{background:var(--card)}
 .nav a[aria-current="page"]{background:var(--sage);color:var(--ground);font-weight:600}
 .nav .live{display:contents}
-.count{font:12px/1.4 var(--mono);color:inherit;opacity:.85}
+.count{font:12px/1.5 var(--mono);min-width:2.2em;text-align:center;padding:0 7px;border-radius:999px;background:var(--card-line);color:var(--on-ground)}
+.nav a[aria-current="page"] .count{background:var(--ground);color:var(--sage)}
 .badge{font:600 12px/1.4 var(--mono);background:var(--demo-bg);color:var(--demo-text);border-radius:999px;padding:1px 8px}
 .dot{width:9px;height:9px;border-radius:50%;display:inline-block}.dot-ok{background:var(--success)}.dot-bad{background:var(--danger-on-ground)}
 .nav-foot{margin-top:auto;font-size:12px;color:var(--on-card-muted);padding:0 12px}
@@ -213,6 +224,7 @@ h3{font-size:13px;font-weight:600;margin:6px 0 0}
 .t-ok{color:var(--success)}.t-warn{color:var(--demo-bg)}.t-bad{color:var(--danger-on-ground)}.t-plain{color:inherit}
 .small.t-ok,.small.t-warn{color:inherit}.small.t-ok{color:var(--success)}.small.t-warn{color:var(--demo-bg)}
 code{font-size:.92em;overflow-wrap:anywhere}
+code.cmd{margin:0 .2em}
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 .card{background:var(--card);border:1px solid var(--card-line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:6px;min-width:0}
 .card-hot{border:1.5px solid var(--sage)}
@@ -294,13 +306,13 @@ background:var(--paper);box-shadow:-12px 0 32px rgba(0,0,0,.45)}
 @media (max-width:768px){
 .app{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto 1fr}
 .nav{grid-row:3}main{grid-row:4}
-.bar{padding:12px 16px}
+.bar,.pause-bar,.pause-banner{padding:12px 16px}
 .nav{border-right:0;border-bottom:1px solid var(--card-line);padding:8px 12px;position:sticky;top:0;z-index:4;background:var(--ground)}
-.nav ul{flex-direction:row;overflow-x:auto;position:relative;top:0;gap:4px}
+.nav ul{flex-direction:row;flex-wrap:wrap;position:relative;top:0;gap:4px}
 .nav a{white-space:nowrap;padding:8px 10px}
 .nav-foot{display:none}
 main{padding:18px 16px 40px}
-.view{scroll-margin-top:140px}
+.view{scroll-margin-top:180px}
 .steps-line{grid-template-columns:repeat(2,minmax(0,1fr))}
 .feed li{grid-template-columns:44px 70px minmax(0,1fr);gap:8px}
 .kv>div{grid-template-columns:minmax(0,1fr);gap:0}
