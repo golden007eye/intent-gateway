@@ -51,7 +51,7 @@ export const TOOLS = {
     schema: ApprovalStatusInput,
     description:
       "Check whether the person approved a purchase with their passkey, using the approval_handle from create_cart. " +
-      "Without an approval_handle (a new session), it lists the purchases waiting for approval in this gateway's log, with their handles. " +
+      "Without an approval_handle (a new session), it lists the purchases with no approval chained in this gateway's log, with their handles. " +
       "Only a passkey approval the gateway verified counts as approved; tell the user what the result says. " +
       "For a one-tap purchase (completed by the gateway's linked wallet), call again until it says ordered, failed or mismatch. " +
       "The result ends with what this gateway sent (to Intent Cloud, and to the wallet for one-tap) and what it blocked.",

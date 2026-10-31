@@ -323,6 +323,8 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain(
       "If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status` once and say its one line. Only if it says `Waiting for`, rejected or expired, also offer to make a new approval link (`create_cart` again for the same offer). If it answers 404 or does not know the approval, do not call it again, and do not create another cart unless the developer asks for one;",
     );
+    // The list of purchases a lost or unknown handle gets is not a status to poll on or to make a new cart from.
+    expect(prompt).toContain("That list, or a result that says the handle is not known, is not `Waiting for`: do not poll on it and do not create a new cart;");
     // The prompt and the gateway's own next step after a 4xx agree: no duplicate cart without asking.
     expect(read("src/gateway/gateway.ts")).toContain("do not create a new cart for this purchase unless the buyer asks for one");
     expect(read("src/gateway/gateway.ts")).not.toContain("offer a new cart only if they did not approve this one");

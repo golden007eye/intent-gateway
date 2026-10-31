@@ -1877,10 +1877,12 @@ describe("get_approval_status without a handle: the waiting purchases, from the 
     const result = await h.gateway.getApprovalStatus({});
     expect(result.status).toBe("unknown");
     const lines = result.message.split("\n");
-    expect(lines[0]).toBe("No approval_handle was given. Waiting for approval in this gateway's log (newest first; no approval is chained for these yet):");
+    expect(lines[0]).toBe("No approval_handle was given. Purchases with no approval chained in this gateway's log, newest first:");
     expect(lines[1]).toMatch(new RegExp(`^- Road Runner 2 from .+, total \\$64\\.99, asked for 1 minute ago\\. approval_handle: ${road}$`));
     expect(lines[2]).toMatch(new RegExp(`^- Trail Runner 3 from .+, total \\$94\\.99, asked for 3 minutes ago\\. approval_handle: ${trail}$`));
-    expect(lines[3]).toBe("Call get_approval_status with one of these approval_handles to read its status.");
+    expect(lines[3]).toBe("Call get_approval_status with one of these approval_handles to read its status; do not create a new cart for them.");
+    // Attack: the prompt polls, and offers a new link, while a result says "Waiting for"; this list is no such status.
+    expect(result.message).not.toContain("Waiting for");
     expect(result.summary).toBe("Sent: nothing / Blocked: nothing");
     expect(h.totalSends()).toBe(sent);
   });
@@ -1898,7 +1900,10 @@ describe("get_approval_status without a handle: the waiting purchases, from the 
     // An unknown, well-formed handle lists them too.
     const result = await h.gateway.getApprovalStatus({ approval_handle: "ap_NOTINTHISCHAIN0000" });
     expect(result.status).toBe("unknown");
-    expect(result.message).toMatch(/^This gateway did not ask for that approval, so it cannot report on it\. Waiting for approval/);
+    expect(result.message).toMatch(/^That approval_handle is not known: this gateway did not ask for that approval, so it cannot report on it\. Purchases with no approval chained/);
+    // Attack: a stale or mistyped handle must not read as pending (the prompt would poll, or make a duplicate cart).
+    expect(result.message).not.toContain("Waiting for");
+    expect(result.message).toContain("do not create a new cart for them");
     expect(result.message).toContain(`approval_handle: ${waiting}`);
     expect(result.message).not.toContain(rejected);
     expect(result.message).not.toContain(expired);
@@ -1906,7 +1911,12 @@ describe("get_approval_status without a handle: the waiting purchases, from the 
     // The words claim no state: not approved, pending at Intent Cloud, ordered or paid.
     expect(result.message).not.toMatch(/\b(approved|pending|ordered|paid)\b/i);
     h.advance(16 * 60_000);
-    expect((await h.gateway.getApprovalStatus({})).message).toBe("No approval_handle was given. No purchase is waiting for approval in this gateway's log.");
+    expect((await h.gateway.getApprovalStatus({})).message).toBe("No approval_handle was given. This gateway's log has no unexpired purchase with no approval chained.");
+    const unknown = await h.gateway.getApprovalStatus({ approval_handle: "ap_NOTINTHISCHAIN0000" });
+    expect(unknown.message).toBe(
+      "That approval_handle is not known: this gateway did not ask for that approval, so it cannot report on it. This gateway's log has no unexpired purchase with no approval chained.",
+    );
+    expect(unknown.message).not.toContain("Waiting for");
   });
 });
 

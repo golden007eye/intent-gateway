@@ -286,7 +286,7 @@ export type CreateCartInput = z.input<typeof CreateCartInput>;
 
 export const ApprovalStatusInput = z.strictObject({
   approval_handle: ApprovalHandle.optional().describe(
-    "The approval_handle that create_cart returned. Leave it out to list the purchases waiting for approval in this gateway's log, with their handles.",
+    "The approval_handle that create_cart returned. Leave it out to list the purchases with no approval chained in this gateway's log, with their handles.",
   ),
 });
 export type ApprovalStatusInput = z.input<typeof ApprovalStatusInput>;
@@ -1499,7 +1499,11 @@ export function createGateway(options: GatewayOptions): Gateway {
     const pending = handle === undefined ? undefined : chain.findLast((e) => e.kind === "approval_pending" && bodyOf(e).handle === handle);
     if (handle === undefined || pending === undefined) {
       // A new agent session has no handle: the purchases still waiting, from the local log only (nothing is sent).
-      const said = handle === undefined ? "No approval_handle was given." : "This gateway did not ask for that approval, so it cannot report on it.";
+      // Never "Waiting for": the prompt polls on those words, and this is no status of any purchase.
+      const said =
+        handle === undefined
+          ? "No approval_handle was given."
+          : "That approval_handle is not known: this gateway did not ask for that approval, so it cannot report on it.";
       return { status: "unknown", message: `${said} ${waitingWords(chain)}`, summary: summary(fromSeq) };
     }
     const chained = chain.find((e) => e.kind === "approval" && bodyOf(e).handle === handle);
@@ -1599,7 +1603,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       })
       .reverse()
       .slice(0, MAX_WAITING_LISTED);
-    if (waiting.length === 0) return "No purchase is waiting for approval in this gateway's log.";
+    if (waiting.length === 0) return "This gateway's log has no unexpired purchase with no approval chained.";
     const lines = waiting.map((e) => {
       const b = bodyOf(e);
       const item = shown.get(b.handle);
@@ -1609,8 +1613,8 @@ export function createGateway(options: GatewayOptions): Gateway {
       return `- ${title}${from}${total}, asked for ${ageText(at - Date.parse(e.ts))} ago. approval_handle: ${String(b.handle)}`;
     });
     return (
-      `Waiting for approval in this gateway's log (newest first; no approval is chained for these yet):\n${lines.join("\n")}\n` +
-      "Call get_approval_status with one of these approval_handles to read its status."
+      `Purchases with no approval chained in this gateway's log, newest first:\n${lines.join("\n")}\n` +
+      "Call get_approval_status with one of these approval_handles to read its status; do not create a new cart for them."
     );
   }
 
