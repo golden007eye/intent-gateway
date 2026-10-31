@@ -389,16 +389,33 @@ describe("create_cart with a linked Shop wallet: the 1.7.1 submit", () => {
 
   it("the per-IP checkout quota: 429 checkouts is one clear line, and the gateway does not resubmit", async () => {
     const h = await setup();
-    const found = await h.gateway.findOffers(STICKERS);
-    if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
     const results: CreateCartResult[] = [];
-    for (let i = 0; i < 11; i++) results.push(await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle }));
+    // A fresh search each time: the same offer handle again would return its pending purchase, not submit again.
+    for (let i = 0; i < 11; i++) {
+      const found = await h.gateway.findOffers(STICKERS);
+      if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
+      results.push(await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle }));
+    }
     const last = results.at(-1) as CreateCartResult;
     expect(last.status).toBe("refused");
     expect(last.message).toContain("too many checkouts this hour");
     expect(last.message).toContain("does not resubmit");
     // One POST per create_cart: 11, the refused one included, and none sent again.
     expect(disclosures(h).filter((d) => d.endpoint === "createCheckout")).toHaveLength(11);
+  });
+
+  it("create_cart again for the same Shop offer: the same pending purchase, no second Shop checkout or submit", async () => {
+    const h = await setup();
+    const found = await h.gateway.findOffers(STICKERS);
+    if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
+    const handle = found.offers[0].offer_handle;
+    const first = await h.gateway.createCart({ offer_handle: handle });
+    const again = await h.gateway.createCart({ offer_handle: handle });
+    if (first.status !== "approval_needed" || again.status !== "approval_needed") throw new Error(`${first.message} / ${again.message}`);
+    expect([again.approval_handle, again.approval_url, again.check_code]).toEqual([first.approval_handle, first.approval_url, first.check_code]);
+    expect(again.message).toContain("same pending purchase");
+    expect(disclosures(h).filter((d) => d.endpoint === "createCheckout")).toHaveLength(1);
+    expect(h.shop.createCount).toBe(1);
   });
 
   it("has one clear line for every refusal code the contract names", () => {

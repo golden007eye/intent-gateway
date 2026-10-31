@@ -891,6 +891,64 @@ describe("invariant 3: buyer identity in a tool input is never sent", () => {
 
 // ---- invariant 4 --------------------------------------------------------------------------------------------------
 
+describe("create_cart again for the same offer: the same pending purchase, never a second approval (QA: a duplicate cart)", () => {
+  it("returns the open approval's link, check code and status from the local log, and sends nothing", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    const first = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    h.advance(60_000);
+    const sent = h.totalSends();
+    const again = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(h.totalSends()).toBe(sent);
+    expect(bodies(h, "approval_pending")).toHaveLength(1);
+    expect({ handle: again.approval_handle, url: again.approval_url, code: again.check_code }).toEqual({
+      handle: first.approval_handle,
+      url: first.approval_url,
+      code: first.check_code,
+    });
+    expect(again.qr.text).toBe(first.qr.text);
+    expect(again.message).toMatch(/^This is the same pending purchase \(total \$\d+\.\d{2}\), asked for 1 minute ago: no new cart was made\. /);
+    expect(again.message).toContain("waiting for the buyer's passkey");
+    expect(again.summary).toBe("Sent: nothing / Blocked: nothing");
+  });
+
+  it("attack (invariant 4): the repeat approves nothing; once the first is approved, rejected or expired, a new cart needs a new approval", async () => {
+    const h = await setup();
+    const passkey = new SoftPasskey();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    const first = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    // Still pending at Intent Cloud and in the log: no approval chained by the repeat.
+    expect((await h.gateway.getApprovalStatus({ approval_handle: first.approval_handle })).status).toBe("pending");
+    expect(bodies(h, "approval")).toHaveLength(0);
+
+    expect(h.fake.approveWithPasskey(first.approval_handle, passkey).status).toBe(200);
+    expect((await h.gateway.getApprovalStatus({ approval_handle: first.approval_handle })).status).toBe("approved");
+    const second = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(second.approval_handle).not.toBe(first.approval_handle);
+    expect(h.sends.createApproval).toBe(2);
+
+    expect(h.fake.reject(second.approval_handle, passkey).status).toBe(200);
+    expect((await h.gateway.getApprovalStatus({ approval_handle: second.approval_handle })).status).toBe("rejected");
+    const third = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(third.approval_handle).not.toBe(second.approval_handle);
+
+    h.advance(16 * 60_000);
+    const fourth = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(fourth.approval_handle).not.toBe(third.approval_handle);
+    expect(h.sends.createApproval).toBe(4);
+  });
+
+  it("another quantity is another purchase: a new cart is asked for", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    const one = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    const two = approvalOf(await h.gateway.createCart({ offer_handle: handle, quantity: 2 }));
+    expect(two.approval_handle).not.toBe(one.approval_handle);
+    expect(h.sends.createCart).toBe(2);
+  });
+});
+
 describe("invariant 4: approved only when verified, chained and from the pinned passkey", () => {
   it("pending until the passkey approves; then the pin and the approval are chained, and the pin goes to stderr", async () => {
     const h = await setup();
@@ -1951,9 +2009,18 @@ describe("get_approval_status without a handle: the waiting purchases, from the 
     expect(result.status).toBe("unknown");
     const lines = result.message.split("\n");
     expect(lines[0]).toBe("No approval_handle was given. Purchases with no approval chained in this gateway's log, newest first:");
+    // Each with its link and check code as chained when asked for, so a fresh session can show them again.
+    const linkOf = (handle: string) => String(bodies(h, "approval_pending").find((b) => b.handle === handle)?.approval_url);
+    const codeOf = (handle: string) => String(bodies(h, "approval_pending").find((b) => b.handle === handle)?.snapshot_hash).slice(0, 8);
     expect(lines[1]).toMatch(new RegExp(`^- Road Runner 2 from .+, total \\$64\\.99, asked for 1 minute ago\\. approval_handle: ${road}$`));
-    expect(lines[2]).toMatch(new RegExp(`^- Trail Runner 3 from .+, total \\$94\\.99, asked for 3 minutes ago\\. approval_handle: ${trail}$`));
-    expect(lines[3]).toBe("Call get_approval_status with one of these approval_handles to read its status; do not create a new cart for them.");
+    expect(lines.slice(2, 4)).toEqual([`  Approval link: ${linkOf(road)}`, `  Check code: ${codeOf(road)}`]);
+    expect(lines[4]).toMatch(new RegExp(`^- Trail Runner 3 from .+, total \\$94\\.99, asked for 3 minutes ago\\. approval_handle: ${trail}$`));
+    expect(lines.slice(5, 7)).toEqual([`  Approval link: ${linkOf(trail)}`, `  Check code: ${codeOf(trail)}`]);
+    expect(linkOf(road)).toMatch(/^https:\/\//);
+    expect(lines[7]).toBe(
+      "The buyer can still open a link above and approve with their passkey. Call get_approval_status with one of these approval_handles " +
+        "to read its status; do not create a new cart for them.",
+    );
     // Attack: the prompt polls, and offers a new link, while a result says "Waiting for"; this list is no such status.
     expect(result.message).not.toContain("Waiting for");
     expect(result.summary).toBe("Sent: nothing / Blocked: nothing");

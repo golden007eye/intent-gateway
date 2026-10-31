@@ -478,6 +478,8 @@ export function createGateway(options: GatewayOptions): Gateway {
   const providers: SearchProvider[] = options.oneTap?.searchInGateway === true && wallet?.searchCatalog !== undefined ? [createShopProvider(wallet)] : [];
   /** Approvals whose cart this process's session key created; any other is read with its completer key. */
   const createdHere = new Set<string>();
+  /** The approval each offer handle last led to here, and its quantity: a repeated create_cart returns it (samePending). */
+  const askedFor = new Map<string, { approval: string; quantity: number }>();
   let stopReported = false;
 
   // One call at a time: the spend caps and the replay check read the chain and then append to it. Each call records
@@ -1051,9 +1053,19 @@ export function createGateway(options: GatewayOptions): Gateway {
     const parsed = CreateCartInput.safeParse(raw);
     if (!parsed.success) return { status: "invalid", message: `Not sent: ${z.prettifyError(parsed.error)}`, summary: summary(fromSeq) };
     const quantity = parsed.data.quantity ?? 1;
-    const local = localOffers.get(parsed.data.offer_handle);
+    const offerHandle = parsed.data.offer_handle;
+    // The same offer again while its approval is open: the same pending purchase, never a second approval.
+    const same = samePending(offerHandle, quantity, fromSeq);
+    if (same !== null) return same;
+    const made = await newCart(offerHandle, quantity, fromSeq);
+    if (made.status === "approval_needed") askedFor.set(offerHandle, { approval: made.approval_handle, quantity });
+    return made;
+  }
+
+  async function newCart(offerHandle: string, quantity: number, fromSeq: number): Promise<CreateCartResult> {
+    const local = localOffers.get(offerHandle);
     if (local !== undefined) return submitShopCheckout(local, quantity, fromSeq);
-    const known = offers.get(parsed.data.offer_handle);
+    const known = offers.get(offerHandle);
     if (known === undefined) {
       return {
         status: "invalid",
@@ -1630,25 +1642,13 @@ export function createGateway(options: GatewayOptions): Gateway {
    */
   function waitingWords(chain: readonly Entry[]): string {
     const at = now();
-    const approved = new Set(chain.flatMap((e) => (e.kind === "approval" ? [bodyOf(e).handle] : [])));
-    const lastRead = new Map<unknown, unknown>();
     const shown = new Map<unknown, { title?: unknown; merchant?: unknown }>();
     for (const e of chain) {
       if (e.kind !== "observed") continue;
       const b = bodyOf(e);
-      if (b.endpoint === "getApproval") lastRead.set(b.approval_handle, b.state);
       if (b.endpoint === "createApproval" || b.endpoint === "createCheckout") shown.set(b.approval_handle, { title: b.title, merchant: b.merchant });
     }
-    const waiting = chain
-      .filter((e) => {
-        if (e.kind !== "approval_pending") return false;
-        const b = bodyOf(e);
-        const expires = typeof b.expires_at === "string" ? Date.parse(b.expires_at) : Number.NaN;
-        const read = lastRead.get(b.handle);
-        return !approved.has(b.handle) && expires > at && (read === undefined || read === "pending") && !supersededIn(chain, e);
-      })
-      .reverse()
-      .slice(0, MAX_WAITING_LISTED);
+    const waiting = openPending(chain).reverse().slice(0, MAX_WAITING_LISTED);
     if (waiting.length === 0) return "This gateway's log has no purchase still open.";
     const lines = waiting.map((e) => {
       const b = bodyOf(e);
@@ -1656,12 +1656,63 @@ export function createGateway(options: GatewayOptions): Gateway {
       const title = typeof item?.title === "string" && item.title !== "" ? item.title : "(item not recorded)";
       const from = typeof item?.merchant === "string" && item.merchant !== "" ? ` from ${item.merchant}` : "";
       const total = typeof b.total_minor === "number" ? `, total ${formatMinor(b.total_minor, typeof b.currency === "string" ? b.currency : "USD")}` : "";
-      return `- ${title}${from}${total}, asked for ${ageText(at - Date.parse(e.ts))} ago. approval_handle: ${String(b.handle)}`;
+      // The link and the check code as chained when the approval was asked for: read from the log, never fetched.
+      const link = typeof b.approval_url === "string" ? `\n  Approval link: ${b.approval_url}` : "";
+      const code = typeof b.snapshot_hash === "string" ? `\n  Check code: ${b.snapshot_hash.slice(0, 8)}` : "";
+      return `- ${title}${from}${total}, asked for ${ageText(at - Date.parse(e.ts))} ago. approval_handle: ${String(b.handle)}${link}${code}`;
     });
     return (
       `Purchases with no approval chained in this gateway's log, newest first:\n${lines.join("\n")}\n` +
-      "Call get_approval_status with one of these approval_handles to read its status; do not create a new cart for them."
+      "The buyer can still open a link above and approve with their passkey. Call get_approval_status with one of these approval_handles " +
+      "to read its status; do not create a new cart for them."
     );
+  }
+
+  /**
+   * The approvals this gateway's log shows as still open, oldest first: asked for, not expired, not replaced by a
+   * newer submit, no approval chained, and no status read since that says otherwise. From the local log only.
+   */
+  function openPending(chain: readonly Entry[]): Entry[] {
+    const at = now();
+    const approved = new Set(chain.flatMap((e) => (e.kind === "approval" ? [bodyOf(e).handle] : [])));
+    const lastRead = new Map<unknown, unknown>();
+    for (const e of chain) {
+      if (e.kind === "observed" && bodyOf(e).endpoint === "getApproval") lastRead.set(bodyOf(e).approval_handle, bodyOf(e).state);
+    }
+    return chain.filter((e) => {
+      if (e.kind !== "approval_pending") return false;
+      const b = bodyOf(e);
+      const expires = typeof b.expires_at === "string" ? Date.parse(b.expires_at) : Number.NaN;
+      const read = lastRead.get(b.handle);
+      return !approved.has(b.handle) && expires > at && (read === undefined || read === "pending") && !supersededIn(chain, e);
+    });
+  }
+
+  /**
+   * The open approval this process asked for with the same offer handle and quantity, as an approval_needed result
+   * that sends nothing and makes no new approval: the same link and check code, which still need the buyer's passkey
+   * (invariant 4). Null when there is none, or it is no longer open in the log.
+   */
+  function samePending(offerHandle: string, quantity: number, fromSeq: number): CreateCartResult | null {
+    const earlier = askedFor.get(offerHandle);
+    if (earlier === undefined || earlier.quantity !== quantity) return null;
+    const pending = openPending(store.entries()).find((e) => bodyOf(e).handle === earlier.approval);
+    if (pending === undefined) return null;
+    const b = bodyOf(pending);
+    if (typeof b.approval_url !== "string" || typeof b.snapshot_hash !== "string") return null;
+    const total = typeof b.total_minor === "number" ? ` (total ${formatMinor(b.total_minor, typeof b.currency === "string" ? b.currency : "USD")})` : "";
+    return {
+      status: "approval_needed",
+      approval_handle: earlier.approval,
+      approval_url: b.approval_url,
+      check_code: b.snapshot_hash.slice(0, 8),
+      qr: approvalQr(b.approval_url),
+      message:
+        `This is the same pending purchase${total}, asked for ${ageText(now() - Date.parse(pending.ts))} ago: no new cart was made. ` +
+        "Its status in this gateway's log: waiting for the buyer's passkey. Ask the buyer to open the same approval link (or scan the QR code), " +
+        "check that the page shows the check code, and approve with their passkey. Then call get_approval_status.",
+      summary: summary(fromSeq),
+    };
   }
 
   /**
