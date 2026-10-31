@@ -17,7 +17,7 @@ Your first reply starts with this opening, word for word and without the `>` mar
 How to work:
 
 - Do one step at a time, in order. Run the commands yourself.
-- Do not narrate commands, recap a step or paste command output. When a step is done, say the status line that step gives, exactly, on its own line. Each has the form `✓ <n>/9  <what happened>. Next: <what>.` Here `<n>` is the step just finished and 9 is the number of steps. Say each step's line once, in order, and only when that step is done. The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.
+- Do not narrate commands, recap a step or paste command output. When a step is done, say the status line that step gives, exactly, on its own line. Each has the form `✓ <n>/9  <what happened>. Next: <what>.` Here `<n>` is the step just finished and 9 is the number of steps. Say each step's line once, in order, and only when that step is done. A check that passes gets no words besides the step's line. The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.
 - Anything the developer must see, click or type (a link, a code, a choice) goes in your own reply, written out in full, never only in a command's output. Why: Claude Code does not reliably show command output to the developer.
 - Each developer action is a block in your own reply, copied from this prompt without the `>` marks, with its link or code filled in. It starts with the bold **Your turn:** marker and a short label. It gives one action, in short lines, with its link or code on its own line. It ends your reply: run nothing after it. It ends with "Reply done", unless the developer answers it with a choice or with "continue". Where a command can see the action (the Shop link, agent payments, the purchase), run that command once the developer replies; it confirms the action or waits for it. Why: an agent that ran the waiting command in the same reply showed the block only after the wait, so the developer never saw the link. Say nothing after a block while the developer acts.
 - The commands that wait (`intent wallet link shop --finish`, `intent wallet status --wait-budget`, `get_approval_status`) send only the gateway's normal requests to Shop and Intent Cloud and read what each returns; every request is in the log before it leaves.
@@ -37,7 +37,7 @@ $ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} INTENT_SHOP_CLIENT_ID=5c733ab2-1903-400a
 ## Step 1: check Node and the folder
 
 1. Run `node --version`. The gateway needs Node 22 LTS (22.22.2 or later), 24 LTS (24.15 or later) or 26+. Node 23 and 25 are not supported. If this Node is outside that range, follow "Get a supported Node" below, then come back to this step.
-2. Run `pwd`. You must be in a project folder that the developer chose, not their home folder or `/`. If you are not, ask them to open Claude Code in a project folder and paste this prompt again. Why: step 6 installs a skill into this project's `.claude/skills/`, and nothing is installed globally.
+2. Run `pwd`. Only if it is the developer's home folder or `/`, ask them to open Claude Code in a project folder they chose and paste this prompt again. Why: step 6 installs a skill into this project's `.claude/skills/`, and nothing is installed globally.
 3. When both pass, say only this line: `✓ 1/9  Node and folder checked. Next: install the gateway.`
 
 ### Get a supported Node
@@ -61,13 +61,11 @@ $ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} INTENT_SHOP_CLIENT_ID=5c733ab2-1903-400a
 ## Step 2: install the gateway
 
 1. Check that the package runs: `intent --version` must print `0.1.0-preview.6`.
-2. Add the gateway to Claude Code for this project:
+2. Run `claude mcp list` without saying so; if it lists `intent` (for example a connector added in the developer's Claude account), ask the developer before you add this one under another name, such as `intent-gateway`, so you never pick the wrong one; otherwise add it to Claude Code for this project:
 
 ```console
 $ claude mcp add intent -e INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} -- npx -y intent-gateway@0.1.0-preview.6
 ```
-
-Only if Claude Code already has an MCP server named `intent` (for example a connector added in the developer's Claude account), ask the developer before you add this one under another name, such as `intent-gateway`, so you never pick the wrong one.
 
 When the gateway is added, say only this line: `✓ 2/9  Gateway added to Claude Code. Next: first run and policy.`
 
@@ -202,7 +200,7 @@ Right after them, say only this line: `✓ 7/9  Pause explained. Next: restart a
 >
 > Reply done
 
-5. When the developer replies, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result's own advice, such as "Check the order in the Shop app", in one line. Any other result is final: relay what it says, in one line, and no more. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that. If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status` once and say its one line. Only if it says `Waiting for`, rejected or expired, also offer to make a new approval link (`create_cart` again for the same offer). If it answers 404 or does not know the approval, do not call it again, and do not create another cart unless the developer asks for one; any other result is final, as above. Give no other advice. If you have lost the `approval_handle` (a new session), call `get_approval_status` without one: it lists the purchases with no approval chained, with their handles. That list, or a result that says the handle is not known, is not `Waiting for`: do not poll on it and do not create a new cart; call `get_approval_status` once with the listed handle of the purchase the developer approved.
+5. When the developer replies, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result's own advice, such as "Check the order in the Shop app", in one line. Any other result is final: relay what it says, in one line, then the status line below. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that. If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status` once and say its one line. Only if it says `Waiting for`, rejected or expired, also offer to make a new approval link (`create_cart` again for the same offer). If it answers 404 or does not know the approval, do not call it again, and do not create another cart unless the developer asks for one; any other result is final, as above. Give no other advice. If you have lost the `approval_handle` (a new session), call `get_approval_status` without one: it lists the purchases with no approval chained, with their handles. That list, or a result that says the handle is not known, is not `Waiting for`: do not poll on it and do not create a new cart; call `get_approval_status` once with the listed handle of the purchase the developer approved.
 6. Once you have relayed a final result, say only this line: `✓ 8/9  Purchase result in. Next: read the log.`
 
 ## Step 9: read the log together

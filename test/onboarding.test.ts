@@ -308,7 +308,10 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain("Do not narrate commands, recap a step or paste command output. When a step is done, say the status line that step gives, exactly, on its own line.");
     expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.");
     // One status line per finished step: a dogfood run said "✓ 8/9 (part 1)" in the middle of step 8.
-    expect(prompt).toContain("Say each step's line once, in order, and only when that step is done.");
+    expect(prompt).toContain("Say each step's line once, in order, and only when that step is done. A check that passes gets no words besides the step's line.");
+    // Only a failure has words: "If you are not" and "Only if … already has" made agents confirm the check passed.
+    expect(prompt).toContain("Run `claude mcp list` without saying so; if it lists `intent`");
+    expect(prompt).not.toMatch(/If you are not|already has an MCP server/);
     const step7 = prompt.slice(prompt.indexOf("## Step 7"), prompt.indexOf("## Step 8"));
     expect(step7).toMatch(/Shop app\.\n\nRight after them, say only this line: `✓ 7\/9 {2}[^`]+` Then go on to step 8\.\n\n$/);
     // Nothing the developer was not shown: a dogfood agent invented an account URL and a QR code after a failed passkey.
@@ -488,6 +491,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     // Steps 1, 2 and 3 finish without the developer: each line names the next step, which is the line after it.
     const next = (n: number): string => /say only this line: `✓ \d\/9 {2}[^`]+Next: ([^`]+)\.`/.exec(steps[n - 1] ?? "")?.[1] ?? "";
     expect(next(1)).toBe("install the gateway");
+    expect(next(2)).toBe("first run and policy");
     expect(next(3)).toBe("sign up and create a passkey");
   });
 
@@ -516,7 +520,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const prompt = read(PROMPT);
     const step8 = prompt.slice(prompt.indexOf("## Step 8"), prompt.indexOf("## Step 9"));
     expect(step8).toContain("Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again.");
-    expect(step8).toContain("Any other result is final: relay what it says, in one line, and no more.");
+    expect(step8).toContain("Any other result is final: relay what it says, in one line, then the status line below.");
     // The poll is capped: an indeterminate one-tap keeps saying "call again", so after about 3 minutes the agent stops
     // and relays the result's own advice, which the gateway writes.
     expect(step8).toContain(
@@ -660,7 +664,10 @@ describe("onboarding prompt and policy-advisor skill", () => {
     // Started as the agent's own background task and stopped by it: a dogfood agent ran it with `&` into /tmp/panel.log
     // and left it running, unsaid.
     expect(skill).toContain("with your shell tool's own background option (`run_in_background` in Claude Code), not with `&`, `nohup` or a log file");
-    expect(skill).toContain("When the developer answers the block below, stop that background task, and say in your next status line that the panel is stopped.");
+    expect(skill).toContain("When the developer answers the block below, stop that background task; your status line, or the onboarding's step 6 line, says the panel is stopped.");
+    // One ✓ 6/9: run by the onboarding, the skill says no status line of its own.
+    expect(skill).toContain("When the onboarding runs you, say none: its step 6 line, said after you finish, is your only status line.");
+    expect(read(PROMPT)).toContain("`✓ 6/9  Rules checked, panel stopped. Next: pause.`");
     expect(skill).not.toMatch(/> ?\/tmp\/|\/tmp\/panel/);
     expect(skill).toContain("> **Your turn:** look at your rules (optional)\n>\n> Here are your rules. Keep them, or tell me what to change.\n");
     expect(skill).toContain("> http://127.0.0.1:<port>/#/policy");
