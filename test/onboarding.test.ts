@@ -319,12 +319,21 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain(
       "Never give the developer a step, link, page or button that neither this prompt nor a tool result showed them, and never build a URL yourself.",
     );
+    // A new link only while nothing was approved: after approved, handed off or ordered it would invite a second purchase.
     expect(prompt).toContain(
-      "If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status`, say its one line, and offer to make a new approval link (`create_cart` again for the same offer); give no other advice.",
+      "If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status` and say its one line. Only if it says `Waiting for`, rejected or expired, also offer to make a new approval link (`create_cart` again for the same offer); any other result is final, as above. Give no other advice.",
     );
-    // A failed create_cart names its next step, and the cart's total is said before the approval link.
-    expect(prompt).toContain("If it fails, say its line, which names what to do next. Otherwise say the total from its `Cart:` line in one line");
-    expect(read("src/mcp/tools.ts")).toContain("Tell the buyer this total before the approval link.");
+    expect(prompt).not.toMatch(/say its one line, and offer to make a new approval link/);
+    const gateway = read("src/gateway/gateway.ts");
+    for (const words of ['"The buyer rejected this purchase."', '"This approval expired. Create a new cart to try again."']) expect(gateway).toContain(words);
+    // A failed create_cart names its next step, and the total is said before the approval link, for a Cloud cart and
+    // for a Shop checkout (the normal path once Shop is linked) alike.
+    expect(prompt).toContain(
+      "If it fails, say its line, which names what to do next. Otherwise say the total from its `Cart:` or `Shop checkout:` line (`… from <store>, total <total> …`) in one line",
+    );
+    const tools = read("src/mcp/tools.ts");
+    expect(tools).toContain('const TELL = "Tell the buyer this total before the approval link.";');
+    expect([...tools.matchAll(/\$\{TELL\}`/g)]).toHaveLength(2);
     // A block ends the reply, and the command that sees the action runs once the developer replies: in five dogfood
     // runs an agent told to show the block and then run --finish (10 minutes) or get_approval_status in the same reply
     // showed nothing before the wait, so the developer never saw the link (attack: no waiting command in the block's reply).

@@ -142,16 +142,21 @@ describe("tools (AC-R1)", () => {
     expect(text).toContain("Pass only what the user said");
     expect(text).toContain("Never guess a postcode or a budget.");
     // The one country an agent may infer: a US ZIP code with a dollar budget and no other country (a dogfood agent
-    // asked "Which country does 94103 ship to?"). Everything else is asked: 5-digit euro postcodes, other dollar currencies.
+    // asked "Which country does 94103 ship to?"), and only when nothing else points elsewhere: Mexico also writes $ and
+    // has 5-digit postcodes ("under $300, ship to 06600, Ciudad de México" is asked). Everything else is asked.
     expect(text).toContain(
       "Never guess a country, with one exception: a 5-digit ZIP code or ZIP+4 (12345 or 12345-6789) with a budget in dollars " +
-        "($, USD, or the user said dollars) and no other country named means US. Any other postcode needs the country from the user",
+        "($, USD, or the user said dollars) means US, when nothing in the conversation suggests another country (a non-US city, " +
+        "region or language); if unsure, ask. Any other postcode needs the country from the user",
     );
-    expect(text).toContain("5-digit postcodes are also used in euro countries, and other countries' dollars are written $ too.");
+    expect(text).toContain("5-digit postcodes are also used in other countries, and other countries' currencies are written $ too.");
     expect(text).not.toContain("Never guess a country, a postcode or a budget");
+    expect(text).not.toContain("no other country named means US");
     // The schema the agent sees says the same, and nothing looser.
     const country = (z.toJSONSchema(FindOffersInput, { io: "input" }) as unknown as { properties: { country: { description: string } } }).properties.country.description;
-    expect(country).toContain("Never guess it, except US for a 5-digit ZIP code or ZIP+4 with a budget in dollars and no other country named.");
+    expect(country).toContain(
+      "Never guess it, except US for a 5-digit ZIP code or ZIP+4 with a budget in dollars when nothing in the conversation suggests another country; if unsure, ask.",
+    );
     expect(text).toContain("their budget in the currency of the ship-to country");
     expect(text).toContain("ask the user only for those");
     expect(text).toContain("if find_offers refuses a country, tell the user what it says");
@@ -230,7 +235,21 @@ describe("tools (AC-R1)", () => {
     const found = textOf(await client.callTool({ name: "find_offers", arguments: SHOES }));
     const handle = /Trail Runner 3 .*offer_handle: (of_[A-Za-z0-9_-]+)/.exec(found)?.[1];
     const text = textOf(await client.callTool({ name: "create_cart", arguments: { offer_handle: handle } }));
-    expect(text).toContain("from Trail Supply Co, total $94.99 (estimated: quoted without the merchant's tax) ($89.99 each, shipping $5.00).");
+    // The confirm page's words for an estimated total (contract Appendix A).
+    expect(text).toContain("from Trail Supply Co, total $94.99 (estimated: the final total can be lower, never higher) ($89.99 each, shipping $5.00).");
+  });
+
+  it("a total above the items and shipping is said as the merchant's quote, with no breakdown the cart does not carry", async () => {
+    // The dogfood: $1.00 each, shipping $1.00, total $2.14 (the cart carries no tax field).
+    env.fake.tamper.cart({ total: { amount_minor: 9513, currency: "USD" } });
+    const client = await connect((await serve()).url);
+    const found = textOf(await client.callTool({ name: "find_offers", arguments: SHOES }));
+    const handle = /Trail Runner 3 .*offer_handle: (of_[A-Za-z0-9_-]+)/.exec(found)?.[1];
+    const text = textOf(await client.callTool({ name: "create_cart", arguments: { offer_handle: handle } }));
+    expect(text).toMatch(
+      /^Cart: 1 × Trail Runner 3 \(US 10 \/ Blue\) from Trail Supply Co, total \$95\.13 \(\$89\.99 each, shipping \$5\.00; the total includes tax and fees the merchant quoted\)\. Tell the buyer this total before the approval link\./,
+    );
+    expect(text).not.toMatch(/tax \$/);
   });
 
   it("a create_cart refusal with no code names a next step (attack: the dogfood's 'names no fix')", async () => {
@@ -240,7 +259,7 @@ describe("tools (AC-R1)", () => {
     const result = await client.callTool({ name: "create_cart", arguments: { offer_handle: handle, quantity: 3 } });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toMatch(
-      /^Intent Cloud answered 409: not enough stock\. Nothing was bought: no approval was made\. Pick another offer, or search again, for example to another postcode\.\n\nSent: /,
+      /^Intent Cloud answered 409: not enough stock\. Nothing was bought: no approval was made\. Pick another offer, or search again\.\n\nSent: /,
     );
   });
 

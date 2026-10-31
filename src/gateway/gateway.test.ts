@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type FakeCloud, type FakeCloudOptions, SoftPasskey, startFakeCloud } from "../cloud-fake/index.ts";
 import type { ApprovalCreated, ApprovalStatus, SnapshotV3 } from "../contract/index.ts";
 import { INTENT } from "../config/index.ts";
-import { CloudNetworkError, connectCloud, type DisclosedCloud, DisclosureRefusedError, DisclosureStoppedError } from "../disclosure/index.ts";
+import { CloudNetworkError, CloudResponseError, connectCloud, type DisclosedCloud, DisclosureDiscardedError, DisclosureRefusedError, DisclosureStoppedError } from "../disclosure/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { loadPolicy } from "../policy/index.ts";
 import { type CompleterKeys, createSession, openCompleterKeys } from "../signing/index.ts";
@@ -651,7 +651,7 @@ describe("createCart snapshot checks", () => {
 // ---- every refusal names a next step -----------------------------------------------------------------------------
 
 describe("an answer with no refusal code still names what to do next", () => {
-  const CART_NEXT = "Nothing was bought: no approval was made. Pick another offer, or search again, for example to another postcode.";
+  const CART_NEXT = "Nothing was bought: no approval was made. Pick another offer, or search again.";
 
   it("create_cart 409 not enough stock (the fake's own answer): Intent Cloud's words, nothing bought, a next step", async () => {
     const h = await setup();
@@ -671,8 +671,8 @@ describe("an answer with no refusal code still names what to do next", () => {
     };
     const result = await h.gateway.createCart({ offer_handle: handle });
     expect(result).toMatchObject({ status: "error", message: `Intent Cloud answered 409: the merchant did not quote a final total. ${CART_NEXT}` });
-    // Attack: no cause the answer did not give (the store's shipping options, the ZIP code).
-    expect(result.message).not.toMatch(/shipping option|ZIP|because/i);
+    // Attack: no cause the answer did not give (the store's shipping options, the ZIP code or postcode).
+    expect(result.message).not.toMatch(/shipping option|ZIP|postcode|because/i);
     expect(h.sends.createApproval).toBe(0);
   });
 
@@ -690,13 +690,50 @@ describe("an answer with no refusal code still names what to do next", () => {
     delete h.patch.createApproval;
     const approval = await pendingPurchase(h, "Trail Runner 3");
     h.patch.getApproval = async (a, s) => ({ ...(await h.real.getApproval(a, s)), ...bad });
-    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).message).toBe(
-      "Intent Cloud answered 502. The gateway changed nothing; call get_approval_status again in a minute.",
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).message).toBe("Intent Cloud answered 502. Call get_approval_status again in a minute.");
+    // A 4xx is final for the call: no retry that the prompt's 5 s poll would loop on for 3 minutes.
+    h.patch.getApproval = async (a, s) => ({ ...(await h.real.getApproval(a, s)), ...bad, status: 404 });
+    const final = (await h.gateway.getApprovalStatus({ approval_handle: approval })).message;
+    expect(final).toBe(
+      "Intent Cloud answered 404. Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; offer a new cart only if they did not approve this one.",
     );
+    expect(final).not.toMatch(/again in a minute/);
+  });
+
+  // Invariant 5: the request may have reached Intent Cloud and no usable answer came back, so an approval may exist
+  // there: the line never says none was made, only that the gateway has no link to approve one with.
+  const NO_LINK = "Nothing was bought: the gateway has no approval link, so none can be approved.";
+  const UNSURE: [string, () => Error][] = [
+    ["a timeout", () => new CloudNetworkError("timeout", {} as never, "Intent Cloud at cloud.example cannot be reached (no complete response within 30 s)")],
+    ["an answer with no valid receipt", () => new DisclosureDiscardedError(9, 201, "receipt signature does not verify")],
+    ["a malformed answer", () => new CloudResponseError("schema", 201, { receipt: null, contractVersion: null, raw: {} as never }, "bad body")],
+  ];
+
+  it.each(UNSURE)("create_approval with %s: never 'no approval was made'", async (_name, error) => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    h.patch.createApproval = async (c) => {
+      await h.real.createApproval(c); // it reached Intent Cloud: a pending approval exists there
+      throw error();
+    };
+    const result = await h.gateway.createCart({ offer_handle: handle });
+    expect(result.status).toBe("error");
+    expect(result.message).toContain(`${NO_LINK} Call create_cart again, or pick another offer.`);
+    expect(result.message).not.toMatch(/no approval was made/);
+    expect(h.kinds()).not.toContain("approval_pending");
+  });
+
+  it.each(UNSURE)("create_cart with %s: never 'no approval was made' either", async (_name, error) => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    h.patch.createCart = () => Promise.reject(error());
+    const result = await h.gateway.createCart({ offer_handle: handle });
+    expect(result.message).toContain(`${NO_LINK} Pick another offer, or search again.`);
+    expect(result.message).not.toMatch(/no approval was made/);
   });
 });
 
-// ---- invariant 3--------------------------------------------------------------------------------------------------
+// ---- invariant 3 --------------------------------------------------------------------------------------------------
 
 describe("invariant 3: buyer identity in a tool input is never sent", () => {
   const ATTACKS: [string, Record<string, unknown>][] = [

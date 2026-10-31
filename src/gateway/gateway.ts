@@ -252,7 +252,8 @@ export const FindOffersInput = z.strictObject({
     .optional()
     .describe(
       "The ship-to country as an ISO 3166 alpha-2 code (US, CA, GB, DE, ...), from what the user said. Never guess it, " +
-        "except US for a 5-digit ZIP code or ZIP+4 with a budget in dollars and no other country named.",
+        "except US for a 5-digit ZIP code or ZIP+4 with a budget in dollars when nothing in the conversation suggests " +
+        "another country; if unsure, ask.",
     ),
   postcode: z.string().max(40).optional().describe("The postcode (ZIP code in the US) the user said to ship to. Never guess it."),
 });
@@ -281,6 +282,12 @@ export interface MissingDetail {
 interface Told {
   readonly message: string;
   readonly summary: string;
+}
+
+/** A call's next step for the agent: after an answer with a status, or when no usable answer came back. */
+interface Next {
+  answered(status: number): string;
+  readonly unsure: string;
 }
 
 /** Nothing was sent: the input was malformed, identity was found, or the policy refused the request. */
@@ -537,13 +544,14 @@ export function createGateway(options: GatewayOptions): Gateway {
 
   /**
    * Runs one disclosed call; a failure becomes a Refused naming what happened, never Cloud's content. `next` is the
-   * step's next step, added where no more specific line names one (an answer with no refusal code, a malformed or
-   * unreceipted answer), so every refusal the agent relays names what to do.
+   * step's next step (NEXT), added where no more specific line names one, so every refusal the agent relays names
+   * what to do: `answered` after a status with no refusal code, `unsure` when the request may have reached Intent
+   * Cloud but no usable answer came back (a timeout, an unreceipted or a malformed answer).
    */
   async function call<T>(
     run: () => Promise<DisclosedResult<T>>,
     fromSeq: number,
-    next: string = "",
+    next: Next = { answered: () => "", unsure: "" },
   ): Promise<{ ok: true; body: T; seq: number } | { ok: false; refused: Refused; paused?: true }> {
     const refuse = (status: Refused["status"], message: string) => ({ ok: false as const, refused: { status, message, summary: summary(fromSeq) } });
     let result: DisclosedResult<T>;
@@ -562,7 +570,7 @@ export function createGateway(options: GatewayOptions): Gateway {
         return refuse("error", `Not sent: ${error.message}. The developer must restart the gateway.`);
       }
       if (error instanceof DisclosureDiscardedError) {
-        return refuse("error", `Intent Cloud's answer carried no valid receipt, so the gateway discarded it.${next}`);
+        return refuse("error", `Intent Cloud's answer carried no valid receipt, so the gateway discarded it.${next.unsure}`);
       }
       if (error instanceof DisclosureKeysExpiredError) {
         return refuse("error", `Not sent: the key statement expired on ${error.expiresAt.toISOString()}; restart the gateway to fetch a fresh one.`);
@@ -571,9 +579,9 @@ export function createGateway(options: GatewayOptions): Gateway {
       if (error instanceof CloudNetworkError) {
         // Invariant 5: with no connection made, the logged request never left, and the summary does not list it as sent.
         if (error.neverLeft) return refuse("error", `Not sent: ${error.message}, so the request never left this machine. Try again later.`);
-        return refuse("error", `${error.message}; the request may have reached it, and is logged as sent but not acknowledged.${next}`);
+        return refuse("error", `${error.message}; the request may have reached it, and is logged as sent but not acknowledged.${next.unsure}`);
       }
-      if (error instanceof CloudResponseError) return refuse("error", `Intent Cloud's answer was malformed (${error.reason}).${next}`);
+      if (error instanceof CloudResponseError) return refuse("error", `Intent Cloud's answer was malformed (${error.reason}).${next.unsure}`);
       if (error instanceof CloudRequestError) return refuse("invalid", `Not sent: ${error.message}`);
       throw error;
     }
@@ -599,16 +607,35 @@ export function createGateway(options: GatewayOptions): Gateway {
       return refuse("refused", `Refused: Intent Cloud answered that this network has submitted too many checkouts this hour. Nothing was bought, and the gateway does not resubmit by itself.${retry}`);
     }
     const said = result.body === null ? "" : `: ${result.body.message}`;
-    return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}${next}`);
+    return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}${next.answered(result.status)}`);
   }
 
-  /** The next step for each call the agent's tools make, for `call`. Nothing here names a cause the answer did not. */
+  /**
+   * The next step for each call the agent's tools make, for `call`. Nothing here names a cause the answer did not.
+   * "No approval was made" is said only after an answer that refused with a status; when the request may have reached
+   * Intent Cloud and no usable answer came back (`unsure`), an approval may exist there, but the gateway has no link
+   * to it, so none can be approved.
+   */
+  const NO_LINK = " Nothing was bought: the gateway has no approval link, so none can be approved.";
+  const transient = (status: number): boolean => status >= 500 || status === 429;
   const NEXT = {
-    search: " Search again, or change the search.",
-    cart: " Nothing was bought: no approval was made. Pick another offer, or search again, for example to another postcode.",
-    approval: " Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
-    status: " The gateway changed nothing; call get_approval_status again in a minute.",
-  } as const;
+    search: { answered: () => " Search again, or change the search.", unsure: " Search again, or change the search." },
+    cart: {
+      answered: () => " Nothing was bought: no approval was made. Pick another offer, or search again.",
+      unsure: `${NO_LINK} Pick another offer, or search again.`,
+    },
+    approval: {
+      answered: () => " Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
+      unsure: `${NO_LINK} Call create_cart again, or pick another offer.`,
+    },
+    status: {
+      answered: (status: number) =>
+        transient(status)
+          ? " Call get_approval_status again in a minute."
+          : " Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; offer a new cart only if they did not approve this one.",
+      unsure: " Call get_approval_status again in a minute.",
+    },
+  } as const satisfies Record<string, Next>;
 
   /** Chains Intent Cloud's `paused` refusal of a request sent since `fromSeq`, and what it says about the pause. */
   async function pausedByCloud(step: "create_cart" | "create_approval", endpoint: string, fromSeq: number): Promise<void> {

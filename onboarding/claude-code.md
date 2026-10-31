@@ -179,7 +179,7 @@ Right after them, say step 7's status line, then go on to step 8.
 >
 > Reply with the number of the offer you want.
 
-4. Call `create_cart` for the offer they picked, with its `offer_handle`. Never approve for them. If it fails, say its line, which names what to do next. Otherwise say the total from its `Cart:` line in one line (it can differ from the offer's price, which may leave out shipping and tax), then show, with the link and the check code from its result:
+4. Call `create_cart` for the offer they picked, with its `offer_handle`. Never approve for them. If it fails, say its line, which names what to do next. Otherwise say the total from its `Cart:` or `Shop checkout:` line (`… from <store>, total <total> …`) in one line (it can differ from the offer's price, which may leave out shipping and tax), then show, with the link and the check code from its result:
 
 > **Your turn:** approve with your passkey
 >
@@ -191,7 +191,7 @@ Right after them, say step 7's status line, then go on to step 8.
 >
 > Reply done
 
-5. When the developer replies, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result's own advice, such as "Check the order in the Shop app", in one line. Any other result is final: relay what it says, in one line, and no more. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that. If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status`, say its one line, and offer to make a new approval link (`create_cart` again for the same offer); give no other advice.
+5. When the developer replies, call `get_approval_status`. Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again. If it still tells you to call again after about 3 minutes (a one-tap purchase whose result Shop has not confirmed), stop calling and relay the result's own advice, such as "Check the order in the Shop app", in one line. Any other result is final: relay what it says, in one line, and no more. Never offer a link or a next step the result does not give; if it says to create a new cart, offer that. If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status` and say its one line. Only if it says `Waiting for`, rejected or expired, also offer to make a new approval link (`create_cart` again for the same offer); any other result is final, as above. Give no other advice.
 
 ## Step 9: read the log together
 
