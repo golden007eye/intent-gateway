@@ -8,4 +8,4 @@
 // top of style.ts.
 export { LOGO_SVG } from "./logo.ts";
 export { printable, printableJson, printableLines } from "./printable.ts";
-export { ICONS, UI_CONTRAST_PAIRS, UI_CSS, UI_TOKENS } from "./style.ts";
+export { ICONS, UI_CONTRAST_PAIRS, UI_CSS, UI_NONTEXT_PAIRS, UI_TOKENS } from "./style.ts";
