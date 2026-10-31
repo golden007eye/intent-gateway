@@ -83,12 +83,14 @@ describe("intent pause", () => {
     expect(status.out).toContain("Intent Cloud: acknowledged the pause.\nResume needs your passkey.\n");
   });
 
-  it("Intent Cloud answered 404 (it does not know the account key yet): status says it can be lifted here, and says only what was received", async () => {
+  it("Intent Cloud answered 404 (not_found): status says it can be lifted here, and says only what was received", async () => {
     const s = setup();
     await s.run(["pause"]);
     await sendResult(s.dir, "retrying", "not_found");
     const status = await s.run(["status"]);
-    expect(status.out).toContain("a not_found answer was received from Intent Cloud: it does not know this machine's account key yet");
+    expect(status.out).toContain("a not_found answer was received from Intent Cloud for this machine's account key");
+    // Invariant 5: what was received, never why Intent Cloud answered so.
+    expect(status.out).not.toContain("does not know");
     expect(status.out).not.toContain("first approved purchase");
     expect(status.out).toContain(
       "The pause holds on this machine only and can be lifted here: Intent Cloud has not acknowledged it. Once Intent Cloud acknowledges a pause, resuming needs your passkey.",
