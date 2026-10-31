@@ -305,10 +305,14 @@ interface Told {
   readonly summary: string;
 }
 
-/** A call's next step for the agent: after an answer with a status, or when no usable answer came back. */
+/**
+ * A call's next step for the agent: after an answer with a status, or when no usable answer came back. `refused`,
+ * when it returns a sentence, words a known refusal whole (its next step included) in place of the plain one.
+ */
 interface Next {
   answered(status: number): string;
   readonly unsure: string;
+  refused?(status: number, message: string | null): string | null;
 }
 
 /** Nothing was sent: the input was malformed, identity was found, or the policy refused the request. */
@@ -634,8 +638,11 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (result.status === 429 && result.body !== null && "limit" in result.body && result.body.limit === "checkouts") {
       return refuse("refused", `Refused: Intent Cloud answered that this network has submitted too many checkouts this hour. Nothing was bought, and the gateway does not resubmit by itself.${retry}`);
     }
-    const said = result.body === null ? "" : `: ${result.body.message}`;
-    return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}${next.answered(result.status)}`);
+    // No HTTP status number in the agent's text (an agent relays "a 409 error" to the buyer): it is in `intent log`.
+    const message = result.body === null ? null : result.body.message;
+    const known = next.refused?.(result.status, message) ?? null;
+    if (known !== null) return refuse("error", `${known}${retry}`);
+    return refuse("error", `${answerWords(result.status, message)}${retry}${next.answered(result.status)}`);
   }
 
   /**
@@ -646,12 +653,22 @@ export function createGateway(options: GatewayOptions): Gateway {
    */
   const NO_LINK = " Nothing was bought: the gateway has no approval link, so none can be approved.";
   const transient = (status: number): boolean => status >= 500 || status === 429;
+  const NEXT_CART: Next = {
+    answered: () => " Nothing was bought: no approval was made. Pick another offer, or search again.",
+    unsure: `${NO_LINK} Pick another offer, or search again.`,
+  };
   const NEXT = {
     search: { answered: () => " Search again, or change the search.", unsure: " Search again, or change the search." },
-    cart: {
-      answered: () => " Nothing was bought: no approval was made. Pick another offer, or search again.",
-      unsure: `${NO_LINK} Pick another offer, or search again.`,
-    },
+    cart: NEXT_CART,
+    /** A cart to `zip`: Intent Cloud's "did not quote a final total" said in plain words, with its next step. */
+    cartTo: (zip: string): Next => ({
+      ...NEXT_CART,
+      refused: (status, message) =>
+        status === 409 && message !== null && /final total/i.test(message)
+          ? `This merchant could not quote a final total for delivery to ZIP ${zip}, so no cart was made. Nothing was bought: no approval was made. ` +
+            "Pick another offer, or try again later."
+          : null,
+    }),
     approval: {
       answered: () => " Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
       unsure: `${NO_LINK} Call create_cart again, or pick another offer.`,
@@ -663,7 +680,7 @@ export function createGateway(options: GatewayOptions): Gateway {
           : " Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; do not create a new cart for this purchase unless the buyer asks for one.",
       unsure: " Call get_approval_status again in a minute.",
     },
-  } as const satisfies Record<string, Next>;
+  } as const satisfies Record<string, Next | ((zip: string) => Next)>;
 
   /** Chains Intent Cloud's `paused` refusal of a request sent since `fromSeq`, and what it says about the pause. */
   async function pausedByCloud(step: "create_cart" | "create_approval", endpoint: string, fromSeq: number): Promise<void> {
@@ -1107,7 +1124,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   ): Promise<CreateCartResult> {
     const { quantity } = request;
     const domain = known.offer.merchant.domain;
-    const cartCall = await call(() => cloud.createCart(request), fromSeq, NEXT.cart);
+    const cartCall = await call(() => cloud.createCart(request), fromSeq, NEXT.cartTo(request.ship_to.postal_code));
     if (!cartCall.ok) {
       if (cartCall.paused === true) await pausedByCloud("create_cart", "createCart", fromSeq);
       return cartCall.refused;
@@ -1921,6 +1938,19 @@ export function paymentCapMinor(spend: Policy["spend"], snapshot: AnySnapshot, c
 export function paymentOffer(s: AnySnapshot): PolicyOffer {
   const total = snapshotTotal(s);
   return s.v === 4 ? policyOffer(s.myshopify_domain, "", total, null, s.quantity, total.currency) : policyOffer(s.merchant.domain, "", total, null, s.quantity);
+}
+
+/**
+ * An answer with an error status and no refusal code, in words and without the status number (that is in
+ * `intent log`): what kind of answer it was, then Intent Cloud's own message when it gave one.
+ */
+function answerWords(status: number, message: string | null): string {
+  const said = message === null || message === "" ? "" : `: ${message}`;
+  if (status >= 500) return `Intent Cloud answered with an error on its side${said}.`;
+  if (status === 429) return `Intent Cloud answered that it is limiting requests from this gateway for now${said}.`;
+  if (status === 404) return `Intent Cloud answered that it does not know this handle${said}.`;
+  if (status === 410) return `Intent Cloud answered that this has expired${said}.`;
+  return `Intent Cloud answered with a refusal${said}.`;
 }
 
 /** What the agent is told when Intent Cloud answered `paused`. */

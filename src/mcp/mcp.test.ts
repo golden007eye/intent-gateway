@@ -266,7 +266,7 @@ describe("tools (AC-R1)", () => {
     const result = await client.callTool({ name: "create_cart", arguments: { offer_handle: handle, quantity: 3 } });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toMatch(
-      /^Intent Cloud answered 409: not enough stock\. Nothing was bought: no approval was made\. Pick another offer, or search again\.\n\nSent: /,
+      /^Intent Cloud answered with a refusal: not enough stock\. Nothing was bought: no approval was made\. Pick another offer, or search again\.\n\nSent: /,
     );
   });
 

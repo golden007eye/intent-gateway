@@ -712,7 +712,7 @@ describe("an answer with no refusal code still names what to do next", () => {
     const h = await setup();
     const handle = await offerHandle(h, "Road Runner 2"); // stock 2
     const result = await h.gateway.createCart({ offer_handle: handle, quantity: 3 });
-    expect(result).toMatchObject({ status: "error", message: `Intent Cloud answered 409: not enough stock. ${CART_NEXT}` });
+    expect(result).toMatchObject({ status: "error", message: `Intent Cloud answered with a refusal: not enough stock. ${CART_NEXT}` });
     expect(h.sends.createApproval).toBe(0);
     expect(h.kinds()).not.toContain("approval_pending");
   });
@@ -725,10 +725,32 @@ describe("an answer with no refusal code still names what to do next", () => {
       return { ...res, ok: false as const, status: 409, body: { error: "conflict" as const, message: "the merchant did not quote a final total" } };
     };
     const result = await h.gateway.createCart({ offer_handle: handle });
-    expect(result).toMatchObject({ status: "error", message: `Intent Cloud answered 409: the merchant did not quote a final total. ${CART_NEXT}` });
-    // Attack: no cause the answer did not give (the store's shipping options, the ZIP code or postcode).
-    expect(result.message).not.toMatch(/shipping option|ZIP|postcode|because/i);
+    // Plain words and the next step, no status number (an agent told the buyer "a 409 error"); the ZIP is the one
+    // the cart was asked for, said as where, never as a cause.
+    expect(result).toMatchObject({
+      status: "error",
+      message:
+        "This merchant could not quote a final total for delivery to ZIP 94103, so no cart was made. Nothing was bought: no approval was made. " +
+        "Pick another offer, or try again later.",
+    });
+    // Attack: no cause the answer did not give (the store's shipping options, the postcode), and no status number.
+    expect(result.message).not.toMatch(/shipping option|postcode|because|\b\d{3}\b/i);
     expect(h.sends.createApproval).toBe(0);
+  });
+
+  // The status stays in `intent log`, which shows each receipt's status (src/cli/log.test.ts).
+  it("no bare HTTP status number in any fall-through a tool returns (QA: an agent said \"a 409 error\")", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    for (const status of [400, 401, 404, 409, 410, 413, 429, 500, 502, 503]) {
+      const answer = { ok: false as const, status, body: null, contractVersion: null, receipt: null, retryAfter: null };
+      h.patch.createCart = async (r) => ({ ...(await h.real.createCart(r)), ...answer });
+      h.patch.search = async (r) => ({ ...(await h.real.search(r)), ...answer });
+      for (const result of [await h.gateway.createCart({ offer_handle: handle }), await h.gateway.findOffers(SHOES)]) {
+        expect(result.status, String(status)).toBe("error");
+        expect(result.message, String(status)).not.toMatch(/\b\d{3}\b|HTTP|status/i);
+      }
+    }
   });
 
   it("create_approval, search and status fall-throughs each name their own next step", async () => {
@@ -737,20 +759,20 @@ describe("an answer with no refusal code still names what to do next", () => {
     const bad = { ok: false as const, status: 502, body: null, contractVersion: null, receipt: null, retryAfter: null };
     h.patch.createApproval = async (c) => ({ ...(await h.real.createApproval(c)), ...bad });
     expect((await h.gateway.createCart({ offer_handle: handle })).message).toBe(
-      "Intent Cloud answered 502. Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
+      "Intent Cloud answered with an error on its side. Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
     );
     h.patch.search = async (r) => ({ ...(await h.real.search(r)), ...bad });
-    expect((await h.gateway.findOffers(SHOES)).message).toBe("Intent Cloud answered 502. Search again, or change the search.");
+    expect((await h.gateway.findOffers(SHOES)).message).toBe("Intent Cloud answered with an error on its side. Search again, or change the search.");
     delete h.patch.search;
     delete h.patch.createApproval;
     const approval = await pendingPurchase(h, "Trail Runner 3");
     h.patch.getApproval = async (a, s) => ({ ...(await h.real.getApproval(a, s)), ...bad });
-    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).message).toBe("Intent Cloud answered 502. Call get_approval_status again in a minute.");
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).message).toBe("Intent Cloud answered with an error on its side. Call get_approval_status again in a minute.");
     // A 4xx is final for the call: no retry that the prompt's 5 s poll would loop on for 3 minutes.
     h.patch.getApproval = async (a, s) => ({ ...(await h.real.getApproval(a, s)), ...bad, status: 404 });
     const final = (await h.gateway.getApprovalStatus({ approval_handle: approval })).message;
     expect(final).toBe(
-      "Intent Cloud answered 404. Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; do not create a new cart for this purchase unless the buyer asks for one.",
+      "Intent Cloud answered that it does not know this handle. Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; do not create a new cart for this purchase unless the buyer asks for one.",
     );
     expect(final).not.toMatch(/again in a minute/);
   });
@@ -1549,7 +1571,8 @@ describe("contract 1.6.x: completer key, local checks before any approval reques
     const restarted = await h.restart();
     const result = await restarted.gateway.getApprovalStatus({ approval_handle: approval });
     expect(result.status).toBe("error");
-    expect(result.message).toContain("404");
+    expect(result.message).toContain("does not know this handle");
+    expect(result.message).not.toContain("404");
     expect(restarted.signers.at(-1)).toEqual({ op: "getApproval", keyid: null });
   });
 
@@ -2035,7 +2058,7 @@ describe("refusals name their limit", () => {
     const handle = await offerHandle(h, "Trail Runner 3");
     const limited = (retryAfter: number) => ({ ok: false as const, status: 429, body: null, contractVersion: null, receipt: null, retryAfter });
     h.patch.createCart = async (r) => ({ ...(await h.real.createCart(r)), ...limited(30) });
-    expect((await h.gateway.createCart({ offer_handle: handle })).message).toContain("Intent Cloud answered 429. Try again in 30 s.");
+    expect((await h.gateway.createCart({ offer_handle: handle })).message).toContain("Intent Cloud answered that it is limiting requests from this gateway for now. Try again in 30 s.");
     h.patch.createCart = async (r) => ({ ...(await h.real.createCart(r)), ...limited(60) });
     expect((await h.gateway.createCart({ offer_handle: handle })).message).toContain("Try again in 1 minute.");
     h.patch.createCart = async (r) => ({ ...(await h.real.createCart(r)), ...limited(3_590) });
