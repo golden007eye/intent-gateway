@@ -12,9 +12,9 @@ The ten seed policies, and three that the [policy advisor](#the-policy-advisor) 
 | `strict-default` | Shares no ship-to at all; one item; at most $50 per order, $75 per day and $150 per week; blocks `dropship.example`. It sends no ZIP code, so the gateway blocks every search (`find_offers`) before sending and no cart can be made: agents see every search blocked. Use it only to lock a gateway down; `policy add`, `policy show` and `doctor` all say so. To search again, delete `policy.yaml` and add a policy that keeps the ZIP, such as `per-order-60`. |
 | `per-order-60` | Refuses a cart over $60 (price × quantity). |
 | `per-order-20` | Refuses a cart over $20 (price × quantity): the per-order limit the policy advisor suggests. |
-| `daily-40` | Refuses a cart that would take approved purchases in the last 24 hours above $40. |
-| `weekly-150` | Refuses a cart that would take approved purchases in the last 7 days above $150. |
-| `weekly-40` | Refuses a cart that would take approved purchases in the last 7 days above $40: the weekly limit the policy advisor suggests. |
+| `daily-40` | Refuses a cart that would take approved purchases and carts waiting for approval in the last 24 hours above $40. |
+| `weekly-150` | Refuses a cart that would take approved purchases and carts waiting for approval in the last 7 days above $150. |
+| `weekly-40` | Refuses a cart that would take approved purchases and carts waiting for approval in the last 7 days above $40: the weekly limit the policy advisor suggests. |
 | `handoff-only` | Allows the hand-off completion mode only, so no purchase is completed in one tap. |
 | `one-item` | One item per cart; the baseline allows 3. |
 | `gifts-under-30` | One item at up to $30. |

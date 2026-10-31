@@ -546,7 +546,10 @@ describe("buyers outside the US: Canada, Australia, the UK, Ireland and the euro
     const result = await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
     if (result.status !== "approval_needed") throw new Error(`${result.status}: ${result.message}`);
     expect(result.checkout).toMatchObject({ currency, ship_to: { country: region.country, postal_code_coarse: coarse }, completion_mode: "shop_agent" });
-    expect(result.message).toContain(`approve ${currency} 8.99 with their passkey`);
+    // The total is said once, in the checkout's own line (mcp's "Shop checkout: …, total …"), not again here.
+    expect(result.message).toContain("approve with their passkey");
+    expect(result.message).not.toContain("8.99");
+    expect(result.checkout?.totals.total).toBe(899);
     // The spend history counts it in its own currency.
     expect(body(h.store.entries().findLast((e) => e.kind === "approval_pending") as Entry)).toMatchObject({ total_minor: 899, currency });
     expect(h.fake.checkouts.received).toHaveLength(1);
@@ -697,7 +700,8 @@ describe("buyers outside the US: Canada, Australia, the UK, Ireland and the euro
     if (found.status !== "shop_offers" || found.offers[0] === undefined) throw new Error(found.message);
     const result = await h.gateway.createCart({ offer_handle: found.offers[0].offer_handle });
     expect(result.status).toBe("blocked");
-    expect(result.message).toContain("over the CAD 7 per order limit");
+    // The quoted total, with shipping and tax, and the limit it is over, both named.
+    expect(result.message).toContain("the total with shipping and tax, CAD 8.99, is over the CAD 7.00 per-order limit");
     expect(h.fake.checkouts.received).toHaveLength(0);
   });
 

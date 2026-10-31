@@ -76,11 +76,22 @@ import {
   DisclosureNoKeysError,
   DisclosureRefusedError,
   DisclosureStoppedError,
+  SHOP_PUBLIC_CLIENT_ID,
   type StorefrontPort,
 } from "../disclosure/index.ts";
 import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
-import { capsIn, CLOUD_BASELINE, scalable, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
+import {
+  type Blocked,
+  capsIn,
+  CLOUD_BASELINE,
+  scalable,
+  type CompletionMode as PolicyCompletionMode,
+  evaluate,
+  meet,
+  type Offer as PolicyOffer,
+  type Policy,
+} from "../policy/index.ts";
 import { coarsen, currencyFor, currencyWords, namesText, shipCountry } from "../shipto/index.ts";
 import { isPausedAnswer, noteSubmitAnswer, pausedIn, pausedRefusalWords, pauseState, refuseForPause } from "../pause/index.ts";
 import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
@@ -88,7 +99,7 @@ import { createShopProvider, filterOffers, newOfferHandle, type SearchOffer, typ
 import { CloudOutcomeEntry, ORDER_REF, outcomesFor, readCloudOutcome, replaces, shownStatus, type StatementCheck } from "../outcome/index.ts";
 import { findIdentity, ORDER_REF_AT, TOOL_POSTCODE_AT } from "../privacy/index.ts";
 import type { CompleterKeys, Session } from "../signing/index.ts";
-import { type Entry, type Store, StoreConflictError } from "../store/index.ts";
+import { appendedHere, type Entry, recordAppends, type Store, StoreConflictError } from "../store/index.ts";
 import {
   approverFingerprint,
   checkApprover,
@@ -259,14 +270,24 @@ export const FindOffersInput = z.strictObject({
 });
 export type FindOffersInput = z.input<typeof FindOffersInput>;
 
+/** Intent Cloud's baseline allows at most 3 items per cart (the policy may allow fewer). */
+const QUANTITY_LIMIT = "quantity must be 1 to 3: a cart holds at most 3 items";
+
 export const CreateCartInput = z.strictObject({
   offer_handle: OfferHandle.describe("The offer_handle of the offer the user picked, from find_offers."),
-  quantity: z.int().min(1).max(3).optional().describe("How many the user asked for (1 to 3). Defaults to 1."),
+  quantity: z
+    .int()
+    .min(1, QUANTITY_LIMIT)
+    .max(3, QUANTITY_LIMIT)
+    .optional()
+    .describe("How many the user asked for (1 to 3). Defaults to 1."),
 });
 export type CreateCartInput = z.input<typeof CreateCartInput>;
 
 export const ApprovalStatusInput = z.strictObject({
-  approval_handle: ApprovalHandle.describe("The approval_handle that create_cart returned."),
+  approval_handle: ApprovalHandle.optional().describe(
+    "The approval_handle that create_cart returned. Leave it out to list the purchases waiting for approval in this gateway's log, with their handles.",
+  ),
 });
 export type ApprovalStatusInput = z.input<typeof ApprovalStatusInput>;
 
@@ -423,6 +444,8 @@ interface LocalOffer {
 }
 
 const MAX_REMEMBERED_OFFERS = 500;
+/** How many waiting purchases a get_approval_status without a handle lists. */
+const MAX_WAITING_LISTED = 5;
 /** The contract's completion mode for each policy mode. */
 const CONTRACT_MODE: Readonly<Record<PolicyCompletionMode, CloudCompletionMode>> = { handoff: "handoff", one_tap: "shop_agent" };
 
@@ -453,10 +476,12 @@ export function createGateway(options: GatewayOptions): Gateway {
   const createdHere = new Set<string>();
   let stopReported = false;
 
-  // One call at a time: the spend caps and the replay check read the chain and then append to it.
+  // One call at a time: the spend caps and the replay check read the chain and then append to it. Each call records
+  // the entries it appends, so its "Sent:" line names only its own requests (invariant 5).
   let tail: Promise<unknown> = Promise.resolve();
   function serial<T>(run: () => Promise<T>): Promise<T> {
-    const result = tail.then(run, run);
+    const own = (): Promise<T> => recordAppends(run);
+    const result = tail.then(own, own);
     tail = result.catch(() => undefined);
     return result;
   }
@@ -505,7 +530,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   }
 
   const head = (): number => store.entries().at(-1)?.seq ?? -1;
-  const summary = (fromSeq: number, extra: readonly string[] = []): string => summaryLine(disclosedSince(store.entries(), fromSeq), extra);
+  const summary = (fromSeq: number, extra: readonly string[] = []): string => summaryLine(disclosedSince(store.entries(), fromSeq, appendedHere()), extra);
 
   /**
    * Writes a `block` entry and returns the refusal. Items name fields and rules. `held` (policy blocks only) keeps the
@@ -604,7 +629,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (code !== undefined && (result.status === 403 || result.status === 409)) {
       return refuse("refused", `Refused: ${code}. ${REFUSAL_CODE_WORDS[code]}`);
     }
-    const retry = result.retryAfter === null ? "" : ` Try again in ${String(result.retryAfter)} s.`;
+    const retry = result.retryAfter === null ? "" : ` Try again in ${waitText(result.retryAfter)}.`;
     // 1.7.0: the per-IP checkout quota. Said once; the gateway never resubmits on its own.
     if (result.status === 429 && result.body !== null && "limit" in result.body && result.body.limit === "checkouts") {
       return refuse("refused", `Refused: Intent Cloud answered that this network has submitted too many checkouts this hour. Nothing was bought, and the gateway does not resubmit by itself.${retry}`);
@@ -635,7 +660,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       answered: (status: number) =>
         transient(status)
           ? " Call get_approval_status again in a minute."
-          : " Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; offer a new cart only if they did not approve this one.",
+          : " Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; do not create a new cart for this purchase unless the buyer asks for one.",
       unsure: " Call get_approval_status again in a minute.",
     },
   } as const satisfies Record<string, Next>;
@@ -825,7 +850,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       return {
         status: "needs_details",
         missing,
-        message: `Ask the user only for: ${missing.map((m) => m.ask).join(" ")}`,
+        message: `${missing.length === 1 ? "Ask the user only this:" : "Ask the user only these questions:"} ${missing.map((m) => m.ask).join(" ")}`,
         summary: summary(fromSeq),
       };
     }
@@ -834,7 +859,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (shipTo.country !== "US" && providers.length === 0) {
       return {
         status: "refused",
-        message: `Not sent: searching for ${place.name} needs a linked Shop wallet (\`${INTENT} wallet link shop\`); without one, intent searches the US only.`,
+        message: `Not sent: searching for ${place.name} needs a linked Shop wallet; without one, intent searches the US only. ${LINK_SHOP}`,
         summary: summary(fromSeq),
       };
     }
@@ -997,7 +1022,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const request: Omit<CloudCartRequest, "completer_keyid" | "completion_accepts"> = { offer_handle: known.offer.offer_handle, quantity, ship_to: { country: "US", postal_code: known.shipTo.coarse } };
     if (before.length > 0) {
       return block("createCart", inputFields(request), before.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
-        `Not sent: the gateway policy refuses this cart (${before.map((b) => b.reason).join("; ")}).`,
+        `Not sent: the gateway policy refuses this cart (${policyWords(before).join("; ")}).`,
         { title: known.offer.title, merchant: known.offer.merchant.name, quantity });
     }
 
@@ -1067,11 +1092,16 @@ export function createGateway(options: GatewayOptions): Gateway {
       ...(cart.merchant.domain === domain ? [] : ["merchant differs from the offer"]),
       ...(cart.quantity === quantity ? [] : ["quantity differs from the request"]),
       ...cartV16Problems(cart, known.offer, request.completion_accepts),
-      ...spendCheck(policyOffer(cart.merchant.domain, known.category, cart.total, null, cart.quantity), mode).map((b) => b.reason),
     ];
     if (cartProblems.length > 0) {
       return block("createCart", ["cart"], cartProblems.map((p) => `cart: ${p}`), fromSeq, "refused",
         `Refused: the cart Intent Cloud created does not match what was asked (${cartProblems.join("; ")}). No approval was requested.`);
+    }
+    // The cart's total is the first quoted one (shipping and tax included): it can be over a limit the offer fitted.
+    const overQuoted = spendCheck(policyOffer(cart.merchant.domain, known.category, cart.total, null, cart.quantity), mode);
+    if (overQuoted.length > 0) {
+      return block("createCart", ["cart"], overQuoted.map((b) => `cart: ${b.reason}`), fromSeq, "refused",
+        `Refused: the gateway policy refuses this cart (${policyWords(overQuoted, { totalMinor: cart.total.amount_minor, currency: "USD" }).join("; ")}). No approval was requested. Pick a cheaper offer or a smaller quantity.`);
     }
 
     // What step 7 matches the snapshot to, now and when the approval is accepted (chained below). Checked against its
@@ -1116,8 +1146,9 @@ export function createGateway(options: GatewayOptions): Gateway {
     const created = { ...served, snapshot: served.snapshot };
     const snapshotProblems = [
       ...checkSnapshot(created, cart, sent),
-      ...spendCheck(policyOffer(created.snapshot.merchant.domain, known.category, created.snapshot.total, null, created.snapshot.quantity), mode).map(
-        (b) => b.reason,
+      ...policyWords(
+        spendCheck(policyOffer(created.snapshot.merchant.domain, known.category, created.snapshot.total, null, created.snapshot.quantity), mode),
+        { totalMinor: created.snapshot.total.amount_minor, currency: "USD" },
       ),
     ];
     if (snapshotProblems.length > 0) {
@@ -1147,7 +1178,7 @@ export function createGateway(options: GatewayOptions): Gateway {
       );
     } catch (error) {
       if (!(error instanceof StoreConflictError)) throw error;
-      const over = spendCheck(reserved, mode).map((b) => b.reason);
+      const over = policyWords(spendCheck(reserved, mode));
       return block("createApproval", ["snapshot"], over.map((p) => `snapshot: ${p}`), fromSeq, "refused",
         `Refused: another purchase took the room under the gateway policy's limits meanwhile (${over.join("; ")}). Do not approve it.`);
     }
@@ -1159,13 +1190,13 @@ export function createGateway(options: GatewayOptions): Gateway {
       check_code: created.check_code,
       qr: approvalQr(approvalUrl),
       cart,
+      // The link and the check code are in the result's own fields (approval_url, check_code), said once.
       message:
         options.demo === undefined
-          ? `Ask the buyer to open ${approvalUrl} (or scan the QR code) and approve with their passkey; ` +
-            `the page shows check code ${created.check_code}. Then call get_approval_status.`
-          : `Demo: ask the user to open the approval link ${approvalUrl} and click "${approveLabel(created.snapshot.total.amount_minor)}" ` +
-            `(enter the demo code: the page shows the command that prints it); the page shows check code ${created.check_code}. ` +
-            "Then call get_approval_status.",
+          ? `Ask the buyer to open the approval link (or scan the QR code), check that the page shows the check code, and approve with their passkey. ` +
+            "Then call get_approval_status."
+          : `Demo: ask the user to open the approval link, check that the page shows the check code, and click "${approveLabel(created.snapshot.total.amount_minor)}" ` +
+            "(enter the demo code: the page shows the command that prints it). Then call get_approval_status.",
       summary: summary(fromSeq),
     };
   }
@@ -1178,6 +1209,21 @@ export function createGateway(options: GatewayOptions): Gateway {
     const at = now();
     const completion = mode === undefined ? {} : { completion_mode: policyMode(mode) };
     return evaluate(policy, { kind: "cart", offer, ...completion }, spendHistory(chain, at), at, ceilings()).blocked;
+  }
+
+  /**
+   * The policy's refusals in the agent's words. The daily and weekly limits say that carts waiting for approval count
+   * toward them (spendHistory). With `quoted` (a total the merchant or Shop quoted, shipping and tax included), the
+   * per-order refusal names that total and the limit, so a cart the offer's price fitted is not left unexplained.
+   */
+  function policyWords(blocked: readonly Blocked[], quoted?: { readonly totalMinor: number; readonly currency: string }): string[] {
+    return blocked.map((b) => {
+      if (b.rule === "spend.per_day_usd" || b.rule === "spend.per_week_usd") return `${b.reason} (carts waiting for approval count toward it)`;
+      if (b.rule !== "spend.per_order_usd" || quoted === undefined) return b.reason;
+      const cap = capsIn(meet(policy, CLOUD_BASELINE).spend, quoted.currency, ceilings())?.per_order_usd;
+      if (cap === undefined) return b.reason;
+      return `the total with shipping and tax, ${formatMinor(quoted.totalMinor, quoted.currency)}, is over the ${formatMinor(cap, quoted.currency)} per-order limit`;
+    });
   }
 
   /**
@@ -1217,7 +1263,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const before = spendCheck({ merchant: offer.storeDomain, category: local.category, price_usd: offer.price.amountMinor / 100, quantity, currency: searched });
     if (before.length > 0) {
       return block(endpoint, ["checkout"], before.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
-        `Not sent: the gateway policy refuses this purchase (${before.map((b) => b.reason).join("; ")}).`, { title: offer.title, quantity });
+        `Not sent: the gateway policy refuses this purchase (${policyWords(before).join("; ")}).`, { title: offer.title, quantity });
     }
     if (wallet === null) return refuse("wallet: none", "Not sent: no usable Shop wallet is linked, so the gateway cannot prepare this Shop checkout.", "error");
     const table = currencyTable;
@@ -1302,7 +1348,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (spend.length > 0) {
       await forget(checkout);
       return block(endpoint, ["checkout"], spend.map((b) => `${b.rule} at ${b.path}`), fromSeq, "blocked",
-        `Not sent: the gateway policy refuses this checkout's total (${spend.map((b) => b.reason).join("; ")}).`, { title: offer.title, quantity });
+        `Not sent: the gateway policy refuses this checkout (${policyWords(spend, { totalMinor: totals.total, currency }).join("; ")}). Pick a cheaper offer or a smaller quantity.`, { title: offer.title, quantity });
     }
 
     // 4. The completer key, on disk before the request names it (ADR-0016), then the submit, logged before it is sent.
@@ -1407,12 +1453,11 @@ export function createGateway(options: GatewayOptions): Gateway {
       );
     } catch (error) {
       if (!(error instanceof StoreConflictError)) throw error;
-      const over = spendCheck(reserved, mode).map((b) => b.reason);
+      const over = policyWords(spendCheck(reserved, mode));
       return block("createCheckout", ["snapshot"], over.map((p) => `snapshot: ${p}`), fromSeq, "refused",
         `Refused: another purchase took the room under the gateway policy's limits meanwhile (${over.join("; ")}). Do not approve it.`);
     }
     createdHere.add(created.approval_handle);
-    const total = formatMinor(s.totals.total, s.currency);
     const how = mode === "shop_agent" ? "approving pays at once through the buyer's Shop agent payments" : "after approving, the buyer pays on Shop's checkout page";
     return {
       status: "approval_needed",
@@ -1430,12 +1475,11 @@ export function createGateway(options: GatewayOptions): Gateway {
         completion_mode: mode,
       },
       message:
-        (options.demo === undefined
-          ? `Ask the buyer to open ${approvalUrl} (or scan the QR code) and approve ${total} with their passkey; ${how}. ` +
-            `The page shows check code ${created.check_code}. Then call get_approval_status.`
-          : `Demo: ask the user to open the approval link ${approvalUrl} and click "${approveLabel(s.totals.total, s.currency)}" ` +
-            `(enter the demo code: the page shows the command that prints it); ${how}. The page shows check code ${created.check_code}. ` +
-            "Then call get_approval_status."),
+        options.demo === undefined
+          ? `Ask the buyer to open the approval link (or scan the QR code), check that the page shows the check code, and approve with their passkey; ${how}. ` +
+            "Then call get_approval_status."
+          : `Demo: ask the user to open the approval link, check that the page shows the check code, and click "${approveLabel(s.totals.total, s.currency)}" ` +
+            `(enter the demo code: the page shows the command that prints it); ${how}. Then call get_approval_status.`,
       summary: summary(fromSeq),
     };
   }
@@ -1452,9 +1496,11 @@ export function createGateway(options: GatewayOptions): Gateway {
     const handle = parsed.data.approval_handle;
 
     const chain = store.entries();
-    const pending = chain.findLast((e) => e.kind === "approval_pending" && bodyOf(e).handle === handle);
-    if (pending === undefined) {
-      return { status: "unknown", message: "This gateway did not ask for that approval, so it cannot report on it.", summary: summary(fromSeq) };
+    const pending = handle === undefined ? undefined : chain.findLast((e) => e.kind === "approval_pending" && bodyOf(e).handle === handle);
+    if (handle === undefined || pending === undefined) {
+      // A new agent session has no handle: the purchases still waiting, from the local log only (nothing is sent).
+      const said = handle === undefined ? "No approval_handle was given." : "This gateway did not ask for that approval, so it cannot report on it.";
+      return { status: "unknown", message: `${said} ${waitingWords(chain)}`, summary: summary(fromSeq) };
     }
     const chained = chain.find((e) => e.kind === "approval" && bodyOf(e).handle === handle);
     // Contract 1.7.0: a later submit of the same checkout in the same mode supersedes this approval (Intent Cloud
@@ -1524,6 +1570,48 @@ export function createGateway(options: GatewayOptions): Gateway {
     const parsedProof = BindableApprovalProof.safeParse(status.proof);
     const completion = mode === "shop_agent" && parsedProof.success ? await complete(handle, pending, parsedProof.data, keys) : null;
     return approved(check.fingerprint, status, mode, shown, fromSeq, completion);
+  }
+
+  /**
+   * The purchases waiting for approval as this gateway's log shows them, newest first, for an agent that lost the
+   * handle: asked for, not expired, not replaced by a newer submit, no approval chained, and no status read since
+   * that says otherwise. Each with its item, total, age and handle, from the gateway's own entries; no status is
+   * claimed for any of them beyond that, and the agent reads one with its handle.
+   */
+  function waitingWords(chain: readonly Entry[]): string {
+    const at = now();
+    const approved = new Set(chain.flatMap((e) => (e.kind === "approval" ? [bodyOf(e).handle] : [])));
+    const lastRead = new Map<unknown, unknown>();
+    const shown = new Map<unknown, { title?: unknown; merchant?: unknown }>();
+    for (const e of chain) {
+      if (e.kind !== "observed") continue;
+      const b = bodyOf(e);
+      if (b.endpoint === "getApproval") lastRead.set(b.approval_handle, b.state);
+      if (b.endpoint === "createApproval" || b.endpoint === "createCheckout") shown.set(b.approval_handle, { title: b.title, merchant: b.merchant });
+    }
+    const waiting = chain
+      .filter((e) => {
+        if (e.kind !== "approval_pending") return false;
+        const b = bodyOf(e);
+        const expires = typeof b.expires_at === "string" ? Date.parse(b.expires_at) : Number.NaN;
+        const read = lastRead.get(b.handle);
+        return !approved.has(b.handle) && expires > at && (read === undefined || read === "pending") && !supersededIn(chain, e);
+      })
+      .reverse()
+      .slice(0, MAX_WAITING_LISTED);
+    if (waiting.length === 0) return "No purchase is waiting for approval in this gateway's log.";
+    const lines = waiting.map((e) => {
+      const b = bodyOf(e);
+      const item = shown.get(b.handle);
+      const title = typeof item?.title === "string" && item.title !== "" ? item.title : "(item not recorded)";
+      const from = typeof item?.merchant === "string" && item.merchant !== "" ? ` from ${item.merchant}` : "";
+      const total = typeof b.total_minor === "number" ? `, total ${formatMinor(b.total_minor, typeof b.currency === "string" ? b.currency : "USD")}` : "";
+      return `- ${title}${from}${total}, asked for ${ageText(at - Date.parse(e.ts))} ago. approval_handle: ${String(b.handle)}`;
+    });
+    return (
+      `Waiting for approval in this gateway's log (newest first; no approval is chained for these yet):\n${lines.join("\n")}\n` +
+      "Call get_approval_status with one of these approval_handles to read its status."
+    );
   }
 
   /**
@@ -1921,11 +2009,19 @@ const OWN_NEXT_STEP: ReadonlySet<string> = new Set(["redeem_refused", "redeem_re
 const NO_TABLE_AT_START = "the answer Intent Cloud returns at start has no currency table intent can check, so no search or purchase can be sent; restart Claude Code later (it restarts intent), or update intent.";
 const NO_CURRENCY_TABLE = `Not sent: ${NO_TABLE_AT_START}`;
 
+/**
+ * How the developer links a Shop wallet, as a command that works today: Shop does not accept the gateway's own client
+ * yet, so the link names Shop's public client for a shopper's own agent (the wallet keeps it). Linking waits for the
+ * developer in Shop, and the gateway reads the wallet when it starts.
+ */
+const LINK_COMMAND = `INTENT_SHOP_CLIENT_ID=${SHOP_PUBLIC_CLIENT_ID} ${INTENT} wallet link shop`;
+const LINK_SHOP = `To link one, the developer runs \`${LINK_COMMAND}\` in a terminal, then restarts Claude Code (it restarts intent).`;
+
 /** What the developer can do about a one-tap refusal the gateway made before paying (complete.ts reasons). */
 const REFUSAL_WORDS: Readonly<Record<string, string>> = {
   budget_unknown: 'Shop shows no budget for this connection: turn on "Allow agent to pay" with a budget in the Shop app.',
   no_budget_instrument: 'Shop offered no agent payments to pay this checkout with, and the gateway never pays with the card: turn on "Allow agent to pay" with a budget in the Shop app.',
-  wallet_disconnected: "Shop answered that this connection can no longer read the account (as when it is removed in the Shop app): run intent wallet unlink shop, then intent wallet link shop.",
+  wallet_disconnected: `Shop answered that this connection can no longer read the account (as when it is removed in the Shop app): the developer runs \`${INTENT} wallet unlink shop\`, then \`${LINK_COMMAND}\`, in a terminal.`,
   create_unconfirmed: "Shop gave no usable answer to the checkout request, and the gateway never sends it twice.",
   // A refusal of the completing report that names no code the gateway knows.
   redeem_refused: "Intent Cloud returns a refusal for this purchase before it was paid, so nothing was bought. Ask the agent to search again for a new purchase.",
@@ -1958,6 +2054,21 @@ function refusalWords(reason: string | undefined): string {
   }
   const words = reason === undefined ? undefined : REFUSAL_WORDS[reason];
   return words === undefined ? "" : ` ${words}`;
+}
+
+/** An age for a sentence: "2 minutes", "3 hours", "1 day"; under a minute is "less than a minute". */
+function ageText(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (!Number.isFinite(minutes) || minutes < 1) return "less than a minute";
+  const [n, unit] = minutes < 60 ? [minutes, "minute"] : minutes < 1440 ? [Math.floor(minutes / 60), "hour"] : [Math.floor(minutes / 1440), "day"];
+  return `${String(n)} ${unit}${n === 1 ? "" : "s"}`;
+}
+
+/** A Retry-After for a sentence: seconds under a minute, else whole minutes, rounded up so the wait is long enough. */
+export function waitText(seconds: number): string {
+  if (seconds < 60) return `${String(seconds)} s`;
+  const minutes = Math.ceil(seconds / 60);
+  return `${String(minutes)} minute${minutes === 1 ? "" : "s"}`;
 }
 
 function approveLabel(totalMinor: unknown, currency: unknown = "USD"): string {

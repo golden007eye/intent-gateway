@@ -34,8 +34,8 @@ export const TOOLS = {
       "5-digit ZIP code or ZIP+4 (12345 or 12345-6789) with a budget in dollars ($, USD, or the user said dollars) means " +
       "US, when nothing in the conversation suggests another country (a non-US city, region or language); if unsure, " +
       "ask. Any other postcode needs the country from the user: 5-digit postcodes are also used in other countries, " +
-      "and other countries' currencies are written $ too. If the result lists missing details, ask the user only for " +
-      "those, then call again. " +
+      "and other countries' currencies are written $ too. Never put a name, street or full postcode in product or " +
+      "must_haves. If the result lists missing details, ask the user only for those, then call again. " +
       `${LIMITS} The result ends with what this gateway sent (to Intent Cloud, or to Shop when the gateway searches a ` +
       "linked Shop wallet itself) and what it blocked.",
   },
@@ -51,6 +51,7 @@ export const TOOLS = {
     schema: ApprovalStatusInput,
     description:
       "Check whether the person approved a purchase with their passkey, using the approval_handle from create_cart. " +
+      "Without an approval_handle (a new session), it lists the purchases waiting for approval in this gateway's log, with their handles. " +
       "Only a passkey approval the gateway verified counts as approved; tell the user what the result says. " +
       "For a one-tap purchase (completed by the gateway's linked wallet), call again until it says ordered, failed or mismatch. " +
       "The result ends with what this gateway sent (to Intent Cloud, and to the wallet for one-tap) and what it blocked.",
@@ -130,8 +131,7 @@ function createCartResult(result: CreateCartResult): CallToolResult {
         `(${money(cart.unit_price)} each, shipping ${money(cart.shipping)}${cartRest(cart)}). ${TELL}`
       : checkout !== undefined
         ? `Shop checkout: ${String(checkout.quantity)} × ${checkout.title} from ${checkout.store}, total ${minorText(checkout.totals.total, checkout.currency)} ` +
-          `(shipping ${minorText(checkout.totals.shipping, checkout.currency)}, tax ${minorText(checkout.totals.tax, checkout.currency)}), ` +
-          `${checkout.completion_mode === "shop_agent" ? "paid at once by one tap" : "paid by the buyer on Shop's checkout page"}. ${TELL}`
+          `(shipping ${minorText(checkout.totals.shipping, checkout.currency)}, tax ${minorText(checkout.totals.tax, checkout.currency)}). ${TELL}`
         : "";
   const details = [
     `approval_handle: ${result.approval_handle}\nApproval link: ${result.approval_url}\nCheck code: ${result.check_code}`,

@@ -67,13 +67,16 @@ export interface Disclosed {
   readonly blocked: readonly string[];
 }
 
-/** The entries after `fromSeq` (the chain's head before the call), as a Disclosed. */
-export function disclosedSince(chain: readonly Entry[], fromSeq: number): Disclosed {
+/**
+ * The entries after `fromSeq` (the chain's head before the call), as a Disclosed. With `own` (the seqs this call
+ * appended, store's appendedHere), only those: a request another process or call logged meanwhile is not this call's.
+ */
+export function disclosedSince(chain: readonly Entry[], fromSeq: number, own: ReadonlySet<number> | null = null): Disclosed {
   const sends: { destination: string | null; endpoint: string; fields: string[]; acknowledged: boolean; answered: boolean }[] = [];
   const bySeq = new Map<number, (typeof sends)[number]>();
   const blocked: string[] = [];
   for (const entry of chain) {
-    if (entry.seq <= fromSeq) continue;
+    if (entry.seq <= fromSeq || (own !== null && !own.has(entry.seq))) continue;
     const body = asBody(entry.body);
     if (entry.kind === "disclosure") {
       const destination = typeof body.destination === "string" && body.destination !== "intent_cloud" ? body.destination : null;

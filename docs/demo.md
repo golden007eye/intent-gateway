@@ -73,7 +73,7 @@ Ask your agent for stickers shipped to ZIP 94107 in the US, under $20. This is w
 `create_cart` for the holographic sticker creates the Shop checkout, reads it back and submits it to the demo Intent Cloud. Only the country and the 5-digit ZIP go with it:
 
 ```text
-Shop checkout: 1 × Holographic sticker from stickers.example, total $8.99 (shipping $3.99, tax $0.00), paid at once by one tap.
+Shop checkout: 1 × Holographic sticker from stickers.example, total $8.99 (shipping $3.99, tax $0.00). Tell the buyer this total before the approval link.
 Approval link: http://127.0.0.1:8788/confirm/c/<link>
 ```
 
