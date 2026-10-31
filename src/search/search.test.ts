@@ -158,4 +158,30 @@ describe("excluded categories", () => {
     expect(group({ title: "Swine plush toy", categories: [] })).toBeNull();
     expect(group({ title: "Holographic sticker", categories: ["stickers"] })).toBeNull();
   });
+
+  it("keeps a benign compound whose last word is a keyword, in the title, variant or category words", () => {
+    const titles = [
+      "A&W Root Beer, 12 cans", "Fever-Tree ginger beer", "Birch beer soda", "Butterbeer fudge", "Rubbing alcohol 70%", "Isopropyl Alcohol 99%",
+      "Retro candy cigarettes", "Milk chocolate cigars", "Bubble gum cigars, pink", "Wine gums 1kg", "Red wine vinegar", "Root-beer barrels candy",
+    ];
+    for (const title of titles) expect(group({ title, categories: [] }), title).toBeNull();
+    expect(group({ title: "Soda", variantTitle: "Root beer", categories: ["Root Beer"] })).toBeNull();
+    const result = filterOffers(POLICY, titles.map((title, i) => offer({ title, categories: [], variantRef: `gid://shopify/ProductVariant/${String(i)}` })), context);
+    expect(result.hidden).toBe(0);
+  });
+
+  it("attack: a compound beside a keyword, or behind an alcoholic qualifier, is still dropped", () => {
+    const cases: [string, string][] = [
+      ["Root beer vodka", "alcohol"],
+      ["Root beer and vodka gift set", "alcohol"],
+      ["Ginger beer and whisky set", "alcohol"],
+      ["Hard root beer 6 pack", "alcohol"],
+      ["Alcoholic ginger beer", "alcohol"],
+      ["Non-alcoholic beer", "alcohol"],
+      ["Candy cigarettes with nicotine", "tobacco"],
+      ["Wine gums and red wine", "alcohol"],
+    ];
+    for (const [title, expected] of cases) expect(group({ title, categories: [] }), title).toBe(expected);
+    expect(group({ title: "Candy cigarettes", categories: ["nicotine"] })).toBe("tobacco");
+  });
 });

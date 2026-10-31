@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluate, loadPolicy, type Offer, type Outbound, type Purchase } from "./index.ts";
+import { BENIGN_COMPOUNDS, evaluate, loadPolicy, type Offer, type Outbound, type Purchase } from "./index.ts";
 
 const NOW = Date.parse("2026-10-15T12:00:00Z");
 const DAY = 86_400_000;
@@ -250,6 +250,26 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
       { category: "grocery", must_haves: ["bourbon-free", "beer free shipping"] },
     ];
     for (const fields of benign) expect(rules(ALCOHOL, search(fields)), JSON.stringify(fields)).toEqual([]);
+  });
+
+  it("sends a benign compound whose last word is a keyword, as a product, a must-have or a category", () => {
+    const compounds = [
+      "root beer", "ginger beer", "birch beer", "butterbeer", "Root Beer 12 pack", "rubbing alcohol", "isopropyl alcohol 70%",
+      "candy cigarettes", "chocolate cigars", "bubble gum cigars", "bubblegum cigar", "wine gums", "red wine vinegar",
+      ...BENIGN_COMPOUNDS,
+    ];
+    for (const product of compounds) {
+      expect(rules(ALCOHOL, search({ category: "grocery", product })), product).toEqual([]);
+      expect(rules(ALCOHOL, search({ category: "grocery", must_haves: [product] })), product).toEqual([]);
+    }
+    expect(rules(ALCOHOL, search({ category: "beverages/root-beer" }))).toEqual([]);
+  });
+
+  it("attack: a compound never unblocks its keyword, an alcoholic qualifier, or a keyword elsewhere", () => {
+    const attempts = ["root beer vodka", "vodka and root beer", "hard root beer", "alcoholic ginger beer", "spiked root beer", "non-alcoholic beer", "beer", "alcohol", "cigars", "candy cigarettes and nicotine"];
+    for (const product of attempts) expect(rules(ALCOHOL, search({ category: "grocery", product })), product).toContain("categories.block");
+    // The developer's own narrowing still applies to a compound.
+    expect(rules(policy("categories: {block: [soda, root-beer]}\n"), search({ category: "grocery", product: "root beer" }))).toEqual(["categories.block"]);
   });
 });
 
