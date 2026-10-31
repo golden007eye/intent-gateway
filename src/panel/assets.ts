@@ -166,16 +166,20 @@ export const APP_JS = `"use strict";
 
 // The panel's own rules on top of UI_CSS (tokens only). A side nav on the left; under 768px it becomes a row of
 // tabs under the brand bar. Without app.js every view is listed one after another and the nav links scroll to them.
-const PANEL_CSS = `.app{display:grid;grid-template-columns:220px minmax(0,1fr);grid-template-rows:auto 1fr;min-height:100vh}
+// Rows: the brand bar, the pause region (an empty row without one), then nav and main. The pause region's grid item
+// is its live wrapper, not the bar inside it, so the wrapper is what spans; otherwise it takes the nav's cell.
+const PANEL_CSS = `.app{display:grid;grid-template-columns:220px minmax(0,1fr);grid-template-rows:auto auto 1fr;min-height:100vh}
+.app>.live{grid-column:1/-1;grid-row:2}
+.nav,main{grid-row:3}
 .skip{position:absolute;left:8px;top:-60px;z-index:10;background:var(--sage);color:var(--ground);padding:8px 12px;border-radius:8px;font-weight:600}
 .skip:focus{top:8px}
 a{color:var(--sage)}a:hover{color:var(--on-ground)}
 a:focus-visible,summary:focus-visible,select:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--sage);outline-offset:2px}
 h1:focus,h2:focus{outline:none}
-.bar{grid-column:1/-1;display:flex;align-items:center;gap:14px;padding:16px 28px;border-bottom:1px solid var(--card-line);flex-wrap:wrap}
+.bar{grid-column:1/-1;grid-row:1;display:flex;align-items:center;gap:14px;padding:16px 28px;border-bottom:1px solid var(--card-line);flex-wrap:wrap}
 .bar .brand{display:flex;align-items:center;gap:10px;text-decoration:none}
 .product{font-size:15px;color:var(--on-card-muted)}
-.pause-bar,.pause-banner{grid-column:1/-1;margin:0;padding:12px 28px;border-bottom:1px solid var(--card-line);display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
+.pause-bar,.pause-banner{margin:0;padding:12px 28px;border-bottom:1px solid var(--card-line);display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}
 .pause-bar p,.pause-banner p{margin:0}
 .pause-banner{display:block;border-left:4px solid var(--warn-text)}
 .pause-banner ul{margin:4px 0;padding-left:20px}
@@ -288,10 +292,11 @@ background:var(--paper);box-shadow:-12px 0 32px rgba(0,0,0,.45)}
 .drawer .d-ok{color:var(--deep-sage)}.drawer .d-bad{color:var(--danger)}.drawer .d-warn{color:var(--warn-text)}
 @media (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.split{grid-template-columns:minmax(0,1fr)}.feed-panel{grid-column:auto}}
 @media (max-width:768px){
-.app{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto 1fr}
+.app{grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto 1fr}
+.nav{grid-row:3}main{grid-row:4}
 .bar{padding:12px 16px}
 .nav{border-right:0;border-bottom:1px solid var(--card-line);padding:8px 12px;position:sticky;top:0;z-index:4;background:var(--ground)}
-.nav ul{flex-direction:row;overflow-x:auto;position:static;gap:4px}
+.nav ul{flex-direction:row;overflow-x:auto;position:relative;top:0;gap:4px}
 .nav a{white-space:nowrap;padding:8px 10px}
 .nav-foot{display:none}
 main{padding:18px 16px 40px}
