@@ -140,7 +140,23 @@ describe("tools (AC-R1)", () => {
     const client = await connect((await serve()).url);
     const text = (await client.listTools()).tools.map((t) => t.description ?? "").join(" ");
     expect(text).toContain("Pass only what the user said");
-    expect(text).toContain("Never guess a country, a postcode or a budget");
+    expect(text).toContain("Never guess a postcode or a budget.");
+    // The one country an agent may infer: a US ZIP code with a dollar budget and no other country (a dogfood agent
+    // asked "Which country does 94103 ship to?"), and only when nothing else points elsewhere: Mexico also writes $ and
+    // has 5-digit postcodes ("under $300, ship to 06600, Ciudad de México" is asked). Everything else is asked.
+    expect(text).toContain(
+      "Never guess a country, with one exception: a 5-digit ZIP code or ZIP+4 (12345 or 12345-6789) with a budget in dollars " +
+        "($, USD, or the user said dollars) means US, when nothing in the conversation suggests another country (a non-US city, " +
+        "region or language); if unsure, ask. Any other postcode needs the country from the user",
+    );
+    expect(text).toContain("5-digit postcodes are also used in other countries, and other countries' currencies are written $ too.");
+    expect(text).not.toContain("Never guess a country, a postcode or a budget");
+    expect(text).not.toContain("no other country named means US");
+    // The schema the agent sees says the same, and nothing looser.
+    const country = (z.toJSONSchema(FindOffersInput, { io: "input" }) as unknown as { properties: { country: { description: string } } }).properties.country.description;
+    expect(country).toContain(
+      "Never guess it, except US for a 5-digit ZIP code or ZIP+4 with a budget in dollars when nothing in the conversation suggests another country; if unsure, ask.",
+    );
     expect(text).toContain("their budget in the currency of the ship-to country");
     expect(text).toContain("ask the user only for those");
     expect(text).toContain("if find_offers refuses a country, tell the user what it says");
@@ -186,6 +202,65 @@ describe("tools (AC-R1)", () => {
     expect(approvedText).toContain("Approver passkey fingerprint: ");
     expect(approvedText).toMatch(SUMMARY_END);
     expect(env.store.entries().filter((e) => e.kind === "approval")).toHaveLength(1);
+  });
+
+  it("an exact offer shows its shipping; a max one never shows a cap, since shipping and tax come with the cart", async () => {
+    const client = await connect((await serve()).url);
+    const exact = textOf(await client.callTool({ name: "find_offers", arguments: SHOES }));
+    expect(exact).toContain("- Trail Runner 3 (US 10 / Blue) from Trail Supply Co: $89.99 + $5.00 shipping, in stock. offer_handle: of_");
+    // Intent Cloud's storefront offers: shipping 0 and max mean "not quoted yet" (the dogfood's confirm page then
+    // showed $1.00 shipping and a $2.14 total for an offer listed as "$1.00 + $0.00 shipping (at most)").
+    env.fake.tamper.offer({ total_kind: "max", shipping: { amount_minor: 0, currency: "USD" } });
+    const unquoted = textOf(await client.callTool({ name: "find_offers", arguments: SHOES }));
+    expect(unquoted).toContain("- Trail Runner 3 (US 10 / Blue) from Trail Supply Co: $89.99; shipping and tax are quoted when the cart is made, in stock.");
+    env.fake.tamper.offer({ total_kind: "max", shipping: { amount_minor: 500, currency: "USD" } });
+    const partial = textOf(await client.callTool({ name: "find_offers", arguments: SHOES }));
+    expect(partial).toContain("$89.99 + $5.00 shipping, not final; shipping and tax are quoted when the cart is made, in stock.");
+    for (const text of [exact, unquoted, partial]) expect(text).not.toMatch(/at most|up to/i);
+  });
+
+  it("create_cart states the cart's total first, before the approval link, so the developer sees it before the confirm page", async () => {
+    const client = await connect((await serve()).url);
+    const found = textOf(await client.callTool({ name: "find_offers", arguments: SHOES }));
+    const handle = /Trail Runner 3 .*offer_handle: (of_[A-Za-z0-9_-]+)/.exec(found)?.[1];
+    const text = textOf(await client.callTool({ name: "create_cart", arguments: { offer_handle: handle, quantity: 2 } }));
+    const line = "Cart: 2 × Trail Runner 3 (US 10 / Blue) from Trail Supply Co, total $184.98 ($89.99 each, shipping $5.00). Tell the buyer this total before the approval link.";
+    expect(text.startsWith(`${line}\n\nAsk the buyer to open `)).toBe(true);
+    expect(text.indexOf(line)).toBeLessThan(text.indexOf("Approval link: "));
+  });
+
+  it("an estimated cart total says so", async () => {
+    env.fake.tamper.cart({ total_estimated: true });
+    const client = await connect((await serve()).url);
+    const found = textOf(await client.callTool({ name: "find_offers", arguments: SHOES }));
+    const handle = /Trail Runner 3 .*offer_handle: (of_[A-Za-z0-9_-]+)/.exec(found)?.[1];
+    const text = textOf(await client.callTool({ name: "create_cart", arguments: { offer_handle: handle } }));
+    // The confirm page's words for an estimated total (contract Appendix A).
+    expect(text).toContain("from Trail Supply Co, total $94.99 (estimated: the final total can be lower, never higher) ($89.99 each, shipping $5.00).");
+  });
+
+  it("a total above the items and shipping is said as the merchant's quote, with no breakdown the cart does not carry", async () => {
+    // The dogfood: $1.00 each, shipping $1.00, total $2.14 (the cart carries no tax field).
+    env.fake.tamper.cart({ total: { amount_minor: 9513, currency: "USD" } });
+    const client = await connect((await serve()).url);
+    const found = textOf(await client.callTool({ name: "find_offers", arguments: SHOES }));
+    const handle = /Trail Runner 3 .*offer_handle: (of_[A-Za-z0-9_-]+)/.exec(found)?.[1];
+    const text = textOf(await client.callTool({ name: "create_cart", arguments: { offer_handle: handle } }));
+    expect(text).toMatch(
+      /^Cart: 1 × Trail Runner 3 \(US 10 \/ Blue\) from Trail Supply Co, total \$95\.13 \(\$89\.99 each, shipping \$5\.00; the total includes tax and fees the merchant quoted\)\. Tell the buyer this total before the approval link\./,
+    );
+    expect(text).not.toMatch(/tax \$/);
+  });
+
+  it("a create_cart refusal with no code names a next step (attack: the dogfood's 'names no fix')", async () => {
+    const client = await connect((await serve()).url);
+    const found = textOf(await client.callTool({ name: "find_offers", arguments: SHOES }));
+    const handle = /Road Runner 2 .*offer_handle: (of_[A-Za-z0-9_-]+)/.exec(found)?.[1];
+    const result = await client.callTool({ name: "create_cart", arguments: { offer_handle: handle, quantity: 3 } });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(
+      /^Intent Cloud answered 409: not enough stock\. Nothing was bought: no approval was made\. Pick another offer, or search again\.\n\nSent: /,
+    );
   });
 
   it("missing details are asked for, nothing is sent, and the result still ends with the summary", async () => {

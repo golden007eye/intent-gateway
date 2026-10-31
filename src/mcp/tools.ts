@@ -30,8 +30,12 @@ export const TOOLS = {
     description:
       "Find physical products that ship to the user's address. Pass only what the user said: an exact product or a kind " +
       "of product, any must-haves, their budget in the currency of the ship-to country, the country as a two-letter " +
-      "code and the postcode. Never guess a country, a postcode or a budget. If the result lists missing details, ask " +
-      "the user only for those, then call again. " +
+      "code and the postcode. Never guess a postcode or a budget. Never guess a country, with one exception: a " +
+      "5-digit ZIP code or ZIP+4 (12345 or 12345-6789) with a budget in dollars ($, USD, or the user said dollars) means " +
+      "US, when nothing in the conversation suggests another country (a non-US city, region or language); if unsure, " +
+      "ask. Any other postcode needs the country from the user: 5-digit postcodes are also used in other countries, " +
+      "and other countries' currencies are written $ too. If the result lists missing details, ask the user only for " +
+      "those, then call again. " +
       `${LIMITS} The result ends with what this gateway sent (to Intent Cloud, or to Shop when the gateway searches a ` +
       "linked Shop wallet itself) and what it blocked.",
   },
@@ -117,20 +121,23 @@ function findOffersResult(result: FindOffersResult): CallToolResult {
 function createCartResult(result: CreateCartResult): CallToolResult {
   if (result.status !== "approval_needed") return told(result);
   const { cart, checkout } = result;
+  // The total comes first, before the approval link: an offer can leave shipping and tax unquoted, so this is the
+  // first time the developer sees the total the passkey approves.
   const what =
     cart !== undefined
-      ? `Cart: ${String(cart.quantity)} × ${cart.item.title} (${cart.item.variant}) from ${cart.merchant.name}, total ${totalText(cart.total, cart.total_kind)}.`
+      ? `Cart: ${String(cart.quantity)} × ${cart.item.title} (${cart.item.variant}) from ${cart.merchant.name}, total ${totalText(cart.total, cart.total_kind)}` +
+        `${cart.total_estimated === true ? " (estimated: the final total can be lower, never higher)" : ""} ` +
+        `(${money(cart.unit_price)} each, shipping ${money(cart.shipping)}${cartRest(cart)}). ${TELL}`
       : checkout !== undefined
         ? `Shop checkout: ${String(checkout.quantity)} × ${checkout.title} from ${checkout.store}, total ${minorText(checkout.totals.total, checkout.currency)} ` +
           `(shipping ${minorText(checkout.totals.shipping, checkout.currency)}, tax ${minorText(checkout.totals.tax, checkout.currency)}), ` +
-          `${checkout.completion_mode === "shop_agent" ? "paid at once by one tap" : "paid by the buyer on Shop's checkout page"}.`
+          `${checkout.completion_mode === "shop_agent" ? "paid at once by one tap" : "paid by the buyer on Shop's checkout page"}. ${TELL}`
         : "";
   const details = [
-    what,
     `approval_handle: ${result.approval_handle}\nApproval link: ${result.approval_url}\nCheck code: ${result.check_code}`,
     `QR code for the approval link:\n${result.qr.text}`,
   ];
-  const text = told(result, details);
+  const text = told({ ...result, message: [what, result.message].filter((part) => part !== "").join("\n\n") }, details);
   // The QR as an image for clients that show one; the text stays last so the result still ends with the summary.
   const gif = /^data:image\/gif;base64,(.+)$/.exec(result.qr.data_url)?.[1];
   return gif === undefined ? text : { ...text, content: [{ type: "image", data: gif, mimeType: "image/gif" }, ...text.content] };
@@ -148,12 +155,31 @@ function approvalStatusResult(result: ApprovalStatusResult): CallToolResult {
   return told(result);
 }
 
+/**
+ * One offer. A "max" offer has no final shipping or tax: Intent Cloud's storefront offers carry shipping 0 and "max"
+ * because both are known only at the cart, and a cart's total can be above the offer's price plus shipping. So the
+ * gateway never shows a "max" offer's amounts as a cap; the cart's total is the first quoted one.
+ */
 function offerLine(offer: Offer): string {
-  return (
-    `- ${offer.title} (${offer.variant}) from ${offer.merchant.name}: ${money(offer.price)} + ${money(offer.shipping)} ` +
-    `shipping${offer.total_kind === "max" ? " (at most)" : ""}, ${offer.availability.replace("_", " ")}. ` +
-    `offer_handle: ${offer.offer_handle}`
-  );
+  const price =
+    offer.total_kind === "exact"
+      ? `${money(offer.price)} + ${money(offer.shipping)} shipping`
+      : offer.shipping.amount_minor === 0
+        ? `${money(offer.price)}; ${UNQUOTED}`
+        : `${money(offer.price)} + ${money(offer.shipping)} shipping, not final; ${UNQUOTED}`;
+  return `- ${offer.title} (${offer.variant}) from ${offer.merchant.name}: ${price}, ${offer.availability.replace("_", " ")}. offer_handle: ${offer.offer_handle}`;
+}
+
+const UNQUOTED = "shipping and tax are quoted when the cart is made";
+const TELL = "Tell the buyer this total before the approval link.";
+
+/**
+ * A cart carries no tax field, so a total above the items and shipping is said only as the merchant's quote, with
+ * no breakdown the answer does not give. An estimated total is labelled as such instead.
+ */
+function cartRest(cart: { quantity: number; unit_price: Money; shipping: Money; total: Money; total_estimated?: boolean | undefined }): string {
+  const rest = cart.total.amount_minor - cart.unit_price.amount_minor * cart.quantity - cart.shipping.amount_minor;
+  return rest > 0 && cart.total_estimated !== true ? "; the total includes tax and fees the merchant quoted" : "";
 }
 
 function shopOfferLine(offer: ShopOfferView): string {
