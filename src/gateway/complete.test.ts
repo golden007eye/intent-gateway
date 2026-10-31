@@ -715,7 +715,8 @@ describe("Shop as the S1 spike saw it (2026-10-18)", () => {
     const handle = await approvedCart(base, p);
     const result = await status(p, handle);
     expect(completionOf(result)).toMatchObject({ state: "failed", reason: "wallet_disconnected" });
-    expect(result.message).toContain("intent wallet unlink shop, then intent wallet link shop");
+    // A relink that works today: Shop does not accept the gateway's own client yet, so the command names Shop's public one.
+    expect(result.message).toContain("the developer runs `intent wallet unlink shop`, then `INTENT_SHOP_CLIENT_ID=5c733ab2-1903-400a-891e-7ba20c09e2a3 intent wallet link shop`, in a terminal.");
     expect(base.shop.createCount).toBe(0);
   });
 

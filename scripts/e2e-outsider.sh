@@ -733,7 +733,7 @@ scenario_u1() {
   ask_claude u-uk "$MCP_CONFIG" new "$PROMPT_UK" || return 1
   must_match "$REPORT" '^called: .*mcp__gw__find_offers' "Claude called find_offers" || return 1
   must_match "$REPORT" '[0-9]+ offers? from' "Claude's find_offers was answered with a search" || return 1
-  must_not_match "$REPORT" 'Ask the user only for|Not sent: intent' "the gateway searched for the UK address Claude passed" || return 1
+  must_not_match "$REPORT" 'Ask the user only th|Not sent: intent' "the gateway searched for the UK address Claude passed" || return 1
   # The same search straight to the gateway, so u2 has its offers whatever the agent passed.
   UK_OFFERS="$LOGS/u-offers.txt"
   helper mcp-call "$GW_URL" - find_offers "$UK_SEARCH" >"$UK_OFFERS" 2>&1 || { WHY="find_offers for the UK failed; see $UK_OFFERS"; return 1; }
@@ -804,7 +804,7 @@ scenario_r() {
   fi
   f="$LOGS/r-partial.txt"
   helper mcp-call "$GW_URL" - find_offers '{"category":"stickers","budget":20,"country":"GB","postcode":"SW1A"}' >"$f" 2>&1 || true
-  must_match "$f" '^Ask the user only for: That postcode does not look right for the UK: give a full postcode such as SW1A 1AA\.' "a partial UK postcode is asked again" || return 1
+  must_match "$f" '^Ask the user only this: That postcode does not look right for the UK: give a full postcode such as SW1A 1AA\.' "a partial UK postcode is asked again" || return 1
   must_match "$f" '^Sent: nothing' "nothing sent for a partial postcode" || return 1
   f="$LOGS/r-japan.txt"
   helper mcp-call "$GW_URL" - find_offers '{"category":"stickers","budget":20,"country":"JP","postcode":"100-0001"}' >"$f" 2>&1 || true

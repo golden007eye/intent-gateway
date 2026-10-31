@@ -428,7 +428,8 @@ function disclosed(summary: ActivitySummary, g: Glyphs, paint: (tone: Tone, s: s
   for (const d of destinations) out.push(paint("dim", sentLine(d)));
   const { checked, unchecked, findings } = summary.identity;
   if (findings.length > 0) {
-    out.push(paint("bad", `${g.bad} Buyer identity in what was sent: ${findings.map((f) => `entry #${String(f.seq)} (${f.kinds.join(", ")})`).join(", ")}; run ${INTENT} verify`));
+    // No "run intent verify" here: verify does not scan what was sent for buyer identity, so it would not help.
+    out.push(paint("bad", `${g.bad} Buyer identity in what was sent: ${findings.map((f) => `entry #${String(f.seq)} (${f.kinds.join(", ")})`).join(", ")}.`));
   } else if (checked > 0 || unchecked === 0) {
     const caveat = unchecked === 0 ? "" : ` (${plural(unchecked, "request", "requests")} with no logged bytes not checked)`;
     // Only what the check can tell (invariant 5): a field named for identity, or an address, postcode or card number in
