@@ -2,7 +2,7 @@
 // unsigned (a `response`, never a receipt); Intent Cloud sends read as before (invariant 5).
 import { describe, expect, it } from "vitest";
 import type { Entry, EntryKind } from "../store/index.ts";
-import { disclosedSince, spendHistory, summaryLine } from "./history.ts";
+import { blockedWords, disclosedSince, spendHistory, summaryLine } from "./history.ts";
 
 const entry = (seq: number, kind: EntryKind, body: unknown): Entry => ({ seq, prev: "", ts: "2026-10-16T00:00:00.000Z", kind, body, hash: "" });
 
@@ -78,5 +78,21 @@ describe("summaryLine with destinations", () => {
   it("treats an explicit intent_cloud destination as Intent Cloud", () => {
     const chain = [entry(0, "disclosure", { endpoint: "getMeta", destination: "intent_cloud", fields: [] }), entry(1, "receipt", { disclosure_seq: 0, verified: false })];
     expect(summaryLine(disclosedSince(chain, -1))).toBe("Sent: getMeta (no body fields; no verified receipt) / Blocked: nothing");
+  });
+});
+
+describe("blockedWords: the Blocked part in plain words, the JSON path only in intent log -v", () => {
+  it("words an identity block by what it found and the field it was in", () => {
+    expect(blockedWords("postcode at $.must_haves[0]")).toBe("a full postcode (in must-haves)");
+    expect(blockedWords("street_address at $.must_haves[2]")).toBe("a street address (in must-haves)");
+    expect(blockedWords("email at $.params.arguments.note")).toBe("an email address (in note)");
+    expect(blockedWords('phone at $["contact phone"]')).toBe("a phone number (in contact phone)");
+    expect(blockedWords("banned_key at $")).toBe("an identity field (in the request)");
+    expect(blockedWords("email in a field name")).toBe("an email address (in a field name)");
+  });
+
+  it("keeps a policy block as it is", () => {
+    expect(blockedWords("categories.block at category")).toBe("categories.block at category");
+    expect(blockedWords("1 offer (merchants.block)")).toBe("1 offer (merchants.block)");
   });
 });

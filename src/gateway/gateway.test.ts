@@ -862,6 +862,8 @@ describe("invariant 3: buyer identity in a tool input is never sent", () => {
     const result = await h.gateway.findOffers({ ...SHOES, product: "phone stand to SW1A 1AA" });
     expect(result.status === "blocked" && result.message).toContain("Remove any address or postcode from the product, category and must-haves, pass the postcode in the postcode field only");
     expect(bodies(h, "block")[0]).toMatchObject({ blocked: ["postcode at $.product"] });
+    // The tool's line says it in words; the exact path is only in the block entry (intent log -v).
+    expect(result.summary).toBe("Sent: nothing / Blocked: a full postcode (in product)");
   });
 
   it("a whole postcode in the postcode field itself is not identity: it is coarsened, not refused", async () => {
