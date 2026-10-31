@@ -16,7 +16,7 @@ The side navigation (a row of tabs on a narrow window) switches between six view
 | View | Address | What it shows |
 |---|---|---|
 | Overview | `#/overview` | Four cards: approved in the last 24 hours against your policy's daily limit; approvals waiting for you, with a link to the approval page; requests sent to Intent Cloud, split into acknowledged by a signed receipt, no receipt, logged and maybe sent, and not sent, then each wallet destination apart ("Also sent to Shop: 2 (2 answered, unsigned)": a wallet answers, it signs no receipt); requests refused before sending, with the reason. Below them: the latest activity, a summary of your rules and approver pin, and the last server log entries. |
-| Purchases | `#/purchases` | Each purchase as four steps: Search, Cart, Your approval, Agent checked, each marked done, waiting, failed or not yet. A step's **Details** opens a drawer (`#/purchases/a-<seq>`) with exactly the fields that left your machine and their values, the line "Never sent: your name, postal address and card", what came back (status and receipt key), the request's digest and its seq range. Refused requests are listed below the purchases. |
+| Purchases | `#/purchases` | Each purchase as four steps: Search, Cart, Your approval, Agent checked, each marked done, waiting, failed or not yet. A step's **Details** opens a drawer (`#/purchases/a-<seq>`) with exactly the fields that left your machine and their values, the line "No buyer name, address or card field was sent" (with the reminder that free text is sent as written, so a name in it cannot be detected), what came back (status and receipt key), the request's digest and its seq range. Refused requests are listed below the purchases. |
 | Approvals | `#/approvals` | Approvals waiting for you, each with **Open approval page**; approved and expired ones; the pinned approver passkey's fingerprint and any flagged passkey. Compare the fingerprint with your passkey manager before you run `intent approver accept`. |
 | Policy | `#/policy` | The active policy, rule by rule, and where it came from (your policy file, or the bundled default). A policy can only narrow the rules Intent Cloud enforces. |
 | Server log | `#/log` | The full local chain, entry by entry. Open an entry to see its body field by field, with its `prev` and `hash`. Filter by kind or by any text (a field, a value, a seq); the filter is kept in the address (`#/log?kind=disclosure&q=94103`). |
@@ -36,11 +36,11 @@ The button does what `intent pause` does ([ADR-0023](adr/0023-pause.md)): it app
 
 While purchases are paused, the button gives way to a banner:
 
-- **Paused since <time>. Resume needs your passkey.**
+- **Paused since <time>.** and what lifts it: "Resume needs your passkey." once Intent Cloud has acknowledged the pause; until then, that the pause holds on this machine and can be lifted from it until Intent Cloud acknowledges it;
 - where the pause stands at Intent Cloud: acknowledged, not acknowledged yet and retrying while the gateway serves (with the reason), refused, or not sent yet;
 - the purchases stopped: each approval asked for, not expired and not settled, with its total;
 - how many steps were refused since the pause;
-- how to resume: run `intent resume`, which names the confirm page's `/account`, where you resume with your passkey. The panel cannot resume.
+- how to resume: run `intent resume`, which names the confirm page's `/account`, where you resume with your passkey, or, before Intent Cloud has acknowledged the pause, lifts it on this machine. The panel cannot resume.
 
 ## Why it is safe to leave open
 

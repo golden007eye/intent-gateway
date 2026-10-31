@@ -23,6 +23,9 @@
 // - street_address: a house number, one to four street-name words, then a street suffix (St, Ave, Rd, Blvd, Ln,
 //   Dr, Ct, Way…). "Main Street Coffee Mug" has no house number, so it is clean; a number followed by a quantity
 //   word ("4 Wheel Drive", "2 Pack Way") is a quantity, so it is clean too.
+// - free text (IdentityOptions.freeText, freetext.ts), on the agent's tool input only: a whole postcode of a ship-to
+//   country (`postcode`), and a street with no house number after a delivery phrase (`street_address`). Never run on
+//   what a destination returned or by `intent verify`, so merchant text ("AMD Radeon RX 7900 XT") cannot trip them.
 // - banned_key: an object key naming identity, compared case-insensitively after splitting into words on "_",
 //   "-", spaces and camelCase. Banned: the key "pan", any key starting with "card", and any key containing one
 //   of the words name, surname, recipient, address, addr, street, email, phone, card, cvv, cvv2, cvc
@@ -33,7 +36,8 @@
 //   (IdentityOptions.mcpEnvelope, Shop's search context, G5), and only while its value is a two-letter upper-case
 //   country code: a country is no more than the policy already shares. Anywhere else, or with any other value, it
 //   is still a banned key, so the key cannot carry text two letters at a time.
-// A 5-digit ZIP or ZIP+4 alone is not identity: the policy may share a postcode.
+// A bare 4- or 5-digit number (a 5-digit ZIP among them) is not identity: the policy may share a ZIP, and products have
+// numbers. A coarse postcode alone ("SW1A", "K1A") is what the policy shares.
 //
 // Credentials (credentials.ts) are the other thing a logged request must never hold in clear: the disclosure core
 // digests them before the log append, and `intent verify` refuses an unredacted one (ADR-0014).
@@ -62,9 +66,11 @@ export {
   valueAt,
 } from "./credentials.ts";
 import { SCAN_DEPTH } from "./credentials.ts";
+import { freeTextFindings } from "./freetext.ts";
+import { QUANTITY_WORDS, STREET_WORD, SUFFIXES } from "./street.ts";
 
 /** `too_deep`: a value nested deeper than SCAN_DEPTH, not walked (so it cannot exhaust the stack) and so not cleared. */
-export type FindingKind = "card" | "email" | "phone" | "street_address" | "banned_key" | "too_deep";
+export type FindingKind = "card" | "email" | "phone" | "street_address" | "postcode" | "banned_key" | "too_deep";
 
 export interface Finding {
   /** Where the identity sits, as a JSONPath: `$`, `$.buyer.email`, `$.items[0]`, `$["first name"]`. */
@@ -88,7 +94,21 @@ export interface IdentityOptions {
    * other path are scanned as usual. A split card across neighbouring fields is still found: a gid is never a digit leaf.
    */
   orderRefAt?: readonly string[];
+  /**
+   * The value is what the agent typed into a tool (the gateway's input screen, and `intent log` reading a search sent to
+   * Intent Cloud): the free-text rules (freetext.ts) run too. Never for what came back from a destination (observations,
+   * Shop's results, statements) or for `intent verify`: merchant text is not the agent's free text.
+   */
+  freeText?: boolean;
+  /**
+   * With freeText, JSONPaths where a whole postcode is expected (the tool's own `postcode` field, TOOL_POSTCODE_AT): the
+   * postcode rule does not run on the string at exactly one of them; every other check does, and every other path gets all.
+   */
+  postcodeAt?: readonly string[];
 }
+
+/** The postcode field of the gateway's own tool input (find_offers), coarsened by the gateway before any send. */
+export const TOOL_POSTCODE_AT: readonly string[] = ["$.postcode"];
 
 /**
  * A Shopify order reference, as the whole string value: `gid://shopify/Order/` and 1 to 20 ASCII digits (ADR-0019).
@@ -128,7 +148,8 @@ const CLIENT_NAME_PATH = `$.params._meta[${JSON.stringify(CLIENT_INFO)}].name`;
 
 export function findIdentity(value: unknown, options: IdentityOptions = {}): Finding[] {
   const findings: Finding[] = [];
-  walk(value, "$", findings, new Set(options.orderRefAt ?? []));
+  const freeText = options.freeText === true;
+  walk(value, "$", findings, { orderRefAt: new Set(options.orderRefAt ?? []), freeText, postcodeAt: new Set(freeText ? (options.postcodeAt ?? []) : []) });
   if (options.mcpEnvelope !== true) return findings;
   const toolName = isToolCall(value);
   const clientName = isClientNamed(value);
@@ -161,18 +182,24 @@ function isToolCall(value: unknown): boolean {
   return typeof name === "string" && MCP_TOOL_NAME.test(name);
 }
 
-function walk(value: unknown, path: string, out: Finding[], orderRefAt: ReadonlySet<string>, depth = 0): void {
+interface Exempt {
+  readonly orderRefAt: ReadonlySet<string>;
+  readonly freeText: boolean;
+  readonly postcodeAt: ReadonlySet<string>;
+}
+
+function walk(value: unknown, path: string, out: Finding[], exempt: Exempt, depth = 0): void {
   if (depth > SCAN_DEPTH && typeof value === "object" && value !== null) {
     out.push({ path, kind: "too_deep" });
   } else if (typeof value === "string") {
-    const notCard = isUuid(value) || (orderRefAt.has(path) && SHOPIFY_ORDER_GID.test(value));
-    for (const kind of scanText(normalize(value), notCard)) out.push({ path, kind });
+    const notCard = isUuid(value) || (exempt.orderRefAt.has(path) && SHOPIFY_ORDER_GID.test(value));
+    for (const kind of scanText(normalize(value), notCard, exempt.freeText, exempt.postcodeAt.has(path))) out.push({ path, kind });
   } else if (typeof value === "bigint" || (typeof value === "number" && Number.isInteger(value))) {
     if (isCardDigits(value.toString())) out.push({ path, kind: "card" });
   } else if (Array.isArray(value)) {
     const items: unknown[] = value;
     items.forEach((item, i) => {
-      walk(item, `${path}[${String(i)}]`, out, orderRefAt, depth + 1);
+      walk(item, `${path}[${String(i)}]`, out, exempt, depth + 1);
     });
     if (hasSplitCard(items)) out.push({ path, kind: "card" });
   } else if (typeof value === "object" && value !== null) {
@@ -181,8 +208,8 @@ function walk(value: unknown, path: string, out: Finding[], orderRefAt: Readonly
       const keyPath = path + (/^[A-Za-z_$][\w$]*$/.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`);
       const normalKey = normalize(key);
       if (isBannedKey(normalKey)) out.push({ path: keyPath, kind: "banned_key" });
-      for (const kind of scanText(normalKey, isUuid(key))) out.push({ path: keyPath, kind });
-      walk(item, keyPath, out, orderRefAt, depth + 1);
+      for (const kind of scanText(normalKey, isUuid(key), exempt.freeText)) out.push({ path: keyPath, kind });
+      walk(item, keyPath, out, exempt, depth + 1);
     }
     if (hasSplitCard(entries.map(([, item]) => item))) out.push({ path, kind: "card" });
   }
@@ -213,26 +240,24 @@ function isUuid(raw: string): boolean {
   return UUID.test(raw);
 }
 
-/** `notCard`: the raw value is a canonical UUID or an exempt order gid, so it is not scanned for a card. */
-function scanText(text: string, notCard: boolean): FindingKind[] {
+/**
+ * `notCard`: the raw value is a canonical UUID or an exempt order gid, so it is not scanned for a card. `freeText`: the
+ * value is the agent's tool input (IdentityOptions.freeText), so the free-text rules run too; `isPostcode`: it sits in
+ * the postcode field (IdentityOptions.postcodeAt), so it is not scanned for a whole postcode.
+ */
+function scanText(text: string, notCard: boolean, freeText = false, isPostcode = false): FindingKind[] {
   const kinds: FindingKind[] = [];
   if (!notCard && hasCard(text)) kinds.push("card");
   if (EMAIL.test(text)) kinds.push("email");
   if (E164.test(text) || US_PHONE.test(text)) kinds.push("phone");
   if (STREET.test(text)) kinds.push("street_address");
+  if (freeText) for (const kind of freeTextFindings(text, isPostcode)) if (!kinds.includes(kind)) kinds.push(kind);
   return kinds;
 }
 
 const EMAIL = /[\p{L}\p{M}\p{N}._%+-]+@[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-]+)*\.\p{L}{2,}/u;
 const E164 = /(?<![\w+])\+[1-9](?:[ .()-]{0,2}\d){7,14}(?!\d)/;
 const US_PHONE = /(?<![\w+])(?:\+?1[ .-]?)?(?:\([2-9]\d{2}\) ?|[2-9]\d{2}[ .-])[2-9]\d{2}[ .-]\d{4}(?![\w])/;
-const SUFFIXES = [
-  "St", "Street", "Ave", "Av", "Avenue", "Rd", "Road", "Blvd", "Boulevard", "Ln", "Lane", "Dr", "Drive",
-  "Ct", "Court", "Way", "Pl", "Place", "Ter", "Terrace", "Pkwy", "Parkway", "Hwy", "Highway", "Cir", "Circle",
-];
-const STREET_WORD = String.raw`(?:[A-Za-z][A-Za-z'.-]*|\d+(?:st|nd|rd|th))`;
-// A number followed by a quantity word ("4 Wheel Drive", "2 Pack Way") is a quantity, not a house number.
-const QUANTITY_WORDS = ["wheel", "pack", "piece", "pc", "pcs", "count", "ct", "inch", "in", "ft", "oz", "lb", "x"];
 const STREET = new RegExp(
   String.raw`(?<![\w-])\d{1,6}[A-Za-z]?\s+(?!(?:${QUANTITY_WORDS.join("|")})\b)(?:${STREET_WORD}\s+){1,4}(?:${SUFFIXES.join("|")})\b`,
   "i",

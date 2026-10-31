@@ -55,6 +55,8 @@ export interface PauseState {
   readonly retries: number;
   /** The `refused` entries since the pause in effect began. */
   readonly refusals: number;
+  /** An answer from Intent Cloud said `paused` since the pause in effect began (a `refused` entry from intent_cloud). */
+  readonly cloudSaidPaused: boolean;
 }
 
 type Body = Record<string, unknown>;
@@ -67,6 +69,7 @@ export function pauseState(entries: readonly PauseEntry[]): PauseState {
   let cloud: PauseState["cloud"] = null;
   let retries = 0;
   let refusals = 0;
+  let cloudSaidPaused = false;
   for (const e of entries) {
     const b = bodyOf(e);
     switch (e.kind) {
@@ -76,6 +79,7 @@ export function pauseState(entries: readonly PauseEntry[]): PauseState {
           cloud = null;
           retries = 0;
           refusals = 0;
+          cloudSaidPaused = false;
         } else if (cloud?.result === "failed") {
           // Pausing again after Intent Cloud refused the pause for good sends it again; the local pause keeps its start.
           cloud = null;
@@ -103,17 +107,21 @@ export function pauseState(entries: readonly PauseEntry[]): PauseState {
             cloud = null;
             retries = 0;
             refusals = 0;
+            cloudSaidPaused = false;
           }
         }
         break;
       case "refused":
-        if (paused !== null) refusals += 1;
+        if (paused !== null) {
+          refusals += 1;
+          if (b.source === "intent_cloud") cloudSaidPaused = true;
+        }
         break;
       default:
         break;
     }
   }
-  return { paused, unconfirmedResume: unconfirmed, cloud, retries, refusals };
+  return { paused, unconfirmedResume: unconfirmed, cloud, retries, refusals, cloudSaidPaused };
 }
 
 /** Whether purchases are paused after `entries`: the one test create_cart and complete_checkout read. */
@@ -176,7 +184,7 @@ export function pauseReasonWords(reason: string): string {
     case "unreachable":
       return "the send to Intent Cloud got no answer";
     case "not_found":
-      return "a not_found answer was received from Intent Cloud: the account key is pinned at the first passkey approval";
+      return "a not_found answer was received from Intent Cloud: it does not know this machine's account key yet";
     case "rate_limited":
       return "rate limited: a 429 was received from Intent Cloud";
     case "clock_skew":

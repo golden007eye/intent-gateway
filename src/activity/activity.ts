@@ -283,7 +283,7 @@ const REFUSAL = /^(cart|snapshot|approval_proof): /;
  */
 const LOGGING_REFUSAL = /^(a credential at |a credential in the query |the body is not plain JSON|the form body is not written|the request has more than one content-type header)/;
 /** Block reasons of the buyer-identity check (findIdentity's kinds, written as `<kind> at <path>`). */
-const IDENTITY_REASON = /^(card|email|phone|street_address|banned_key|too_deep) at /;
+const IDENTITY_REASON = /^(card|email|phone|street_address|postcode|banned_key|too_deep) at /;
 const SEVERITY: readonly Delivery[] = ["acknowledged", "answered", "not_sent", "unacknowledged", "maybe_sent", "discarded"];
 
 /** Reads the chain items `readChain` returns as actions, in chain order, with summary counts. */
@@ -602,7 +602,9 @@ export function summarise(items: readonly unknown[], activities: readonly Activi
       // name key, and a wallet's `params.name` loses its MCP exemption.
       bodies ??= bodiesBySeq(items);
       const toCloud = r.destination === INTENT_CLOUD;
-      const found = findIdentity(bodies.get(r.seq) ?? null, { mcpEnvelope: !toCloud, orderRefAt: sentOrderRefAt(r.endpoint, toCloud) });
+      // A search to Intent Cloud carries the agent's free text (product, must-haves): the free-text rules run on it too.
+      const freeText = toCloud && r.endpoint === "searchCatalog";
+      const found = findIdentity(bodies.get(r.seq) ?? null, { mcpEnvelope: !toCloud, orderRefAt: sentOrderRefAt(r.endpoint, toCloud), freeText });
       if (found.length > 0) findings.push({ seq: r.seq, kinds: [...new Set(found.map((f) => f.kind))].sort() });
     }
   }

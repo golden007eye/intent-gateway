@@ -1,6 +1,6 @@
 // `intent doctor`: one line per check, and for each problem the command or setting that fixes it. Checks the data
-// dir, the active policy and its lock, the local hash chain and its lease, the root key, and Intent Cloud's
-// contract version and key statement. Its two requests to Intent Cloud go through the disclosure log like any other.
+// dir, the active policy and its lock, the local hash chain (and whether purchases are paused) and its lease, the root
+// key, and Intent Cloud's contract version and key statement. Its two requests to Intent Cloud go through the disclosure log like any other.
 import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type Config, INTENT, type RootKey, UPDATE_COMMAND } from "../config/index.ts";
@@ -14,6 +14,7 @@ import { verifyStatement } from "../trust/index.ts";
 import { describeError, errorContext, metaRefused } from "./errors.ts";
 import { type Io, line } from "./io.ts";
 import { readLog } from "./log.ts";
+import { doctorPauseLine } from "./pause.ts";
 import { noShipToNote, shipToFix } from "./policy.ts";
 import { printable } from "../ui/index.ts";
 import { demoTrustKeys } from "../demo/index.ts";
@@ -148,6 +149,9 @@ export function checkChain(dataDir: string, report: Report): ReturnType<typeof c
   }
   const head = items.at(-1) as { seq: number; hash: string };
   report("ok", `log: ${String(items.length)} entries, each linked to the one before; last entry #${String(head.seq)}, hash ${head.hash}`);
+  // A pause is not a fault, but a developer who runs doctor because nothing gets bought needs to see it.
+  const paused = doctorPauseLine(items as Entry[]);
+  if (paused !== null) report("warn", paused);
   return chainMode(items as Entry[]);
 }
 

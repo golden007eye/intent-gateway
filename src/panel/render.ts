@@ -62,7 +62,7 @@ function header(m: PanelModel): string {
 }
 
 /**
- * The pause banner while paused ("Paused since <time>. Resume needs your passkey.", Intent Cloud's word on it, the
+ * The pause banner while paused ("Paused since <time>." and what lifts it, Intent Cloud's word on it, the
  * purchases stopped); otherwise, on a panel run with a token, the Pause button. On a panel without one the region is
  * there with only a line for screen readers, so app.js's refresh can fill it when a pause is made from the CLI and
  * empty it after a resume. The region is a status region that stays on the page while its content changes, so a
@@ -83,7 +83,7 @@ function pauseBar(m: PanelModel, canPause: boolean): string {
   return status(
     `<div class="pause-banner"><strong>${esc(p.banner)}</strong>` +
       `<p class="tone-${p.cloudTone}">${esc(p.cloud)}</p>${stopped}${refused}` +
-      `<p>To resume: run <code>${esc(m.intent)} resume</code>, which opens the confirm page's /account for your passkey.</p></div>`,
+      `<p>To resume: run <code>${esc(m.intent)} resume</code>${p.held ? ", which opens the confirm page's /account for your passkey" : " in a terminal"}.</p></div>`,
   );
 }
 
@@ -227,11 +227,18 @@ function drawer(d: Drawer, verifyCommand: string): string {
   );
 }
 
+/** The drawer's identity line, from that request's own check (as `intent log` reads it), never one line for all. */
+const IDENTITY_LINE: Readonly<Record<RequestDetail["identity"], string>> = {
+  none: "No buyer name, address or card field was sent. Free text is sent as written: a name in it cannot be detected.",
+  found: "What looks like buyer identity is in this request&#39;s logged values; run intent verify.",
+  unchecked: "Not checked for buyer identity: no logged bytes.",
+};
+
 function request(r: RequestDetail): string {
   return (
     `<div class="req"><p class="ep"><code>${esc(r.endpoint)}</code> <span class="small">${esc(r.method)}</span></p>` +
     (r.sent.length === 0 ? `<p class="small">No body fields.</p>` : kv(r.sent)) +
-    `<p class="small">Never sent: your name, postal address and card.</p>` +
+    `<p class="small${r.identity === "found" ? " d-bad" : ""}">${IDENTITY_LINE[r.identity]}</p>` +
     `<h3>What came back</h3>` +
     (r.back.length === 0 ? "" : kv(r.back)) +
     `<p class="small d-${r.tone}">${esc(r.delivery)}</p>` +

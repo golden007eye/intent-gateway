@@ -25,7 +25,7 @@ import {
 import { withheldAt } from "../observation/index.ts";
 import { isCredentialHeader, markerDigest } from "../privacy/index.ts";
 import { EXCLUDED_CATEGORIES, type Policy } from "../policy/index.ts";
-import { type PauseEntry, pauseReasonWords, pauseState, stoppedPurchases } from "../pause/index.ts";
+import { heldByCloud, liftWords, type PauseEntry, pauseReasonWords, pauseState, stoppedPurchases } from "../pause/index.ts";
 import type { ChainResult } from "../store/index.ts";
 
 export type Mode = "demo" | "real";
@@ -126,6 +126,11 @@ export interface RequestDetail {
   readonly delivery: string;
   readonly tone: Tone;
   readonly digest: string | null;
+  /**
+   * What the buyer-identity check found in this request's logged values, as `intent log` reads them: `none`, `found`,
+   * or `unchecked` (no logged bytes, or never sent). The drawer's identity line says only this.
+   */
+  readonly identity: "none" | "found" | "unchecked";
 }
 
 export interface Drawer {
@@ -199,8 +204,10 @@ export interface PanelModel {
 }
 
 export interface PauseView {
-  /** "Paused since <time>. Resume needs your passkey." */
+  /** "Paused since <time>. Resume needs your passkey." once Intent Cloud holds it; until then, that it can be lifted here. */
   readonly banner: string;
+  /** Intent Cloud holds the pause too, so only the passkey lifts it (src/pause heldByCloud). */
+  readonly held: boolean;
   /** Where the pause stands at Intent Cloud, in plain words. */
   readonly cloud: string;
   readonly cloudTone: Tone;
@@ -225,6 +232,8 @@ const DELIVERY: Record<Delivery, readonly [short: string, long: string, tone: To
 export function buildModel(input: ModelInput): PanelModel {
   const { items, now } = input;
   const { activities, summary } = buildActivity(items);
+  // The requests where the buyer-identity check found something, as `intent log` reports them.
+  const flagged = new Set(summary.identity.findings.map((f) => f.seq));
   const purchases = buildPurchases(activities, now);
   const time = clockFor(now, input.timeZone);
   const last = record(items.at(-1));
@@ -287,7 +296,7 @@ export function buildModel(input: ModelInput): PanelModel {
     kpis,
     feed: lines.reverse(),
     purchases: purchases.map((p) => purchaseView(p, time)).reverse(),
-    drawers: [...new Map(drawers.map((a) => [a.seq, drawerOf(a, time)])).values()],
+    drawers: [...new Map(drawers.map((a) => [a.seq, drawerOf(a, time, flagged)])).values()],
     refusals: activities.filter((a) => a.action === "blocked" || (a.outcome === "refused" && a.action !== "cart")).map((a) => feedLine(a, time)).reverse(),
     pending: purchases
       .filter((p) => p.state === "waiting" || p.state === "expired")
@@ -342,7 +351,8 @@ function pauseView(items: readonly unknown[], now: number, time: Clock): PauseVi
           ? `A refusal of the pause was received from Intent Cloud (${pauseReasonWords(c.reason)}); it holds here only.`
           : `Intent Cloud has not acknowledged it yet (${pauseReasonWords(c.reason)}); the gateway retries while it serves.`;
   return {
-    banner: `Paused since ${time(state.paused.since)}. Resume needs your passkey.`,
+    banner: `Paused since ${time(state.paused.since)}. ${liftWords(state)}`,
+    held: heldByCloud(state),
     cloud,
     cloudTone: c?.result === "acknowledged" || (c === null && state.paused.from === "intent_cloud") ? "ok" : c?.result === "failed" ? "bad" : "warn",
     stopped: stoppedPurchases(entries, now).map((p) => join([`approval ${short(p.handle)}`, p.totalMinor === null ? "" : money(p.totalMinor)])),
@@ -582,7 +592,7 @@ function stepState(a: Activity): StepState {
 
 const drawerId = (a: Activity): string => `a-${String(a.seq)}`;
 
-function drawerOf(a: Activity, time: Clock): Drawer {
+function drawerOf(a: Activity, time: Clock, flagged: ReadonlySet<number>): Drawer {
   const heading = a.action === "search" ? "Search" : a.action === "cart" ? "Cart" : a.action === "status" ? "Agent checked" : "Your approval";
   const seqs = a.seqs.length <= 1 ? `entry #${String(a.seq)}` : `entries #${String(a.seqs[0])}–${String(a.seqs.at(-1))}`;
   const facts: (readonly [string, string])[] =
@@ -595,10 +605,10 @@ function drawerOf(a: Activity, time: Clock): Drawer {
           ["proof", "verified by the gateway and logged"],
         ]
       : [];
-  return { id: drawerId(a), heading, requests: a.requests.map(requestDetail), facts, seqs };
+  return { id: drawerId(a), heading, requests: a.requests.map((r) => requestDetail(r, flagged)), facts, seqs };
 }
 
-function requestDetail(r: ActivityRequest): RequestDetail {
+function requestDetail(r: ActivityRequest, flagged: ReadonlySet<number>): RequestDetail {
   const sent: [string, string][] =
     r.fields === null
       ? r.field_names.map((n) => [n, "(value not logged)"])
@@ -614,7 +624,8 @@ function requestDetail(r: ActivityRequest): RequestDetail {
     if (res.reason !== null) back.push(["reason", res.reason]);
   }
   const [, long, tone] = DELIVERY[r.delivery];
-  return { seq: r.seq, endpoint: r.endpoint, method: join([r.method ?? "", r.path ?? ""], " "), sent, back, delivery: long, tone, digest: r.content_digest };
+  const identity = flagged.has(r.seq) ? "found" : r.fields === null || r.delivery === "not_sent" ? "unchecked" : "none";
+  return { seq: r.seq, endpoint: r.endpoint, method: join([r.method ?? "", r.path ?? ""], " "), sent, back, delivery: long, tone, digest: r.content_digest, identity };
 }
 
 function policyView(info: PolicyInfo): NonNullable<PanelModel["policy"]> {

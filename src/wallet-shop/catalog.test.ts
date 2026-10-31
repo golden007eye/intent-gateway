@@ -54,6 +54,11 @@ describe("projectCatalog", () => {
     expect(findIdentity(hits)).toEqual([]);
   });
 
+  it("keeps a product title that only looks like a postcode (review of #134, HIGH 1): \"AMD Radeon RX 7900 XT\"", () => {
+    const [hit] = projectCatalog({ products: [product({ title: "AMD Radeon RX 7900 XT" }, { title: "Default" })] });
+    expect(hit?.title).toBe("AMD Radeon RX 7900 XT");
+  });
+
   it("drops a title or URL that reads as identity, and a URL with credentials or not https", () => {
     const [hit] = projectCatalog({
       products: [product({ title: `Engraved for ${PII.email}`, url: `https://stickers.example/u/${PII.email}`, media: [{ url: "http://stickers.example/x.png" }] }, { title: "Default" })],

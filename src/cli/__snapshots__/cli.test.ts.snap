@@ -18,7 +18,7 @@ Commands:
   intent evidence <approval handle> one purchase's evidence pack (--out <file>); check it: verify --evidence <file>
   intent panel [--port <n>]         read-only local page: activity, purchases, approvals, policy, log, verify
   intent doctor                     check the setup; each problem comes with its fix
-  intent pause                      stop every purchase not paid yet (status shows it; resume lifts it, with your passkey)
+  intent pause                      stop every purchase not paid yet (status shows it and what lifts it)
   intent policy show                the active policy and its policy.lock
   intent policy add <name> [--yes]  narrow the policy with a library policy (shows the diff first)
   intent policy test <cases.yaml>   run test cases against the active policy

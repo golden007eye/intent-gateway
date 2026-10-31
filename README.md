@@ -121,7 +121,7 @@ What this does **not** cover: `intent verify` proves what the gateway sent, what
 
 `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app.
 
-The pause holds on your machine at once, then goes to Intent Cloud through the disclosure log. `intent status` says since when purchases are paused and which ones it stopped; the panel has the same Pause button and banner. `intent resume` sends you to the confirm page's `/account`, where you resume with your passkey. Pause cannot stop a program that reads the Shop token and pays Shop directly; only turning off agent payments in the Shop app can.
+The pause holds on your machine at once, then goes to Intent Cloud through the disclosure log. `intent status` says since when purchases are paused and which ones it stopped; the panel has the same Pause button and banner. Once Intent Cloud has acknowledged the pause, `intent resume` sends you to the confirm page's `/account`, where you resume with your passkey. Until then (for example with no account key on your machine, or no connection) the pause holds on your machine only, and `intent resume` lifts it there. Pause cannot stop a program that reads the Shop token and pays Shop directly; only turning off agent payments in the Shop app can.
 
 ## What it does not do
 

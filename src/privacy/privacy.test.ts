@@ -12,6 +12,7 @@ import {
   ORDER_REF_AT,
   SCAN_DEPTH,
   SHOPIFY_ORDER_GID,
+  TOOL_POSTCODE_AT,
 } from "./index.ts";
 
 // Invariant 3 (no buyer identity in the gateway): each positive is identity an agent might try to send out.
@@ -319,5 +320,145 @@ describe("a Shopify order gid at an order path is not a card (ADR-0019)", () => 
 
   it("only the card check is skipped: every other finding at the path stays", () => {
     expect(findIdentity({ order_ref: "jane@example.com" }, report)).toEqual([{ path: "$.order_ref", kind: "email" }]);
+  });
+});
+
+// Invariant 3, QA on preview.6: a full postcode, or a street with no house number after a delivery phrase, inside the
+// agent's free text reached Intent Cloud ("phone stand to SW1A 1AA", must_haves ["deliver to Evergreen Terrace"]).
+// These rules run only on a tool input (freeText); merchant text never meets them (review of #134, HIGH 1).
+describe("free text of a tool input: a full postcode or a delivered-to street", () => {
+  const input = (text: string): Finding[] => findIdentity({ product: text, must_haves: [text] }, { freeText: true, postcodeAt: TOOL_POSTCODE_AT });
+
+  // Realistic product text that must still leave: model codes, sizes, units, years, storage, coarse postcodes.
+  const products = [
+    // Review of #134, HIGH 2: each was refused.
+    "RX 6800 XT", "RX 7900 XT", "AMD Radeon RX 7900 XT", "RX 9070 XT", "RX 5700 XT", "RTX 4090 FE", "RTX 4080 FE", "3060 OC",
+    "1998 VW Golf parts", "2015 VW Jetta mirror", "2019 GM truck mat", "1972 VW Beetle parts", "1000 TC sheets", "DDR 3200 MT",
+    "2000 BC history book", "1500 AD", "4000 UV lamp", "5000 IU vitamin", "5000 WH", "M4 2SB screws",
+    // From the first round.
+    "RTX 4090", "GeForce RTX 4070 TI SUPER", "1080 Ti", "4090 TI", "size 10 1/2", "Nike Air Max 270 size 10.5", "M4 bolts",
+    "M8 x 1.25 bolts", "2 pack", "AA batteries 24 pack", "9V battery 4 pack", "PS5 2TB", "PS4 2PK controller", "M2 2TB SSD",
+    "S24 1TB", "Galaxy S24 Ultra 512GB", "Xbox Series X 1TB", "iPhone 15 Pro 256GB", "Mac mini M4 512GB", "DDR5 32GB 6000MHz",
+    "1000 ml bottle", "1500 ML", "Hydro Flask 32 oz", "A4 paper 500 sheets", "Galaxy A15 2024", "E27 bulb 2700K", "A19 bulb 60W",
+    "h12 deck", "B12 3HP motor", "E3 1LB weight", "N1 2ND gen", "1230 PM", "usb hub 2000 or less", "Sony WH-1000XM5",
+    "Canon EOS R5 24-105mm", "USB-C 3.1 cable 6ft", "LG C3 OLED 55 inch", "Main Street Coffee Mug", "Baker Street Sherlock poster",
+    "ships to my place", "send to my place", "ship to the US", "deliver to Canada", "delivery by Friday", "2024-10-30", "ZIP 94107 tee",
+    "94107", "10115", "SW1A", "K1A", "D02", "of_x-K1A0B1-abc", "550e8400-e29b-41d4-a716-446655440000",
+    // 30 more of our own.
+    "Nissan R35 GTR1 badge", "A65 F4E2 relay", "Y35 VR5X lens", "Golf GTI MK7 intake", "BMW E90 330i filter", "E46 M3 brake pads",
+    "H7 bulb 55W", "T10 W5W LED", "GU10 LED 5W", "1200 TC sheets", "2400 DPI mouse", "3000 PSI washer", "1000 VA UPS", "2000 LM torch",
+    "6000 BTU AC", "4000 GPH pump", "1080 P webcam", "1440 HZ monitor", "18650 3500mAh", "CR2032 3V 10 pack", "Seagate 2TB ST2000DM008",
+    "Kingston KC3000 2048G", "Levi's 501 W32 L34", "Dewalt DCD791D2 20V drill", "1/4-20 bolts", "ISBN 978-0-13-468599-1",
+    "square plate set of 4", "Crescent wrench 10 inch", "Hill climb bike tyre", "deliver to the office", "shipping to Main Street Coffee",
+    "Walk-in tub 2 seat", "1984 Orwell paperback", "Corsair 2x16GB 3600 CL18",
+  ];
+  it("keeps at least 100 realistic product strings", () => {
+    expect(products.length).toBeGreaterThanOrEqual(100);
+  });
+  it.each(products)("leaves product text %j clean", (text) => {
+    expect(input(text)).toEqual([]);
+  });
+
+  const postcodes: [label: string, text: string][] = [
+    ["UK, in a product (QA)", "phone stand to SW1A 1AA"],
+    ["UK, a name and a postcode (QA)", "tee for Jane Tester to SW1A 1AA"],
+    ["UK, lower case", "sw1a 1aa"],
+    ["UK, glued", "EC1A1BB"],
+    ["UK, 3-character outward", "LS1 1BA"],
+    ["UK, two spaces", "SW1A  1AA"],
+    ["UK, a tab", "SW1A\t1AA"],
+    ["UK, en dash", "SW1A–1AA"],
+    ["UK, middle dot", "SW1A·1AA"],
+    ["UK, slash", "SW1A/1AA"],
+    ["UK, comma", "SW1A, 1AA"],
+    ["UK, full width", "ＳＷ１Ａ　１ＡＡ"],
+    ["UK in brackets", "mug (SW1A 1AA)."],
+    ["UK in curly quotes", "to “SW1A 1AA”"],
+    ["UK in guillemets", "to «SW1A 1AA»"],
+    ["UK after @", "phone stand @SW1A 1AA"],
+    ["UK after #", "phone stand #SW1A 1AA"],
+    ["UK after =", "postcode=SW1A 1AA"],
+    ["UK after ->", "phone stand ->SW1A 1AA"],
+    ["UK before /flat", "SW1A 1AA/flat 2"],
+    ["UK, 2-character outward after ship to", "ship to M1 1AE"],
+    ["Canada", "K1A 0B1"],
+    ["Canada, lower case and glued", "k1a0b1"],
+    ["Canada, en dash", "K1A–0B1"],
+    ["Ireland after deliver to", "deliver to D02 X285"],
+    ["Ireland, lower case, after eircode", "eircode d02x285"],
+    ["the Netherlands after ship to", "ship to 1012 AB"],
+    ["the Netherlands after postcode", "postcode 1012ab"],
+    ["Portugal", "1000-001 Lisboa"],
+    ["Portugal, space, after address", "address: 1000 001"],
+    ["US ZIP+4", "94107-1234"],
+    ["US ZIP+4, U+2010 hyphen", "94107‐1234"],
+    ["US ZIP+4, minus sign", "94107−1234"],
+    ["US ZIP+4, em dash", "94107—1234"],
+    ["US ZIP+4, non-breaking hyphen", "94107‑1234"],
+    ["US ZIP+4, spaced hyphen", "94107 - 1234"],
+    ["US ZIP+4 without hyphen, after zip", "ZIP 941071234"],
+    ["US ZIP+4 with space, after zip", "zip 94107 1234"],
+  ];
+  it.each(postcodes)("finds a full postcode: %s", (_label, text) => {
+    expect(findIdentity({ product: text }, { freeText: true })).toContainEqual({ path: "$.product", kind: "postcode" });
+  });
+
+  const streets: [label: string, text: string][] = [
+    ["deliver to (QA)", "deliver to Evergreen Terrace"],
+    ["upper case", "DELIVER TO EVERGREEN TERRACE"],
+    ["two spaces", "deliver  to  Evergreen  Terrace"],
+    ["deliver-to", "deliver-to Evergreen Terrace"],
+    ["deliver to:", "deliver to: Evergreen Terrace"],
+    ["deliver to the", "delivered to the Evergreen Terrace"],
+    ["deliver it to", "deliver it to Evergreen Terrace"],
+    ["deliver it for me to", "deliver it for me to Evergreen Terrace"],
+    ["ship to", "ship to Baker Street"],
+    ["ship to, abbreviation", "ship to Baker St."],
+    ["send it to", "send it to Fifth Avenue"],
+    ["shipping to, lower case", "shipping to abbey road"],
+    ["bring to", "bring to Evergreen Terrace"],
+    ["drop off at", "drop off at Evergreen Terrace"],
+    ["courier to", "courier to Evergreen Terrace"],
+    ["dispatch to", "dispatch to Evergreen Terrace"],
+    ["I live on", "I live on Evergreen Terrace"],
+    ["my flat on", "for my flat on Evergreen Terrace"],
+    ["located at", "located at Evergreen Terrace"],
+    ["address is", "my address is Elm Lane"],
+    ["address:", "address: 5th Ave"],
+    ["addr:", "addr: Evergreen Terrace"],
+    ["UK Crescent", "ship to Baker Crescent"],
+    ["UK Close", "ship to Baker Close"],
+    ["UK Gardens", "ship to Baker Gardens"],
+    ["UK Mews", "ship to Baker Mews"],
+    ["UK Square", "ship to Baker Square"],
+    ["UK Grove", "deliver to Acacia Grove, flat 2"],
+    ["UK Row", "send to Savile Row"],
+    ["UK Hill", "deliver to Notting Hill"],
+    ["UK Walk", "ship to Riverside Walk."],
+    ["UK type with a house number", "12 Acacia Gardens"],
+    ["full width", "ship to Ａｂｂｅｙ Ｒｏａｄ"],
+  ];
+  it.each(streets)("finds a street with no house number after a delivery phrase: %s", (_label, text) => {
+    expect(findIdentity({ must_haves: [text] }, { freeText: true })).toContainEqual({ path: "$.must_haves[0]", kind: "street_address" });
+  });
+
+  it("lets a whole postcode through only in the tool's own postcode field, and only from the postcode check", () => {
+    const options = { freeText: true, postcodeAt: TOOL_POSTCODE_AT };
+    expect(findIdentity({ postcode: "SW1A 1AA", country: "GB" }, options)).toEqual([]);
+    expect(findIdentity({ postcode: "94110-1234" }, options)).toEqual([]);
+    // Attack: the exemption does not follow the value to another field, nor stop the other checks in that field.
+    expect(findIdentity({ product: "SW1A 1AA", postcode: "SW1A 1AA" }, options)).toEqual([{ path: "$.product", kind: "postcode" }]);
+    expect(findIdentity({ postcode: "SW1A 1AA" }, { freeText: true })).toEqual([{ path: "$.postcode", kind: "postcode" }]);
+    expect(findIdentity({ postcode: "742 Evergreen Terrace" }, options)).toEqual([{ path: "$.postcode", kind: "street_address" }]);
+    expect(findIdentity({ nested: { postcode: "SW1A 1AA" } }, options)).toEqual([{ path: "$.nested.postcode", kind: "postcode" }]);
+  });
+
+  it("never runs on anything but a tool input: merchant text and old logs read as before", () => {
+    // HIGH 1: observations, Shop results, statements, verify and evidence call findIdentity without freeText.
+    for (const text of ["AMD Radeon RX 7900 XT", "1972 VW Beetle parts", "phone stand to SW1A 1AA", "deliver to Evergreen Terrace", "94107-1234"]) {
+      expect(findIdentity({ title: text })).toEqual([]);
+    }
+    // The rules that were always there still run without it.
+    expect(findIdentity({ title: "ship to 742 Evergreen Terrace" })).toEqual([{ path: "$.title", kind: "street_address" }]);
   });
 });

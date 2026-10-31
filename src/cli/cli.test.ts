@@ -3,7 +3,7 @@
 // `doctor` (contract mismatch, unreachable host, a healthy fake Intent Cloud), one-line errors with a fix, --help.
 // The real process (stdio serve, pipes) is tested in test/cli.test.ts.
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -273,6 +273,19 @@ describe("a policy that shares no ZIP says that search cannot work (F-h)", () =>
     expect(doctor.out).not.toMatch(/^FAIL/m);
     const plain = await setup().run(["policy", "show"]);
     expect(plain.out).not.toMatch(/note:/);
+  });
+
+  it("a policy.lock that no longer describes policy.yaml: doctor names the fix once (QA on preview.6 printed it twice)", async () => {
+    const s = setup();
+    const added = await s.run(["policy", "add", "per-order-60", "--yes", "--demo"]);
+    const policyPath = /applied: (.+policy\.yaml) now includes/.exec(added.out)?.[1];
+    expect(policyPath).toBeDefined();
+    appendFileSync(policyPath ?? "", "# edited by hand\n");
+    const doctor = await s.run(["doctor", "--demo"]);
+    const warn = doctor.out.split("\n").find((l) => l.startsWith("WARN  policy lock:")) ?? "";
+    expect(warn).toContain("policy.lock does not describe policy.yaml");
+    expect(warn.match(/\brun /g)).toHaveLength(1);
+    expect(warn).toMatch(/; run intent policy add <name> again$/);
   });
 });
 
