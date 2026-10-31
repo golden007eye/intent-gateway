@@ -161,7 +161,7 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
 
   it("refuses the category QA saw leave the machine: \"single malt whisky\" under categories.block [alcohol]", () => {
     expect(evaluate(ALCOHOL, search({ category: "single malt whisky" }), [], NOW).blocked).toEqual([
-      { path: "category", rule: "categories.block", reason: "the category names alcohol, a blocked category" },
+      { path: "category", rule: "categories.block", reason: "the category names alcohol, a blocked category", named: "alcohol" },
     ]);
     // The Cloud baseline excludes alcohol whatever the policy names.
     expect(rules(policy(""), search({ category: "single malt whisky" }))).toEqual(["categories.block"]);
@@ -199,8 +199,8 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
   it("names the field and the group, never the free text", () => {
     const d = evaluate(ALCOHOL, search({ category: "gifts", product: "Lagavulin single malt whisky", must_haves: ["peaty", "bourbon"] }), [], NOW);
     expect(d.blocked).toEqual([
-      { path: "product", rule: "categories.block", reason: "the product names alcohol, a blocked category" },
-      { path: "must_haves[1]", rule: "categories.block", reason: "the must-have names alcohol, a blocked category" },
+      { path: "product", rule: "categories.block", reason: "the product names alcohol, a blocked category", named: "alcohol" },
+      { path: "must_haves[1]", rule: "categories.block", reason: "the must-have names alcohol, a blocked category", named: "alcohol" },
     ]);
     expect(JSON.stringify(d)).not.toMatch(/Lagavulin|peaty/);
   });

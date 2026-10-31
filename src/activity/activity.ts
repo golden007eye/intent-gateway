@@ -765,10 +765,15 @@ const FIELD_WORDS: Readonly<Record<string, string>> = { must_haves: "must-haves"
 
 /**
  * A logged JSON path as the field a person typed it in: `$.must_haves[0]` → `must-haves`, `$.params.arguments.note`
- * → `note`, `$` → `the request`. The exact path stays in `intent log -v` and the panel's server log.
+ * → `note`, `$` → `the request`. The exact path stays in `intent log -v`.
  */
 export function fieldWords(path: string): string {
-  const last = path.replace(/\[\d+\]/g, "").split(".").filter((s) => s !== "" && s !== "$").at(-1);
+  const last = path
+    .replace(/\["((?:[^"\\]|\\.)*)"\]/g, ".$1")
+    .replace(/\[\d+\]/g, "")
+    .split(".")
+    .filter((s) => s !== "" && s !== "$")
+    .at(-1);
   if (last === undefined) return "the request";
   return FIELD_WORDS[last] ?? last.replaceAll("_", " ");
 }
@@ -778,6 +783,45 @@ export function identityWords(reason: string): string | null {
   const match = /^(.+?) at (.+)$/.exec(reason);
   const words = match === null ? undefined : IDENTITY_WORDS[match[1] ?? ""];
   return words === undefined ? null : `${words} (in ${fieldWords(match?.[2] ?? "")})`;
+}
+
+/** An excluded group (src/policy/keywords.ts) in words; any other name is the policy's own category, `-` read as a space. */
+const GROUP_WORDS: Readonly<Record<string, string>> = {
+  health: "health and medical products",
+  alcohol: "alcohol",
+  tobacco: "tobacco",
+  cannabis: "cannabis",
+  adult: "adult products",
+  weapons: "weapons",
+  financial: "financial goods",
+  digital: "digital goods",
+};
+
+/** A blocked category's name in words: `alcohol` → `alcohol`, `gift-cards` → `gift cards`. */
+export function categoryWords(name: string): string {
+  return GROUP_WORDS[name] ?? name.replaceAll("-", " ");
+}
+
+/**
+ * A block item in the words the Sent/Blocked line and the panel use; the exact rule and JSON path stay in the block
+ * entry, which `intent log -v` shows. `street_address at $.must_haves[0]` → `a street address (in must-haves)`,
+ * `email in a field name` → `an email address (in a field name)`, `categories.block at category` with `named`
+ * (the block entry's, by path) `{category: "alcohol"}` → `a blocked category (alcohol, in the category)`. Any other
+ * item is kept as it is.
+ */
+export function blockedWords(item: string, named: Readonly<Record<string, unknown>> = {}): string {
+  const inName = /^([a-z_]+) in a field name$/.exec(item);
+  const nameWords = IDENTITY_WORDS[inName?.[1] ?? ""];
+  if (nameWords !== undefined) return `${nameWords} (in a field name)`;
+  const identity = identityWords(item);
+  if (identity !== null) return identity;
+  const category = /^categories\.block at (.+)$/.exec(item);
+  if (category === null) return item;
+  const path = category[1] ?? "";
+  const field = fieldWords(path);
+  const where = field === "category" || field === "product" ? `the ${field}` : field;
+  const what = named[path];
+  return `a blocked category (${typeof what === "string" ? `${categoryWords(what)}, ` : ""}in ${where})`;
 }
 
 /** `intent_cloud` → `Intent Cloud`, `shop` → `Shop`, `shop_accounts` → `Shop accounts`: a destination in words. */

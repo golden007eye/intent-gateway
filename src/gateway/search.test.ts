@@ -153,7 +153,7 @@ describe("find_offers with a linked Shop wallet", () => {
     for (const product of ["single malt whisky", "craft beers"]) {
       const result = await h.gateway.findOffers({ ...STICKERS, category: "gifts", product });
       expect(result.status).toBe("blocked");
-      expect(result.message).toContain("blocked category");
+      expect(result.message).toContain("this search is for alcohol, which intent can't buy");
     }
     expect(h.shop.searches).toEqual([]);
     expect(h.cloudSearches()).toBe(0);

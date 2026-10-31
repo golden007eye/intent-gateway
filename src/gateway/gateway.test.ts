@@ -429,9 +429,11 @@ describe("policy", () => {
     const h = await setup({ policy: `${BASE_POLICY}categories:\n  block: [electronics]\n` });
     const result = await h.gateway.findOffers({ category: "Electronics/Headphones", budget: 300, country: "US", postcode: "94103" });
     expect(result.status).toBe("blocked");
-    expect(result.summary).toBe("Sent: nothing / Blocked: categories.block at category");
+    // Plain words in the refusal and the Blocked line; the exact rule and path only in the block entry (intent log -v).
+    expect(result.summary).toBe("Sent: nothing / Blocked: a blocked category (electronics, in the category)");
+    if (result.status === "blocked") expect(result.message).toMatch(/^Not sent: this search is for electronics, which your gateway policy blocks\. /);
     expect(h.sends.search).toBe(0);
-    expect(bodies(h, "block").at(-1)).toMatchObject({ endpoint: "searchCatalog", blocked: ["categories.block at category"] });
+    expect(bodies(h, "block").at(-1)).toMatchObject({ endpoint: "searchCatalog", blocked: ["categories.block at category"], named: { category: "electronics" } });
   });
 
   describe("attack: a product-only search must not get around categories.block (the no-electronics seed)", () => {
@@ -454,7 +456,7 @@ describe("policy", () => {
       const h = await setup({ policy: NO_ELECTRONICS });
       const result = await h.gateway.findOffers({ ...HEADPHONES, category: "electronics" });
       expect(result.status).toBe("blocked");
-      expect(result.summary).toBe("Sent: nothing / Blocked: categories.block at category");
+      expect(result.summary).toBe("Sent: nothing / Blocked: a blocked category (electronics, in the category)");
       expect(h.sends.search).toBe(0);
     });
 
@@ -479,16 +481,17 @@ describe("policy", () => {
     const ALCOHOL = `${BASE_POLICY}categories:\n  block: [alcohol]\n`;
     const WHISKY = { category: "single malt whisky", budget: 20, country: "US", postcode: "10001" };
     const PLAIN =
-      "Not sent: this search is for a blocked category (the category names alcohol, a blocked category). Nothing was searched. " +
+      "Not sent: this search is for alcohol, which intent can't buy. Nothing was searched. " +
       "Tell the user this cannot be bought through intent. Do not search again for it with other words.";
 
     it("refused before it is sent, in plain words, with a block entry that keeps only the category", async () => {
       const h = await setup({ policy: ALCOHOL });
       const result = await h.gateway.findOffers(WHISKY);
-      expect(result).toMatchObject({ status: "blocked", message: PLAIN, summary: "Sent: nothing / Blocked: categories.block at category" });
+      expect(result).toMatchObject({ status: "blocked", message: PLAIN, summary: "Sent: nothing / Blocked: a blocked category (alcohol, in the category)" });
+      expect(`${result.status === "blocked" ? result.message : ""} ${result.summary}`).not.toMatch(/categories\.block|\$\./);
       expect(h.sends.search).toBe(0);
       expect(bodies(h, "disclosure")).toHaveLength(2); // meta and key statement at start, nothing since
-      expect(bodies(h, "block").at(-1)).toMatchObject({ endpoint: "searchCatalog", blocked: ["categories.block at category"], held: { category: "single malt whisky" } });
+      expect(bodies(h, "block").at(-1)).toMatchObject({ endpoint: "searchCatalog", blocked: ["categories.block at category"], held: { category: "single malt whisky" }, named: { category: "alcohol" } });
     });
 
     it("refused first, before any missing detail is asked for", async () => {
@@ -1270,6 +1273,7 @@ describe("observations: an `observed` entry after each acknowledged answer, neve
       fields: ["budget_max", "budget_max.amount_minor", "budget_max.currency", "category", "ship_to", "ship_to.country", "ship_to.postal_code"],
       blocked: ["categories.block at category"],
       held: { category: "alcohol" },
+      named: { category: "alcohol" },
     });
     expect((await h.gateway.findOffers({ ...SHOES, product: "mail jane.doe@mail.example" })).status).toBe("blocked");
     expect(bodies(h, "block").at(-1)).not.toHaveProperty("held");

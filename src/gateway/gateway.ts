@@ -79,12 +79,14 @@ import {
   SHOP_PUBLIC_CLIENT_ID,
   type StorefrontPort,
 } from "../disclosure/index.ts";
+import { categoryWords } from "../activity/index.ts";
 import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import {
   type Blocked,
   capsIn,
   CLOUD_BASELINE,
+  EXCLUDED_KEYWORDS,
   scalable,
   type CompletionMode as PolicyCompletionMode,
   evaluate,
@@ -544,6 +546,8 @@ export function createGateway(options: GatewayOptions): Gateway {
   /**
    * Writes a `block` entry and returns the refusal. Items name fields and rules. `held` (policy blocks only) keeps the
    * values the policy held back, which never left the machine; it is dropped whole if any of it looks like identity.
+   * `named` (a category block only) gives, by path, the excluded group or policy category each field names: words from
+   * the keyword lists or the policy, never the request's text, so the Blocked line can say `alcohol`.
    */
   async function block(
     endpoint: string,
@@ -553,9 +557,16 @@ export function createGateway(options: GatewayOptions): Gateway {
     status: Refused["status"],
     message: string,
     held: Readonly<Record<string, unknown>> = {},
+    named: Readonly<Record<string, string>> = {},
   ): Promise<Refused> {
     const keep = Object.keys(held).length > 0 && findIdentity(held).length === 0;
-    await store.append("block", { endpoint, fields: [...fields], blocked: [...blocked], ...(keep ? { held: { ...held } } : {}) });
+    await store.append("block", {
+      endpoint,
+      fields: [...fields],
+      blocked: [...blocked],
+      ...(keep ? { held: { ...held } } : {}),
+      ...(Object.keys(named).length > 0 ? { named: { ...named } } : {}),
+    });
     return { status, message, summary: summary(fromSeq) };
   }
 
@@ -855,10 +866,11 @@ export function createGateway(options: GatewayOptions): Gateway {
         blockedCategory.map((b) => `${b.rule} at ${b.path}`),
         fromSeq,
         "blocked",
-        `Not sent: this search is for a blocked category (${blockedCategory.map((b) => b.reason).join("; ")}). Nothing was searched. ` +
+        `Not sent: ${categoryRefusal(blockedCategory)} Nothing was searched. ` +
           "Tell the user this cannot be bought through intent. Do not search again for it with other words.",
         // Structured values only: never the free-text product or must-haves, whose words findIdentity cannot vet.
         category === undefined ? {} : { category },
+        Object.fromEntries(blockedCategory.flatMap((b) => (b.named === undefined ? [] : [[b.path, b.named]]))),
       );
     }
     const missing: MissingDetail[] = [];
@@ -2001,6 +2013,24 @@ export function paymentOffer(s: AnySnapshot): PolicyOffer {
  * An answer with an error status and no refusal code, in words and without the status number (that is in
  * `intent log`): what kind of answer it was, then Intent Cloud's own message when it gave one.
  */
+/**
+ * A search's category refusal in plain words: "this search is for alcohol, which intent can't buy." for an excluded
+ * category, "…, which your gateway policy blocks." for one only the policy blocks. The exact rule and path stay in
+ * the block entry (`intent log -v`).
+ */
+function categoryRefusal(blocked: readonly Blocked[]): string {
+  const names = [...new Set(blocked.flatMap((b) => (b.named === undefined ? [] : [b.named])))];
+  const excluded = (name: string) => name in EXCLUDED_KEYWORDS || CLOUD_BASELINE.categories.block.includes(name);
+  const list = (items: readonly string[]) => items.map(categoryWords).join(" and ");
+  const intent = names.filter(excluded);
+  const policy = names.filter((n) => !excluded(n));
+  const parts = [
+    ...(intent.length === 0 ? [] : [`${list(intent)}, which intent can't buy`]),
+    ...(policy.length === 0 ? [] : [`${list(policy)}, which your gateway policy blocks`]),
+  ];
+  return parts.length === 0 ? "this search is for a category your gateway policy blocks." : `this search is for ${parts.join(", and ")}.`;
+}
+
 function answerWords(status: number, message: string | null): string {
   const said = message === null || message === "" ? "" : `: ${message}`;
   if (status >= 500) return `Intent Cloud answered with an error on its side${said}.`;

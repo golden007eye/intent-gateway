@@ -2,7 +2,8 @@
 // unsigned (a `response`, never a receipt); Intent Cloud sends read as before (invariant 5).
 import { describe, expect, it } from "vitest";
 import type { Entry, EntryKind } from "../store/index.ts";
-import { blockedWords, disclosedSince, spendHistory, summaryLine } from "./history.ts";
+import { blockedWords } from "../activity/index.ts";
+import { disclosedSince, spendHistory, summaryLine } from "./history.ts";
 
 const entry = (seq: number, kind: EntryKind, body: unknown): Entry => ({ seq, prev: "", ts: "2026-10-16T00:00:00.000Z", kind, body, hash: "" });
 
@@ -91,8 +92,19 @@ describe("blockedWords: the Blocked part in plain words, the JSON path only in i
     expect(blockedWords("email in a field name")).toBe("an email address (in a field name)");
   });
 
-  it("keeps a policy block as it is", () => {
-    expect(blockedWords("categories.block at category")).toBe("categories.block at category");
+  it("words a category block by the group the block entry names and the field, and keeps any other item as it is", () => {
+    expect(blockedWords("categories.block at category", { category: "alcohol" })).toBe("a blocked category (alcohol, in the category)");
+    expect(blockedWords("categories.block at product", { product: "health" })).toBe("a blocked category (health and medical products, in the product)");
+    expect(blockedWords("categories.block at must_haves[1]", { "must_haves[1]": "power-tools" })).toBe("a blocked category (power tools, in must-haves)");
+    expect(blockedWords("categories.block at category")).toBe("a blocked category (in the category)");
     expect(blockedWords("1 offer (merchants.block)")).toBe("1 offer (merchants.block)");
+  });
+
+  it("the Blocked line reads the block entry's named group, never a rule or a JSON path", () => {
+    const chain = [
+      entry(0, "block", { endpoint: "searchCatalog", fields: ["category"], blocked: ["categories.block at category"], named: { category: "alcohol" } }),
+      entry(1, "block", { endpoint: "searchCatalog", fields: ["must_haves"], blocked: ["street_address at $.must_haves[0]"] }),
+    ];
+    expect(summaryLine(disclosedSince(chain, -1))).toBe("Sent: nothing / Blocked: a blocked category (alcohol, in the category); a street address (in must-haves)");
   });
 });
