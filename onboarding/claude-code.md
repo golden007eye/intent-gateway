@@ -1,5 +1,5 @@
 <!--
-Onboarding prompt for Claude Code, for intent-gateway 0.1.0-preview.6 (`pnpm release` sets the version below).
+Onboarding prompt for Claude Code, for intent-gateway 0.1.0-preview.7 (`pnpm release` sets the version below).
 Intent Cloud serves it from the try link and fills in the placeholders per invite before serving:
   {{INTENT_INVITE}}        the invite token of this try link; passed to no gateway command
   {{INTENT_CLOUD_URL}}     the Intent Cloud host for this lane; today it equals the gateway's default host
@@ -29,7 +29,7 @@ How to work:
 In every step, `intent <command>` means this exact command line:
 
 ```console
-$ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} INTENT_SHOP_CLIENT_ID=5c733ab2-1903-400a-891e-7ba20c09e2a3 npx -y intent-gateway@0.1.0-preview.6 <command>
+$ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} INTENT_SHOP_CLIENT_ID=5c733ab2-1903-400a-891e-7ba20c09e2a3 npx -y intent-gateway@0.1.0-preview.7 <command>
 ```
 
 `INTENT_SHOP_CLIENT_ID` is Shop's public client for a shopper's own agent: the developer links their own Shop account, for their own use. The linked wallet keeps it, so the `claude mcp add` line in step 2 does not set it.
@@ -60,11 +60,11 @@ $ INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} INTENT_SHOP_CLIENT_ID=5c733ab2-1903-400a
 
 ## Step 2: install the gateway
 
-1. Check that the package runs: `intent --version` must print `0.1.0-preview.6`.
+1. Check that the package runs: `intent --version` must print `0.1.0-preview.7`.
 2. Run `claude mcp list` without saying so; if it lists `intent` (for example a connector added in the developer's Claude account), ask the developer before you add this one under another name, such as `intent-gateway`, so you never pick the wrong one; otherwise add it to Claude Code for this project:
 
 ```console
-$ claude mcp add intent -e INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} -- npx -y intent-gateway@0.1.0-preview.6
+$ claude mcp add intent -e INTENT_CLOUD_URL={{INTENT_CLOUD_URL}} -- npx -y intent-gateway@0.1.0-preview.7
 ```
 
 When the gateway is added, say only this line: `✓ 2/9  Gateway added to Claude Code. Next: first run and policy.`
@@ -146,8 +146,8 @@ Install the policy-advisor skill from this exact package version into this proje
 
 ```console
 $ tmp="$(mktemp -d)"
-$ npm pack intent-gateway@0.1.0-preview.6 --pack-destination "$tmp"
-$ tar -xzf "$tmp/intent-gateway-0.1.0-preview.6.tgz" -C "$tmp" package/onboarding/skills/policy-advisor
+$ npm pack intent-gateway@0.1.0-preview.7 --pack-destination "$tmp"
+$ tar -xzf "$tmp/intent-gateway-0.1.0-preview.7.tgz" -C "$tmp" package/onboarding/skills/policy-advisor
 $ mkdir -p .claude/skills
 $ cp -R "$tmp/package/onboarding/skills/policy-advisor" .claude/skills/
 ```
