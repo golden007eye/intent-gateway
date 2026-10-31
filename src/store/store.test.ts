@@ -695,3 +695,66 @@ describe("appendUnless: compare-and-append (plan G7b)", () => {
     await b.close();
   });
 });
+
+describe("readers without the lease see whole lines only (readChain, entries())", () => {
+  // A reader takes no lease, so it can read while another writer's write(2) is mid-copy: the file then ends in the
+  // first bytes of a line. That is an append in flight, not corruption; a fragment that stays is (attack: a crashed
+  // writer's torn line is still reported, never dropped). test/store-torn-read.test.ts finishes the line from a
+  // second process while the read waits.
+  const lease = (expires_at: number) => JSON.stringify({ token: "other", holder: "other:1", expires_at });
+  /** Three linked entries on disk, then the file cut back to the first two plus `cut` bytes of the third. */
+  async function tornThird(cut: number) {
+    await (await filled(3)).close();
+    const text = logText();
+    const third = text.slice(text.lastIndexOf("\n", text.length - 2) + 1);
+    await fsp.writeFile(logPath(), text.slice(0, text.length - third.length) + third.slice(0, cut));
+    return third.slice(cut);
+  }
+
+  it("reports a fragment that stays: after one wait under a leftover lease, at once with no lease held", async () => {
+    await tornThird(20);
+    const reader = await openStore(dir, { clock, fs: fast });
+    // A writer that died mid-write leaves its lease behind: the reader waits for it at most a second, then reports,
+    // and does not wait again for the same fragment.
+    await fsp.writeFile(lockPath(), lease(T0 + LEASE));
+    let started = Date.now();
+    expect(() => reader.entries()).toThrow(StoreCorruptError);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+    started = Date.now();
+    expect(() => reader.entries()).toThrow(StoreCorruptError);
+    expect(Date.now() - started).toBeLessThan(500);
+    // A changed fragment with no lease held: no writer is mid-write, so it is reported at once.
+    await fsp.unlink(lockPath());
+    await fsp.appendFile(logPath(), "x");
+    started = Date.now();
+    expect(() => reader.entries()).toThrow(StoreCorruptError);
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(verifyChain(readChain(dir))).toMatchObject({ ok: false, brokenSeq: 2 });
+  });
+
+  it("never reports another handle's appends as corruption while it writes them (stress: 2 handles, large lines)", async () => {
+    const writer = await openStore(dir, { clock, fs: fast });
+    const reader = await openStore(dir, { clock, fs: fast });
+    const run = { stop: false };
+    let reads = 0;
+    const failures: unknown[] = [];
+    const reading = (async () => {
+      while (!run.stop) {
+        try {
+          reader.entries();
+        } catch (error) {
+          failures.push(error);
+        }
+        reads++;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    })();
+    for (let i = 0; i < 40; i++) await writer.append("disclosure", { pad: "a".repeat(5000 + (i % 7) * 900) });
+    run.stop = true;
+    await reading;
+    await writer.close();
+    expect(failures).toEqual([]);
+    expect(reads).toBeGreaterThan(40);
+    expect(verifyChain(readChain(dir))).toEqual({ ok: true });
+  });
+});
