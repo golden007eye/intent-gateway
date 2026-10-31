@@ -11,7 +11,8 @@ import { UI_CSS } from "../ui/index.ts";
  *   when you navigate, Escape closes a drawer, back and forward work because every view is a URL;
  * - the server log filter (kind and free text), kept in the address;
  * - live refresh: every 4 s (not while the tab is hidden) it re-reads the page and replaces only the regions whose
- *   version changed, keeping focus, open entries and the filter.
+ *   version changed (their content, the region element stays), keeping focus, open entries and the filter; a
+ *   reply that lacks a region the page has changes nothing and marks the page stale.
  */
 export const APP_JS = `"use strict";
 (function () {
@@ -111,13 +112,13 @@ export const APP_JS = `"use strict";
       })
       .then(function (html) {
         var doc = new DOMParser().parseFromString(html, "text/html");
-        // A region the fresh page no longer has is emptied, so nothing stale stays on screen.
+        // Every page has every region. One that lacks any is not the panel's page (a cut-off body, an error page,
+        // another process on the port): keep what is on screen, the pause banner included, and say it is stale.
+        var whole = true;
         document.querySelectorAll("[data-live]").forEach(function (old) {
-          if (!doc.querySelector('[data-live="' + old.getAttribute("data-live") + '"]')) {
-            old.textContent = "";
-            old.setAttribute("data-v", "");
-          }
+          if (!doc.querySelector('[data-live="' + old.getAttribute("data-live") + '"]')) whole = false;
         });
+        if (!whole) throw new Error("not the panel's page");
         doc.querySelectorAll("[data-live]").forEach(function (fresh) {
           var old = document.querySelector('[data-live="' + fresh.getAttribute("data-live") + '"]');
           if (!old || old.getAttribute("data-v") === fresh.getAttribute("data-v")) return;
@@ -125,8 +126,10 @@ export const APP_JS = `"use strict";
           var keep = active && old.contains(active) ? active.getAttribute("href") || active.id : null;
           var opened = [];
           old.querySelectorAll("details[open]").forEach(function (d) { opened.push(d.parentNode.textContent.slice(0, 40)); });
-          var node = document.importNode(fresh, true);
-          old.replaceWith(node);
+          // The region itself stays and only its content is swapped, so a status region announces the change.
+          var node = old;
+          node.replaceChildren.apply(node, Array.prototype.map.call(fresh.childNodes, function (c) { return document.importNode(c, true); }));
+          node.setAttribute("data-v", fresh.getAttribute("data-v"));
           node.querySelectorAll("details").forEach(function (d) {
             if (opened.indexOf(d.parentNode.textContent.slice(0, 40)) >= 0) d.open = true;
           });
@@ -192,8 +195,9 @@ a:focus-visible,summary:focus-visible,select:focus-visible,input:focus-visible,b
 .pause-banner strong{display:block;font-size:17px;font-weight:700;margin-bottom:2px}
 .pause-banner p+p,.pause-banner ul+p{margin-top:4px}
 .pause-banner code{font-weight:600}
+.pause-banner .tone-ok{color:var(--deep-sage)}.pause-banner .tone-bad{color:var(--danger);font-weight:600}
 .pause-banner ul{margin:4px 0;padding-left:20px}
-.pause-button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--warn-text);background:transparent;color:inherit;cursor:pointer}
+.pause-button{font:inherit;padding:6px 14px;border-radius:8px;border:1px solid var(--demo-bg);background:transparent;color:inherit;cursor:pointer}
 .pause-button:disabled{opacity:.5;cursor:default}
 .pill-real{background:transparent;color:var(--sage);border:1px solid var(--sage)}
 .bar .live{margin-left:auto}
@@ -224,7 +228,7 @@ h3{font-size:13px;font-weight:600;margin:6px 0 0}
 .t-ok{color:var(--success)}.t-warn{color:var(--demo-bg)}.t-bad{color:var(--danger-on-ground)}.t-plain{color:inherit}
 .small.t-ok,.small.t-warn{color:inherit}.small.t-ok{color:var(--success)}.small.t-warn{color:var(--demo-bg)}
 code{font-size:.92em;overflow-wrap:anywhere}
-code.cmd{margin:0 .2em}
+code.cmd{padding:1px 6px}
 .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 .card{background:var(--card);border:1px solid var(--card-line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:6px;min-width:0}
 .card-hot{border:1.5px solid var(--sage)}

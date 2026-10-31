@@ -72,6 +72,15 @@ export const UI_CONTRAST_PAIRS: readonly (readonly [keyof typeof UI_TOKENS, keyo
   ["demo-bg", "card"],
   ["demo-bg", "ground"],
   ["on-ground", "card-line"],
+  // The panel's pause banner: Intent Cloud's answer on the warn tint.
+  ["deep-sage", "warn-bg"],
+  ["danger", "warn-bg"],
+];
+
+/** Non-text pairs (control borders, the banner edge) and the ground they sit on; each must reach 3:1. */
+export const UI_NONTEXT_PAIRS: readonly (readonly [keyof typeof UI_TOKENS, keyof typeof UI_TOKENS])[] = [
+  ["demo-bg", "ground"],
+  ["demo-bg", "card"],
 ];
 
 const vars = Object.entries(UI_TOKENS)

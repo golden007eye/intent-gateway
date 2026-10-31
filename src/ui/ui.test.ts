@@ -1,7 +1,7 @@
 // The shared visual system: every text colour meets WCAG AA on its background, the CSS declares every token, and
 // nothing in it, the logo or the icons makes a request (the pages run offline under `default-src 'none'`).
 import { describe, expect, it } from "vitest";
-import { ICONS, LOGO_SVG, UI_CONTRAST_PAIRS, UI_CSS, UI_TOKENS } from "./index.ts";
+import { ICONS, LOGO_SVG, UI_CONTRAST_PAIRS, UI_CSS, UI_NONTEXT_PAIRS, UI_TOKENS } from "./index.ts";
 
 /** WCAG 2 relative luminance of `#RRGGBB`. */
 function luminance(hex: string): number {
@@ -23,6 +23,14 @@ describe("ui", () => {
     for (const [fg, bg] of UI_CONTRAST_PAIRS) {
       expect(contrast(UI_TOKENS[fg], UI_TOKENS[bg]), `${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it("meets WCAG 1.4.11 (3:1) for every non-text pair, such as a control's border on the ground", () => {
+    for (const [fg, bg] of UI_NONTEXT_PAIRS) {
+      expect(contrast(UI_TOKENS[fg], UI_TOKENS[bg]), `${fg} on ${bg}`).toBeGreaterThanOrEqual(3);
+    }
+    // The pause button's border before: warn-text on the ground does not reach it.
+    expect(contrast(UI_TOKENS["warn-text"], UI_TOKENS.ground)).toBeLessThan(3);
   });
 
   it("declares every token in UI_CSS", () => {

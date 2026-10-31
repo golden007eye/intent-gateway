@@ -433,12 +433,13 @@ describe("the layout", () => {
 // from either page would never appear or never go. A pause or resume made at the CLI while the panel is open must
 // still show: every region is in every page, and the pause region holds the banner exactly while paused.
 describe("the live regions", () => {
-  const ids = (html: string): string[] => [...html.matchAll(/<div class="live" data-live="([^"]+)" data-v="[^"]+">/g)].map((m) => m[1] ?? "");
+  const ids = (html: string): string[] => [...html.matchAll(/<div class="live" data-live="([^"]+)" data-v="[^"]+"[^>]*>/g)].map((m) => m[1] ?? "");
   const version = (html: string): string | undefined => /data-live="pause" data-v="([^"]+)"/.exec(html)?.[1];
 
-  /** The pause region's content: everything between its opening tag and the nav, less the region's closing tag. */
+  /** The pause region's content: everything between its opening tag and the nav, less the region's closing tag. The
+   * region is itself the status region, so a screen reader announces what app.js swaps into it. */
   function pauseRegion(html: string): string {
-    const start = /<div class="live" data-live="pause" data-v="[^"]+">/.exec(html);
+    const start = /<div class="live" data-live="pause" data-v="[^"]+" role="status" aria-live="polite">/.exec(html);
     if (start === null) throw new Error("no pause region");
     const from = start.index + start[0].length;
     return html.slice(from, html.lastIndexOf("</div>", html.indexOf('<nav class="nav"', from)));
@@ -452,12 +453,12 @@ describe("the live regions", () => {
       panel = await startPanel(dir, pause === undefined ? { port: 0 } : { port: 0, pause });
       const before = (await call(panel.url, "/")).body;
       expect(pauseRegion(before)).not.toContain("pause-banner");
-      expect(pauseRegion(before) === "").toBe(pause === undefined);
+      expect(pauseRegion(before) === '<p class="sr-only">Purchases not paused.</p>').toBe(pause === undefined);
 
       const store = await openStore(dir, { fs: fast });
       await store.append("pause", { from: "cli" });
       const paused = (await call(panel.url, "/")).body;
-      expect(pauseRegion(paused)).toMatch(/^<div class="pause-banner"[^>]*><strong>Paused since /);
+      expect(pauseRegion(paused)).toMatch(/^<div class="pause-banner"><strong>Paused since /);
 
       await store.append("resume", { from: "cli", confirmed: false, pending: "next submit" });
       await store.close();
