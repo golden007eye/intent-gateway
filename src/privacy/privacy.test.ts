@@ -376,6 +376,12 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
     "charger to go", "adapter at 65W", "ship to me fast", "upgrade to Windows 11", "fits up to 15 inch", "Live at Leeds", "Breakfast at Tiffany's",
     "I'm at home", "home is Baker Street poster", "kids books ages 3-5 Cat in the Hat Dr Seuss", "ages 2-4 Green Eggs Dr Seuss",
     "sizes 4-6 Little Girls Pl dress", "fits 2-4 Person Tent Ct", "Toddler 2-3 Years Old Way", "1-3 Year Old Toy Rd", "10-20 Gallon Tank Way",
+    // A house-number range counts only after a delivery phrase: box sets and seasons name streets too.
+    // ("Seasons 1-4 21 Jump Street" is left out: the default rule has always read "21 Jump Street" as an address.)
+    "Seasons 1-3 Sesame Street", "Season 1-2 Coronation Street", "Vol 1-2 Abbey Road",
+    "Episodes 1-6 Sesame Street", "Sesame Street Seasons 1-3", "Books 1-3 Tobacco Road", "Series 1-5 Coronation Street",
+    "Seasons 1-3 Mulholland Drive", "Grades 3-5 Sesame Street workbook", "Season 1-2 Melrose Place", "Seasons 1-7 Melrose Place",
+    "Episodes 1-10 Sesame Street, DVD", "grades 3-5 Science Kit Dr", "12-14 Baker Street",
   ];
   it("keeps at least 100 realistic product strings", () => {
     expect(products.length).toBeGreaterThanOrEqual(100);
@@ -475,9 +481,10 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
     ["then on", "send it to Abbey Road on Monday"],
     ["I live at, curly quote", "we live at Baker Street"],
     ["address is, then text", "my address is Baker Street, thanks"],
-    ["house number range, UK type", "12-14 Acacia Gardens"],
-    ["house number range, US type", "12-14 Baker Street"],
-    ["house number range, en dash", "12 – 14 Baker St, London"],
+    ["house number range after deliver to, UK type", "deliver to 12-14 Acacia Gardens"],
+    ["house number range after ship to, US type", "ship to 12-14 Baker Street"],
+    ["house number range after address:, en dash", "address: 12 – 14 Baker St, London"],
+    ["house number range after a phrase, a few words on", "deliver it to the shop at 12-14 Baker Street"],
   ];
   it.each(streets)("finds a street with no house number after a delivery phrase: %s", (_label, text) => {
     expect(findIdentity({ must_haves: [text] }, { freeText: true })).toContainEqual({ path: "$.must_haves[0]", kind: "street_address" });
@@ -500,6 +507,7 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
       ["3-4 Way Valve Dr", []],
       ["100-240 Volt Adapter Dr", []],
       ["14 Baker Street", [{ path: "$.title", kind: "street_address" }]],
+      ["Seasons 1-4 21 Jump Street", [{ path: "$.title", kind: "street_address" }]],
     ];
     for (const [text, found] of base) expect([text, findIdentity({ title: text })]).toEqual([text, found]);
   });
@@ -511,6 +519,7 @@ describe("free text of a tool input: a full postcode or a delivered-to street", 
     ["street after a phrase with a colon", { product: "lamp, address:", must_haves: ["Abbey Road please"] }, "street_address"],
     ["2-character UK outward code after a phrase in another field", { product: "lamp, ship to", must_haves: ["M1 1AE"] }, "postcode"],
     ["Dutch postcode after a phrase in another field", { product: "lamp, send it to", must_haves: ["1012 AB"] }, "postcode"],
+    ["house number range after a phrase in another field", { product: "lamp, ship to", must_haves: ["12-14 Baker Street"] }, "street_address"],
   ];
   it.each(split)("attack: finds identity split across fields, at $: %s", (_label, value, kind) => {
     expect(findIdentity(value, { freeText: true, postcodeAt: TOOL_POSTCODE_AT })).toEqual([{ path: "$", kind }]);

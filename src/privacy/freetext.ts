@@ -21,8 +21,9 @@
 // the sentence rather than the name ("…Terrace and wrap it", "…Terrace, flat 2", "…Street by Friday"), so "shipping to
 // Main Street Coffee" or "square plate" stays clean. Only a delivery phrase counts, never a bare "to" or "at": titles
 // say "Return to Elm Street" and "Live at Abbey Road". With a house number, the UK types Crescent, Close, Mews and
-// Gardens count too ("12 Acacia Gardens"), and so does a house-number range before any street type, at the end of the
-// address ("12-14 Baker Street", but not "ages 3-5 Cat in the Hat Dr Seuss" or "fits 2-4 Person Tent Ct"); the default
+// Gardens count too ("12 Acacia Gardens"). A house-number range before any street type counts only within a few
+// characters after a delivery phrase, as the ambiguous postcode shapes do ("deliver to 12-14 Baker Street"; not
+// "Seasons 1-3 Sesame Street", "Vol 1-2 Abbey Road" or "fits 2-4 Person Tent Ct"); the default
 // street_address rule (index.ts) takes single house numbers only, so verify reads old logs as before.
 //
 // Across fields (acrossFields): a delivery phrase that ends one value, then a street or a postcode that starts the
@@ -104,16 +105,22 @@ const RANGE_QUANTITY = [
   "month", "months", "week", "weeks", "day", "days", "hour", "hours", "gallon", "gal", "quart", "qt", "liter", "litre", "cup",
   "volt", "port", "way", "pound", "lbs",
 ];
-/** A house-number range ("12-14 Baker Street"), not after an age, a size or a fit ("ages 3-5", "sizes 4-6", "fits 2-4"), ending the address. */
+/** A house-number range ("12-14 Baker Street"), not after an age, a size or a fit ("ages 3-5", "sizes 4-6", "fits 2-4"), ending the address; only near a delivery phrase (rangeAfter). */
 const HOUSE_RANGE = new RegExp(
   String.raw`(?<![\w-])(?<!\b(?:ages?|sizes?|fits?|for|up\s+to)\s+)\d{1,6}[A-Za-z]?\s*-\s*\d{1,6}[A-Za-z]?\s+(?!(?:${RANGE_QUANTITY.join("|")})\b)` +
     String.raw`(?:${STREET_WORD}\s+){1,4}(?:${[...SUFFIXES, ...UK_STRONG].join("|")})\b\.?${ENDS}`,
   "i",
 );
 
+/** A house-number range starts at most NEAR characters into `text` (the text after a delivery phrase). */
+function rangeAfter(text: string): boolean {
+  const match = HOUSE_RANGE.exec(text);
+  return match !== null && match.index <= NEAR;
+}
+
 function hasStreet(text: string): boolean {
-  if (UK_HOUSE.test(text) || HOUSE_RANGE.test(text)) return true;
-  return phraseEnds(text).some((end) => STREET_AFTER_PHRASE.test(text.slice(end).trimStart()));
+  if (UK_HOUSE.test(text)) return true;
+  return phraseEnds(text).some((end) => STREET_AFTER_PHRASE.test(text.slice(end).trimStart()) || rangeAfter(text.slice(end)));
 }
 
 /**
@@ -126,7 +133,7 @@ export function acrossFields(texts: readonly string[]): FreeTextKind[] {
     const before = fold(texts[i] ?? "");
     if (!phraseEnds(before).some((end) => /^[\s:,.-]*$/.test(before.slice(end)))) continue;
     const next = fold(texts[i + 1] ?? "").trimStart();
-    if (STREET_AFTER_PHRASE.test(next)) kinds.add("street_address");
+    if (STREET_AFTER_PHRASE.test(next) || rangeAfter(next)) kinds.add("street_address");
     if (hasPostcode(next, [0])) kinds.add("postcode");
   }
   return [...kinds];
