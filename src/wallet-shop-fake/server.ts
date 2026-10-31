@@ -126,6 +126,18 @@ export const FAKE_CATALOG: readonly Record<string, unknown>[] = Object.freeze([
     ],
   },
 ]);
+/**
+ * A checkout line's title and unit price: the catalog's product title and variant price for a catalog variant, so a
+ * checkout shows the item it holds; the demo sticker's for a variant the catalog does not list (a fault's).
+ */
+function itemOf(variant: string): { title: string; unit: number } {
+  for (const product of FAKE_CATALOG) {
+    for (const v of product.variants as { id: string; price: { amount: number } }[]) {
+      if (v.id === variant) return { title: String(product.title), unit: v.price.amount };
+    }
+  }
+  return { title: "Holographic sticker", unit: UNIT_PRICE_MINOR };
+}
 const CARD_ID = "0b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a40";
 
 export interface FakeShopFaults {
@@ -494,7 +506,9 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
   }
 
   function view(c: Checkout): Record<string, unknown> {
-    const amount = UNIT_PRICE_MINOR * c.quantity;
+    const shown = shop.faults.viewVariant ?? c.variant;
+    const { title, unit } = itemOf(shown);
+    const amount = unit * c.quantity;
     const token = c.id.replace(/^gid:\/\/shopify\/Checkout\//, "").replace(/\?.*$/, "");
     return {
       ucp: { version: UCP_VERSION },
@@ -509,7 +523,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
       line_items: [
         {
           id: `gid://shopify/CartLine/${randomUUID()}?cart=${token}`,
-          item: { id: shop.faults.viewVariant ?? c.variant, title: "Holographic sticker", price: UNIT_PRICE_MINOR },
+          item: { id: shown, title, price: unit },
           quantity: c.quantity,
           totals: [{ type: "subtotal", amount, display_text: "Subtotal" }],
         },
@@ -677,7 +691,7 @@ export async function startFakeShop(options: { faults?: FakeShopFaults; clientId
           else {
             c.status = "completed";
             c.orderId = `gid://shopify/Order/${shop.faults.orderNumber ?? String(++orders)}`;
-            shop.orders.push({ id: c.orderId, totalMinor: UNIT_PRICE_MINOR * c.quantity + SHIPPING_MINOR + (shop.faults.totalAboveMinor ?? 0), createdAt: new Date().toISOString() });
+            shop.orders.push({ id: c.orderId, totalMinor: itemOf(c.variant).unit * c.quantity + SHIPPING_MINOR + (shop.faults.totalAboveMinor ?? 0), createdAt: new Date().toISOString() });
           }
           return result(view(c));
         });

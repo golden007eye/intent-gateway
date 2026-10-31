@@ -33,6 +33,7 @@ import { createSession, openCompleterKeys } from "../signing/index.ts";
 import { openStore, type Store } from "../store/index.ts";
 import { isTestRoot, type PinnedRootKey, TEST_ROOT_KEY } from "../trust/index.ts";
 import { formatReport, runVerify } from "../verify/index.ts";
+import { SHIPPING_MINOR } from "../wallet-shop-fake/index.ts";
 import { CONFIRM_CSP, type Demo, DEMO_BANNER, demoDataDir, demoTrustKeys, MAX_WRONG_CODES, nextSteps, startDemo } from "./index.ts";
 
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
@@ -219,6 +220,29 @@ describe("demo flow", () => {
     const report = await runVerify({ dataDir: demo.dataDir, pinnedRootKeys: demoTrustKeys().rootKeys, now: new Date(), skipSupplyChain: true });
     expect(report.checks.filter((c) => !c.ok)).toEqual([]);
     expect(report.exitCode).toBe(0);
+  });
+
+  it("one-tap buys every offer the demo lists, each checkout with the picked item's title and price (the Vinyl sheet at paper.example too)", async () => {
+    const demo = await demoAt(await tmpData());
+    const { gateway } = await gatewayOver(demo, { oneTap: true });
+    await gateway.start();
+    const found = await gateway.findOffers({ category: "stickers", budget: 20, country: "US", postcode: "94107" });
+    if (found.status !== "shop_offers") throw new Error(`no Shop offers: ${found.message}`);
+    expect(found.offers.map((o) => `${o.title} at ${o.store}`).sort()).toEqual(["Holographic sticker at stickers.example", "Vinyl sticker sheet at paper.example"]);
+    for (const [i, offer] of found.offers.entries()) {
+      const cart = await gateway.createCart({ offer_handle: offer.offer_handle });
+      if (cart.status !== "approval_needed") throw new Error(`${offer.title}: no approval: ${cart.message}`);
+      const sent = demo.cloud.checkouts.received[i] as { checkout: { title: string; totals: { subtotal: number; shipping: number; total: number } } };
+      expect(sent.checkout.title).toBe(offer.title);
+      expect(sent.checkout.totals.subtotal).toBe(offer.price.amount_minor);
+      expect(sent.checkout.totals.total).toBe(offer.price.amount_minor + SHIPPING_MINOR);
+      const page = await raw(cart.approval_url);
+      const done = await post(cart.approval_url, { csrf: csrfOf(page.body), action: "approve", code: demo.code }, { origin: new URL(cart.approval_url).origin, "sec-fetch-site": "same-origin" });
+      expect(done.body).toContain("Your gateway completes payment with demo Shop; check your agent.");
+      const status = await gateway.getApprovalStatus({ approval_handle: cart.approval_handle });
+      expect(status.message).toContain("Shop reported the order (order gid://shopify/Order/");
+    }
+    expect(demo.shop.completeCount).toBe(found.offers.length);
   });
 
   it("rejects with the demo passkey", async () => {
