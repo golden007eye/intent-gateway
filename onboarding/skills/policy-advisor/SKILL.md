@@ -46,7 +46,7 @@ $ intent policy add weekly-40 --yes
 
 ## 2. Show it in the panel
 
-Start `intent panel` in the background; it keeps running. Read the address from its `panel: http://127.0.0.1:<port>/` line. The panel shows your rules; changes go through you, with the commands below. If the developer says nothing about the rules, or keeps them, go on to the test run. Show:
+Start `intent panel` in the background with your shell tool's own background option (`run_in_background` in Claude Code), not with `&`, `nohup` or a log file of your own, so you can stop it. It keeps running until you stop it. Read the address from its `panel: http://127.0.0.1:<port>/` line. When the developer answers the block below, stop that background task, and say in your next status line that the panel is stopped. The panel shows your rules; changes go through you, with the commands below. If the developer says nothing about the rules, or keeps them, go on to the test run. Show:
 
 > **Your turn:** look at your rules (optional)
 >

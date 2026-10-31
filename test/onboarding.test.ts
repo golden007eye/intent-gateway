@@ -309,6 +309,31 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.");
     // One status line per finished step: a dogfood run said "✓ 8/9 (part 1)" in the middle of step 8.
     expect(prompt).toContain("once per finished step, and never for a step that is not finished yet.");
+    // Every step 1 to 8 its own line: a dogfood agent merged steps 1 and 2 into "3/9" and skipped step 7's line.
+    expect(prompt).toContain(
+      "Every step from 1 to 8 gets its own line, in order: when several steps finish without the developer in between (steps 1, 2 and 3 usually do), say one line for each, never one line for all.",
+    );
+    const step7 = prompt.slice(prompt.indexOf("## Step 7"), prompt.indexOf("## Step 8"));
+    expect(step7).toMatch(/Shop app\.\n\nRight after them, say step 7's status line, then go on to step 8\.\n\n$/);
+    // Nothing the developer was not shown: a dogfood agent invented an account URL and a QR code after a failed passkey.
+    expect(prompt).toContain(
+      "Never give the developer a step, link, page or button that neither this prompt nor a tool result showed them, and never build a URL yourself.",
+    );
+    // A new link only while nothing was approved: after approved, handed off or ordered it would invite a second purchase.
+    expect(prompt).toContain(
+      "If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status` and say its one line. Only if it says `Waiting for`, rejected or expired, also offer to make a new approval link (`create_cart` again for the same offer); any other result is final, as above. Give no other advice.",
+    );
+    expect(prompt).not.toMatch(/say its one line, and offer to make a new approval link/);
+    const gateway = read("src/gateway/gateway.ts");
+    for (const words of ['"The buyer rejected this purchase."', '"This approval expired. Create a new cart to try again."']) expect(gateway).toContain(words);
+    // A failed create_cart names its next step, and the total is said before the approval link, for a Cloud cart and
+    // for a Shop checkout (the normal path once Shop is linked) alike.
+    expect(prompt).toContain(
+      "If it fails, say its line, which names what to do next. Otherwise say the total from its `Cart:` or `Shop checkout:` line (`… from <store>, total <total> …`) in one line",
+    );
+    const tools = read("src/mcp/tools.ts");
+    expect(tools).toContain('const TELL = "Tell the buyer this total before the approval link.";');
+    expect([...tools.matchAll(/\$\{TELL\}`/g)]).toHaveLength(2);
     // A block ends the reply, and the command that sees the action runs once the developer replies: in five dogfood
     // runs an agent told to show the block and then run --finish (10 minutes) or get_approval_status in the same reply
     // showed nothing before the wait, so the developer never saw the link (attack: no waiting command in the block's reply).
@@ -441,6 +466,9 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(step8).toContain("> Where should it ship? Country and postcode.");
     expect(step8).toContain("with `country` (its two-letter code), `postcode` and `budget` as they gave them");
     expect(step8).not.toMatch(/US addresses only|ZIP/);
+    // The country inference lives in one home, find_offers' description; the prompt points there and asks otherwise.
+    expect(step8).toContain("If they named no country, `find_offers`' description gives the one case where the postcode and the budget settle it; otherwise ask for it.");
+    expect(read("src/mcp/tools.ts")).toContain("Never guess a country, with one exception");
     // What the gateway takes today: the find_offers fields, and the same ask when the ship-to is missing.
     expect(Object.keys(FindOffersInput.shape).sort()).toEqual(["budget", "category", "country", "must_haves", "postcode", "product"]);
     const gateway = read("src/gateway/gateway.ts");
@@ -490,7 +518,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(tools).toContain("[`One-tap: ${c.state}");
     expect(tools).toContain('${c.order_ref === undefined ? "" : `, order ${c.order_ref}`}');
     expect(tools).toContain("`Shop checkout: ${String(checkout.quantity)} × ${checkout.title} from ${checkout.store}, total ${minorText(checkout.totals.total, checkout.currency)} `");
-    expect(tools).toContain("from ${cart.merchant.name}, total ${totalText(cart.total, cart.total_kind)}.`");
+    expect(tools).toContain("from ${cart.merchant.name}, total ${totalText(cart.total, cart.total_kind)}`");
     expect(read("src/gateway/gateway.ts")).toContain('placed the order${order === undefined ? "" : ` (order ${order})`}');
     // A Shop offer shows a price and no total, so the offer list shows the price.
     expect(tools).toContain("shipping shown at checkout, in stock.");
@@ -592,6 +620,11 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(skill).not.toMatch(/a limit already applied stays|can only narrow, so/);
     // The panel shows the rules; changes go through the agent (the panel's one write is Pause).
     expect(skill).toContain("Start `intent panel` in the background");
+    // Started as the agent's own background task and stopped by it: a dogfood agent ran it with `&` into /tmp/panel.log
+    // and left it running, unsaid.
+    expect(skill).toContain("with your shell tool's own background option (`run_in_background` in Claude Code), not with `&`, `nohup` or a log file");
+    expect(skill).toContain("When the developer answers the block below, stop that background task, and say in your next status line that the panel is stopped.");
+    expect(skill).not.toMatch(/> ?\/tmp\/|\/tmp\/panel/);
     expect(skill).toContain("> **Your turn:** look at your rules (optional)\n>\n> Here are your rules. Keep them, or tell me what to change.\n");
     expect(skill).toContain("> http://127.0.0.1:<port>/#/policy");
     expect(skill).toContain("The panel shows your rules; changes go through you");
