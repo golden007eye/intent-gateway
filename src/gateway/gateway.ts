@@ -478,8 +478,11 @@ export function createGateway(options: GatewayOptions): Gateway {
   const providers: SearchProvider[] = options.oneTap?.searchInGateway === true && wallet?.searchCatalog !== undefined ? [createShopProvider(wallet)] : [];
   /** Approvals whose cart this process's session key created; any other is read with its completer key. */
   const createdHere = new Set<string>();
-  /** The approval each offer handle last led to here, and its quantity: a repeated create_cart returns it (samePending). */
-  const askedFor = new Map<string, { approval: string; quantity: number }>();
+  /**
+   * The approval each offer handle last led to here, with its quantity and ship-to postcode (the coarse one, as Intent
+   * Cloud's replay key has it): a repeated create_cart with all three the same returns it (samePending).
+   */
+  const askedFor = new Map<string, { approval: string; quantity: number; postcode: string | undefined }>();
   let stopReported = false;
 
   // One call at a time: the spend caps and the replay check read the chain and then append to it. Each call records
@@ -1056,10 +1059,12 @@ export function createGateway(options: GatewayOptions): Gateway {
     const quantity = parsed.data.quantity ?? 1;
     const offerHandle = parsed.data.offer_handle;
     // The same offer again while its approval is open: the same pending purchase, never a second approval.
-    const same = samePending(offerHandle, quantity, fromSeq);
+    // The postcode of the search the handle is remembered from now: a later search to another ZIP is another cart.
+    const postcode = (localOffers.get(offerHandle) ?? offers.get(offerHandle))?.shipTo.coarse;
+    const same = samePending(offerHandle, quantity, postcode, fromSeq);
     if (same !== null) return same;
     const made = await newCart(offerHandle, quantity, fromSeq);
-    if (made.status === "approval_needed") askedFor.set(offerHandle, { approval: made.approval_handle, quantity });
+    if (made.status === "approval_needed") askedFor.set(offerHandle, { approval: made.approval_handle, quantity, postcode });
     return made;
   }
 
@@ -1690,13 +1695,13 @@ export function createGateway(options: GatewayOptions): Gateway {
   }
 
   /**
-   * The open approval this process asked for with the same offer handle and quantity, as an approval_needed result
-   * that sends nothing and makes no new approval: the same link and check code, which still need the buyer's passkey
+   * The open approval this process asked for with the same offer handle, quantity and postcode, as an approval_needed
+   * result that sends nothing and makes no new approval: the same link and check code, which still need the buyer's passkey
    * (invariant 4). Null when there is none, or it is no longer open in the log.
    */
-  function samePending(offerHandle: string, quantity: number, fromSeq: number): CreateCartResult | null {
+  function samePending(offerHandle: string, quantity: number, postcode: string | undefined, fromSeq: number): CreateCartResult | null {
     const earlier = askedFor.get(offerHandle);
-    if (earlier === undefined || earlier.quantity !== quantity) return null;
+    if (earlier === undefined || earlier.quantity !== quantity || postcode === undefined || earlier.postcode !== postcode) return null;
     const pending = openPending(store.entries()).find((e) => bodyOf(e).handle === earlier.approval);
     if (pending === undefined) return null;
     const b = bodyOf(pending);

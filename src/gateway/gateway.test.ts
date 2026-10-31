@@ -956,6 +956,24 @@ describe("create_cart again for the same offer: the same pending purchase, never
     expect(h.sends.createApproval).toBe(4);
   });
 
+  it("another ZIP is another purchase, as in Intent Cloud's replay key: a new cart is asked for", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    const first = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    // Intent Cloud may serve the same offer handle to a search for another ZIP: only the ZIP differs.
+    h.patch.search = async (r) => {
+      const res = await h.real.search(r);
+      if (!res.ok) return res;
+      return { ...res, body: { ...res.body, offers: res.body.offers.map((o) => (o.title === "Trail Runner 3" ? { ...o, offer_handle: handle } : o)) } };
+    };
+    expect(await offerHandle(h, "Trail Runner 3", { ...SHOES, postcode: "94110" })).toBe(handle);
+    const second = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(second.approval_handle).not.toBe(first.approval_handle);
+    expect(h.sends.createCart).toBe(2);
+    const sent = bodies(h, "disclosure").filter((b) => b.endpoint === "createCart").at(-1);
+    expect(JSON.parse(Buffer.from(String(sent?.body_b64), "base64").toString("utf8"))).toMatchObject({ ship_to: { postal_code: "94110" } });
+  });
+
   it("another quantity is another purchase: a new cart is asked for", async () => {
     const h = await setup();
     const handle = await offerHandle(h, "Trail Runner 3");

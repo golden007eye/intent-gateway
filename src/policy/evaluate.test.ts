@@ -181,12 +181,23 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
       { category: "home", product: "disposable vapes" },
       { category: "outdoors", product: "hunting rifles" },
       { category: "gifts", product: "$50 gift card" },
+      // The obvious cases the early check keeps refusing.
+      { category: "whisky" },
+      { category: "gifts", product: "bourbon" },
+      { category: "gifts", product: "vodka" },
+      { category: "gifts", product: "gift card" },
+      { category: "gifts", product: "nicotine pouches" },
+      { category: "gifts", product: "CBD gummies" },
+      { category: "outdoors", product: "ammo" },
+      { category: "gifts", product: "e-liquid" },
+      { category: "beverages/spirits" },
+      { category: "alcoholic beverages" },
     ];
     for (const fields of attempts) expect(rules(ALCOHOL, search(fields)), JSON.stringify(fields)).toContain("categories.block");
   });
 
   it("names the field and the group, never the free text", () => {
-    const d = evaluate(ALCOHOL, search({ category: "gifts", product: "Lagavulin single malt whisky", must_haves: ["peaty", "bourbon cask"] }), [], NOW);
+    const d = evaluate(ALCOHOL, search({ category: "gifts", product: "Lagavulin single malt whisky", must_haves: ["peaty", "bourbon"] }), [], NOW);
     expect(d.blocked).toEqual([
       { path: "product", rule: "categories.block", reason: "the product names alcohol, a blocked category" },
       { path: "must_haves[1]", rule: "categories.block", reason: "the must-have names alcohol, a blocked category" },
@@ -194,14 +205,15 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
     expect(JSON.stringify(d)).not.toMatch(/Lagavulin|peaty/);
   });
 
-  it("refuses the words of a category the policy itself blocks, in the product too", () => {
+  it("refuses the words of a category the policy itself blocks, at the product's head", () => {
     const p = policy("categories: {block: [electronics, power-tools]}\n");
-    expect(rules(p, search({ category: "gifts", product: "cheap electronics gadget" }))).toEqual(["categories.block"]);
+    expect(rules(p, search({ category: "gifts", product: "cheap electronics" }))).toEqual(["categories.block"]);
     expect(rules(p, search({ category: "garden", must_haves: ["Power Tools"] }))).toEqual(["categories.block"]);
     expect(rules(p, search({ category: "gifts", product: "electronic music vinyl" }))).toEqual([]);
+    expect(rules(p, search({ category: "gifts", product: "electronics organizer bag" }))).toEqual([]);
   });
 
-  it("benign corpus: accessories and look-alike words are sent", () => {
+  it("benign corpus: accessories, modifiers and look-alike words are sent (the request check is an early courtesy)", () => {
     const benign: Omit<Extract<Outbound, { kind: "search" }>, "kind">[] = [
       { category: "kitchen", product: "whisky stones" },
       { category: "garden", product: "whiskey barrel planter" },
@@ -214,6 +226,28 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
       { category: "books", product: "winery history" },
       { category: "running-shoes", must_haves: ["trail", "waterproof"] },
       { category: "stickers", product: "holographic sticker" },
+      // A modifier never refuses (the security review's probe): sent, and the results are still screened.
+      { category: "home", product: "tobacco-scented candle" },
+      { category: "kitchen", product: "Bourbon vanilla extract" },
+      { category: "office", product: "Rifle Paper Co planner" },
+      { category: "clothing", product: "medical scrubs" },
+      { category: "beauty", product: "vitamin C serum" },
+      { category: "clothing", product: "wine-red sweater" },
+      { category: "kitchen", product: "beer bottle opener" },
+      { category: "kitchen", product: "wine bottle stopper" },
+      { category: "kitchen", product: "champagne flutes" },
+      { category: "kitchen", product: "Champagne gold cutlery" },
+      { category: "electronics", product: "shotgun microphone" },
+      { category: "tools", product: "pistol grip drill" },
+      { category: "music", product: "cigar box guitar" },
+      { category: "electronics", product: "pdf scanner" },
+      { category: "office", product: "printable labels" },
+      { category: "electronics", product: "crypto hardware wallet" },
+      { category: "grocery", product: "vodka sauce" },
+      { category: "grocery", product: "bourbon chicken sauce" },
+      { category: "grocery", product: "wine gums" },
+      { category: "grocery", product: "beer bread mix" },
+      { category: "grocery", must_haves: ["bourbon-free", "beer free shipping"] },
     ];
     for (const fields of benign) expect(rules(ALCOHOL, search(fields)), JSON.stringify(fields)).toEqual([]);
   });
