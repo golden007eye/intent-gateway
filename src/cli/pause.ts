@@ -107,6 +107,7 @@ function cloudLine(state: PauseState): string {
   if (c.result === "acknowledged") return "Intent Cloud: acknowledged the pause.";
   if (c.reason === "no_account_key") return `Not sent to Intent Cloud: ${pauseReasonWords(c.reason)}.`;
   if (c.result === "failed") return `A refusal of the pause was received from Intent Cloud (${pauseReasonWords(c.reason)}); it holds on this machine only. Run \`${INTENT} pause\` again to resend.`;
+  if (c.reason === "not_found") return 'Intent Cloud answered "not found" for this machine\'s account key, so it has not acknowledged the pause. The gateway sends it again while it runs.';
   return `Intent Cloud: not acknowledged yet (${pauseReasonWords(c.reason)}). The gateway resends it while it runs.`;
 }
 

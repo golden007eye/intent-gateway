@@ -170,7 +170,8 @@ describe("--version and --help", () => {
     expect(result).toMatchObject({ code: 0, err: "" });
     expect(result.out).toBe(help());
     expect(help()).toMatchSnapshot();
-    expect(help().split("\n").length).toBeLessThan(40);
+    // One screen: 40 lines at most (resume, the pause's way back, is the 40th).
+    expect(help().split("\n").length).toBeLessThanOrEqual(40);
   });
 
   it.each([[["frobnicate"]], [["policy"]], [["policy", "nope"]], [["approver"]]])("refuses %j with exit 2", async (argv) => {
@@ -303,7 +304,7 @@ describe("intent log (golden)", () => {
       Thursday 15 October 2026 (UTC)
       12:00:00  keys      keys signed by cloud-root-1 · valid until 2027-01-13  ✓ recorded
       12:00:00  search    budget_max.amount_minor, budget_max.currency, category, ship_to.country, ship_to.postal_code  ✓ receipt
-      12:00:00  blocked   search: an email address in note                      ✗ nothing sent
+      12:00:00  blocked   search: an email address (in note)                    ✗ nothing sent
       12:00:00  cart      at most $45.99                                        ✗ answer discarded: no valid receipt
       12:00:00  pinned    passkey aaaa…1111 is the approver now                 ✓ pinned
       12:00:00  approved  $45.99 · passkey aaaa…1111 (pinned)                   ✓ passkey proof checked
@@ -371,7 +372,7 @@ describe("intent log (golden)", () => {
     await writeChain(s.dir);
     const ascii = await s.run(["log"], { io: { env: { ...s.env, LANG: "C" } } });
     expect(ascii.out).not.toMatch(/[✓⚠✗→·…]/);
-    expect(ascii.out).toMatch(/ blocked {3}search: an email address in note +x nothing sent\n/);
+    expect(ascii.out).toMatch(/ blocked {3}search: an email address \(in note\) +x nothing sent\n/);
     const narrow = await s.run(["log", "--no-color"], { tty: true, io: { columns: 60 } });
     const lines = narrow.out.trimEnd().split("\n");
     expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(60);
@@ -731,7 +732,7 @@ describe("intent doctor", () => {
     fake = await startFakeCloud({});
     const s = setup({ INTENT_CLOUD_URL: "https://intent.example" });
     let connected = 0;
-    const serve = await s.run(["serve", "--trust-keys", trustFile(fake)], { input: "", io: { connect: () => (connected++, ({}) as never) } });
+    const serve = await s.run(["serve", "--trust-keys", trustFile(fake)], { tty: true, io: { connect: () => (connected++, ({}) as never) } });
     expect(serve.code).toBe(2);
     expect(serve.err).toMatch(/holds the published test root key .*not for https:\/\/intent\.example/);
     expect(connected).toBe(0);
@@ -763,7 +764,7 @@ describe("intent doctor", () => {
     const line = "Intent Cloud at staging-api.intentai.shop answered HTTP 503 to the gateway's first request (meta, no body fields). Check your network, or try everything locally with intent demo";
     const doctor = await setup().run(["doctor"], { io: { connect: () => stub } });
     expect(doctor.out).toContain(`\nFAIL  ${line}\n`);
-    const serve = await setup().run(["serve"], { input: "", io: { connect: () => stub } });
+    const serve = await setup().run(["serve"], { tty: true, io: { connect: () => stub } });
     expect(serve.code).toBe(1);
     // A start that fails prints no policy line, only the error (F-l).
     expect(serve.err).toBe(`intent: ${line}\n`);
@@ -803,7 +804,7 @@ describe("intent doctor", () => {
       const port = new URL(silent.url).port;
       const io: Partial<Io> = { connect: (http, store, options) => connectCloud({ ...http, timeoutMs: 400 }, store, options), cloudNoticeMs: 50 };
       const waiting = `still waiting for Intent Cloud at 127.0.0.1:${port}: no answer yet (it gives up after 400 ms)`;
-      const serve = await setup({ INTENT_CLOUD_URL: silent.url }).run(["serve", "--trust-keys", trustFile(fake)], { input: "", io });
+      const serve = await setup({ INTENT_CLOUD_URL: silent.url }).run(["serve", "--trust-keys", trustFile(fake)], { tty: true, io });
       expect(serve.code).toBe(1);
       expect(serve.err).toMatch(new RegExp(`^intent: ${waiting.replace(/[().]/g, "\\$&")}\\nintent: .*no complete response within 400 ms.*\\n$`));
       const doctor = await setup({ INTENT_CLOUD_URL: silent.url }).run(["doctor", "--trust-keys", trustFile(fake)], { io });
@@ -920,13 +921,12 @@ describe("serve failures", () => {
     ]);
   });
 
-  it("started by an MCP client (stdin not a terminal), answers initialize with the same reason as a JSON-RPC error", async () => {
-    const result = await setup().run([], { input: `${JSON.stringify(initialize)}\n`, io: noDns });
+  // Started by an MCP client over stdio, the server keeps running and refuses each tool call: test/cli.test.ts.
+  it("--http with stdin not a terminal still fails at start and prints to stderr only; stdout stays empty", async () => {
+    const result = await setup().run(["serve", "--http"], { input: `${JSON.stringify(initialize)}\n`, io: noDns });
     expect(result.code).toBe(1);
     expect(result.err).toBe(`intent: ${STAGING_DNS}\n`);
-    expect(JSON.parse(result.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent could not start: ${STAGING_DNS}` } });
-    // --http and a terminal print to stderr only; stdout stays empty.
-    expect((await setup().run(["serve", "--http"], { input: `${JSON.stringify(initialize)}\n`, io: noDns })).out).toBe("");
+    expect(result.out).toBe("");
   });
 
   it("in the container, an unreachable staging host says to re-run it in demo mode, never docker exec into it (F-h)", async () => {
@@ -946,8 +946,6 @@ describe("serve failures", () => {
       expect(result.code).toBe(1);
       expect(result.err).toBe(`intent: ${EMPTY_PIN_HINT}\n`);
       expect(result.out).toBe("");
-      const mcp = await s.run([], { input: `${JSON.stringify(initialize)}\n` });
-      expect(JSON.parse(mcp.out)).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: `intent could not start: ${EMPTY_PIN_HINT}` } });
       expect(existsSync(join(s.dir, "audit.jsonl"))).toBe(false);
     });
   });
@@ -959,7 +957,7 @@ describe("serve failures", () => {
       const stub = {
         meta: () => Promise.resolve({ ok: true, status: 200, body: { contract_version: "9.9.9", contract_sums_sha256: "0".repeat(64) }, contractVersion: "9.9.9" }),
       } as unknown as DisclosedCloud;
-      const result = await s.run(["serve", "--trust-keys", trustFile(fake)], { input: "", io: { connect: () => stub } });
+      const result = await s.run(["serve", "--trust-keys", trustFile(fake)], { tty: true, io: { connect: () => stub } });
       expect(result.code).toBe(1);
       expect(result.err).toMatch(/^intent: could not start: contract mismatch: .+; run intent doctor to see each check\n$/);
     } finally {

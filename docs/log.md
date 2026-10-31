@@ -150,7 +150,7 @@ After each answer with a receipt the gateway verified, it appends an `observed` 
 
 | Request | What the observation keeps |
 |---|---|
-| `searchCatalog` | `offers_count` (how many offers Intent Cloud returns), `offers_hidden` (how many the gateway policy hid from the agent), and up to 10 `offers`, each with `offer_handle`, `title`, `merchant`, `price_minor`, `shipping_minor`, `currency`. |
+| `searchCatalog` | `offers_count` (how many offers Intent Cloud returns), `offers_hidden` (how many the gateway policy hid from the agent), and up to 10 `offers`, each with `offer_handle`, `title`, `merchant`, `price_minor`, `shipping_minor`, `currency`, and, only for an offer whose shipping and tax are quoted when the cart is made, `total_kind: "max"` (`intent log -v` then says "shipping quoted at cart"). |
 | `createCart` | `title`, `merchant`, `quantity`, `total_minor`, `currency`. |
 | `createApproval` | `approval_handle`, `state`, `title`, `merchant`, `quantity`, `total_minor`, `currency`. |
 | `getApproval` | `approval_handle`, `state` (`pending`, `approved`, `rejected`, `expired`, `handed_off`, `ordered`), `title`, `merchant`, `total_minor`, `currency`. |

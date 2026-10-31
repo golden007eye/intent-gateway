@@ -88,7 +88,7 @@ describe("intent pause", () => {
     await s.run(["pause"]);
     await sendResult(s.dir, "retrying", "not_found");
     const status = await s.run(["status"]);
-    expect(status.out).toContain("a not_found answer was received from Intent Cloud for this machine's account key");
+    expect(status.out).toContain('Intent Cloud answered "not found" for this machine\'s account key, so it has not acknowledged the pause. The gateway sends it again while it runs.\n');
     // Invariant 5: what was received, never why Intent Cloud answered so.
     expect(status.out).not.toContain("does not know");
     expect(status.out).not.toContain("first approved purchase");

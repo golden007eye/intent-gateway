@@ -307,6 +307,8 @@ describe("onboarding prompt and policy-advisor skill", () => {
     );
     expect(prompt).toContain("Do not narrate commands, recap a step or paste command output. Between developer actions, say only the status line:");
     expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.");
+    // No narration of a passed check: QA agents said "Node 24.x is in range…" before the status line.
+    expect(prompt).toContain("`<what happened>` is a few plain words; it quotes no version, path or command output. A check that passed gets no sentence of its own");
     // One status line per finished step: a dogfood run said "✓ 8/9 (part 1)" in the middle of step 8.
     expect(prompt).toContain("once per finished step, and never for a step that is not finished yet.");
     // Every step 1 to 8 its own line: a dogfood agent merged steps 1 and 2 into "3/9" and skipped step 7's line.
@@ -444,7 +446,9 @@ describe("onboarding prompt and policy-advisor skill", () => {
   it("the opening names the developer's actions: their number and labels match the **Your turn** blocks", () => {
     const prompt = read(PROMPT);
     const opening = /^> (Setting up intent: .*)$/m.exec(prompt)?.[1] ?? "";
-    expect(opening).toMatch(/^Setting up intent: about 10 minutes\. You'll do (\d+) things: (.+)\.$/);
+    // The opening's step count is the status lines' total (QA: "8 things" read as 8 steps beside "✓ 1/9").
+    const steps = [...prompt.matchAll(/^## Step (\d+):/gm)].length;
+    expect(opening).toMatch(new RegExp(`^Setting up intent: ${String(steps)} steps, about 10 minutes\\. You'll do (\\d+) things: (.+)\\.$`));
     const [, count = "", list = ""] = /You'll do (\d+) things: (.+)\.$/.exec(opening) ?? [];
     // The prompt's blocks, with the advisor's one look at the rules (step 6) in its place; its restart only follows a change.
     const own = turns(prompt).map((b) => b.label);
@@ -454,7 +458,10 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(list.split(", ")).toEqual(actions);
     expect(Number(count)).toBe(actions.length);
     // At most three lines, before step 1, and the agent's first reply.
-    expect(prompt.indexOf("Your first reply starts with this opening, word for word, and goes straight on with step 1:")).toBeLessThan(prompt.indexOf("## Step 1"));
+    // First in the prompt, before How to work, and before any command: a QA agent skipped it and went straight to step 1.
+    const first = "Your first reply starts with this opening, word for word, before you run any command, and goes straight on with step 1. Never skip it or shorten it";
+    expect(prompt.indexOf(first)).toBeGreaterThan(-1);
+    expect(prompt.indexOf(first)).toBeLessThan(prompt.indexOf("How to work:"));
     expect(opening.length).toBeLessThanOrEqual(3 * 100);
   });
 

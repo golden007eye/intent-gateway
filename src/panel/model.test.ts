@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadPolicy } from "../policy/index.ts";
 import { APP_CSS, APP_JS } from "./assets.ts";
 import { buildModel, type ModelInput, renderPage } from "./index.ts";
+import { refusalWords } from "./model.ts";
 import { VIEWS } from "./render.ts";
 
 const b64 = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64");
@@ -312,7 +313,7 @@ describe("buildModel: wallet destinations, refusals and wallet entries (ADR-0014
       ["wallet", "plain", "Shop wallet unlinked · token not revoked (deleted here only)"],
       ["wallet", "plain", "Shop wallet unlinked · token revoked at Shop"],
       ["refused", "bad", "Shop search refused before sending: not logged as sent: a credential in the query (access_token), which the log cannot digest · nothing sent"],
-      ["refused", "bad", "Shop search refused before sending: buyer identity held back · nothing sent"],
+      ["refused", "bad", "Shop search refused before sending: it contained an email address (in note) · nothing sent"],
       ["call", "warn", "Shop refresh · answered 401, no signed receipt"],
       ["call", "plain", "Shop get_checkout · answered 200, no signed receipt"],
       ["start", "plain", "Gateway started"],
@@ -468,5 +469,15 @@ describe("assets", () => {
   it("app.css collapses the nav to tabs at 768px and makes no request", () => {
     expect(APP_CSS).toContain("@media (max-width:768px)");
     expect(APP_CSS).not.toMatch(/url\(|@import|@font-face|https?:/i);
+  });
+});
+
+describe("refusal words", () => {
+  it("an identity block says what the search contained and where, in plain words (QA: `postcode at $.must_haves[0]`)", () => {
+    expect(refusalWords(["postcode at $.must_haves[0]"])).toBe("it contained a full postcode (in must-haves)");
+    expect(refusalWords(["street_address at $.must_haves[0]", "email at $.must_haves[1]"])).toBe(
+      "it contained a street address (in must-haves); it contained an email address (in must-haves)",
+    );
+    expect(refusalWords(["categories.block at category"], { category: "alcohol" })).toBe('category "alcohol" excluded');
   });
 });

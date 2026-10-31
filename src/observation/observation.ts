@@ -7,7 +7,7 @@
 // it is written, findIdentity runs over it, and any value that looks like buyer identity is replaced with WITHHELD
 // and its path listed in `withheld` (invariant 3: what we never hold, we cannot leak). Pure; no I/O.
 import { z } from "zod";
-import { type ApprovalCreated, type ApprovalStatus, type Cart, CompletionMode, OutcomeSource, OutcomeState, type SearchResponse } from "../contract/index.ts";
+import { type ApprovalCreated, type ApprovalStatus, type Cart, CompletionMode, OutcomeSource, OutcomeState, type SearchResponse, TotalKind } from "../contract/index.ts";
 import { findIdentity, ORDER_REF_AT } from "../privacy/index.ts";
 
 /** At most this many offers of a search are kept in its observation; `offers_count` still counts them all. */
@@ -30,6 +30,11 @@ export const ObservedOffer = z.strictObject({
   price_minor: Minor,
   shipping_minor: Minor,
   currency: z.literal("USD"),
+  /**
+   * Only `max`, kept only for such an offer: shipping and tax are quoted when the cart is made, so `shipping_minor` is
+   * no quote. Absent for an exact offer, and in chains written before it was kept.
+   */
+  total_kind: TotalKind.extract(["max"]).optional(),
 });
 export type ObservedOffer = z.infer<typeof ObservedOffer>;
 
@@ -122,6 +127,7 @@ export function observeSearch(disclosureSeq: number, response: SearchResponse, h
       price_minor: o.price.amount_minor,
       shipping_minor: o.shipping.amount_minor,
       currency: o.price.currency,
+      ...(o.total_kind === "max" ? { total_kind: "max" as const } : {}),
     })),
   });
 }
