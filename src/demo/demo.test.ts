@@ -309,9 +309,9 @@ describe("the sample catalog through the demo gateway", () => {
     const { demo, gateway } = await started();
     const blocked = await gateway.findOffers({ category: "alcohol", product: "red wine", budget: 50, country: "US", postcode: "10001" });
     expect(blocked.status).toBe("blocked");
-    expect(blocked.summary).toBe("Sent: nothing / Blocked: categories.block at category");
-    // Attack: a product-only search for it is sent (the policy names no category block), but the demo Intent Cloud,
-    // like Intent Cloud, never returns an item in an excluded category.
+    expect(blocked.summary).toBe("Sent: nothing / Blocked: categories.block at category; categories.block at product");
+    // Attack: a product-only search whose words name no excluded keyword is sent (the policy names no category block),
+    // but the demo Intent Cloud, like Intent Cloud, never returns an item in an excluded category.
     for (const product of ["Cabernet Sauvignon", "Vitamin D3 Gummies", "Premium Cigars", "Store Gift Card", "Folding Hunting Knife"]) {
       const found = await gateway.findOffers({ product, budget: 100, country: "US", postcode: "10001" });
       expect(found.status === "offers" ? found.offers.map((o) => o.title) : [], product).not.toContain(product);

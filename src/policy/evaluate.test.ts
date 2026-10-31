@@ -155,6 +155,104 @@ describe("evaluate: searches", () => {
   });
 });
 
+describe("evaluate: a search that names a blocked category in words (invariant 1)", () => {
+  const search = (fields: Omit<Extract<Outbound, { kind: "search" }>, "kind">): Outbound => ({ kind: "search", ...fields });
+  const ALCOHOL = policy("categories: {block: [alcohol]}\n");
+
+  it("refuses the category QA saw leave the machine: \"single malt whisky\" under categories.block [alcohol]", () => {
+    expect(evaluate(ALCOHOL, search({ category: "single malt whisky" }), [], NOW).blocked).toEqual([
+      { path: "category", rule: "categories.block", reason: "the category names alcohol, a blocked category" },
+    ]);
+    // The Cloud baseline excludes alcohol whatever the policy names.
+    expect(rules(policy(""), search({ category: "single malt whisky" }))).toEqual(["categories.block"]);
+  });
+
+  it("attack: rephrase to get around it; the product, a must-have, plurals, case, full-width and zero-width forms are all refused", () => {
+    const attempts: Omit<Extract<Outbound, { kind: "search" }>, "kind">[] = [
+      { category: "gifts", product: "Islay single malt whisky" },
+      { category: "gifts", product: "two single malt whiskies" },
+      { category: "drinks/spirits/Whisky-Single-Malt" },
+      { category: "SCOTCH WHISKY" },
+      { category: "ｗｈｉｓｋｙ" },
+      { category: `whis${ZWSP}ky` },
+      { category: "gifts", must_haves: ["aged 12 years", "bourbon"] },
+      { category: "gifts", product: "red wines" },
+      { category: "kitchen", product: "whisky stones and a bottle of whisky" },
+      { category: "home", product: "disposable vapes" },
+      { category: "outdoors", product: "hunting rifles" },
+      { category: "gifts", product: "$50 gift card" },
+      // The obvious cases the early check keeps refusing.
+      { category: "whisky" },
+      { category: "gifts", product: "bourbon" },
+      { category: "gifts", product: "vodka" },
+      { category: "gifts", product: "gift card" },
+      { category: "gifts", product: "nicotine pouches" },
+      { category: "gifts", product: "CBD gummies" },
+      { category: "outdoors", product: "ammo" },
+      { category: "gifts", product: "e-liquid" },
+      { category: "beverages/spirits" },
+      { category: "alcoholic beverages" },
+    ];
+    for (const fields of attempts) expect(rules(ALCOHOL, search(fields)), JSON.stringify(fields)).toContain("categories.block");
+  });
+
+  it("names the field and the group, never the free text", () => {
+    const d = evaluate(ALCOHOL, search({ category: "gifts", product: "Lagavulin single malt whisky", must_haves: ["peaty", "bourbon"] }), [], NOW);
+    expect(d.blocked).toEqual([
+      { path: "product", rule: "categories.block", reason: "the product names alcohol, a blocked category" },
+      { path: "must_haves[1]", rule: "categories.block", reason: "the must-have names alcohol, a blocked category" },
+    ]);
+    expect(JSON.stringify(d)).not.toMatch(/Lagavulin|peaty/);
+  });
+
+  it("refuses the words of a category the policy itself blocks, at the product's head", () => {
+    const p = policy("categories: {block: [electronics, power-tools]}\n");
+    expect(rules(p, search({ category: "gifts", product: "cheap electronics" }))).toEqual(["categories.block"]);
+    expect(rules(p, search({ category: "garden", must_haves: ["Power Tools"] }))).toEqual(["categories.block"]);
+    expect(rules(p, search({ category: "gifts", product: "electronic music vinyl" }))).toEqual([]);
+    expect(rules(p, search({ category: "gifts", product: "electronics organizer bag" }))).toEqual([]);
+  });
+
+  it("benign corpus: accessories, modifiers and look-alike words are sent (the request check is an early courtesy)", () => {
+    const benign: Omit<Extract<Outbound, { kind: "search" }>, "kind">[] = [
+      { category: "kitchen", product: "whisky stones" },
+      { category: "garden", product: "whiskey barrel planter" },
+      { category: "kitchen", product: "wine glass" },
+      { category: "kitchen/wine-glasses" },
+      { category: "kitchen", product: "beer koozie" },
+      { category: "clothing", product: "cigarette pants" },
+      { category: "home", must_haves: ["vape-free", "smoke-free"] },
+      { category: "toys", product: "swine plush toy" },
+      { category: "books", product: "winery history" },
+      { category: "running-shoes", must_haves: ["trail", "waterproof"] },
+      { category: "stickers", product: "holographic sticker" },
+      // A modifier never refuses (the security review's probe): sent, and the results are still screened.
+      { category: "home", product: "tobacco-scented candle" },
+      { category: "kitchen", product: "Bourbon vanilla extract" },
+      { category: "office", product: "Rifle Paper Co planner" },
+      { category: "clothing", product: "medical scrubs" },
+      { category: "beauty", product: "vitamin C serum" },
+      { category: "clothing", product: "wine-red sweater" },
+      { category: "kitchen", product: "beer bottle opener" },
+      { category: "kitchen", product: "wine bottle stopper" },
+      { category: "kitchen", product: "champagne flutes" },
+      { category: "kitchen", product: "Champagne gold cutlery" },
+      { category: "electronics", product: "shotgun microphone" },
+      { category: "tools", product: "pistol grip drill" },
+      { category: "music", product: "cigar box guitar" },
+      { category: "electronics", product: "pdf scanner" },
+      { category: "office", product: "printable labels" },
+      { category: "electronics", product: "crypto hardware wallet" },
+      { category: "grocery", product: "vodka sauce" },
+      { category: "grocery", product: "bourbon chicken sauce" },
+      { category: "grocery", product: "wine gums" },
+      { category: "grocery", product: "beer bread mix" },
+      { category: "grocery", must_haves: ["bourbon-free", "beer free shipping"] },
+    ];
+    for (const fields of benign) expect(rules(ALCOHOL, search(fields)), JSON.stringify(fields)).toEqual([]);
+  });
+});
+
 describe("evaluate: bad purchase history fails closed", () => {
   const p = policy("spend: {per_day_usd: 40}\n");
   const bad: [string, unknown][] = [

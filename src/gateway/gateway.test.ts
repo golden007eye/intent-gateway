@@ -362,6 +362,21 @@ describe("findOffers readiness", () => {
     expect(h.totalSends()).toBe(0);
   });
 
+  it("outside the US with no linked Shop wallet: the wallet is said first, never a postcode question it would then refuse (QA: SW1A)", async () => {
+    const h = await setup();
+    for (const asked of [
+      { ...SHOES, country: "GB", postcode: "SW1A" },
+      { category: "running-shoes", country: "GB" },
+      { ...SHOES, country: "GB", postcode: "SW1A 1AA" },
+    ]) {
+      const result = await h.gateway.findOffers(asked);
+      expect(result.status, JSON.stringify(asked)).toBe("refused");
+      expect(result.message).toMatch(/^Not sent: searching for the UK needs a linked Shop wallet; without one, intent searches the US only\./);
+      expect(result.message).not.toMatch(/full postcode|SW1A/);
+    }
+    expect(h.totalSends()).toBe(0);
+  });
+
   it("an unknown input field is refused, not sent", async () => {
     const h = await setup();
     const result = await h.gateway.findOffers({ ...SHOES, colour: "blue" });
@@ -457,6 +472,56 @@ describe("policy", () => {
     it("a policy without category blocks still accepts a product-only search", async () => {
       const h = await setup();
       expect(offersOf(await h.gateway.findOffers(HEADPHONES)).offers.map((o) => o.title)).toEqual(["Studio Headphones"]);
+    });
+  });
+
+  describe("invariant 1: a search whose words name a blocked category never leaves (QA: \"single malt whisky\" was sent)", () => {
+    const ALCOHOL = `${BASE_POLICY}categories:\n  block: [alcohol]\n`;
+    const WHISKY = { category: "single malt whisky", budget: 20, country: "US", postcode: "10001" };
+    const PLAIN =
+      "Not sent: this search is for a blocked category (the category names alcohol, a blocked category). Nothing was searched. " +
+      "Tell the user this cannot be bought through intent. Do not search again for it with other words.";
+
+    it("refused before it is sent, in plain words, with a block entry that keeps only the category", async () => {
+      const h = await setup({ policy: ALCOHOL });
+      const result = await h.gateway.findOffers(WHISKY);
+      expect(result).toMatchObject({ status: "blocked", message: PLAIN, summary: "Sent: nothing / Blocked: categories.block at category" });
+      expect(h.sends.search).toBe(0);
+      expect(bodies(h, "disclosure")).toHaveLength(2); // meta and key statement at start, nothing since
+      expect(bodies(h, "block").at(-1)).toMatchObject({ endpoint: "searchCatalog", blocked: ["categories.block at category"], held: { category: "single malt whisky" } });
+    });
+
+    it("refused first, before any missing detail is asked for", async () => {
+      const h = await setup({ policy: ALCOHOL });
+      const result = await h.gateway.findOffers({ category: "single malt whisky" });
+      expect(result.status).toBe("blocked");
+      expect(result.message).toBe(PLAIN);
+      expect(h.sends.search).toBe(0);
+    });
+
+    it("attack: rephrase to get around it; moved to the product or a must-have, or re-spelled, it is still not sent", async () => {
+      const h = await setup({ policy: ALCOHOL });
+      const attempts = [
+        { ...WHISKY, category: "gifts", product: "Islay single malt whiskies" },
+        { ...WHISKY, category: "gifts", must_haves: ["12 year", "Bourbon"] },
+        { ...WHISKY, category: "ＷＨＩＳＫＹ" },
+        { ...WHISKY, category: "gifts", product: "whisky stones, and a bottle of whisky" },
+      ];
+      for (const attempt of attempts) {
+        const result = await h.gateway.findOffers(attempt);
+        expect(result.status, JSON.stringify(attempt)).toBe("blocked");
+        expect(result.message).toContain("Do not search again for it with other words.");
+        // The free text is never kept: only the structured category.
+        expect(JSON.stringify(bodies(h, "block").at(-1))).not.toMatch(/Islay|whiskies|stones/);
+      }
+      expect(h.sends.search).toBe(0);
+    });
+
+    it("an accessory is still searched: whisky stones under kitchen", async () => {
+      const h = await setup({ policy: ALCOHOL });
+      const result = await h.gateway.findOffers({ ...WHISKY, category: "kitchen", product: "whisky stones" });
+      expect(result.status).toBe("offers");
+      expect(h.sends.search).toBe(1);
     });
   });
 
@@ -662,7 +727,7 @@ describe("an answer with no refusal code still names what to do next", () => {
     const h = await setup();
     const handle = await offerHandle(h, "Road Runner 2"); // stock 2
     const result = await h.gateway.createCart({ offer_handle: handle, quantity: 3 });
-    expect(result).toMatchObject({ status: "error", message: `Intent Cloud answered 409: not enough stock. ${CART_NEXT}` });
+    expect(result).toMatchObject({ status: "error", message: `Intent Cloud answered with a refusal: not enough stock. ${CART_NEXT}` });
     expect(h.sends.createApproval).toBe(0);
     expect(h.kinds()).not.toContain("approval_pending");
   });
@@ -675,10 +740,32 @@ describe("an answer with no refusal code still names what to do next", () => {
       return { ...res, ok: false as const, status: 409, body: { error: "conflict" as const, message: "the merchant did not quote a final total" } };
     };
     const result = await h.gateway.createCart({ offer_handle: handle });
-    expect(result).toMatchObject({ status: "error", message: `Intent Cloud answered 409: the merchant did not quote a final total. ${CART_NEXT}` });
-    // Attack: no cause the answer did not give (the store's shipping options, the ZIP code or postcode).
-    expect(result.message).not.toMatch(/shipping option|ZIP|postcode|because/i);
+    // Plain words and the next step, no status number (an agent told the buyer "a 409 error"); the ZIP is the one
+    // the cart was asked for, said as where, never as a cause.
+    expect(result).toMatchObject({
+      status: "error",
+      message:
+        "This merchant could not quote a final total for delivery to ZIP 94103, so no cart was made. Nothing was bought: no approval was made. " +
+        "Pick another offer, or try again later.",
+    });
+    // Attack: no cause the answer did not give (the store's shipping options, the postcode), and no status number.
+    expect(result.message).not.toMatch(/shipping option|postcode|because|\b\d{3}\b/i);
     expect(h.sends.createApproval).toBe(0);
+  });
+
+  // The status stays in `intent log`, which shows each receipt's status (src/cli/log.test.ts).
+  it("no bare HTTP status number in any fall-through a tool returns (QA: an agent said \"a 409 error\")", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    for (const status of [400, 401, 404, 409, 410, 413, 429, 500, 502, 503]) {
+      const answer = { ok: false as const, status, body: null, contractVersion: null, receipt: null, retryAfter: null };
+      h.patch.createCart = async (r) => ({ ...(await h.real.createCart(r)), ...answer });
+      h.patch.search = async (r) => ({ ...(await h.real.search(r)), ...answer });
+      for (const result of [await h.gateway.createCart({ offer_handle: handle }), await h.gateway.findOffers(SHOES)]) {
+        expect(result.status, String(status)).toBe("error");
+        expect(result.message, String(status)).not.toMatch(/\b\d{3}\b|HTTP|status/i);
+      }
+    }
   });
 
   it("create_approval, search and status fall-throughs each name their own next step", async () => {
@@ -687,20 +774,20 @@ describe("an answer with no refusal code still names what to do next", () => {
     const bad = { ok: false as const, status: 502, body: null, contractVersion: null, receipt: null, retryAfter: null };
     h.patch.createApproval = async (c) => ({ ...(await h.real.createApproval(c)), ...bad });
     expect((await h.gateway.createCart({ offer_handle: handle })).message).toBe(
-      "Intent Cloud answered 502. Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
+      "Intent Cloud answered with an error on its side. Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
     );
     h.patch.search = async (r) => ({ ...(await h.real.search(r)), ...bad });
-    expect((await h.gateway.findOffers(SHOES)).message).toBe("Intent Cloud answered 502. Search again, or change the search.");
+    expect((await h.gateway.findOffers(SHOES)).message).toBe("Intent Cloud answered with an error on its side. Search again, or change the search.");
     delete h.patch.search;
     delete h.patch.createApproval;
     const approval = await pendingPurchase(h, "Trail Runner 3");
     h.patch.getApproval = async (a, s) => ({ ...(await h.real.getApproval(a, s)), ...bad });
-    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).message).toBe("Intent Cloud answered 502. Call get_approval_status again in a minute.");
+    expect((await h.gateway.getApprovalStatus({ approval_handle: approval })).message).toBe("Intent Cloud answered with an error on its side. Call get_approval_status again in a minute.");
     // A 4xx is final for the call: no retry that the prompt's 5 s poll would loop on for 3 minutes.
     h.patch.getApproval = async (a, s) => ({ ...(await h.real.getApproval(a, s)), ...bad, status: 404 });
     const final = (await h.gateway.getApprovalStatus({ approval_handle: approval })).message;
     expect(final).toBe(
-      "Intent Cloud answered 404. Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; do not create a new cart for this purchase unless the buyer asks for one.",
+      "Intent Cloud answered that it does not know this handle. Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; do not create a new cart for this purchase unless the buyer asks for one.",
     );
     expect(final).not.toMatch(/again in a minute/);
   });
@@ -775,6 +862,8 @@ describe("invariant 3: buyer identity in a tool input is never sent", () => {
     const result = await h.gateway.findOffers({ ...SHOES, product: "phone stand to SW1A 1AA" });
     expect(result.status === "blocked" && result.message).toContain("Remove any address or postcode from the product, category and must-haves, pass the postcode in the postcode field only");
     expect(bodies(h, "block")[0]).toMatchObject({ blocked: ["postcode at $.product"] });
+    // The tool's line says it in words; the exact path is only in the block entry (intent log -v).
+    expect(result.summary).toBe("Sent: nothing / Blocked: a full postcode (in product)");
   });
 
   it("a whole postcode in the postcode field itself is not identity: it is coarsened, not refused", async () => {
@@ -818,6 +907,82 @@ describe("invariant 3: buyer identity in a tool input is never sent", () => {
 });
 
 // ---- invariant 4 --------------------------------------------------------------------------------------------------
+
+describe("create_cart again for the same offer: the same pending purchase, never a second approval (QA: a duplicate cart)", () => {
+  it("returns the open approval's link, check code and status from the local log, and sends nothing", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    const first = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    h.advance(60_000);
+    const sent = h.totalSends();
+    const again = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(h.totalSends()).toBe(sent);
+    expect(bodies(h, "approval_pending")).toHaveLength(1);
+    expect({ handle: again.approval_handle, url: again.approval_url, code: again.check_code }).toEqual({
+      handle: first.approval_handle,
+      url: first.approval_url,
+      code: first.check_code,
+    });
+    expect(again.qr.text).toBe(first.qr.text);
+    expect(again.message).toMatch(/^This is the same pending purchase \(total \$\d+\.\d{2}\), asked for 1 minute ago: no new cart was made\. /);
+    expect(again.message).toContain("waiting for the buyer's passkey");
+    expect(again.summary).toBe("Sent: nothing / Blocked: nothing");
+  });
+
+  it("attack (invariant 4): the repeat approves nothing; once the first is approved, rejected or expired, a new cart needs a new approval", async () => {
+    const h = await setup();
+    const passkey = new SoftPasskey();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    const first = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    // Still pending at Intent Cloud and in the log: no approval chained by the repeat.
+    expect((await h.gateway.getApprovalStatus({ approval_handle: first.approval_handle })).status).toBe("pending");
+    expect(bodies(h, "approval")).toHaveLength(0);
+
+    expect(h.fake.approveWithPasskey(first.approval_handle, passkey).status).toBe(200);
+    expect((await h.gateway.getApprovalStatus({ approval_handle: first.approval_handle })).status).toBe("approved");
+    const second = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(second.approval_handle).not.toBe(first.approval_handle);
+    expect(h.sends.createApproval).toBe(2);
+
+    expect(h.fake.reject(second.approval_handle, passkey).status).toBe(200);
+    expect((await h.gateway.getApprovalStatus({ approval_handle: second.approval_handle })).status).toBe("rejected");
+    const third = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(third.approval_handle).not.toBe(second.approval_handle);
+
+    h.advance(16 * 60_000);
+    const fourth = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(fourth.approval_handle).not.toBe(third.approval_handle);
+    expect(h.sends.createApproval).toBe(4);
+  });
+
+  it("another ZIP is another purchase, as in Intent Cloud's replay key: a new cart is asked for", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    const first = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    // Intent Cloud may serve the same offer handle to a search for another ZIP: only the ZIP differs.
+    h.patch.search = async (r) => {
+      const res = await h.real.search(r);
+      if (!res.ok) return res;
+      return { ...res, body: { ...res.body, offers: res.body.offers.map((o) => (o.title === "Trail Runner 3" ? { ...o, offer_handle: handle } : o)) } };
+    };
+    expect(await offerHandle(h, "Trail Runner 3", { ...SHOES, postcode: "94110" })).toBe(handle);
+    const second = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    expect(second.approval_handle).not.toBe(first.approval_handle);
+    expect(h.sends.createCart).toBe(2);
+    const sent = bodies(h, "disclosure").filter((b) => b.endpoint === "createCart").at(-1);
+    expect(JSON.parse(Buffer.from(String(sent?.body_b64), "base64").toString("utf8"))).toMatchObject({ ship_to: { postal_code: "94110" } });
+  });
+
+  it("another quantity is another purchase: a new cart is asked for", async () => {
+    const h = await setup();
+    const handle = await offerHandle(h, "Trail Runner 3");
+    const one = approvalOf(await h.gateway.createCart({ offer_handle: handle }));
+    const two = approvalOf(await h.gateway.createCart({ offer_handle: handle, quantity: 2 }));
+    expect(two.approval_handle).not.toBe(one.approval_handle);
+    expect(h.sends.createCart).toBe(2);
+  });
+});
 
 describe("invariant 4: approved only when verified, chained and from the pinned passkey", () => {
   it("pending until the passkey approves; then the pin and the approval are chained, and the pin goes to stderr", async () => {
@@ -1499,7 +1664,8 @@ describe("contract 1.6.x: completer key, local checks before any approval reques
     const restarted = await h.restart();
     const result = await restarted.gateway.getApprovalStatus({ approval_handle: approval });
     expect(result.status).toBe("error");
-    expect(result.message).toContain("404");
+    expect(result.message).toContain("does not know this handle");
+    expect(result.message).not.toContain("404");
     expect(restarted.signers.at(-1)).toEqual({ op: "getApproval", keyid: null });
   });
 
@@ -1878,9 +2044,18 @@ describe("get_approval_status without a handle: the waiting purchases, from the 
     expect(result.status).toBe("unknown");
     const lines = result.message.split("\n");
     expect(lines[0]).toBe("No approval_handle was given. Purchases with no approval chained in this gateway's log, newest first:");
+    // Each with its link and check code as chained when asked for, so a fresh session can show them again.
+    const linkOf = (handle: string) => String(bodies(h, "approval_pending").find((b) => b.handle === handle)?.approval_url);
+    const codeOf = (handle: string) => String(bodies(h, "approval_pending").find((b) => b.handle === handle)?.snapshot_hash).slice(0, 8);
     expect(lines[1]).toMatch(new RegExp(`^- Road Runner 2 from .+, total \\$64\\.99, asked for 1 minute ago\\. approval_handle: ${road}$`));
-    expect(lines[2]).toMatch(new RegExp(`^- Trail Runner 3 from .+, total \\$94\\.99, asked for 3 minutes ago\\. approval_handle: ${trail}$`));
-    expect(lines[3]).toBe("Call get_approval_status with one of these approval_handles to read its status; do not create a new cart for them.");
+    expect(lines.slice(2, 4)).toEqual([`  Approval link: ${linkOf(road)}`, `  Check code: ${codeOf(road)}`]);
+    expect(lines[4]).toMatch(new RegExp(`^- Trail Runner 3 from .+, total \\$94\\.99, asked for 3 minutes ago\\. approval_handle: ${trail}$`));
+    expect(lines.slice(5, 7)).toEqual([`  Approval link: ${linkOf(trail)}`, `  Check code: ${codeOf(trail)}`]);
+    expect(linkOf(road)).toMatch(/^https:\/\//);
+    expect(lines[7]).toBe(
+      "The buyer can still open a link above and approve with their passkey. Call get_approval_status with one of these approval_handles " +
+        "to read its status; do not create a new cart for them.",
+    );
     // Attack: the prompt polls, and offers a new link, while a result says "Waiting for"; this list is no such status.
     expect(result.message).not.toContain("Waiting for");
     expect(result.summary).toBe("Sent: nothing / Blocked: nothing");
@@ -1985,7 +2160,7 @@ describe("refusals name their limit", () => {
     const handle = await offerHandle(h, "Trail Runner 3");
     const limited = (retryAfter: number) => ({ ok: false as const, status: 429, body: null, contractVersion: null, receipt: null, retryAfter });
     h.patch.createCart = async (r) => ({ ...(await h.real.createCart(r)), ...limited(30) });
-    expect((await h.gateway.createCart({ offer_handle: handle })).message).toContain("Intent Cloud answered 429. Try again in 30 s.");
+    expect((await h.gateway.createCart({ offer_handle: handle })).message).toContain("Intent Cloud answered that it is limiting requests from this gateway for now. Try again in 30 s.");
     h.patch.createCart = async (r) => ({ ...(await h.real.createCart(r)), ...limited(60) });
     expect((await h.gateway.createCart({ offer_handle: handle })).message).toContain("Try again in 1 minute.");
     h.patch.createCart = async (r) => ({ ...(await h.real.createCart(r)), ...limited(3_590) });

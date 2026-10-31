@@ -305,10 +305,14 @@ interface Told {
   readonly summary: string;
 }
 
-/** A call's next step for the agent: after an answer with a status, or when no usable answer came back. */
+/**
+ * A call's next step for the agent: after an answer with a status, or when no usable answer came back. `refused`,
+ * when it returns a sentence, words a known refusal whole (its next step included) in place of the plain one.
+ */
 interface Next {
   answered(status: number): string;
   readonly unsure: string;
+  refused?(status: number, message: string | null): string | null;
 }
 
 /** Nothing was sent: the input was malformed, identity was found, or the policy refused the request. */
@@ -474,6 +478,11 @@ export function createGateway(options: GatewayOptions): Gateway {
   const providers: SearchProvider[] = options.oneTap?.searchInGateway === true && wallet?.searchCatalog !== undefined ? [createShopProvider(wallet)] : [];
   /** Approvals whose cart this process's session key created; any other is read with its completer key. */
   const createdHere = new Set<string>();
+  /**
+   * The approval each offer handle last led to here, with its quantity and ship-to postcode (the coarse one, as Intent
+   * Cloud's replay key has it): a repeated create_cart with all three the same returns it (samePending).
+   */
+  const askedFor = new Map<string, { approval: string; quantity: number; postcode: string | undefined }>();
   let stopReported = false;
 
   // One call at a time: the spend caps and the replay check read the chain and then append to it. Each call records
@@ -634,8 +643,11 @@ export function createGateway(options: GatewayOptions): Gateway {
     if (result.status === 429 && result.body !== null && "limit" in result.body && result.body.limit === "checkouts") {
       return refuse("refused", `Refused: Intent Cloud answered that this network has submitted too many checkouts this hour. Nothing was bought, and the gateway does not resubmit by itself.${retry}`);
     }
-    const said = result.body === null ? "" : `: ${result.body.message}`;
-    return refuse("error", `Intent Cloud answered ${String(result.status)}${said}.${retry}${next.answered(result.status)}`);
+    // No HTTP status number in the agent's text (an agent relays "a 409 error" to the buyer): it is in `intent log`.
+    const message = result.body === null ? null : result.body.message;
+    const known = next.refused?.(result.status, message) ?? null;
+    if (known !== null) return refuse("error", `${known}${retry}`);
+    return refuse("error", `${answerWords(result.status, message)}${retry}${next.answered(result.status)}`);
   }
 
   /**
@@ -646,12 +658,22 @@ export function createGateway(options: GatewayOptions): Gateway {
    */
   const NO_LINK = " Nothing was bought: the gateway has no approval link, so none can be approved.";
   const transient = (status: number): boolean => status >= 500 || status === 429;
+  const NEXT_CART: Next = {
+    answered: () => " Nothing was bought: no approval was made. Pick another offer, or search again.",
+    unsure: `${NO_LINK} Pick another offer, or search again.`,
+  };
   const NEXT = {
     search: { answered: () => " Search again, or change the search.", unsure: " Search again, or change the search." },
-    cart: {
-      answered: () => " Nothing was bought: no approval was made. Pick another offer, or search again.",
-      unsure: `${NO_LINK} Pick another offer, or search again.`,
-    },
+    cart: NEXT_CART,
+    /** A cart to `zip`: Intent Cloud's "did not quote a final total" said in plain words, with its next step. */
+    cartTo: (zip: string): Next => ({
+      ...NEXT_CART,
+      refused: (status, message) =>
+        status === 409 && message !== null && /final total/i.test(message)
+          ? `This merchant could not quote a final total for delivery to ZIP ${zip}, so no cart was made. Nothing was bought: no approval was made. ` +
+            "Pick another offer, or try again later."
+          : null,
+    }),
     approval: {
       answered: () => " Nothing was bought: no approval was made. Call create_cart again, or pick another offer.",
       unsure: `${NO_LINK} Call create_cart again, or pick another offer.`,
@@ -663,7 +685,7 @@ export function createGateway(options: GatewayOptions): Gateway {
           : " Calling get_approval_status again will not change this answer. Tell the buyer the approval could not be checked; do not create a new cart for this purchase unless the buyer asks for one.",
       unsure: " Call get_approval_status again in a minute.",
     },
-  } as const satisfies Record<string, Next>;
+  } as const satisfies Record<string, Next | ((zip: string) => Next)>;
 
   /** Chains Intent Cloud's `paused` refusal of a request sent since `fromSeq`, and what it says about the pause. */
   async function pausedByCloud(step: "create_cart" | "create_approval", endpoint: string, fromSeq: number): Promise<void> {
@@ -811,6 +833,34 @@ export function createGateway(options: GatewayOptions): Gateway {
 
     const product = blankToUndefined(input.product);
     const category = blankToUndefined(input.category);
+    // A blocked category is refused first, before any detail is asked for: a search for it would never be sent,
+    // whatever the user answers, and words that name it in the product or must-haves count too (invariant 1).
+    const blockedCategory = evaluate(
+      policy,
+      { kind: "search", ...(product === undefined ? {} : { product }), ...(category === undefined ? {} : { category }), ...(input.must_haves === undefined ? {} : { must_haves: input.must_haves }) },
+      [],
+      now(),
+    ).blocked.filter((b) => b.rule === "categories.block");
+    if (blockedCategory.length > 0) {
+      return block(
+        "searchCatalog",
+        // The fields the search would have sent, by the request's names (never their values).
+        inputFields({
+          ...(category === undefined ? {} : { category }),
+          ...(product === undefined ? {} : { product }),
+          ...(input.must_haves === undefined ? {} : { must_haves: input.must_haves }),
+          ...(input.budget === undefined ? {} : { budget_max: { amount_minor: 0, currency: "" } }),
+          ...(input.country === undefined && input.postcode === undefined ? {} : { ship_to: { country: "", postal_code: "" } }),
+        }),
+        blockedCategory.map((b) => `${b.rule} at ${b.path}`),
+        fromSeq,
+        "blocked",
+        `Not sent: this search is for a blocked category (${blockedCategory.map((b) => b.reason).join("; ")}). Nothing was searched. ` +
+          "Tell the user this cannot be bought through intent. Do not search again for it with other words.",
+        // Structured values only: never the free-text product or must-haves, whose words findIdentity cannot vet.
+        category === undefined ? {} : { category },
+      );
+    }
     const missing: MissingDetail[] = [];
     if (product === undefined && category === undefined) {
       missing.push({ field: "product_or_category", ask: "What should I look for: an exact product, or a kind of product?" });
@@ -830,6 +880,15 @@ export function createGateway(options: GatewayOptions): Gateway {
     const refusal = country === undefined ? null : countryRefusal(country);
     if (refusal !== null) return { status: "refused", message: refusal, summary: summary(fromSeq) };
     const place = country === undefined ? undefined : shipCountry(country);
+    // Outside the US the search runs only against Shop: Intent Cloud's catalog search takes a US ZIP only. Said
+    // before any postcode is asked for, since no postcode would make it searchable.
+    if (place !== undefined && place.code !== "US" && providers.length === 0) {
+      return {
+        status: "refused",
+        message: `Not sent: searching for ${place.name} needs a linked Shop wallet; without one, intent searches the US only. ${LINK_SHOP}`,
+        summary: summary(fromSeq),
+      };
+    }
     // shipsTo admitted the country, so its currency is in the table.
     const currency = place === undefined ? undefined : currencyOf(place.code);
     const budget = input.budget;
@@ -855,20 +914,13 @@ export function createGateway(options: GatewayOptions): Gateway {
       };
     }
     const shipTo: ShipTo = { country: place.code as CoarseCountry, coarse };
-    // Outside the US the search runs only against Shop: Intent Cloud's catalog search takes a US ZIP only.
-    if (shipTo.country !== "US" && providers.length === 0) {
-      return {
-        status: "refused",
-        message: `Not sent: searching for ${place.name} needs a linked Shop wallet; without one, intent searches the US only. ${LINK_SHOP}`,
-        summary: summary(fromSeq),
-      };
-    }
 
     const mustHaves = input.must_haves;
     const decision = evaluate(
       policy,
       {
         kind: "search",
+        ...(product === undefined ? {} : { product }),
         ...(category === undefined ? {} : { category }),
         ...(mustHaves === undefined ? {} : { must_haves: mustHaves }),
         budget_usd: budget,
@@ -1005,9 +1057,21 @@ export function createGateway(options: GatewayOptions): Gateway {
     const parsed = CreateCartInput.safeParse(raw);
     if (!parsed.success) return { status: "invalid", message: `Not sent: ${z.prettifyError(parsed.error)}`, summary: summary(fromSeq) };
     const quantity = parsed.data.quantity ?? 1;
-    const local = localOffers.get(parsed.data.offer_handle);
+    const offerHandle = parsed.data.offer_handle;
+    // The same offer again while its approval is open: the same pending purchase, never a second approval.
+    // The postcode of the search the handle is remembered from now: a later search to another ZIP is another cart.
+    const postcode = (localOffers.get(offerHandle) ?? offers.get(offerHandle))?.shipTo.coarse;
+    const same = samePending(offerHandle, quantity, postcode, fromSeq);
+    if (same !== null) return same;
+    const made = await newCart(offerHandle, quantity, fromSeq);
+    if (made.status === "approval_needed") askedFor.set(offerHandle, { approval: made.approval_handle, quantity, postcode });
+    return made;
+  }
+
+  async function newCart(offerHandle: string, quantity: number, fromSeq: number): Promise<CreateCartResult> {
+    const local = localOffers.get(offerHandle);
     if (local !== undefined) return submitShopCheckout(local, quantity, fromSeq);
-    const known = offers.get(parsed.data.offer_handle);
+    const known = offers.get(offerHandle);
     if (known === undefined) {
       return {
         status: "invalid",
@@ -1078,7 +1142,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   ): Promise<CreateCartResult> {
     const { quantity } = request;
     const domain = known.offer.merchant.domain;
-    const cartCall = await call(() => cloud.createCart(request), fromSeq, NEXT.cart);
+    const cartCall = await call(() => cloud.createCart(request), fromSeq, NEXT.cartTo(request.ship_to.postal_code));
     if (!cartCall.ok) {
       if (cartCall.paused === true) await pausedByCloud("create_cart", "createCart", fromSeq);
       return cartCall.refused;
@@ -1584,25 +1648,13 @@ export function createGateway(options: GatewayOptions): Gateway {
    */
   function waitingWords(chain: readonly Entry[]): string {
     const at = now();
-    const approved = new Set(chain.flatMap((e) => (e.kind === "approval" ? [bodyOf(e).handle] : [])));
-    const lastRead = new Map<unknown, unknown>();
     const shown = new Map<unknown, { title?: unknown; merchant?: unknown }>();
     for (const e of chain) {
       if (e.kind !== "observed") continue;
       const b = bodyOf(e);
-      if (b.endpoint === "getApproval") lastRead.set(b.approval_handle, b.state);
       if (b.endpoint === "createApproval" || b.endpoint === "createCheckout") shown.set(b.approval_handle, { title: b.title, merchant: b.merchant });
     }
-    const waiting = chain
-      .filter((e) => {
-        if (e.kind !== "approval_pending") return false;
-        const b = bodyOf(e);
-        const expires = typeof b.expires_at === "string" ? Date.parse(b.expires_at) : Number.NaN;
-        const read = lastRead.get(b.handle);
-        return !approved.has(b.handle) && expires > at && (read === undefined || read === "pending") && !supersededIn(chain, e);
-      })
-      .reverse()
-      .slice(0, MAX_WAITING_LISTED);
+    const waiting = openPending(chain).reverse().slice(0, MAX_WAITING_LISTED);
     if (waiting.length === 0) return "This gateway's log has no purchase still open.";
     const lines = waiting.map((e) => {
       const b = bodyOf(e);
@@ -1610,12 +1662,63 @@ export function createGateway(options: GatewayOptions): Gateway {
       const title = typeof item?.title === "string" && item.title !== "" ? item.title : "(item not recorded)";
       const from = typeof item?.merchant === "string" && item.merchant !== "" ? ` from ${item.merchant}` : "";
       const total = typeof b.total_minor === "number" ? `, total ${formatMinor(b.total_minor, typeof b.currency === "string" ? b.currency : "USD")}` : "";
-      return `- ${title}${from}${total}, asked for ${ageText(at - Date.parse(e.ts))} ago. approval_handle: ${String(b.handle)}`;
+      // The link and the check code as chained when the approval was asked for: read from the log, never fetched.
+      const link = typeof b.approval_url === "string" ? `\n  Approval link: ${b.approval_url}` : "";
+      const code = typeof b.snapshot_hash === "string" ? `\n  Check code: ${b.snapshot_hash.slice(0, 8)}` : "";
+      return `- ${title}${from}${total}, asked for ${ageText(at - Date.parse(e.ts))} ago. approval_handle: ${String(b.handle)}${link}${code}`;
     });
     return (
       `Purchases with no approval chained in this gateway's log, newest first:\n${lines.join("\n")}\n` +
-      "Call get_approval_status with one of these approval_handles to read its status; do not create a new cart for them."
+      "The buyer can still open a link above and approve with their passkey. Call get_approval_status with one of these approval_handles " +
+      "to read its status; do not create a new cart for them."
     );
+  }
+
+  /**
+   * The approvals this gateway's log shows as still open, oldest first: asked for, not expired, not replaced by a
+   * newer submit, no approval chained, and no status read since that says otherwise. From the local log only.
+   */
+  function openPending(chain: readonly Entry[]): Entry[] {
+    const at = now();
+    const approved = new Set(chain.flatMap((e) => (e.kind === "approval" ? [bodyOf(e).handle] : [])));
+    const lastRead = new Map<unknown, unknown>();
+    for (const e of chain) {
+      if (e.kind === "observed" && bodyOf(e).endpoint === "getApproval") lastRead.set(bodyOf(e).approval_handle, bodyOf(e).state);
+    }
+    return chain.filter((e) => {
+      if (e.kind !== "approval_pending") return false;
+      const b = bodyOf(e);
+      const expires = typeof b.expires_at === "string" ? Date.parse(b.expires_at) : Number.NaN;
+      const read = lastRead.get(b.handle);
+      return !approved.has(b.handle) && expires > at && (read === undefined || read === "pending") && !supersededIn(chain, e);
+    });
+  }
+
+  /**
+   * The open approval this process asked for with the same offer handle, quantity and postcode, as an approval_needed
+   * result that sends nothing and makes no new approval: the same link and check code, which still need the buyer's passkey
+   * (invariant 4). Null when there is none, or it is no longer open in the log.
+   */
+  function samePending(offerHandle: string, quantity: number, postcode: string | undefined, fromSeq: number): CreateCartResult | null {
+    const earlier = askedFor.get(offerHandle);
+    if (earlier === undefined || earlier.quantity !== quantity || postcode === undefined || earlier.postcode !== postcode) return null;
+    const pending = openPending(store.entries()).find((e) => bodyOf(e).handle === earlier.approval);
+    if (pending === undefined) return null;
+    const b = bodyOf(pending);
+    if (typeof b.approval_url !== "string" || typeof b.snapshot_hash !== "string") return null;
+    const total = typeof b.total_minor === "number" ? ` (total ${formatMinor(b.total_minor, typeof b.currency === "string" ? b.currency : "USD")})` : "";
+    return {
+      status: "approval_needed",
+      approval_handle: earlier.approval,
+      approval_url: b.approval_url,
+      check_code: b.snapshot_hash.slice(0, 8),
+      qr: approvalQr(b.approval_url),
+      message:
+        `This is the same pending purchase${total}, asked for ${ageText(now() - Date.parse(pending.ts))} ago: no new cart was made. ` +
+        "Its status in this gateway's log: waiting for the buyer's passkey. Ask the buyer to open the same approval link (or scan the QR code), " +
+        "check that the page shows the check code, and approve with their passkey. Then call get_approval_status.",
+      summary: summary(fromSeq),
+    };
   }
 
   /**
@@ -1892,6 +1995,19 @@ export function paymentCapMinor(spend: Policy["spend"], snapshot: AnySnapshot, c
 export function paymentOffer(s: AnySnapshot): PolicyOffer {
   const total = snapshotTotal(s);
   return s.v === 4 ? policyOffer(s.myshopify_domain, "", total, null, s.quantity, total.currency) : policyOffer(s.merchant.domain, "", total, null, s.quantity);
+}
+
+/**
+ * An answer with an error status and no refusal code, in words and without the status number (that is in
+ * `intent log`): what kind of answer it was, then Intent Cloud's own message when it gave one.
+ */
+function answerWords(status: number, message: string | null): string {
+  const said = message === null || message === "" ? "" : `: ${message}`;
+  if (status >= 500) return `Intent Cloud answered with an error on its side${said}.`;
+  if (status === 429) return `Intent Cloud answered that it is limiting requests from this gateway for now${said}.`;
+  if (status === 404) return `Intent Cloud answered that it does not know this handle${said}.`;
+  if (status === 410) return `Intent Cloud answered that this has expired${said}.`;
+  return `Intent Cloud answered with a refusal${said}.`;
 }
 
 /** What the agent is told when Intent Cloud answered `paused`. */
