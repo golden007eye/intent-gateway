@@ -27,7 +27,7 @@ ${pad("verify")}re-check the log, receipts, approvals, this install (--skip-inst
 ${pad("evidence <approval handle>")}one purchase's evidence pack (--out <file>); check it: verify --evidence <file>
 ${pad("panel [--port <n>]")}read-only local page: activity, purchases, approvals, policy, log, verify
 ${pad("doctor")}check the setup; each problem comes with its fix
-${pad("pause")}stop every purchase not paid yet (status shows it; resume lifts it, with your passkey)
+${pad("pause")}stop every purchase not paid yet (status shows it and what lifts it)
 ${pad("policy show")}the active policy and its policy.lock
 ${pad("policy add <name> [--yes]")}narrow the policy with a library policy (shows the diff first)
 ${pad("policy test <cases.yaml>")}run test cases against the active policy

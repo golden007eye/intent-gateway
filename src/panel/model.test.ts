@@ -152,7 +152,8 @@ describe("buildModel: purchases", () => {
       digest: "sha-256=:createCart:",
     });
     const html = renderPage(m);
-    expect(html).toContain("Never sent: your name, postal address and card.");
+    expect(html).toContain("No name, address or card field was sent. Free text is sent as written: a name in it cannot be detected.");
+    expect(html).not.toContain("Never sent: your name");
     expect(html).toContain('<aside class="drawer" id="/purchases/a-6" aria-labelledby="dh-a-6">');
     // Every step's Details link has a drawer to open.
     for (const [, id] of html.matchAll(/data-drawer="([^"]+)"/g)) expect(html).toContain(`id="/purchases/${id ?? ""}"`);

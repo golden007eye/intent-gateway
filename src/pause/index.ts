@@ -1,5 +1,6 @@
 // Pause (ADR-0023): stop every purchase through the gateway that is not paid yet, locally at once and at Intent Cloud
-// through the disclosure log; resume needs the buyer's passkey on the confirm page. State is read from the chain alone.
+// through the disclosure log. Once Intent Cloud holds the pause, resume needs the buyer's passkey on the confirm page;
+// until then it can be lifted from this machine (words.ts). State is read from the chain alone.
 export {
   type AccountKey,
   type AccountKeySource,
@@ -32,3 +33,4 @@ export {
   stoppedPurchases,
   type StoppedPurchase,
 } from "./state.ts";
+export { heldByCloud, liftWords, pausedRefusalWords } from "./words.ts";

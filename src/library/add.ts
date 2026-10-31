@@ -191,7 +191,8 @@ export async function readLock(policyPath: string): Promise<Lock | undefined> {
   if (sha256Hex(policy) !== parsed.policy_sha256) {
     throw new LibraryError(
       "LOCK_STALE",
-      `policy.lock does not describe policy.yaml (the last policy add did not finish, or policy.yaml was edited since); run ${INTENT} policy add again`,
+      // The fix ("run … policy add <name> again") is added by the CLI's error words, once.
+      "policy.lock does not describe policy.yaml (the last policy add did not finish, or policy.yaml was edited since)",
     );
   }
   return parsed;

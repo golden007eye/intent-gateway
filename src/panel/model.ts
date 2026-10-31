@@ -25,7 +25,7 @@ import {
 import { withheldAt } from "../observation/index.ts";
 import { isCredentialHeader, markerDigest } from "../privacy/index.ts";
 import { EXCLUDED_CATEGORIES, type Policy } from "../policy/index.ts";
-import { type PauseEntry, pauseReasonWords, pauseState, stoppedPurchases } from "../pause/index.ts";
+import { heldByCloud, liftWords, type PauseEntry, pauseReasonWords, pauseState, stoppedPurchases } from "../pause/index.ts";
 import type { ChainResult } from "../store/index.ts";
 
 export type Mode = "demo" | "real";
@@ -199,8 +199,10 @@ export interface PanelModel {
 }
 
 export interface PauseView {
-  /** "Paused since <time>. Resume needs your passkey." */
+  /** "Paused since <time>. Resume needs your passkey." once Intent Cloud holds it; until then, that it can be lifted here. */
   readonly banner: string;
+  /** Intent Cloud holds the pause too, so only the passkey lifts it (src/pause heldByCloud). */
+  readonly held: boolean;
   /** Where the pause stands at Intent Cloud, in plain words. */
   readonly cloud: string;
   readonly cloudTone: Tone;
@@ -342,7 +344,8 @@ function pauseView(items: readonly unknown[], now: number, time: Clock): PauseVi
           ? `A refusal of the pause was received from Intent Cloud (${pauseReasonWords(c.reason)}); it holds here only.`
           : `Intent Cloud has not acknowledged it yet (${pauseReasonWords(c.reason)}); the gateway retries while it serves.`;
   return {
-    banner: `Paused since ${time(state.paused.since)}. Resume needs your passkey.`,
+    banner: `Paused since ${time(state.paused.since)}. ${liftWords(state)}`,
+    held: heldByCloud(state),
     cloud,
     cloudTone: c?.result === "acknowledged" || (c === null && state.paused.from === "intent_cloud") ? "ok" : c?.result === "failed" ? "bad" : "warn",
     stopped: stoppedPurchases(entries, now).map((p) => join([`approval ${short(p.handle)}`, p.totalMinor === null ? "" : money(p.totalMinor)])),

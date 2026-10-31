@@ -116,6 +116,9 @@ describe("pause at the gateway", () => {
     const result = await h.gateway.createCart({ offer_handle: handle });
     expect(result.status).toBe("refused");
     expect(result.message).toContain("paused purchases");
+    // Not acknowledged by Intent Cloud: the agent is told what lifts it, never that the passkey is needed.
+    expect(result.message).toContain("Nothing is bought until they lift it (`intent resume`); do not retry.");
+    expect(result.message).not.toContain("passkey");
     expect(cartSends(h)).toBe(0);
     expect(ofKind(h, "refused")).toEqual([{ step: "create_cart", reason: "paused", source: "gateway" }]);
     const report = await verify(h);
@@ -137,6 +140,9 @@ describe("pause at the gateway", () => {
     expect(kinds.slice(disclosed)).toEqual(["disclosure", "receipt", "pause_sent"]);
     expect(ofKind(h, "disclosure").at(-1)).toMatchObject({ endpoint: "pause", path: "/v1/pause" });
     expect(ofKind(h, "receipt").at(-1)).toMatchObject({ status: 200, verified: true, contract_version: "1.7.1" });
+    // Acknowledged: now only the passkey lifts it, and the agent is told so.
+    const held = await h.gateway.createCart({ offer_handle: await offer(h) });
+    expect(held.status === "refused" && held.message).toContain("Nothing is bought until they resume with their passkey; do not retry.");
 
     // The developer resumes locally (after the passkey resume), but Intent Cloud was never resumed: the next submit
     // answers `paused`, which is chained as Intent Cloud's refusal and pauses here again.
@@ -163,7 +169,9 @@ describe("pause at the gateway", () => {
     const outcome = await sendPause({ store: h.store, accountKey: () => Promise.resolve(testKey()), connect: () => Promise.resolve((r) => h.gateway.sendPause(r)), now: h.now });
     expect(outcome).toEqual({ sent: true, result: "retrying", reason: "not_found" });
     expect(pausedIn(h.store.entries())).toBe(true);
-    expect((await h.gateway.createCart({ offer_handle: await offer(h) })).status).toBe("refused");
+    const refused = await h.gateway.createCart({ offer_handle: await offer(h) });
+    expect(refused.status).toBe("refused");
+    expect(refused.status === "refused" && refused.message).toContain("until they lift it (`intent resume`)");
     expect((await verify(h)).exitCode).toBe(0);
   });
 

@@ -98,6 +98,6 @@ Later starts reuse the token without printing it: their connect line reads it fr
 
 - `intent init` checks the setup for a real run, makes the gateway's account key once (`<data dir>/account-key.json`, mode 600, never replaced; it prints only its thumbprint), offers to link Shop for one tap at a terminal (it skips the step with `--yes`, in demo mode and without a terminal), and prints the line that connects your agent. There is one account key per developer, and your first approval pins it; to replace it today, move `account-key.json` aside and run `intent init` again.
 - `intent doctor --demo` checks the setup; every problem it finds comes with its fix.
-- `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app. `intent status` shows the pause; `intent resume` needs your passkey. Agent payments in the Shop app are the only hard stop, because any program running as you can read the Shop token.
+- `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app. `intent status` shows the pause and what lifts it: your passkey once Intent Cloud has acknowledged it, `intent resume` alone before that. Agent payments in the Shop app are the only hard stop, because any program running as you can read the Shop token.
 - [Gateway policy](policy.md): narrow what leaves the gateway.
 - [Panel](panel.md): a local page with the same log, pending approvals, the approver pin and a Pause button.

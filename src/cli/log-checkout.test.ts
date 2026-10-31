@@ -84,7 +84,8 @@ describe("intent log on the 1.7.0 checkout submit", () => {
       17:00:12  cart      submit checkout · Holographic sticker ×1 · $8.99 · stickers.example  → approval link  ✓ receipt
 
       Sent to Intent Cloud only: account_key.crv, account_key.kty, account_key.x, checkout.checkout_ref_hash, checkout.currency, checkout.myshopify_domain, checkout.quantity, checkout.ship_to.country, checkout.ship_to.postal_code, checkout.store_name, checkout.store_site, checkout.title, checkout.totals.shipping, checkout.totals.subtotal, checkout.totals.tax, checkout.totals.total, checkout.variant_ref, completer_keyid, completion_mode.
-      Never sent: your name, postal address, card.
+      No name, address or card field was sent.
+      Free text is sent as written: a name in it cannot be detected.
 
       2 actions · 1 cart · 1 receipt
       Details: intent log --demo -v · Machine-readable: intent log --demo --json · Integrity: intent verify --demo

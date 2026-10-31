@@ -18,7 +18,7 @@ intent-gateway is a self-hosted gateway, run with npx or Docker, that gives AI a
 | Submitted checkout | `create_cart` creates the Shop checkout and submits it for passkey approval: the store, the item, the quantity, the totals and currency, the country and coarse postcode, a checkout reference hash, the completion mode and two public keys. |
 | One tap | After the passkey Approval, the gateway pays the checkout from the Shop agent budget. See [One-tap purchases](one-tap.md). |
 | Hand-off | When one tap cannot pay, the buyer pays on Shop's checkout page instead. The hand-off needs a second approval. |
-| Pause | `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app. `intent status` shows the pause; `intent resume` needs your passkey ([ADR-0023](adr/0023-pause.md)). |
+| Pause | `intent pause` stops every purchase that goes through intent and isn't paid yet. For a hard stop, also turn off agent payments in the Shop app. `intent status` shows the pause and what lifts it: your passkey once Intent Cloud has acknowledged it, `intent resume` alone before that ([ADR-0023](adr/0023-pause.md)). |
 | Shop wallet | The developer's own Shop account, linked with `intent wallet link shop`. Shop holds the card, the saved addresses and the budget; the gateway keeps only an encrypted token. The Shop budget is the only hard stop, because any program running as you can read the Shop token. |
 | Account key | One per developer, made once by `intent init` (`<data dir>/account-key.json`); your first approval pins it. To replace it today, move `account-key.json` aside and run `intent init` again. |
 

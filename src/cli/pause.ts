@@ -1,9 +1,10 @@
 // `intent pause`, `intent resume`, `intent status`, and the pause wiring serve and the panel share (ADR-0023).
 //
 // The local pause is chained first and holds at once; then the pause is sent to Intent Cloud through a started gateway
-// (log before send). Resume needs the buyer's passkey on the confirm page's /account: the gateway never resumes Intent
-// Cloud itself, so `intent resume` prints that address and clears the local pause only after the developer confirms at
-// a terminal, unconfirmed until the next submit's answer.
+// (log before send). Once Intent Cloud holds the pause, resume needs the buyer's passkey on the confirm page's /account:
+// the gateway never resumes Intent Cloud itself, so `intent resume` prints that address. Until then the local pause is
+// the only stop, and `intent resume` says it lifts it from this machine. Either way it clears the local pause only after
+// the developer confirms at a terminal, unconfirmed until the next submit's answer. Every line says which (liftWords).
 import { loadAccountKey } from "../account/index.ts";
 import type { Config } from "../config/index.ts";
 import { INTENT } from "../config/index.ts";
@@ -12,6 +13,8 @@ import { createGateway } from "../gateway/index.ts";
 import {
   type AccountKeySource,
   confirmOrigin,
+  heldByCloud,
+  liftWords,
   pauseLocally,
   pauseReasonWords,
   type PauseSource,
@@ -80,10 +83,13 @@ export function pauseDeps(io: Io, config: Config, store: Store, demo: Demo | nul
 export async function pauseAndSend(deps: SendDeps, from: PauseSource): Promise<string[]> {
   const before = pauseState(deps.store.entries());
   if (before.paused === null) await pauseLocally(deps.store, from);
-  const lines = [before.paused === null ? "Paused: from now on the gateway refuses create_cart and complete_checkout." : `Already paused since ${when(before.paused.since)}.`, HONEST_LINE];
+  const lines = [
+    before.paused === null ? "Paused: from now on the gateway prepares no cart and completes no purchase." : `Already paused since ${when(before.paused.since)}.`,
+    HONEST_LINE,
+  ];
   await sendPause(deps);
-  lines.push(cloudLine(pauseState(deps.store.entries())));
-  lines.push(`Resume needs your passkey: run \`${INTENT} resume\`.`);
+  const after = pauseState(deps.store.entries());
+  lines.push(cloudLine(after), liftWords(after), `To resume: run \`${INTENT} resume\`.`);
   return lines;
 }
 
@@ -101,7 +107,7 @@ function cloudLine(state: PauseState): string {
   if (c.result === "acknowledged") return "Intent Cloud: acknowledged the pause.";
   if (c.reason === "no_account_key") return `Not sent to Intent Cloud: ${pauseReasonWords(c.reason)}.`;
   if (c.result === "failed") return `A refusal of the pause was received from Intent Cloud (${pauseReasonWords(c.reason)}); it holds on this machine only. Run \`${INTENT} pause\` again to resend.`;
-  return `Intent Cloud: not acknowledged yet (${pauseReasonWords(c.reason)}). The pause holds here; the gateway resends it while it runs.`;
+  return `Intent Cloud: not acknowledged yet (${pauseReasonWords(c.reason)}). The gateway resends it while it runs.`;
 }
 
 export async function pauseCommand(io: Io, config: Config): Promise<number> {
@@ -126,12 +132,20 @@ export async function resumeCommand(io: Io, config: Config): Promise<number> {
       return 0;
     }
     const origin = confirmOrigin(entries);
-    line(io.stdout, `Paused since ${when(state.paused.since)}. Resume needs your passkey.`);
-    line(io.stdout, origin === null ? "Open the confirm page's /account and resume there with your passkey." : `Open ${origin}/account and resume there with your passkey.`);
+    const account = origin === null ? "the confirm page's /account" : `${origin}/account`;
+    const held = heldByCloud(state);
+    line(io.stdout, `Paused since ${when(state.paused.since)}. ${liftWords(state)}`);
+    if (held) line(io.stdout, `Open ${account} and resume there with your passkey.`);
+    // Not acknowledged is not proof Intent Cloud never got it: if it did, the next purchase is answered paused again.
+    else line(io.stdout, `If Intent Cloud received it after all, the next purchase is answered paused and pauses here again; then resume with your passkey at ${account}.`);
     if (!io.isTTY.stdin || !io.isTTY.stdout) {
-      throw new CliError(`${INTENT} resume needs a terminal: after resuming with your passkey, run it again in a terminal to clear the local pause`);
+      throw new CliError(
+        held
+          ? `${INTENT} resume needs a terminal: after resuming with your passkey, run it again in a terminal to clear the local pause`
+          : `${INTENT} resume needs a terminal: run it again in a terminal to lift the pause on this machine`,
+      );
     }
-    const answer = await ask(io, "Type \"resumed\" once you have resumed with your passkey on that page: ");
+    const answer = await ask(io, held ? "Type \"resumed\" once you have resumed with your passkey on that page: " : "Type \"resumed\" to lift the pause on this machine: ");
     if (answer?.trim().toLowerCase() !== "resumed") {
       line(io.stdout, "Not resumed: the pause holds.");
       return 1;
@@ -157,6 +171,13 @@ export async function statusCommand(io: Io, config: Config): Promise<number> {
   }
 }
 
+/** `intent doctor`'s line while purchases are paused, or null when they are not. */
+export function doctorPauseLine(entries: Parameters<typeof pauseState>[0]): string | null {
+  const state = pauseState(entries);
+  if (state.paused === null) return null;
+  return `purchases: paused since ${when(state.paused.since)}. ${liftWords(state)} ${INTENT} status says more.`;
+}
+
 /** `intent status`: the pause, as the panel banner says it. */
 export function statusLines(store: Store, nowMs: number): string[] {
   const entries = store.entries();
@@ -166,8 +187,9 @@ export function statusLines(store: Store, nowMs: number): string[] {
   }
   const stopped = stoppedPurchases(entries, nowMs);
   return [
-    `Paused since ${when(state.paused.since)}. Resume needs your passkey.`,
+    `Paused since ${when(state.paused.since)}.`,
     cloudLine(state),
+    liftWords(state),
     stopped.length === 0
       ? "Purchases stopped: none was open."
       : `Purchases stopped: ${stopped.map((p) => `approval ${p.handle}${p.totalMinor === null ? "" : ` ($${(p.totalMinor / 100).toFixed(2)})`}`).join(", ")}.`,

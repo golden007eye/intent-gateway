@@ -88,14 +88,30 @@ describe("the Pause button", () => {
     expect((await call(panel.url, "/pause", "POST", { origin: new URL(panel.url).origin })).status).toBe(405);
   });
 
-  it("while paused the banner says since when, that resume needs the passkey, and hides the button", async () => {
+  it("while paused and not acknowledged yet, the banner says since when, that it can be lifted here, and hides the button", async () => {
     const store = await openStore(dir);
     await store.append("pause", { from: "panel" });
     await store.close();
     panel = await startPanel(dir, { port: 0, pause: () => Promise.resolve() });
     const page = await call(panel.url, "/", "GET");
-    expect(page.body).toMatch(/Paused since [^<]+\. Resume needs your passkey\./);
+    expect(page.body).toMatch(
+      /Paused since [^<]+\. The pause holds on this machine; Intent Cloud has not acknowledged it yet\. Until it does, the pause can be lifted from this machine; after that, resuming needs your passkey\./,
+    );
+    // Attack on the claim (invariant 5): this machine alone can lift this pause, so the banner does not say a passkey is needed.
+    expect(page.body).not.toContain("Resume needs your passkey");
+    expect(page.body).toContain("<code>intent resume</code> in a terminal.");
     expect(page.body).not.toContain("data-pause");
     expect(page.body).toContain("No open purchase was waiting.");
+  });
+
+  it("once Intent Cloud acknowledged the pause, the banner says resume needs the passkey", async () => {
+    const store = await openStore(dir);
+    const pause = await store.append("pause", { from: "panel" });
+    await store.append("pause_sent", { pause_seq: pause.seq, counter: 1, disclosure_seq: 0, result: "acknowledged", reason: "acknowledged" });
+    await store.close();
+    panel = await startPanel(dir, { port: 0 });
+    const page = await call(panel.url, "/", "GET");
+    expect(page.body).toMatch(/Paused since [^<]+\. Resume needs your passkey\./);
+    expect(page.body).toContain("which opens the confirm page's /account for your passkey.");
   });
 });

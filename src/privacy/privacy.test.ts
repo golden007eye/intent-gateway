@@ -12,6 +12,7 @@ import {
   ORDER_REF_AT,
   SCAN_DEPTH,
   SHOPIFY_ORDER_GID,
+  TOOL_POSTCODE_AT,
 } from "./index.ts";
 
 // Invariant 3 (no buyer identity in the gateway): each positive is identity an agent might try to send out.
@@ -102,7 +103,6 @@ const negatives: [label: string, body: unknown][] = [
   ["float", { weight_kg: 4111111111111.111 }],
   ["ZIP", { zip: "94110" }],
   ["ZIP as number", { zip: 94110 }],
-  ["ZIP+4", { postcode: "94110-1234" }],
   ["postcode_only policy field", { postcode_only: true }],
   ["ISO date", { since: "2026-10-15" }],
   ["ISO timestamp", { at: "2026-10-15T10:30:00.123Z" }],
@@ -319,5 +319,72 @@ describe("a Shopify order gid at an order path is not a card (ADR-0019)", () => 
 
   it("only the card check is skipped: every other finding at the path stays", () => {
     expect(findIdentity({ order_ref: "jane@example.com" }, report)).toEqual([{ path: "$.order_ref", kind: "email" }]);
+  });
+});
+
+// Invariant 3, QA on preview.6: a full postcode, or a street with no house number after a delivery phrase, inside free
+// text reached Intent Cloud ("phone stand to SW1A 1AA", must_haves ["deliver to Evergreen Terrace"]).
+describe("a full postcode or a delivered-to street in free text", () => {
+  // Realistic product text that must still leave: numbers, sizes, units, storage, model names, coarse postcodes.
+  const products = [
+    "RTX 4090", "GeForce RTX 4070 TI SUPER", "1080 Ti", "4090 TI", "size 10 1/2", "Nike Air Max 270 size 10.5", "M4 bolts",
+    "M8 x 1.25 bolts", "2 pack", "AA batteries 24 pack", "9V battery 4 pack", "PS5 2TB", "PS4 2PK controller", "M2 2TB SSD",
+    "S24 1TB", "Galaxy S24 Ultra 512GB", "Xbox Series X 1TB", "iPhone 15 Pro 256GB", "Pixel 8 Pro 128GB", "Mac mini M4 512GB",
+    "MacBook Air M3 13 inch 16GB", "SanDisk 1TB microSD", "DDR5 32GB 6000MHz", "1000 ml bottle", "1500 ML", "wd40 400ml",
+    "Hydro Flask 32 oz", "Instant Pot 6 qt", "Le Creuset 5.5 qt", "A4 paper 500 sheets", "Galaxy A15 2024", "E27 bulb 2700K",
+    "A19 bulb 60W", "H11 bulbs", "h12 deck", "B12 3HP motor", "E3 1LB weight", "N1 2ND gen", "1230 PM", "usb hub 2000 or less",
+    "Sony WH-1000XM5", "Canon EOS R5 24-105mm", "USB-C 3.1 cable 6ft", "LG C3 OLED 55 inch", "Dyson V15 Detect", "Bose QC45",
+    "TP-Link AX5400", "Weber Q1200", "Levi's 501 32x32", "Rolex GMT 126710", "K2 skis 2025", "Model Y 2023 floor mats",
+    "AirPods Pro 2nd gen", "tent for 2 people", "Main Street Coffee Mug", "Baker Street Sherlock poster", "Way of Kings book",
+    "ships to my place", "send to my place", "ship to the US", "deliver to Canada", "delivery by Friday", "2024-10-30",
+    "ZIP 94107 tee", "94107", "10115", "SW1A", "K1A", "D02", "of_x-K1A0B1-abc", "550e8400-e29b-41d4-a716-446655440000",
+  ];
+  it.each(products)("leaves product text %j clean", (text) => {
+    expect(findIdentity({ product: text, must_haves: [text] })).toEqual([]);
+  });
+
+  const postcodes: [label: string, text: string][] = [
+    ["UK, in a product (QA)", "phone stand to SW1A 1AA"],
+    ["UK, a name and a postcode (QA)", "tee for Jane Tester to SW1A 1AA"],
+    ["UK, lower case", "sw1a 1aa"],
+    ["UK, glued", "EC1A1BB"],
+    ["UK, one-letter area", "M1 1AE"],
+    ["UK, hyphenated", "SW1A-1AA"],
+    ["Canada", "deliver to K1A 0B1"],
+    ["Canada, lower case and glued", "k1a0b1"],
+    ["Ireland", "D02 X285"],
+    ["Ireland, lower case", "d02 x285"],
+    ["Ireland, all letters", "T12 RHKW"],
+    ["the Netherlands", "naar 1012 AB"],
+    ["Portugal", "1000-001 Lisboa"],
+    ["US ZIP+4", "94107-1234"],
+    ["full-width UK", "ＳＷ１Ａ １ＡＡ"],
+    ["UK in brackets", "mug (SW1A 1AA)."],
+  ];
+  it.each(postcodes)("finds a full postcode: %s", (_label, text) => {
+    expect(findIdentity({ product: text })).toContainEqual({ path: "$.product", kind: "postcode" });
+  });
+
+  const streets: [label: string, text: string][] = [
+    ["deliver to (QA)", "deliver to Evergreen Terrace"],
+    ["ship to", "ship to Baker Street"],
+    ["send it to", "send it to Fifth Avenue"],
+    ["shipping to, lower case", "shipping to abbey road"],
+    ["delivered to", "Delivered to Sunset Blvd"],
+    ["address is", "my address is Elm Lane"],
+    ["address:", "address: 5th Ave"],
+  ];
+  it.each(streets)("finds a street with no house number after a delivery phrase: %s", (_label, text) => {
+    expect(findIdentity({ must_haves: [text] })).toContainEqual({ path: "$.must_haves[0]", kind: "street_address" });
+  });
+
+  it("lets a whole postcode through only in the tool's own postcode field, and only from the postcode check", () => {
+    expect(findIdentity({ postcode: "SW1A 1AA", country: "GB" }, { postcodeAt: TOOL_POSTCODE_AT })).toEqual([]);
+    expect(findIdentity({ postcode: "94110-1234" }, { postcodeAt: TOOL_POSTCODE_AT })).toEqual([]);
+    // Attack: the exemption does not follow the value to another field, nor stop the other checks in that field.
+    expect(findIdentity({ product: "SW1A 1AA", postcode: "SW1A 1AA" }, { postcodeAt: TOOL_POSTCODE_AT })).toEqual([{ path: "$.product", kind: "postcode" }]);
+    expect(findIdentity({ postcode: "SW1A 1AA" })).toEqual([{ path: "$.postcode", kind: "postcode" }]);
+    expect(findIdentity({ postcode: "742 Evergreen Terrace" }, { postcodeAt: TOOL_POSTCODE_AT })).toEqual([{ path: "$.postcode", kind: "street_address" }]);
+    expect(findIdentity({ nested: { postcode: "SW1A 1AA" } }, { postcodeAt: TOOL_POSTCODE_AT })).toEqual([{ path: "$.nested.postcode", kind: "postcode" }]);
   });
 });

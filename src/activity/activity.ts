@@ -283,7 +283,7 @@ const REFUSAL = /^(cart|snapshot|approval_proof): /;
  */
 const LOGGING_REFUSAL = /^(a credential at |a credential in the query |the body is not plain JSON|the form body is not written|the request has more than one content-type header)/;
 /** Block reasons of the buyer-identity check (findIdentity's kinds, written as `<kind> at <path>`). */
-const IDENTITY_REASON = /^(card|email|phone|street_address|banned_key|too_deep) at /;
+const IDENTITY_REASON = /^(card|email|phone|street_address|postcode|banned_key|too_deep) at /;
 const SEVERITY: readonly Delivery[] = ["acknowledged", "answered", "not_sent", "unacknowledged", "maybe_sent", "discarded"];
 
 /** Reads the chain items `readChain` returns as actions, in chain order, with summary counts. */

@@ -660,6 +660,11 @@ describe("invariant 3: buyer identity in a tool input is never sent", () => {
     ["a shipping address object", { ...SHOES, shipping_address: { line1: "1 Infinite Loop" } }],
     ["a card split over a list", { ...SHOES, must_haves: ["4111", "1111", "1111", "1111"] }],
     ["an email as a field name", { ...SHOES, "jane.doe@mail.example": true }],
+    // QA on preview.6: each of these reached Intent Cloud.
+    ["a full UK postcode in the product", { ...SHOES, product: "phone stand to SW1A 1AA" }],
+    ["a street with no house number in a must-have", { ...SHOES, must_haves: ["deliver to Evergreen Terrace"] }],
+    ["a ZIP+4 in the product", { ...SHOES, product: "running shoes 94103-1234" }],
+    ["a Canadian postal code in the category", { ...SHOES, category: "shoes K1A 0B1" }],
   ];
 
   it.each(ATTACKS)("find_offers with %s: 0 sends, a block entry without the value", async (_name, input) => {
@@ -671,8 +676,28 @@ describe("invariant 3: buyer identity in a tool input is never sent", () => {
     expect(h.totalSends()).toBe(0);
     // What this call wrote, without the hashes and the start-up receipts, whose random hex can contain "4111".
     const chain = JSON.stringify(h.store.entries().slice(before).map((e) => [e.kind, e.body]));
-    for (const secret of ["4111", "jane", "Jane", "Pennsylvania", "555-2671", "Infinite"]) expect(chain).not.toContain(secret);
+    for (const secret of ["4111", "jane", "Jane", "Pennsylvania", "555-2671", "Infinite", "1AA", "Evergreen", "94103-1234", "0B1"]) expect(chain).not.toContain(secret);
     expect(bodies(h, "block")).toHaveLength(1);
+  });
+
+  it("the refusal tells the agent to take the postcode out of the text and pass it in the postcode field", async () => {
+    const h = await setup();
+    const result = await h.gateway.findOffers({ ...SHOES, product: "phone stand to SW1A 1AA" });
+    expect(result.status === "blocked" && result.message).toContain("Remove any address or postcode from the product, category and must-haves, pass the postcode in the postcode field only");
+    expect(bodies(h, "block")[0]).toMatchObject({ blocked: ["postcode at $.product"] });
+  });
+
+  it("a whole postcode in the postcode field itself is not identity: it is coarsened, not refused", async () => {
+    const h = await setup();
+    const sent: unknown[] = [];
+    h.patch.search = (request) => {
+      sent.push(request);
+      return h.real.search(request);
+    };
+    const zipPlus4 = await h.gateway.findOffers({ ...SHOES, postcode: "94103-1234" });
+    expect(zipPlus4.status).toBe("offers");
+    // Only the 5-digit ZIP left the gateway.
+    expect(sent).toEqual([expect.objectContaining({ ship_to: { country: "US", postal_code: "94103" } })]);
   });
 
   it("identity is refused even when other details are missing", async () => {

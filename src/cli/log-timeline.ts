@@ -1,6 +1,6 @@
 // `intent log`'s default view, the action timeline: a header (demo or real chain, data dir, entries), a date header
 // per day, one line per action (time, verb, the values it sent in readable form, its outcome), what was sent and what
-// never was, the counts, and where the details are. It says what the gateway sent and what came back for each request
+// the identity check found in it, the counts, and where the details are. It says what the gateway sent and what came back for each request
 // (invariant 5): "receipt" only for a receipt entry, "passkey proof checked" only for an approval the gateway chained
 // after verifying its proof, and `→ 3 offers`, a product title or an approval state only from an `observed` entry,
 // which records what Intent Cloud returned. A chain without observations shows the values sent, as before. A call to
@@ -119,7 +119,7 @@ export function formatTimeline(context: TimelineContext, style: TimelineStyle): 
   lines.push("");
   lines.push(...disclosed(summary, g, paint));
   lines.push("");
-  lines.push(counts(summary, shown.length, total, g, paint));
+  lines.push(counts(summary, shown.filter((a) => cartRefusal(a) !== null).length, shown.length, total, g, paint));
   if (!all.chain.ok) {
     lines.push(paint("bad", `${g.bad} the chain breaks at seq ${String(all.chain.brokenSeq)} (${all.chain.reason}); run ${INTENT} verify${all.demo ? " --demo" : ""}`));
   }
@@ -211,6 +211,9 @@ function rawRow(a: Activity, g: Glyphs): Row {
         return { verb: "cart", verbTone: "bold", values, outcome: `${g.arrow} approval link  ${g.ok} ${receiptWord(receipts)}`, outcomeTone: "good" };
       }
       const [outcome, tone] = delivered();
+      // An HTTP error answer (409 paused or conflict, 429) with a receipt is Intent Cloud refusing the cart: no cart.
+      const refusal = cartRefusal(a);
+      if (refusal !== null) return { verb: "cart", verbTone: "bad", values, outcome: `${g.bad} refused: status ${String(refusal)} ${g.dot} ${outcome}`, outcomeTone: "bad" };
       return { verb: "cart", verbTone: tone === "warn" ? "warn" : "bold", values, outcome, outcomeTone: tone };
     }
     case "status": {
@@ -307,6 +310,16 @@ function rawRow(a: Activity, g: Glyphs): Row {
   }
 }
 
+/** The HTTP error status (400 or more) a cart's request was answered with, or null when none was. */
+function cartRefusal(a: Activity): number | null {
+  if (a.action !== "cart") return null;
+  for (const r of a.requests) {
+    const status = r.response?.status ?? null;
+    if (status !== null && status >= 400) return status;
+  }
+  return null;
+}
+
 /** A state an observation recorded, worded as what Intent Cloud returned: the receipt does not cover the body. */
 function says(state: string): string {
   return `Intent Cloud says ${state}`;
@@ -353,11 +366,15 @@ function offersWord(count: number, hidden: number): string {
 
 const ENDPOINT_WORDS: Readonly<Record<string, string>> = { searchCatalog: "search", createCart: "cart", createCheckout: "checkout submit", createApproval: "approval request", getApproval: "status check" };
 
+/** What the identity check cannot see, said next to its result (the panel's drawer says the same). */
+const NAME_CAVEAT = "Free text is sent as written: a name in it cannot be detected.";
+
 const IDENTITY_WORDS: Readonly<Record<string, string>> = {
   card: "a card number",
   email: "an email address",
   phone: "a phone number",
   street_address: "a street address",
+  postcode: "a full postcode",
   banned_key: "an identity field",
   too_deep: "a value nested too deep to check",
 };
@@ -377,7 +394,8 @@ function reason(text: string): string {
 
 /**
  * "Sent to Intent Cloud only: …" (one such line per destination, each listing what its logged requests carried) and
- * "Never sent: …", from the values the shown requests logged. A destination with no request shown has no line.
+ * what the identity check found ("No name, address or card field was sent", and that a name in free text cannot be
+ * detected), from the values the shown requests logged. A destination with no request shown has no line.
  */
 function disclosed(summary: ActivitySummary, g: Glyphs, paint: (tone: Tone, s: string) => string): string[] {
   const out: string[] = [];
@@ -388,7 +406,9 @@ function disclosed(summary: ActivitySummary, g: Glyphs, paint: (tone: Tone, s: s
     out.push(paint("bad", `${g.bad} Buyer identity in what was sent: ${findings.map((f) => `entry #${String(f.seq)} (${f.kinds.join(", ")})`).join(", ")}; run ${INTENT} verify`));
   } else if (checked > 0 || unchecked === 0) {
     const caveat = unchecked === 0 ? "" : ` (${plural(unchecked, "request", "requests")} with no logged bytes not checked)`;
-    out.push(paint("dim", `Never sent: your name, postal address, card${caveat}.`));
+    // Only what the check can tell (invariant 5): a field named for identity, or an address, postcode or card number in
+    // a value. A name typed into free text looks like any other word, so the line says so instead of "never sent".
+    out.push(paint("dim", `No name, address or card field was sent${caveat}.`), paint("dim", NAME_CAVEAT));
   } else {
     out.push(paint("dim", `Not checked: ${plural(unchecked, "request has", "requests have")} no logged bytes.`));
   }
@@ -452,7 +472,8 @@ export function walletWords(f: Activity["facts"], sep: string): string {
   return [`${rail} wallet ${f.wallet_action ?? ""}`.trim(), revoked, ...walletCheckWords(f)].filter((v) => v !== "").join(sep);
 }
 
-function counts(summary: ActivitySummary, shown: number, total: number, g: Glyphs, paint: (tone: Tone, s: string) => string): string {
+/** `refusedCarts`: carts Intent Cloud answered with an error status, counted as refused, not as carts. */
+function counts(summary: ActivitySummary, refusedCarts: number, shown: number, total: number, g: Glyphs, paint: (tone: Tone, s: string) => string): string {
   const a = summary.actions;
   const r = summary.requests;
   const parts: string[] = [];
@@ -460,13 +481,13 @@ function counts(summary: ActivitySummary, shown: number, total: number, g: Glyph
     if (n > 0) parts.push(paint(tone, plural(n, one, many)));
   };
   add(a.search, "search", "searches");
-  add(a.cart, "cart", "carts");
+  add(a.cart - refusedCarts, "cart", "carts");
   add(a.status, "status check", "status checks");
   add(a.approval, "approval", "approvals");
   add(a.call, "wallet call", "wallet calls");
   add(a.wallet, "wallet change", "wallet changes");
   add(a.blocked, "blocked", "blocked", "bad");
-  add(summary.refused, "refused", "refused", "bad");
+  add(summary.refused + refusedCarts, "refused", "refused", "bad");
   add(a.flagged, "flagged", "flagged", "bad");
   add(r.acknowledged, "receipt", "receipts", "good");
   add(r.answered, "answered without a receipt", "answered without a receipt");

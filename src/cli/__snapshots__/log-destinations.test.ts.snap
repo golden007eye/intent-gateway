@@ -81,7 +81,8 @@ Friday 16 October 2026 (UTC)
 
 Sent to Intent Cloud only: category, ZIP code, country.
 Sent to Shop only: checkout_id, refresh_token, tool name, MCP envelope (jsonrpc, id, method), 2 credentials (in the log as digests).
-Never sent: your name, postal address, card.
+No name, address or card field was sent.
+Free text is sent as written: a name in it cannot be detected.
 
 9 actions · 1 search · 2 wallet calls · 3 wallet changes · 2 blocked · 1 receipt · 2 answered without a receipt
 Details: intent log -v · Machine-readable: intent log --json · Integrity: intent verify

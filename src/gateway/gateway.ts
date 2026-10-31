@@ -82,11 +82,11 @@ import { INTENT } from "../config/index.ts";
 import { canonicalize, sha256Hex } from "../jcs/index.ts";
 import { capsIn, CLOUD_BASELINE, scalable, type CompletionMode as PolicyCompletionMode, evaluate, meet, type Offer as PolicyOffer, type Policy } from "../policy/index.ts";
 import { coarsen, currencyFor, currencyWords, namesText, shipCountry } from "../shipto/index.ts";
-import { isPausedAnswer, noteSubmitAnswer, pausedIn, pauseState, refuseForPause } from "../pause/index.ts";
+import { isPausedAnswer, noteSubmitAnswer, pausedIn, pausedRefusalWords, pauseState, refuseForPause } from "../pause/index.ts";
 import { observeApproval, observeCart, observeSearch, observeStatus } from "../observation/index.ts";
 import { createShopProvider, filterOffers, newOfferHandle, type SearchOffer, type SearchProvider, searchProviders } from "../search/index.ts";
 import { CloudOutcomeEntry, ORDER_REF, outcomesFor, readCloudOutcome, replaces, shownStatus, type StatementCheck } from "../outcome/index.ts";
-import { findIdentity, ORDER_REF_AT } from "../privacy/index.ts";
+import { findIdentity, ORDER_REF_AT, TOOL_POSTCODE_AT } from "../privacy/index.ts";
 import type { CompleterKeys, Session } from "../signing/index.ts";
 import { type Entry, type Store, StoreConflictError } from "../store/index.ts";
 import {
@@ -517,7 +517,8 @@ export function createGateway(options: GatewayOptions): Gateway {
 
   /** Invariant 3, before anything is built from the input: identity anywhere in it means nothing is sent. */
   async function identityRefusal(endpoint: string, input: unknown, fromSeq: number): Promise<Refused | null> {
-    const findings = findIdentity(input);
+    // The postcode field holds a whole postcode by design: it is coarsened before anything is built from it.
+    const findings = findIdentity(input, { postcodeAt: TOOL_POSTCODE_AT });
     if (findings.length === 0) return null;
     // A field name can itself be identity ({"jane@example.com": 1}); such a name is never written to the chain.
     const named = (text: string, kind: string): string => (findIdentity(text).length === 0 ? text : `${kind} in a field name`);
@@ -527,8 +528,10 @@ export function createGateway(options: GatewayOptions): Gateway {
       findings.map((f) => named(`${f.kind} at ${f.path}`, f.kind)),
       fromSeq,
       "blocked",
-      "Not sent: the request contains buyer identity (a name, address, phone, email or card). The gateway never " +
-        "sends or keeps it; the buyer gives it to the merchant at checkout. Remove it and try again.",
+      "Not sent: the request holds what looks like buyer identity (an address, a full postcode, a phone number, an email " +
+        "or a card). The gateway never sends or keeps it; the buyer gives it to the merchant at checkout. Remove any " +
+        "address or postcode from the product, category and must-haves, pass the postcode in the postcode field only, " +
+        "and try again.",
     );
   }
 
@@ -927,7 +930,7 @@ export function createGateway(options: GatewayOptions): Gateway {
     const fromSeq = head();
     // A pause stops every cart before anything is built or sent (ADR-0023); the refusal is chained under the lease.
     if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_cart", source: "gateway" }))) {
-      return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
+      return { status: "refused", message: pausedRefusalWords(pauseState(store.entries())), summary: summary(fromSeq) };
     }
     const identity = await identityRefusal("createCart", raw, fromSeq);
     if (identity !== null) return identity;
@@ -1053,7 +1056,7 @@ export function createGateway(options: GatewayOptions): Gateway {
 
     // A pause chained while the cart was being made stops the purchase at its next outward step (ADR-0023).
     if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_approval", source: "gateway" }))) {
-      return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
+      return { status: "refused", message: pausedRefusalWords(pauseState(store.entries())), summary: summary(fromSeq) };
     }
     const approvalCall = await call(() => cloud.createApproval(cart.cart_handle), fromSeq);
     if (!approvalCall.ok) {
@@ -1312,7 +1315,7 @@ export function createGateway(options: GatewayOptions): Gateway {
   ): Promise<CreateCartResult> {
     // A pause chained since create_cart began (another process, the panel) stops the submit too (ADR-0023).
     if (pausedIn(store.entries()) && (await refuseForPause(store, { step: "create_cart", source: "gateway" }))) {
-      return { status: "refused", message: PAUSED_HERE, summary: summary(fromSeq) };
+      return { status: "refused", message: pausedRefusalWords(pauseState(store.entries())), summary: summary(fromSeq) };
     }
     const submitted = await call(() => cloud.createCheckout(request), fromSeq);
     if (!submitted.ok) {
@@ -1756,9 +1759,6 @@ export function paymentOffer(s: AnySnapshot): PolicyOffer {
   return s.v === 4 ? policyOffer(s.myshopify_domain, "", total, null, s.quantity, total.currency) : policyOffer(s.merchant.domain, "", total, null, s.quantity);
 }
 
-/** What the agent is told when the developer's pause stops a step here. */
-const PAUSED_HERE =
-  `Not sent: the developer paused purchases through intent (\`${INTENT} pause\`). Nothing is bought until they resume with their passkey; do not retry.`;
 /** What the agent is told when Intent Cloud answered `paused`. */
 const PAUSED_BY_CLOUD = "A `paused` answer was received from Intent Cloud for this account. Nothing is bought until the developer resumes with their passkey; do not retry.";
 
@@ -1845,7 +1845,7 @@ function completionWords(c: CompletionView): string {
   const note = c.advisory?.includes("title_differs") === true ? " Note: Shop's item title differs from the approved one (variant, quantity, ZIP and total match)." : "";
   switch (c.state) {
     case "completing":
-      if (c.reason === "paused") return `Purchases are paused (\`${INTENT} pause\`): the gateway did not complete this purchase. It goes on only after the developer resumes with their passkey.`;
+      if (c.reason === "paused") return `Purchases are paused (\`${INTENT} pause\`): the gateway did not complete this purchase. It goes on only after the developer resumes.`;
       return `The gateway is completing the purchase with the linked Shop wallet. ${again}${note}`;
     case "indeterminate":
       return (

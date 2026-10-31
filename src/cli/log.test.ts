@@ -126,7 +126,8 @@ describe("intent log --verbose and --json (golden)", () => {
       17:33:37  search    running shoes · must: road · under $120 · ZIP 94103   ⚠ maybe sent, no answer recorded
 
       Sent to Intent Cloud only (1 request maybe sent): category, must-haves, budget, offer, quantity, ZIP code, country.
-      Never sent: your name, postal address, card.
+      No name, address or card field was sent.
+      Free text is sent as written: a name in it cannot be detected.
 
       9 actions · 3 searches · 1 cart · 2 status checks · 1 approval · 1 blocked · 4 receipts · 1 sent without receipt · 1 not sent · 1 maybe sent
       Details: intent log -v · Machine-readable: intent log --json · Integrity: intent verify
@@ -142,7 +143,52 @@ describe("intent log --verbose and --json (golden)", () => {
     await store.close();
     const result = await s.run(["log"]);
     expect(result.out).toContain("✗ Buyer identity in what was sent: entry #0 (email); run intent verify\n");
-    expect(result.out).not.toContain("Never sent");
+    expect(result.out).not.toContain("No name, address or card field was sent");
+  });
+
+  // Invariant 5, QA on preview.6: "tee for Jane Tester" and "phone stand to SW1A 1AA" were sent, and the log still
+  // ended "Never sent: your name, postal address, card".
+  it("attack: a name typed into the product is sent as written, and the log never claims a name was not sent", async () => {
+    const s = setup();
+    const store = await openStore(s.dir, { clock: () => TS });
+    await store.append("disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", { ...SEARCH, product: "tee for Jane Tester" }, [...SEARCH_FIELDS, "product"]));
+    await store.append("receipt", { disclosure_seq: 0, status: 200, verified: true });
+    await store.close();
+    const result = await s.run(["log"]);
+    expect(result.out).toContain('"tee for Jane Tester"');
+    expect(result.out).toContain("No name, address or card field was sent.\nFree text is sent as written: a name in it cannot be detected.\n");
+    expect(result.out).not.toMatch(/never sent: your name/i);
+  });
+
+  it("attack: a full postcode in the product of an old chain is named as buyer identity in what was sent", async () => {
+    const s = setup();
+    const store = await openStore(s.dir, { clock: () => TS });
+    await store.append("disclosure", disclosure("searchCatalog", "POST", "/v1/catalog/search", { ...SEARCH, product: "phone stand to SW1A 1AA" }, [...SEARCH_FIELDS, "product"]));
+    await store.append("receipt", { disclosure_seq: 0, status: 200, verified: true });
+    await store.close();
+    const result = await s.run(["log"]);
+    expect(result.out).toContain("✗ Buyer identity in what was sent: entry #0 (postcode); run intent verify\n");
+    expect(result.out).not.toContain("No name, address or card field was sent");
+  });
+
+  it("a cart Intent Cloud answered 409 or 429 shows its status as refused and is not counted as a cart", async () => {
+    const s = setup();
+    const store = await openStore(s.dir, { clock: () => TS });
+    const cartFields = ["offer_handle", "quantity", "ship_to", "ship_to.country", "ship_to.postal_code"];
+    await store.append("disclosure", disclosure("createCart", "POST", "/v1/carts", CART, cartFields));
+    await store.append("receipt", { disclosure_seq: 0, status: 409, verified: true, receipt_header: receiptHeader });
+    await store.append("disclosure", disclosure("createCart", "POST", "/v1/carts", CART, cartFields));
+    await store.append("receipt", { disclosure_seq: 2, status: 429, verified: true, receipt_header: receiptHeader });
+    await store.append("disclosure", disclosure("createCart", "POST", "/v1/carts", CART, cartFields));
+    await store.append("receipt", { disclosure_seq: 4, status: 201, verified: true, receipt_header: receiptHeader });
+    await store.close();
+    const result = await s.run(["log", "--utc"]);
+    const rows = result.out.split("\n").filter((l) => /^\d\d:\d\d:\d\d {2}cart /.test(l));
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatch(/✗ refused: status 409 · ✓ receipt$/);
+    expect(rows[1]).toMatch(/✗ refused: status 429 · ✓ receipt$/);
+    expect(rows[2]).toMatch(/ {2}✓ receipt$/);
+    expect(result.out).toMatch(/^3 actions · 1 cart · 2 refused · 3 receipts$/m);
   });
 
   it("--json prints one action per line, the activity model with v: 2 (an old chain: no observations)", async () => {
