@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { BUILD, type Config, INTENT } from "../config/index.ts";
 import { startPanel } from "../panel/index.ts";
-import { answerStdioWithError } from "../mcp/index.ts";
+import { runStdio } from "../mcp/index.ts";
 import { formatReport, type Install, runVerify } from "../verify/index.ts";
 import { approverAccept, approverList } from "./approver.ts";
 import { doctor } from "./doctor.ts";
@@ -107,11 +107,23 @@ export async function main(argv: readonly string[], io: Io): Promise<Outcome> {
   } catch (error) {
     const described = describeError(error, ctx);
     line(io.stderr, `intent: ${printable(described)}`);
-    if (mcpOverStdio) await answerStdioWithError(`intent could not start: ${described}`, io);
+    if (mcpOverStdio) await refuseOverStdio(`intent could not start: ${described}`, io);
     const debug = config?.debug ?? io.env.INTENT_DEBUG === "1";
     if (debug && error instanceof Error && error.stack !== undefined) line(io.stderr, error.stack);
     return { code: error instanceof CliError ? error.code : 1 };
   }
+}
+
+/**
+ * The gateway could not be set up (configuration, policy, data dir) but an MCP client launched it over stdio. A closed
+ * pipe would leave the agent with no tools and nothing to tell the user, so the three tools are listed and every call
+ * is refused with `message`, the reason and its fix. Nothing is sent anywhere. Resolves when the client closes stdin.
+ */
+async function refuseOverStdio(message: string, io: Io): Promise<void> {
+  const refuse = (): Promise<never> => Promise.reject(new Error(message));
+  const mcp = await runStdio({ gateway: { start: () => Promise.resolve(), findOffers: refuse, createCart: refuse, getApprovalStatus: refuse, sendPause: refuse } });
+  await new Promise<void>((resolve) => io.stdin.once("end", resolve));
+  await mcp.close();
 }
 
 function parse(argv: readonly string[]): "help" | { command: string; args: string[]; values: Values } {
@@ -173,7 +185,8 @@ async function run(io: Io, config: Config, command: string, args: readonly strin
       return withDemo(io, config, async (demo) => {
         // `intent demo` typed at a terminal serves over HTTP, so it has something to show; an MCP client runs it over stdio.
         const http = values.http === true || (command === "demo" && io.isTTY.stdin);
-        return serve(io, config, { http, demo });
+        // An MCP client that started this over stdio keeps a server to ask even when Intent Cloud cannot be used yet.
+        return serve(io, config, { http, demo, lazyStart: !http && !io.isTTY.stdin });
       });
     case "log":
       return logCommand(io, config.dataDir, logFlags(io, values));

@@ -74,7 +74,7 @@ Friday 16 October 2026 (UTC)
 17:26:53  start     gateway started                                       ✓ recorded
 17:26:57  call      Shop get_checkout · checkout_id                       ✓ answered 200 (no signed receipt)
 17:27:05  call      Shop refresh · refresh_token                          ⚠ answered 401 (no signed receipt)
-17:27:13  blocked   Shop search: an email address in params.arguments.note  ✗ nothing sent
+17:27:13  blocked   Shop search: an email address (in note)               ✗ nothing sent
 17:27:17  blocked   Shop search: not logged as sent: a credential in the query (access_token), which the log cannot digest  ✗ nothing sent
 17:27:21  wallet    Shop wallet unlinked · token revoked at Shop          ✓ recorded
 17:27:25  wallet    Shop wallet unlinked · token not revoked (deleted here only)  ✓ recorded

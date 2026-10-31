@@ -30,6 +30,17 @@ describe("observeSearch", () => {
     expect(observationProblem(body)).toBeNull();
   });
 
+  it("keeps total_kind only for a max offer, whose shipping is quoted at the cart (the log must not call it $0.00)", () => {
+    const max: Offer = { ...offer(1), shipping: money(0), total_kind: "max" };
+    const body = observeSearch(4, { offers: [max, offer(2)] }, 0);
+    const offers = body.endpoint === "searchCatalog" ? body.offers : [];
+    expect(offers[0]).toMatchObject({ shipping_minor: 0, total_kind: "max" });
+    expect(offers[1]).not.toHaveProperty("total_kind");
+    expect(observationProblem(body)).toBeNull();
+    // Only "max" is a value it keeps; anything else is refused.
+    expect(observationProblem({ ...body, offers: [{ ...offers[1], total_kind: "exact" }] })).not.toBeNull();
+  });
+
   it("caps the list, never the count", () => {
     const body = observeSearch(4, { offers: Array.from({ length: 20 }, (_, i) => offer(i)) }, 0);
     expect(body).toMatchObject({ offers_count: 20 });

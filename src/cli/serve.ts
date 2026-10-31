@@ -6,11 +6,12 @@
 import { ensureAccountKey } from "../account/index.ts";
 import { type Config, DOCKER_EXEC, DOCKER_STOP, INTENT } from "../config/index.ts";
 import { DEMO_BANNER, type Demo, nextSteps } from "../demo/index.ts";
-import { createGateway } from "../gateway/index.ts";
+import { createGateway, type Gateway } from "../gateway/index.ts";
 import { runHttp, runStdio } from "../mcp/index.ts";
 import { openCompleterKeys } from "../signing/index.ts";
 import { openStore } from "../store/index.ts";
 import { containerConnect } from "./connect.ts";
+import { describeError, errorContext } from "./errors.ts";
 import { type Io, line, type Outcome } from "./io.ts";
 import { activePolicy, cloudFor, rootKeys } from "./setup.ts";
 import { leaseNotice, slowCloudNotice } from "./waiting.ts";
@@ -18,7 +19,13 @@ import { oneTapFor } from "./wallet.ts";
 import { startPauseRetry } from "../pause/index.ts";
 import { accountKeyFor } from "./pause.ts";
 
-export async function serve(io: Io, config: Config, options: { http: boolean; demo: Demo | null }): Promise<Outcome> {
+/**
+ * `lazyStart`: an MCP client started this process over stdio. A start that fails (Intent Cloud unreachable, a contract
+ * mismatch, a key statement that does not verify) then does not end the process: the tools are listed, each call tries
+ * the start again first, and until it succeeds every call is refused with the reason, so the agent can tell the user
+ * instead of seeing a dead server. Nothing is trusted or sent for a search until a start succeeds (fail closed).
+ */
+export async function serve(io: Io, config: Config, options: { http: boolean; demo: Demo | null; lazyStart?: boolean }): Promise<Outcome> {
   const { demo } = options;
   const say = (text: string): void => {
     line(io.stderr, `intent: ${text}`);
@@ -59,12 +66,27 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
       ...(demo === null ? {} : { demo: { confirmBaseUrl: demo.confirmBaseUrl, catalogNote: demo.catalogNote } }),
       ...now,
     });
-    await gateway.start();
+    const describe = (error: unknown): string => describeError(error, errorContext(config, io.env));
+    const started = startOnce(gateway, describe);
+    let startFailed = false;
+    if (options.lazyStart === true) {
+      try {
+        await gateway.start();
+      } catch (error) {
+        startFailed = true;
+        say(describe(error));
+      }
+    } else {
+      await gateway.start();
+    }
     starting = false;
     // A pause not yet acknowledged by Intent Cloud (this process's, the CLI's or the panel's) is sent again with backoff
     // while serve runs (ADR-0023); the local pause holds meanwhile.
     const retry = startPauseRetry(
-      { store, accountKey: accountKeyFor(io, dataDir), connect: () => Promise.resolve((request, unless) => gateway.sendPause(request, unless)), now: io.now ?? Date.now },
+      { store, accountKey: accountKeyFor(io, dataDir), connect: async () => {
+        await started.ensure();
+        return (request, unless) => gateway.sendPause(request, unless);
+      }, now: io.now ?? Date.now },
       {
         onError: (error) => {
           log(`intent: the pause could not be sent: ${error instanceof Error ? error.message : String(error)}`);
@@ -98,9 +120,10 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
         say(container ? `serving; stop it with ${DOCKER_STOP}` : "serving until Ctrl-C");
       }
     } else {
-      transport = await runStdio({ gateway, ...banner });
+      transport = await runStdio({ gateway: options.lazyStart === true ? started.gateway : gateway, ...banner });
       policyLine();
-      if (demo === null) say(`MCP over stdio is ready; data dir ${dataDir}`);
+      if (startFailed) say(`MCP over stdio is up, but the gateway could not start: each tool call tries again until Intent Cloud returns a contract and key statement the gateway accepts, and until then tells the agent why; data dir ${dataDir}`);
+      else if (demo === null) say(`MCP over stdio is ready; data dir ${dataDir}`);
       else for (const text of nextSteps({ code: { code: demo.code, file: demo.codeFile }, confirm: confirmOf(demo) })) log(text);
     }
     const stop = async (): Promise<void> => {
@@ -115,6 +138,53 @@ export async function serve(io: Io, config: Config, options: { http: boolean; de
     await store.close();
     throw error;
   }
+}
+
+/** A start failure as a tool call reports it: the reason, its fix, and where to see each check. */
+class NotStartedError extends Error {
+  override name = "NotStartedError";
+}
+
+/**
+ * The gateway, with each tool call preceded by one start attempt shared by concurrent calls (start appends to the
+ * chain, so two must not run at once). A failed attempt is forgotten, so the next call tries again; a call is refused
+ * with the reason while no start has succeeded.
+ */
+function startOnce(gateway: Gateway, describe: (error: unknown) => string): { ensure(): Promise<void>; gateway: Gateway } {
+  let done = false;
+  let attempt: Promise<void> | null = null;
+  const ensure = (): Promise<void> => {
+    if (done) return Promise.resolve();
+    attempt ??= gateway.start().then(
+      () => {
+        done = true;
+      },
+      (error: unknown) => {
+        attempt = null;
+        throw new NotStartedError(`${describe(error).replace(/\.$/, "")}. Run \`${INTENT} doctor\` to see each check.`);
+      },
+    );
+    return attempt;
+  };
+  const after =
+    <T>(run: (input: unknown) => Promise<T>) =>
+    async (input: unknown): Promise<T> => {
+      await ensure();
+      return run(input);
+    };
+  return {
+    ensure,
+    gateway: {
+      start: ensure,
+      findOffers: after((input) => gateway.findOffers(input)),
+      createCart: after((input) => gateway.createCart(input)),
+      getApprovalStatus: after((input) => gateway.getApprovalStatus(input)),
+      sendPause: async (request, unless) => {
+        await ensure();
+        return gateway.sendPause(request, unless);
+      },
+    },
+  };
 }
 
 /** The confirm page for nextSteps: its origin, and the port that was taken when it fell back to a free one. */

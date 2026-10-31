@@ -2,7 +2,7 @@
 // categories (invariant 5: never "acknowledged" without a receipt entry); summary counts; filters.
 import { describe, expect, it } from "vitest";
 import { NOT_SENT_REASON } from "../store/index.ts";
-import { type Activity, buildActivity, filterActivity } from "./index.ts";
+import { type Activity, buildActivity, fieldWords, filterActivity, identityWords } from "./index.ts";
 
 const b64 = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64");
 const receiptHeader = Buffer.from(JSON.stringify({ kid: "cloud-receipt-202610", status: 200 })).toString("base64url");
@@ -393,5 +393,19 @@ describe("wallet destinations (ADR-0014)", () => {
     const other = shop(0, { note: "lamp, deliver to Evergreen Terrace" });
     const { summary } = buildActivity(chain([["disclosure", other], reply(0)]));
     expect(summary.identity.findings).toEqual([]);
+  });
+});
+
+describe("identity block reasons in plain words", () => {
+  it("names what was found and the field it was typed in, never the JSON path (QA: the panel said `postcode at $.must_haves[0]`)", () => {
+    expect(identityWords("postcode at $.must_haves[0]")).toBe("a full postcode (in must-haves)");
+    expect(identityWords("street_address at $.must_haves[2]")).toBe("a street address (in must-haves)");
+    expect(identityWords("email at $.params.arguments.note")).toBe("an email address (in note)");
+    expect(identityWords("banned_key at $")).toBe("an identity field (in the request)");
+    // A policy rule is no identity finding; its words are the caller's.
+    expect(identityWords("categories.block at category")).toBeNull();
+    expect(identityWords("postcode")).toBeNull();
+    expect(fieldWords("$.ship_to.postal_code")).toBe("postcode");
+    expect(fieldWords("$.budget_max.amount_minor")).toBe("amount minor");
   });
 });
