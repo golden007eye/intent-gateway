@@ -362,6 +362,21 @@ describe("findOffers readiness", () => {
     expect(h.totalSends()).toBe(0);
   });
 
+  it("outside the US with no linked Shop wallet: the wallet is said first, never a postcode question it would then refuse (QA: SW1A)", async () => {
+    const h = await setup();
+    for (const asked of [
+      { ...SHOES, country: "GB", postcode: "SW1A" },
+      { category: "running-shoes", country: "GB" },
+      { ...SHOES, country: "GB", postcode: "SW1A 1AA" },
+    ]) {
+      const result = await h.gateway.findOffers(asked);
+      expect(result.status, JSON.stringify(asked)).toBe("refused");
+      expect(result.message).toMatch(/^Not sent: searching for the UK needs a linked Shop wallet; without one, intent searches the US only\./);
+      expect(result.message).not.toMatch(/full postcode|SW1A/);
+    }
+    expect(h.totalSends()).toBe(0);
+  });
+
   it("an unknown input field is refused, not sent", async () => {
     const h = await setup();
     const result = await h.gateway.findOffers({ ...SHOES, colour: "blue" });

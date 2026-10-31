@@ -877,6 +877,15 @@ export function createGateway(options: GatewayOptions): Gateway {
     const refusal = country === undefined ? null : countryRefusal(country);
     if (refusal !== null) return { status: "refused", message: refusal, summary: summary(fromSeq) };
     const place = country === undefined ? undefined : shipCountry(country);
+    // Outside the US the search runs only against Shop: Intent Cloud's catalog search takes a US ZIP only. Said
+    // before any postcode is asked for, since no postcode would make it searchable.
+    if (place !== undefined && place.code !== "US" && providers.length === 0) {
+      return {
+        status: "refused",
+        message: `Not sent: searching for ${place.name} needs a linked Shop wallet; without one, intent searches the US only. ${LINK_SHOP}`,
+        summary: summary(fromSeq),
+      };
+    }
     // shipsTo admitted the country, so its currency is in the table.
     const currency = place === undefined ? undefined : currencyOf(place.code);
     const budget = input.budget;
@@ -902,14 +911,6 @@ export function createGateway(options: GatewayOptions): Gateway {
       };
     }
     const shipTo: ShipTo = { country: place.code as CoarseCountry, coarse };
-    // Outside the US the search runs only against Shop: Intent Cloud's catalog search takes a US ZIP only.
-    if (shipTo.country !== "US" && providers.length === 0) {
-      return {
-        status: "refused",
-        message: `Not sent: searching for ${place.name} needs a linked Shop wallet; without one, intent searches the US only. ${LINK_SHOP}`,
-        summary: summary(fromSeq),
-      };
-    }
 
     const mustHaves = input.must_haves;
     const decision = evaluate(
