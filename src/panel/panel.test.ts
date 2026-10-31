@@ -342,3 +342,79 @@ describe("the page", () => {
     expect(Object.keys(a).filter((k) => a[k] !== b[k])).toEqual(["meta"]);
   });
 });
+
+// The grid of `.app` as app.css lays it out, read from the served page and stylesheet: which direct children are
+// grid items, and the column and row each one takes. A small reader for the panel's own markup and flat CSS, no DOM.
+describe("the layout", () => {
+  const VOID = new Set(["input", "br", "img", "meta", "link", "hr", "source", "wbr"]);
+
+  /** The direct children of `<div class="app">`, as the selector app.css places each one by. */
+  function appChildren(html: string): string[] {
+    const start = html.indexOf('<div class="app">') + '<div class="app">'.length;
+    const out: string[] = [];
+    let depth = 0;
+    for (const m of html.slice(start).matchAll(/<(\/?)([a-z][a-z0-9]*)\b([^>]*)>/g)) {
+      const [, close, tag = "", attrs = ""] = m;
+      if (close === "/") {
+        if (depth === 0) break;
+        depth -= 1;
+        continue;
+      }
+      if (depth === 0) {
+        const cls = /class="([^"]*)"/.exec(attrs)?.[1]?.split(" ")[0];
+        out.push(tag === "main" ? "main" : tag === "nav" ? ".nav" : cls === "live" ? ".app>.live" : `.${cls ?? tag}`);
+      }
+      if (!VOID.has(tag) && !attrs.endsWith("/")) depth += 1;
+    }
+    return out;
+  }
+
+  /** The value app.css gives `prop` for `selector`, the last rule winning; `wide` drops the @media blocks. */
+  function decl(css: string, wide: boolean, selector: string, prop: string): string | undefined {
+    let flat = "";
+    for (let i = 0; i < css.length; ) {
+      if (css.startsWith("@media", i)) {
+        const open = css.indexOf("{", i);
+        let depth = 1;
+        let j = open + 1;
+        for (; depth > 0; j += 1) depth += css[j] === "{" ? 1 : css[j] === "}" ? -1 : 0;
+        if (!wide && css.slice(i, open).includes("max-width:768px")) flat += css.slice(open + 1, j - 1);
+        i = j;
+      } else flat += css.charAt(i++);
+    }
+    let value: string | undefined;
+    for (const [, sels = "", body = ""] of flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!sels.split(",").some((s) => s.trim() === selector)) continue;
+      const v = new RegExp(`(?:^|;)\\s*${prop}:([^;]+)`).exec(body)?.[1];
+      if (v !== undefined) value = v.trim();
+    }
+    return value;
+  }
+
+  for (const [state, paused] of [["the Pause button", false], ["the paused banner", true]] as const) {
+    it(`with ${state}, the brand bar and the pause region span the top and nav and main sit side by side under them`, async () => {
+      if (paused) {
+        const store = await openStore(dir, { fs: fast });
+        await store.append("pause", { from: "panel" });
+        await store.close();
+      }
+      panel = await startPanel(dir, { port: 0, pause: () => Promise.resolve() });
+      const page = (await call(panel.url, "/")).body;
+      const css = (await call(panel.url, "/app.css")).body;
+      expect(page).toContain(paused ? 'class="pause-banner"' : 'class="pause-bar"');
+      const children = appChildren(page);
+      expect(children).toEqual([".bar", ".app>.live", ".nav", "main"]);
+      for (const wide of [true, false]) {
+        const row = (sel: string) => decl(css, wide, sel, "grid-row");
+        const rows = decl(css, wide, ".app", "grid-template-rows")?.split(/\s+/) ?? [];
+        // Each spanning child has its own row, in page order; nav and main follow, beside each other only when wide.
+        for (const [i, sel] of [".bar", ".app>.live"].entries()) {
+          expect([sel, decl(css, wide, sel, "grid-column")]).toEqual([sel, "1/-1"]);
+          expect([sel, row(sel)]).toEqual([sel, String(i + 1)]);
+        }
+        expect([row(".nav"), row("main")]).toEqual(wide ? ["3", "3"] : ["3", "4"]);
+        expect(rows).toEqual(wide ? ["auto", "auto", "1fr"] : ["auto", "auto", "auto", "1fr"]);
+      }
+    });
+  }
+});
