@@ -22,15 +22,10 @@
 //   10-digit run is not a phone (ISBNs and SKUs look like that).
 // - street_address: a house number, one to four street-name words, then a street suffix (St, Ave, Rd, Blvd, Ln,
 //   Dr, Ct, Way…). "Main Street Coffee Mug" has no house number, so it is clean; a number followed by a quantity
-//   word ("4 Wheel Drive", "2 Pack Way") is a quantity, so it is clean too. With no house number, street words and
-//   a suffix are a street_address only right after a delivery phrase ("deliver to", "ship it to", "send to", "address
-//   is"): "deliver to Evergreen Terrace", "ship to Baker Street". The street's first word may not be an article or a
-//   pronoun ("send to my place" is clean).
-// - postcode (postcode.ts): a whole postcode of a ship-to country in text, checked by src/shipto's strict pattern for
-//   that country: a ZIP+4 ("94107-1234"), a UK postcode ("SW1A 1AA"), a Canadian one ("K1A 0B1"), an Eircode
-//   ("D02 X285"), a Dutch one ("1012 AB"), a Portuguese one ("1000-001"). Its guards against product text ("PS5 2TB",
-//   "1080 TI", "A15 2024") are listed there. Not at a path the caller names in IdentityOptions.postcodeAt: the tool's
-//   own postcode field, which the gateway coarsens before anything is built from it.
+//   word ("4 Wheel Drive", "2 Pack Way") is a quantity, so it is clean too.
+// - free text (IdentityOptions.freeText, freetext.ts), on the agent's tool input only: a whole postcode of a ship-to
+//   country (`postcode`), and a street with no house number after a delivery phrase (`street_address`). Never run on
+//   what a destination returned or by `intent verify`, so merchant text ("AMD Radeon RX 7900 XT") cannot trip them.
 // - banned_key: an object key naming identity, compared case-insensitively after splitting into words on "_",
 //   "-", spaces and camelCase. Banned: the key "pan", any key starting with "card", and any key containing one
 //   of the words name, surname, recipient, address, addr, street, email, phone, card, cvv, cvv2, cvc
@@ -71,7 +66,8 @@ export {
   valueAt,
 } from "./credentials.ts";
 import { SCAN_DEPTH } from "./credentials.ts";
-import { hasFullPostcode } from "./postcode.ts";
+import { freeTextFindings } from "./freetext.ts";
+import { QUANTITY_WORDS, STREET_WORD, SUFFIXES } from "./street.ts";
 
 /** `too_deep`: a value nested deeper than SCAN_DEPTH, not walked (so it cannot exhaust the stack) and so not cleared. */
 export type FindingKind = "card" | "email" | "phone" | "street_address" | "postcode" | "banned_key" | "too_deep";
@@ -99,8 +95,14 @@ export interface IdentityOptions {
    */
   orderRefAt?: readonly string[];
   /**
-   * JSONPaths where a whole postcode is expected (a tool input's own `postcode` field, TOOL_POSTCODE_AT): the postcode
-   * check does not run on the string at exactly one of them; every other check does, and every other path gets all.
+   * The value is what the agent typed into a tool (the gateway's input screen, and `intent log` reading a search sent to
+   * Intent Cloud): the free-text rules (freetext.ts) run too. Never for what came back from a destination (observations,
+   * Shop's results, statements) or for `intent verify`: merchant text is not the agent's free text.
+   */
+  freeText?: boolean;
+  /**
+   * With freeText, JSONPaths where a whole postcode is expected (the tool's own `postcode` field, TOOL_POSTCODE_AT): the
+   * postcode rule does not run on the string at exactly one of them; every other check does, and every other path gets all.
    */
   postcodeAt?: readonly string[];
 }
@@ -146,7 +148,8 @@ const CLIENT_NAME_PATH = `$.params._meta[${JSON.stringify(CLIENT_INFO)}].name`;
 
 export function findIdentity(value: unknown, options: IdentityOptions = {}): Finding[] {
   const findings: Finding[] = [];
-  walk(value, "$", findings, { orderRefAt: new Set(options.orderRefAt ?? []), postcodeAt: new Set(options.postcodeAt ?? []) });
+  const freeText = options.freeText === true;
+  walk(value, "$", findings, { orderRefAt: new Set(options.orderRefAt ?? []), freeText, postcodeAt: new Set(freeText ? (options.postcodeAt ?? []) : []) });
   if (options.mcpEnvelope !== true) return findings;
   const toolName = isToolCall(value);
   const clientName = isClientNamed(value);
@@ -181,6 +184,7 @@ function isToolCall(value: unknown): boolean {
 
 interface Exempt {
   readonly orderRefAt: ReadonlySet<string>;
+  readonly freeText: boolean;
   readonly postcodeAt: ReadonlySet<string>;
 }
 
@@ -189,7 +193,7 @@ function walk(value: unknown, path: string, out: Finding[], exempt: Exempt, dept
     out.push({ path, kind: "too_deep" });
   } else if (typeof value === "string") {
     const notCard = isUuid(value) || (exempt.orderRefAt.has(path) && SHOPIFY_ORDER_GID.test(value));
-    for (const kind of scanText(normalize(value), notCard, exempt.postcodeAt.has(path))) out.push({ path, kind });
+    for (const kind of scanText(normalize(value), notCard, exempt.freeText, exempt.postcodeAt.has(path))) out.push({ path, kind });
   } else if (typeof value === "bigint" || (typeof value === "number" && Number.isInteger(value))) {
     if (isCardDigits(value.toString())) out.push({ path, kind: "card" });
   } else if (Array.isArray(value)) {
@@ -204,7 +208,7 @@ function walk(value: unknown, path: string, out: Finding[], exempt: Exempt, dept
       const keyPath = path + (/^[A-Za-z_$][\w$]*$/.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`);
       const normalKey = normalize(key);
       if (isBannedKey(normalKey)) out.push({ path: keyPath, kind: "banned_key" });
-      for (const kind of scanText(normalKey, isUuid(key))) out.push({ path: keyPath, kind });
+      for (const kind of scanText(normalKey, isUuid(key), exempt.freeText)) out.push({ path: keyPath, kind });
       walk(item, keyPath, out, exempt, depth + 1);
     }
     if (hasSplitCard(entries.map(([, item]) => item))) out.push({ path, kind: "card" });
@@ -237,38 +241,25 @@ function isUuid(raw: string): boolean {
 }
 
 /**
- * `notCard`: the raw value is a canonical UUID or an exempt order gid, so it is not scanned for a card. `isPostcode`:
- * the value sits in a postcode field (IdentityOptions.postcodeAt), so it is not scanned for a whole postcode.
+ * `notCard`: the raw value is a canonical UUID or an exempt order gid, so it is not scanned for a card. `freeText`: the
+ * value is the agent's tool input (IdentityOptions.freeText), so the free-text rules run too; `isPostcode`: it sits in
+ * the postcode field (IdentityOptions.postcodeAt), so it is not scanned for a whole postcode.
  */
-function scanText(text: string, notCard: boolean, isPostcode = false): FindingKind[] {
+function scanText(text: string, notCard: boolean, freeText = false, isPostcode = false): FindingKind[] {
   const kinds: FindingKind[] = [];
   if (!notCard && hasCard(text)) kinds.push("card");
   if (EMAIL.test(text)) kinds.push("email");
   if (E164.test(text) || US_PHONE.test(text)) kinds.push("phone");
-  if (STREET.test(text) || SHIP_STREET.test(text)) kinds.push("street_address");
-  if (!isPostcode && hasFullPostcode(text)) kinds.push("postcode");
+  if (STREET.test(text)) kinds.push("street_address");
+  if (freeText) for (const kind of freeTextFindings(text, isPostcode)) if (!kinds.includes(kind)) kinds.push(kind);
   return kinds;
 }
 
 const EMAIL = /[\p{L}\p{M}\p{N}._%+-]+@[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-]+)*\.\p{L}{2,}/u;
 const E164 = /(?<![\w+])\+[1-9](?:[ .()-]{0,2}\d){7,14}(?!\d)/;
 const US_PHONE = /(?<![\w+])(?:\+?1[ .-]?)?(?:\([2-9]\d{2}\) ?|[2-9]\d{2}[ .-])[2-9]\d{2}[ .-]\d{4}(?![\w])/;
-const SUFFIXES = [
-  "St", "Street", "Ave", "Av", "Avenue", "Rd", "Road", "Blvd", "Boulevard", "Ln", "Lane", "Dr", "Drive",
-  "Ct", "Court", "Way", "Pl", "Place", "Ter", "Terrace", "Pkwy", "Parkway", "Hwy", "Highway", "Cir", "Circle",
-];
-const STREET_WORD = String.raw`(?:[A-Za-z][A-Za-z'.-]*|\d+(?:st|nd|rd|th))`;
-// A number followed by a quantity word ("4 Wheel Drive", "2 Pack Way") is a quantity, not a house number.
-const QUANTITY_WORDS = ["wheel", "pack", "piece", "pc", "pcs", "count", "ct", "inch", "in", "ft", "oz", "lb", "x"];
 const STREET = new RegExp(
   String.raw`(?<![\w-])\d{1,6}[A-Za-z]?\s+(?!(?:${QUANTITY_WORDS.join("|")})\b)(?:${STREET_WORD}\s+){1,4}(?:${SUFFIXES.join("|")})\b`,
-  "i",
-);
-// No house number, after a delivery phrase: "deliver to Evergreen Terrace", "ship it to Baker Street", "address: 5th Ave".
-const NOT_A_STREET_WORD = ["the", "a", "an", "my", "your", "our", "their", "his", "her", "its", "this", "that", "me", "us", "you", "him", "them"];
-const DELIVERY = String.raw`(?:(?:deliver(?:ed|ing|y)?|ship(?:s|ped|ping)?|send(?:s|ing)?|sent|mail(?:ed|ing)?|post(?:ed|ing)?)\s+(?:it\s+|them\s+|this\s+)?(?:to|at)|address(?:\s+is)?\s*:?)`;
-const SHIP_STREET = new RegExp(
-  String.raw`\b${DELIVERY}\s+(?:(?!(?:${NOT_A_STREET_WORD.join("|")})\b)${STREET_WORD}\s+){1,4}(?:${SUFFIXES.join("|")})\b`,
   "i",
 );
 

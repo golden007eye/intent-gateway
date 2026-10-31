@@ -95,7 +95,7 @@ describe("the Pause button", () => {
     panel = await startPanel(dir, { port: 0, pause: () => Promise.resolve() });
     const page = await call(panel.url, "/", "GET");
     expect(page.body).toMatch(
-      /Paused since [^<]+\. The pause holds on this machine; Intent Cloud has not acknowledged it yet\. Until it does, the pause can be lifted from this machine; after that, resuming needs your passkey\./,
+      /Paused since [^<]+\. The pause holds on this machine only and can be lifted here: Intent Cloud has not acknowledged it\. Once Intent Cloud acknowledges a pause, resuming needs your passkey\./,
     );
     // Attack on the claim (invariant 5): this machine alone can lift this pause, so the banner does not say a passkey is needed.
     expect(page.body).not.toContain("Resume needs your passkey");

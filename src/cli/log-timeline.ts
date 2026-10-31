@@ -119,7 +119,7 @@ export function formatTimeline(context: TimelineContext, style: TimelineStyle): 
   lines.push("");
   lines.push(...disclosed(summary, g, paint));
   lines.push("");
-  lines.push(counts(summary, shown.filter((a) => cartRefusal(a) !== null).length, shown.length, total, g, paint));
+  lines.push(counts(summary, cartCounts(items, shown), shown.length, total, g, paint));
   if (!all.chain.ok) {
     lines.push(paint("bad", `${g.bad} the chain breaks at seq ${String(all.chain.brokenSeq)} (${all.chain.reason}); run ${INTENT} verify${all.demo ? " --demo" : ""}`));
   }
@@ -211,9 +211,12 @@ function rawRow(a: Activity, g: Glyphs): Row {
         return { verb: "cart", verbTone: "bold", values, outcome: `${g.arrow} approval link  ${g.ok} ${receiptWord(receipts)}`, outcomeTone: "good" };
       }
       const [outcome, tone] = delivered();
-      // An HTTP error answer (409 paused or conflict, 429) with a receipt is Intent Cloud refusing the cart: no cart.
-      const refusal = cartRefusal(a);
-      if (refusal !== null) return { verb: "cart", verbTone: "bad", values, outcome: `${g.bad} refused: status ${String(refusal)} ${g.dot} ${outcome}`, outcomeTone: "bad" };
+      // An HTTP error answer is no cart: a 4xx (409 paused or conflict, 429) is Intent Cloud refusing it, a 5xx a failure.
+      const error = cartError(a);
+      if (error !== null) {
+        const word = error.status >= 500 ? "failed" : "refused";
+        return { verb: "cart", verbTone: "bad", values, outcome: `${g.bad} ${word}: status ${String(error.status)} ${g.dot} ${outcome}`, outcomeTone: "bad" };
+      }
       return { verb: "cart", verbTone: tone === "warn" ? "warn" : "bold", values, outcome, outcomeTone: tone };
     }
     case "status": {
@@ -310,14 +313,36 @@ function rawRow(a: Activity, g: Glyphs): Row {
   }
 }
 
-/** The HTTP error status (400 or more) a cart's request was answered with, or null when none was. */
-function cartRefusal(a: Activity): number | null {
+/** The first request of a cart answered with an HTTP error status (400 or more), or null when none was. */
+function cartError(a: Activity): { seq: number; status: number } | null {
   if (a.action !== "cart") return null;
   for (const r of a.requests) {
     const status = r.response?.status ?? null;
-    if (status !== null && status >= 400) return status;
+    if (status !== null && status >= 400) return { seq: r.seq, status };
   }
   return null;
+}
+
+/**
+ * The shown carts that are no cart: `errors`, every one answered with an HTTP error (left out of "N carts"), and
+ * `refused`, the 4xx ones not already counted as refused through a `refused` entry naming the same request (a 409
+ * `paused` is chained as Intent Cloud's refusal too, ADR-0023), so each refusal is counted once.
+ */
+function cartCounts(items: readonly unknown[], shown: readonly Activity[]): { errors: number; refused: number } {
+  const chained = new Set<number>();
+  for (const item of items) {
+    const e = item as { kind?: unknown; body?: { disclosure_seq?: unknown } } | null;
+    if (e?.kind === "refused" && typeof e.body?.disclosure_seq === "number") chained.add(e.body.disclosure_seq);
+  }
+  let errors = 0;
+  let refused = 0;
+  for (const a of shown) {
+    const error = cartError(a);
+    if (error === null) continue;
+    errors += 1;
+    if (error.status < 500 && !chained.has(error.seq)) refused += 1;
+  }
+  return { errors, refused };
 }
 
 /** A state an observation recorded, worded as what Intent Cloud returned: the receipt does not cover the body. */
@@ -394,7 +419,7 @@ function reason(text: string): string {
 
 /**
  * "Sent to Intent Cloud only: …" (one such line per destination, each listing what its logged requests carried) and
- * what the identity check found ("No name, address or card field was sent", and that a name in free text cannot be
+ * what the identity check found ("No buyer name, address or card field was sent", and that a name in free text cannot be
  * detected), from the values the shown requests logged. A destination with no request shown has no line.
  */
 function disclosed(summary: ActivitySummary, g: Glyphs, paint: (tone: Tone, s: string) => string): string[] {
@@ -408,7 +433,7 @@ function disclosed(summary: ActivitySummary, g: Glyphs, paint: (tone: Tone, s: s
     const caveat = unchecked === 0 ? "" : ` (${plural(unchecked, "request", "requests")} with no logged bytes not checked)`;
     // Only what the check can tell (invariant 5): a field named for identity, or an address, postcode or card number in
     // a value. A name typed into free text looks like any other word, so the line says so instead of "never sent".
-    out.push(paint("dim", `No name, address or card field was sent${caveat}.`), paint("dim", NAME_CAVEAT));
+    out.push(paint("dim", `No buyer name, address or card field was sent${caveat}.`), paint("dim", NAME_CAVEAT));
   } else {
     out.push(paint("dim", `Not checked: ${plural(unchecked, "request has", "requests have")} no logged bytes.`));
   }
@@ -472,8 +497,8 @@ export function walletWords(f: Activity["facts"], sep: string): string {
   return [`${rail} wallet ${f.wallet_action ?? ""}`.trim(), revoked, ...walletCheckWords(f)].filter((v) => v !== "").join(sep);
 }
 
-/** `refusedCarts`: carts Intent Cloud answered with an error status, counted as refused, not as carts. */
-function counts(summary: ActivitySummary, refusedCarts: number, shown: number, total: number, g: Glyphs, paint: (tone: Tone, s: string) => string): string {
+/** `carts`: the shown carts Intent Cloud answered with an error status, left out of the carts (cartCounts). */
+function counts(summary: ActivitySummary, carts: { errors: number; refused: number }, shown: number, total: number, g: Glyphs, paint: (tone: Tone, s: string) => string): string {
   const a = summary.actions;
   const r = summary.requests;
   const parts: string[] = [];
@@ -481,13 +506,13 @@ function counts(summary: ActivitySummary, refusedCarts: number, shown: number, t
     if (n > 0) parts.push(paint(tone, plural(n, one, many)));
   };
   add(a.search, "search", "searches");
-  add(a.cart - refusedCarts, "cart", "carts");
+  add(a.cart - carts.errors, "cart", "carts");
   add(a.status, "status check", "status checks");
   add(a.approval, "approval", "approvals");
   add(a.call, "wallet call", "wallet calls");
   add(a.wallet, "wallet change", "wallet changes");
   add(a.blocked, "blocked", "blocked", "bad");
-  add(summary.refused + refusedCarts, "refused", "refused", "bad");
+  add(summary.refused + carts.refused, "refused", "refused", "bad");
   add(a.flagged, "flagged", "flagged", "bad");
   add(r.acknowledged, "receipt", "receipts", "good");
   add(r.answered, "answered without a receipt", "answered without a receipt");

@@ -517,8 +517,8 @@ export function createGateway(options: GatewayOptions): Gateway {
 
   /** Invariant 3, before anything is built from the input: identity anywhere in it means nothing is sent. */
   async function identityRefusal(endpoint: string, input: unknown, fromSeq: number): Promise<Refused | null> {
-    // The postcode field holds a whole postcode by design: it is coarsened before anything is built from it.
-    const findings = findIdentity(input, { postcodeAt: TOOL_POSTCODE_AT });
+    // The agent's own text, so the free-text rules run; the postcode field holds a whole postcode by design (coarsened).
+    const findings = findIdentity(input, { freeText: true, postcodeAt: TOOL_POSTCODE_AT });
     if (findings.length === 0) return null;
     // A field name can itself be identity ({"jane@example.com": 1}); such a name is never written to the chain.
     const named = (text: string, kind: string): string => (findIdentity(text).length === 0 ? text : `${kind} in a field name`);

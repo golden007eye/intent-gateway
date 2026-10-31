@@ -152,11 +152,30 @@ describe("buildModel: purchases", () => {
       digest: "sha-256=:createCart:",
     });
     const html = renderPage(m);
-    expect(html).toContain("No name, address or card field was sent. Free text is sent as written: a name in it cannot be detected.");
+    expect(html).toContain("No buyer name, address or card field was sent. Free text is sent as written: a name in it cannot be detected.");
     expect(html).not.toContain("Never sent: your name");
     expect(html).toContain('<aside class="drawer" id="/purchases/a-6" aria-labelledby="dh-a-6">');
     // Every step's Details link has a drawer to open.
     for (const [, id] of html.matchAll(/data-drawer="([^"]+)"/g)) expect(html).toContain(`id="/purchases/${id ?? ""}"`);
+  });
+
+  // Review of #134, MED 6: the drawer said "No buyer name, address or card field was sent" even for a request that
+  // `intent log` marks as holding buyer identity.
+  it("attack: a cart whose logged body holds identity: its drawer says so, never that no identity field was sent", () => {
+    const leaked = buildModel(
+      input({
+        items: chain([
+        ["session", { mode: "demo" }, at("08:00")],
+        ["disclosure", disclosure("createCart", "/v1/carts", { offer_handle: "of_8Kx2abcdefghij", quantity: 1, ship_to: SHIP, note: "jane@example.com" }, [...CART_FIELDS, "note"]), at("10:27")],
+        ["receipt", receipt(1, 201), at("10:27")],
+        ]),
+      }),
+    );
+    const drawer = leaked.drawers.find((d) => d.id === "a-1");
+    expect(drawer?.requests[0]?.identity).toBe("found");
+    const html = renderPage(leaked);
+    expect(html).toContain("What looks like buyer identity is in this request&#39;s logged values; run intent verify.");
+    expect(html).not.toContain("No buyer name, address or card field was sent");
   });
 
   it("refused requests are listed apart", () => {

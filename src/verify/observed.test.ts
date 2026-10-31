@@ -83,6 +83,21 @@ describe("runVerify: observations", () => {
     expect(check(report, "requests")?.details).toContain("answers summarised in the log (kept here, never sent): 1");
   });
 
+  // Review of #134, HIGH 1: the free-text postcode rules ran here too, so a preview.6 log with a GPU title or a held
+  // car-parts category failed verify. They run on the agent's tool input only.
+  it("an old log whose observed offer reads like a postcode (\"AMD Radeon RX 7900 XT\") and a held \"1972 VW Beetle parts\" verifies ok", async () => {
+    const dir = await chain(async (s) => {
+      await keys(s);
+      const d = await search(s, 1);
+      await receipt(s, d, response(sent(1)));
+      await s.append("observed", observation(d, { offers: [{ ...OFFER, title: "AMD Radeon RX 7900 XT" }] }));
+      await s.append("block", { endpoint: "searchCatalog", fields: ["category"], blocked: ["categories.block at category"], held: { category: "1972 VW Beetle parts" } });
+    });
+    const report = await verify(dir);
+    expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
   it("attack: an observation never answers a request: one in place of the receipt fails, and the request stays unanswered", async () => {
     const dir = await chain(async (s) => {
       await keys(s);

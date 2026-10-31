@@ -226,11 +226,18 @@ function drawer(d: Drawer, verifyCommand: string): string {
   );
 }
 
+/** The drawer's identity line, from that request's own check (as `intent log` reads it), never one line for all. */
+const IDENTITY_LINE: Readonly<Record<RequestDetail["identity"], string>> = {
+  none: "No buyer name, address or card field was sent. Free text is sent as written: a name in it cannot be detected.",
+  found: "What looks like buyer identity is in this request&#39;s logged values; run intent verify.",
+  unchecked: "Not checked for buyer identity: no logged bytes.",
+};
+
 function request(r: RequestDetail): string {
   return (
     `<div class="req"><p class="ep"><code>${esc(r.endpoint)}</code> <span class="small">${esc(r.method)}</span></p>` +
     (r.sent.length === 0 ? `<p class="small">No body fields.</p>` : kv(r.sent)) +
-    `<p class="small">No name, address or card field was sent. Free text is sent as written: a name in it cannot be detected.</p>` +
+    `<p class="small${r.identity === "found" ? " d-bad" : ""}">${IDENTITY_LINE[r.identity]}</p>` +
     `<h3>What came back</h3>` +
     (r.back.length === 0 ? "" : kv(r.back)) +
     `<p class="small d-${r.tone}">${esc(r.delivery)}</p>` +

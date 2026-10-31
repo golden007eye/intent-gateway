@@ -42,7 +42,7 @@ function setup() {
 const kinds = (dir: string): string[] => (readChain(dir) as Entry[]).map((e) => e.kind);
 
 const NO_KEY_LIFT =
-  "The pause holds on this machine; Intent Cloud has not acknowledged it yet (it needs an account key on this machine: run `intent init`). Until it does, the pause can be lifted from this machine; after that, resuming needs your passkey.";
+  "The pause holds on this machine only and can be lifted here: Intent Cloud has not acknowledged it. This machine has no account key: `intent init` makes one. Once Intent Cloud acknowledges a pause, resuming needs your passkey.";
 
 /** Records a send of the pause in effect with this result, as the pause sender does after Intent Cloud's answer. */
 async function sendResult(dir: string, result: string, reason: string): Promise<void> {
@@ -83,14 +83,15 @@ describe("intent pause", () => {
     expect(status.out).toContain("Intent Cloud: acknowledged the pause.\nResume needs your passkey.\n");
   });
 
-  it("before the first approved purchase (Intent Cloud answers 404), status says it can be lifted here until then", async () => {
+  it("Intent Cloud answered 404 (it does not know the account key yet): status says it can be lifted here, and says only what was received", async () => {
     const s = setup();
     await s.run(["pause"]);
     await sendResult(s.dir, "retrying", "not_found");
     const status = await s.run(["status"]);
-    expect(status.out).toContain("it accepts a pause from this machine only after your first approved purchase");
+    expect(status.out).toContain("a not_found answer was received from Intent Cloud: it does not know this machine's account key yet");
+    expect(status.out).not.toContain("first approved purchase");
     expect(status.out).toContain(
-      "The pause holds on this machine; Intent Cloud has not acknowledged it yet (it can once your first purchase is approved). Until it does, the pause can be lifted from this machine; after that, resuming needs your passkey.",
+      "The pause holds on this machine only and can be lifted here: Intent Cloud has not acknowledged it. Once Intent Cloud acknowledges a pause, resuming needs your passkey.",
     );
     expect(status.out).not.toContain("Resume needs your passkey");
   });
@@ -173,7 +174,7 @@ describe("intent resume", () => {
     await sendResult(s.dir, "retrying", "not_found");
     const noTerminal = await s.run(["resume"], { input: "resumed\n" });
     expect(noTerminal.code).toBe(1);
-    expect(noTerminal.out).toContain("Until it does, the pause can be lifted from this machine");
+    expect(noTerminal.out).toContain("The pause holds on this machine only and can be lifted here");
     expect(noTerminal.out).not.toContain("Resume needs your passkey");
     expect(noTerminal.out).not.toContain("resume there with your passkey");
     expect(noTerminal.out).toContain(

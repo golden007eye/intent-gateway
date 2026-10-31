@@ -31,21 +31,35 @@ describe("what lifts the pause, by state", () => {
     expect(liftWords(state)).toBe(PASSKEY);
   });
 
+  const GENERIC = "The pause holds on this machine only and can be lifted here: Intent Cloud has not acknowledged it. Once Intent Cloud acknowledges a pause, resuming needs your passkey.";
   it.each([
-    ["not sent yet", chain(), ""],
-    ["Intent Cloud does not know the key yet (404, before the first approved purchase)", chain((p) => sent(p, "retrying", "not_found")), " (it can once your first purchase is approved)"],
-    ["no account key on this machine", chain((p) => sent(p, "retrying", "no_account_key")), " (it needs an account key on this machine: run `intent init`)"],
-    ["no connection", chain((p) => sent(p, "retrying", "unreachable")), ""],
-    ["refused for good (400)", chain((p) => sent(p, "failed", "bad_request")), ""],
-  ])("not acknowledged (%s): it holds on this machine and can be lifted here", (_label, entries, when) => {
+    ["not sent yet", chain(), GENERIC],
+    ["Intent Cloud answered 404 (it does not know the account key yet)", chain((p) => sent(p, "retrying", "not_found")), GENERIC],
+    ["no account key on this machine", chain((p) => sent(p, "retrying", "no_account_key")), "The pause holds on this machine only and can be lifted here: Intent Cloud has not acknowledged it. This machine has no account key: `intent init` makes one. Once Intent Cloud acknowledges a pause, resuming needs your passkey."],
+    ["no connection", chain((p) => sent(p, "retrying", "unreachable")), GENERIC],
+    ["refused for good (400)", chain((p) => sent(p, "failed", "bad_request")), GENERIC],
+  ])("not acknowledged (%s): it holds on this machine and can be lifted here", (_label, entries, words) => {
     const state = pauseState(entries);
     expect(heldByCloud(state)).toBe(false);
-    expect(liftWords(state)).toBe(
-      `The pause holds on this machine; Intent Cloud has not acknowledged it yet${when}. Until it does, the pause can be lifted from this machine; after that, resuming needs your passkey.`,
-    );
+    expect(liftWords(state)).toBe(words);
+    // Invariant 5: only what was received, never a reason Intent Cloud did not give.
+    expect(liftWords(state)).not.toMatch(/first (approved )?purchase/);
     // Attack on the claim (invariant 5): no surface says the passkey is needed now when this machine alone can lift it.
     expect(liftWords(state)).not.toContain("Resume needs your passkey");
     expect(pausedRefusalWords(state)).toBe("Not sent: the developer paused purchases through intent (`intent pause`). Nothing is bought until they lift it (`intent resume`); do not retry.");
+  });
+
+  // Review of #134, MED 4: a local pause whose send was not acknowledged, then a cart Intent Cloud refused as paused.
+  it("an answer from Intent Cloud saying paused counts as held, even after an unacknowledged send", () => {
+    const entries = chain(
+      (p) => sent(p, "retrying", "not_found"),
+      () => entry("refused", { step: "create_cart", reason: "paused", source: "intent_cloud", disclosure_seq: 0 }),
+    );
+    const state = pauseState(entries);
+    expect(heldByCloud(state)).toBe(true);
+    expect(liftWords(state)).toBe(PASSKEY);
+    // The gateway's own refusal is not an answer from Intent Cloud.
+    expect(heldByCloud(pauseState(chain((p) => sent(p, "retrying", "not_found"), () => entry("refused", { step: "create_cart", reason: "paused", source: "gateway" }))))).toBe(false);
   });
 
   it("an acknowledgement of an earlier pause does not count for a new one", () => {

@@ -46,6 +46,20 @@ describe("observeSearch", () => {
   });
 });
 
+describe("merchant text that only looks like a postcode (review of #134, HIGH 1)", () => {
+  it("an observed offer titled \"AMD Radeon RX 7900 XT\" is kept as returned, not withheld", () => {
+    const body = {
+      disclosure_seq: 3,
+      endpoint: "searchCatalog",
+      offers_count: 1,
+      offers_hidden: 0,
+      offers: [{ offer_handle: "of_xxxxxxxxxxxxxxxxxxxx", title: "AMD Radeon RX 7900 XT", merchant: "Shop A", price_minor: 70000, shipping_minor: 0, currency: "USD" }],
+    };
+    expect(observationProblem(body)).toBeNull();
+    expect(findIdentity(body)).toEqual([]);
+  });
+});
+
 describe("observeCart and observeStatus", () => {
   const cart: Cart = {
     cart_handle: "ct_xxxxxxxxxxxxxxxxxxxx",

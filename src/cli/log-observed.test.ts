@@ -93,7 +93,7 @@ describe("intent log with observations (golden)", () => {
       17:28:21  rejected  $64.99 · Road Runner 2 · approval ap_po20…qmW2        → Intent Cloud says rejected · ✓ receipt
 
       Sent to Intent Cloud only: category, budget, offer, quantity, ZIP code, country.
-      No name, address or card field was sent.
+      No buyer name, address or card field was sent.
       Free text is sent as written: a name in it cannot be detected.
 
       8 actions · 1 search · 2 carts · 2 status checks · 1 approval · 1 blocked · 7 receipts

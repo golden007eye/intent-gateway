@@ -295,6 +295,7 @@ describe("pause and send", () => {
       cloud: { seq: 1, at, result: "retrying", reason: "rate_limited", retryAfterS: 1_000_000_000 },
       retries: 1,
       refusals: 0,
+      cloudSaidPaused: false,
     });
     expect(due).toBe(Date.parse(at) + 3_600_000);
   });
