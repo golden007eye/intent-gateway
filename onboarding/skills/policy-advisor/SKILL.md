@@ -13,7 +13,7 @@ You show the developer their gateway policy and change it only when they ask. Wo
 4. the test run,
 5. a restart, only if the policy changed.
 
-Do not narrate commands or paste their output: between developer actions, say only one short status line, in the onboarding's form when it runs you (`✓ <n>/9  <what happened>. Next: <what>.`). Each developer action is a block in your own reply, without the `>` marks: the bold **Your turn:** marker and a short label, one action in short lines, its link on its own line. It ends your reply, with "Reply done" unless the developer answers it with a choice or with "continue". Say nothing after a block while the developer acts.
+Do not narrate commands or paste their output: between developer actions, say only one short status line (`✓ <n>/9  <what happened>. Next: <what>.`). When the onboarding runs you, say none: its step 6 line, said after you finish, is your only status line. Each developer action is a block in your own reply, without the `>` marks: the bold **Your turn:** marker and a short label, one action in short lines, its link on its own line. It ends your reply, with "Reply done" unless the developer answers it with a choice or with "continue". Say nothing after a block while the developer acts.
 
 ## Rules you never break
 
@@ -46,7 +46,7 @@ $ intent policy add weekly-40 --yes
 
 ## 2. Show it in the panel
 
-Start `intent panel` in the background with your shell tool's own background option (`run_in_background` in Claude Code), not with `&`, `nohup` or a log file of your own, so you can stop it. It keeps running until you stop it. Read the address from its `panel: http://127.0.0.1:<port>/` line. When the developer answers the block below, stop that background task, and say in your next status line that the panel is stopped. The panel shows your rules; changes go through you, with the commands below. If the developer says nothing about the rules, or keeps them, go on to the test run. Show:
+Start `intent panel` in the background with your shell tool's own background option (`run_in_background` in Claude Code), not with `&`, `nohup` or a log file of your own, so you can stop it. It keeps running until you stop it. Read the address from its `panel: http://127.0.0.1:<port>/` line. When the developer answers the block below, stop that background task; your status line, or the onboarding's step 6 line, says the panel is stopped. The panel shows your rules; changes go through you, with the commands below. If the developer says nothing about the rules, or keeps them, go on to the test run. Show:
 
 > **Your turn:** look at your rules (optional)
 >

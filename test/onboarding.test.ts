@@ -296,7 +296,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(step4).toContain("the first purchase's approval (step 8) is where it is really checked.");
     expect(prompt).toMatch(/^## Step 8: the first purchase/m);
     // The agent checks nothing itself: no command in this step, and the developer opens the page.
-    expect(codeOf(step4).filter((c) => /\s/.test(c))).toEqual([]);
+    expect(codeOf(step4).filter((c) => /\s/.test(c) && !c.startsWith("✓ "))).toEqual([]);
     expect(step4).toContain("Never open the page or fill it in for them.");
   });
 
@@ -305,18 +305,15 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(prompt).toContain(
       "Anything the developer must see, click or type (a link, a code, a choice) goes in your own reply, written out in full, never only in a command's output.",
     );
-    expect(prompt).toContain("Do not narrate commands, recap a step or paste command output. Between developer actions, say only the status line:");
+    expect(prompt).toContain("Do not narrate commands, recap a step or paste command output. When a step is done, say the status line that step gives, exactly, on its own line.");
     expect(prompt).toContain("The only other thing you may say is a command's error line and the fix it names, and what a step tells you to say.");
-    // No narration of a passed check: QA agents said "Node 24.x is in range…" before the status line.
-    expect(prompt).toContain("`<what happened>` is a few plain words; it quotes no version, path or command output. A check that passed gets no sentence of its own");
     // One status line per finished step: a dogfood run said "✓ 8/9 (part 1)" in the middle of step 8.
-    expect(prompt).toContain("once per finished step, and never for a step that is not finished yet.");
-    // Every step 1 to 8 its own line: a dogfood agent merged steps 1 and 2 into "3/9" and skipped step 7's line.
-    expect(prompt).toContain(
-      "Every step from 1 to 8 gets its own line, in order: when several steps finish without the developer in between (steps 1, 2 and 3 usually do), say one line for each, never one line for all.",
-    );
+    expect(prompt).toContain("Say each step's line once, in order, and only when that step is done. A check that passes gets no words besides the step's line.");
+    // Only a failure has words: "If you are not" and "Only if … already has" made agents confirm the check passed.
+    expect(prompt).toContain("Run `claude mcp list` without saying so; if it lists `intent`");
+    expect(prompt).not.toMatch(/If you are not|already has an MCP server/);
     const step7 = prompt.slice(prompt.indexOf("## Step 7"), prompt.indexOf("## Step 8"));
-    expect(step7).toMatch(/Shop app\.\n\nRight after them, say step 7's status line, then go on to step 8\.\n\n$/);
+    expect(step7).toMatch(/Shop app\.\n\nRight after them, say only this line: `✓ 7\/9 {2}[^`]+` Then go on to step 8\.\n\n$/);
     // Nothing the developer was not shown: a dogfood agent invented an account URL and a QR code after a failed passkey.
     expect(prompt).toContain(
       "Never give the developer a step, link, page or button that neither this prompt nor a tool result showed them, and never build a URL yourself.",
@@ -410,7 +407,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
         expect(text.replace(/\n> Reply done$/, ""), `${file}: "Reply done" only as the last line`).not.toMatch(/Reply done/);
         // Nothing after a block while the developer acts: the next line is an instruction or a heading, never prose.
         const next = after.find((l) => l.trim() !== "");
-        if (next !== undefined) expect(next, `${file}: prose after\n${text}`).toMatch(/^(\d+\. |#{2,3} )/);
+        if (next !== undefined) expect(next, `${file}: prose after\n${text}`).toMatch(/^(\d+\. |#{2,3} |When the developer replies done, say only this line: `✓ )/);
         // Attack: a command that sees the action runs in the block's own reply, before the developer could read the link.
         if (DETECTS.test(after.join("\n"))) {
           expect(asksDone, `${file}: a detected action still ends the reply with done\n${text}`).toBe(true);
@@ -459,7 +456,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     expect(Number(count)).toBe(actions.length);
     // At most three lines, before step 1, and the agent's first reply.
     // First in the prompt, before How to work, and before any command: a QA agent skipped it and went straight to step 1.
-    const first = "Your first reply starts with this opening, word for word, before you run any command, and goes straight on with step 1. Never skip it or shorten it";
+    const first = "Your first reply starts with this opening, word for word and without the `>` mark, before you run any command, and goes straight on with step 1. Never skip it or shorten it";
     expect(prompt.indexOf(first)).toBeGreaterThan(-1);
     expect(prompt.indexOf(first)).toBeLessThan(prompt.indexOf("How to work:"));
     expect(opening.length).toBeLessThanOrEqual(3 * 100);
@@ -468,10 +465,40 @@ describe("onboarding prompt and policy-advisor skill", () => {
   it("every status line has one form and one mark, and its total is the number of steps", () => {
     const prompt = read(PROMPT);
     const steps = [...prompt.matchAll(/^## Step (\d+):/gm)].length;
-    expect(prompt).toContain(`say only the status line: \`✓ <n>/${String(steps)}  <what happened>. Next: <what>.\` Here \`<n>\` is the step just finished and ${String(steps)} is the number of steps.`);
+    expect(prompt).toContain(`Each has the form \`✓ <n>/${String(steps)}  <what happened>. Next: <what>.\` Here \`<n>\` is the step just finished and ${String(steps)} is the number of steps.`);
     expect(read(SKILL)).toContain(`(\`✓ <n>/${String(steps)}  <what happened>. Next: <what>.\`)`);
-    // One mark: no other check mark or status form anywhere.
-    for (const file of FILES) expect([...read(file).matchAll(/[✓✔☑✅]/g)].length, file).toBe(1);
+    // One mark: no other check mark anywhere, and every ✓ is the form or a step's own line in that form.
+    for (const file of FILES) {
+      expect([...read(file).matchAll(/[✔☑✅]/g)], file).toEqual([]);
+      for (const m of read(file).matchAll(/`✓[^`]*`/g)) expect(m[0], file).toMatch(/^`✓ (<n>|[1-8])\/9 {2}[^.`]+\. Next: [^.`]+\.`$/);
+    }
+  });
+
+  it("every step 1 to 8 gives its own status line, word for word, once and in its own step (QA: 3 of 5 runs said a check that passed in their own words)", () => {
+    const prompt = read(PROMPT);
+    const steps = prompt.split(/^## Step /m).slice(1);
+    expect(steps).toHaveLength(9);
+    steps.forEach((step, i) => {
+      const n = i + 1;
+      const lines = [...step.matchAll(/say only this line: `(✓ (\d)\/9 {2}[^`]+)`/g)];
+      if (n === 9) {
+        // Step 9 ends with the card instead.
+        expect(lines, "step 9").toEqual([]);
+        return;
+      }
+      expect(lines.map((m) => Number(m[2])), `step ${String(n)}`).toEqual([n]);
+    });
+    // Steps 1, 2 and 3 finish without the developer: each line names the next step, which is the line after it.
+    const next = (n: number): string => /say only this line: `✓ \d\/9 {2}[^`]+Next: ([^`]+)\.`/.exec(steps[n - 1] ?? "")?.[1] ?? "";
+    expect(next(1)).toBe("install the gateway");
+    expect(next(2)).toBe("first run and policy");
+    expect(next(3)).toBe("sign up and create a passkey");
+  });
+
+  it("quotes no sentence it forbids (attack: a negative example primed the very narration it banned)", () => {
+    const prompt = read(PROMPT);
+    // QA: after "never 'Node is in range' or 'this is a project folder'", 3 of 5 runs said exactly that before ✓ 1/9.
+    for (const banned of [/Node is in range/i, /is a project folder/i, /never ['"“]/i]) expect(prompt).not.toMatch(banned);
   });
 
   it("the purchase asks for what find_offers takes: a country, a postcode and a budget, in the gateway's own words", () => {
@@ -493,7 +520,7 @@ describe("onboarding prompt and policy-advisor skill", () => {
     const prompt = read(PROMPT);
     const step8 = prompt.slice(prompt.indexOf("## Step 8"), prompt.indexOf("## Step 9"));
     expect(step8).toContain("Call it again, about 5 s later each time, only while its result says `Waiting for` (the approval is pending) or tells you to call `get_approval_status` again.");
-    expect(step8).toContain("Any other result is final: relay what it says, in one line, and no more.");
+    expect(step8).toContain("Any other result is final: relay what it says, in one line, then the status line below.");
     // The poll is capped: an indeterminate one-tap keeps saying "call again", so after about 3 minutes the agent stops
     // and relays the result's own advice, which the gateway writes.
     expect(step8).toContain(
@@ -637,7 +664,10 @@ describe("onboarding prompt and policy-advisor skill", () => {
     // Started as the agent's own background task and stopped by it: a dogfood agent ran it with `&` into /tmp/panel.log
     // and left it running, unsaid.
     expect(skill).toContain("with your shell tool's own background option (`run_in_background` in Claude Code), not with `&`, `nohup` or a log file");
-    expect(skill).toContain("When the developer answers the block below, stop that background task, and say in your next status line that the panel is stopped.");
+    expect(skill).toContain("When the developer answers the block below, stop that background task; your status line, or the onboarding's step 6 line, says the panel is stopped.");
+    // One ✓ 6/9: run by the onboarding, the skill says no status line of its own.
+    expect(skill).toContain("When the onboarding runs you, say none: its step 6 line, said after you finish, is your only status line.");
+    expect(read(PROMPT)).toContain("`✓ 6/9  Rules checked, panel stopped. Next: pause.`");
     expect(skill).not.toMatch(/> ?\/tmp\/|\/tmp\/panel/);
     expect(skill).toContain("> **Your turn:** look at your rules (optional)\n>\n> Here are your rules. Keep them, or tell me what to change.\n");
     expect(skill).toContain("> http://127.0.0.1:<port>/#/policy");
