@@ -342,3 +342,135 @@ describe("the page", () => {
     expect(Object.keys(a).filter((k) => a[k] !== b[k])).toEqual(["meta"]);
   });
 });
+
+// The grid of `.app` as app.css lays it out, read from the served page and stylesheet: which direct children are
+// grid items, and the column and row each one takes. A small reader for the panel's own markup and flat CSS, no DOM.
+describe("the layout", () => {
+  const VOID = new Set(["input", "br", "img", "meta", "link", "hr", "source", "wbr"]);
+
+  /** The direct children of `<div class="app">`, as the selector app.css places each one by. */
+  function appChildren(html: string): string[] {
+    const start = html.indexOf('<div class="app">') + '<div class="app">'.length;
+    const out: string[] = [];
+    let depth = 0;
+    for (const m of html.slice(start).matchAll(/<(\/?)([a-z][a-z0-9]*)\b([^>]*)>/g)) {
+      const [, close, tag = "", attrs = ""] = m;
+      if (close === "/") {
+        if (depth === 0) break;
+        depth -= 1;
+        continue;
+      }
+      if (depth === 0) {
+        const cls = /class="([^"]*)"/.exec(attrs)?.[1]?.split(" ")[0];
+        out.push(tag === "main" ? "main" : tag === "nav" ? ".nav" : cls === "live" ? ".app>.live" : `.${cls ?? tag}`);
+      }
+      if (!VOID.has(tag) && !attrs.endsWith("/")) depth += 1;
+    }
+    return out;
+  }
+
+  /** The value app.css gives `prop` for `selector`, the last rule winning; `wide` drops the @media blocks. */
+  function decl(css: string, wide: boolean, selector: string, prop: string): string | undefined {
+    let flat = "";
+    for (let i = 0; i < css.length; ) {
+      if (css.startsWith("@media", i)) {
+        const open = css.indexOf("{", i);
+        let depth = 1;
+        let j = open + 1;
+        for (; depth > 0; j += 1) depth += css[j] === "{" ? 1 : css[j] === "}" ? -1 : 0;
+        if (!wide && css.slice(i, open).includes("max-width:768px")) flat += css.slice(open + 1, j - 1);
+        i = j;
+      } else flat += css.charAt(i++);
+    }
+    let value: string | undefined;
+    for (const [, sels = "", body = ""] of flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!sels.split(",").some((s) => s.trim() === selector)) continue;
+      const v = new RegExp(`(?:^|;)\\s*${prop}:([^;]+)`).exec(body)?.[1];
+      if (v !== undefined) value = v.trim();
+    }
+    return value;
+  }
+
+  for (const [state, paused] of [["the Pause button", false], ["the paused banner", true]] as const) {
+    it(`with ${state}, the brand bar and the pause region span the top and nav and main sit side by side under them`, async () => {
+      if (paused) {
+        const store = await openStore(dir, { fs: fast });
+        await store.append("pause", { from: "panel" });
+        await store.close();
+      }
+      panel = await startPanel(dir, { port: 0, pause: () => Promise.resolve() });
+      const page = (await call(panel.url, "/")).body;
+      const css = (await call(panel.url, "/app.css")).body;
+      expect(page).toContain(paused ? 'class="pause-banner"' : 'class="pause-bar"');
+      const children = appChildren(page);
+      expect(children).toEqual([".bar", ".app>.live", ".nav", "main"]);
+      for (const wide of [true, false]) {
+        const row = (sel: string) => decl(css, wide, sel, "grid-row");
+        const rows = decl(css, wide, ".app", "grid-template-rows")?.split(/\s+/) ?? [];
+        // Each spanning child has its own row, in page order; nav and main follow, beside each other only when wide.
+        for (const [i, sel] of [".bar", ".app>.live"].entries()) {
+          expect([sel, decl(css, wide, sel, "grid-column")]).toEqual([sel, "1/-1"]);
+          expect([sel, row(sel)]).toEqual([sel, String(i + 1)]);
+        }
+        expect([row(".nav"), row("main")]).toEqual(wide ? ["3", "3"] : ["3", "4"]);
+        expect(rows).toEqual(wide ? ["auto", "auto", "1fr"] : ["auto", "auto", "auto", "1fr"]);
+      }
+    });
+  }
+
+  it("narrow, the tabs wrap instead of scrolling out of sight; a heading app.js focuses gets no focus box", async () => {
+    panel = await startPanel(dir, { port: 0 });
+    const css = (await call(panel.url, "/app.css")).body;
+    expect(decl(css, false, ".nav ul", "flex-wrap")).toBe("wrap");
+    expect(decl(css, false, ".nav ul", "overflow-x")).toBeUndefined();
+    // The outline rule leaves out tabindex="-1", the headings and main that only app.js or the skip link focus.
+    expect(css).not.toContain("[tabindex]:focus-visible");
+    expect(decl(css, true, '[tabindex="-1"]:focus', "outline")).toBe("none");
+  });
+});
+
+// app.js refreshes a live region by swapping it for the same region in the freshly served page, so a region missing
+// from either page would never appear or never go. A pause or resume made at the CLI while the panel is open must
+// still show: every region is in every page, and the pause region holds the banner exactly while paused.
+describe("the live regions", () => {
+  const ids = (html: string): string[] => [...html.matchAll(/<div class="live" data-live="([^"]+)" data-v="[^"]+"[^>]*>/g)].map((m) => m[1] ?? "");
+  const version = (html: string): string | undefined => /data-live="pause" data-v="([^"]+)"/.exec(html)?.[1];
+
+  /** The pause region's content: everything between its opening tag and the nav, less the region's closing tag. The
+   * region is itself the status region, so a screen reader announces what app.js swaps into it. */
+  function pauseRegion(html: string): string {
+    const start = /<div class="live" data-live="pause" data-v="[^"]+" role="status" aria-live="polite">/.exec(html);
+    if (start === null) throw new Error("no pause region");
+    const from = start.index + start[0].length;
+    return html.slice(from, html.lastIndexOf("</div>", html.indexOf('<nav class="nav"', from)));
+  }
+
+  for (const [run, pause] of [
+    ["without a pause token", undefined],
+    ["with the Pause button", () => Promise.resolve()],
+  ] as const) {
+    it(`${run}, a CLI pause and resume while the panel is open add and remove the banner, and no region comes or goes`, async () => {
+      panel = await startPanel(dir, pause === undefined ? { port: 0 } : { port: 0, pause });
+      const before = (await call(panel.url, "/")).body;
+      expect(pauseRegion(before)).not.toContain("pause-banner");
+      expect(pauseRegion(before) === '<p class="sr-only">Purchases not paused.</p>').toBe(pause === undefined);
+
+      const store = await openStore(dir, { fs: fast });
+      await store.append("pause", { from: "cli" });
+      const paused = (await call(panel.url, "/")).body;
+      expect(pauseRegion(paused)).toMatch(/^<div class="pause-banner"><strong>Paused since /);
+
+      await store.append("resume", { from: "cli", confirmed: false, pending: "next submit" });
+      await store.close();
+      const resumed = (await call(panel.url, "/")).body;
+      expect(pauseRegion(resumed)).toBe(pauseRegion(before));
+
+      expect(ids(before)).toContain("pause");
+      expect(ids(paused)).toEqual(ids(before));
+      expect(ids(resumed)).toEqual(ids(before));
+      // The version follows the content, so app.js swaps the region in at the pause and again at the resume.
+      expect(version(paused)).not.toBe(version(before));
+      expect(version(resumed)).toBe(version(before));
+    });
+  }
+});
