@@ -174,7 +174,8 @@ describe("buildModel: purchases", () => {
     const drawer = leaked.drawers.find((d) => d.id === "a-1");
     expect(drawer?.requests[0]?.identity).toBe("found");
     const html = renderPage(leaked);
-    expect(html).toContain("What looks like buyer identity is in this request&#39;s logged values; run intent verify.");
+    expect(html).toContain("What looks like buyer identity is in this request&#39;s logged values.");
+    expect(html).not.toContain("logged values; run intent verify");
     expect(html).not.toContain("No buyer name, address or card field was sent");
   });
 

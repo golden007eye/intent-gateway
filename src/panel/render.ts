@@ -235,7 +235,8 @@ function drawer(d: Drawer, verifyCommand: string): string {
 /** The drawer's identity line, from that request's own check (as `intent log` reads it), never one line for all. */
 const IDENTITY_LINE: Readonly<Record<RequestDetail["identity"], string>> = {
   none: "No buyer name, address or card field was sent. Free text is sent as written: a name in it cannot be detected.",
-  found: "What looks like buyer identity is in this request&#39;s logged values; run intent verify.",
+  // No "run intent verify": verify does not scan what was sent for buyer identity.
+  found: "What looks like buyer identity is in this request&#39;s logged values.",
   unchecked: "Not checked for buyer identity: no logged bytes.",
 };
 

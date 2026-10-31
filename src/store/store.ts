@@ -23,6 +23,7 @@
 // Paths: the data dir, `audit.jsonl` and `audit.lock` must not be symbolic links, and the data dir must belong to
 // the current user, so a planted link cannot redirect the chain or its chmod to another file.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { constants, openSync, readFileSync } from "node:fs";
 import * as nodeFs from "node:fs/promises";
@@ -83,6 +84,21 @@ export interface Store {
   entries(): Entry[];
   /** Waits for queued appends, then releases the lease. */
   close(): Promise<void>;
+}
+
+const appendScope = new AsyncLocalStorage<Set<number>>();
+
+/**
+ * Runs `run` and records the seq of every entry a store handle of this process appends from it (its async context):
+ * what one call wrote, apart from what another process or another call appended to the same chain meanwhile.
+ */
+export function recordAppends<T>(run: () => Promise<T>): Promise<T> {
+  return appendScope.run(new Set(), run);
+}
+
+/** The seqs appended so far in the current recordAppends scope; null outside one. */
+export function appendedHere(): ReadonlySet<number> | null {
+  return appendScope.getStore() ?? null;
 }
 
 /** The handle lost its lease or the chain moved under it; it refuses all further appends. */
@@ -239,8 +255,13 @@ class FileStore implements Store {
     if (!isEntryKind(kind)) throw new TypeError(`unknown entry kind: ${String(kind)}`);
     canonicalize(body);
     this.#pending++;
+    const own = appendScope.getStore();
     const run = this.#queue
       .then(() => this.#appendOne(kind, body, conflict))
+      .then((entry) => {
+        own?.add(entry.seq);
+        return entry;
+      })
       .finally(async () => {
         if (--this.#pending === 0) await this.#release();
       });

@@ -184,7 +184,7 @@ export function pauseReasonWords(reason: string): string {
     case "unreachable":
       return "the send to Intent Cloud got no answer";
     case "not_found":
-      return "a not_found answer was received from Intent Cloud: it does not know this machine's account key yet";
+      return "a not_found answer was received from Intent Cloud for this machine's account key";
     case "rate_limited":
       return "rate limited: a 429 was received from Intent Cloud";
     case "clock_skew":

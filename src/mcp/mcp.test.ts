@@ -131,8 +131,9 @@ describe("tools (AC-R1)", () => {
     expect(Object.keys(cart.properties).sort()).toEqual(["offer_handle", "quantity"]);
     expect(cart.required).toEqual(["offer_handle"]);
     expect(cart.properties.offer_handle?.pattern).toBe((z.toJSONSchema(OfferHandle) as { pattern: string }).pattern);
-    const status = byName.get("get_approval_status") as unknown as { properties: Record<string, { pattern?: string }>; required: string[] };
-    expect(status.required).toEqual(["approval_handle"]);
+    const status = byName.get("get_approval_status") as unknown as { properties: Record<string, { pattern?: string }>; required?: string[] };
+    // Optional: without one, a new session lists the purchases waiting for approval in the log.
+    expect(status.required ?? []).toEqual([]);
     expect(status.properties.approval_handle?.pattern).toBe((z.toJSONSchema(ApprovalHandle) as { pattern: string }).pattern);
   });
 
@@ -159,6 +160,7 @@ describe("tools (AC-R1)", () => {
     );
     expect(text).toContain("their budget in the currency of the ship-to country");
     expect(text).toContain("ask the user only for those");
+    expect(text).toContain("Never put a name, street or full postcode in product or must_haves.");
     expect(text).toContain("if find_offers refuses a country, tell the user what it says");
     // The countries come from Intent Cloud at start, and the refusal names them: none is hard-coded here.
     expect(text).not.toMatch(/Canada|Australia/);
@@ -227,6 +229,11 @@ describe("tools (AC-R1)", () => {
     const line = "Cart: 2 × Trail Runner 3 (US 10 / Blue) from Trail Supply Co, total $184.98 ($89.99 each, shipping $5.00). Tell the buyer this total before the approval link.";
     expect(text.startsWith(`${line}\n\nAsk the buyer to open `)).toBe(true);
     expect(text.indexOf(line)).toBeLessThan(text.indexOf("Approval link: "));
+    // Said once each: the link and the check code are in their own lines, not repeated in the sentence above them.
+    const link = /Approval link: (\S+)/.exec(text)?.[1] ?? "missing";
+    const code = /Check code: (\S+)/.exec(text)?.[1] ?? "missing";
+    expect(text.split(link)).toHaveLength(2);
+    expect(text.split(code)).toHaveLength(2);
   });
 
   it("an estimated cart total says so", async () => {
@@ -266,7 +273,7 @@ describe("tools (AC-R1)", () => {
   it("missing details are asked for, nothing is sent, and the result still ends with the summary", async () => {
     const client = await connect((await serve()).url);
     const text = textOf(await client.callTool({ name: "find_offers", arguments: { category: "running-shoes" } }));
-    expect(text).toContain("Ask the user only for:");
+    expect(text).toContain("Ask the user only these questions:");
     expect(text).toContain("Where should it ship? Country and postcode.");
     expect(text).toMatch(/\n\nSent: nothing \/ Blocked: nothing$/);
   });

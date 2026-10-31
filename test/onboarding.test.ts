@@ -321,8 +321,15 @@ describe("onboarding prompt and policy-advisor skill", () => {
     );
     // A new link only while nothing was approved: after approved, handed off or ordered it would invite a second purchase.
     expect(prompt).toContain(
-      "If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status` and say its one line. Only if it says `Waiting for`, rejected or expired, also offer to make a new approval link (`create_cart` again for the same offer); any other result is final, as above. Give no other advice.",
+      "If the developer says approving failed (the passkey did not work, the page showed an error), call `get_approval_status` once and say its one line. Only if it says `Waiting for`, rejected or expired, also offer to make a new approval link (`create_cart` again for the same offer). If it answers 404 or does not know the approval, do not call it again, and do not create another cart unless the developer asks for one;",
     );
+    // The list of purchases a lost or unknown handle gets is not a status to poll on or to make a new cart from.
+    expect(prompt).toContain("That list, or a result that says the handle is not known, is not `Waiting for`: do not poll on it and do not create a new cart;");
+    // The prompt and the gateway's own next step after a 4xx agree: no duplicate cart without asking.
+    expect(read("src/gateway/gateway.ts")).toContain("do not create a new cart for this purchase unless the buyer asks for one");
+    expect(read("src/gateway/gateway.ts")).not.toContain("offer a new cart only if they did not approve this one");
+    // Identity never goes in the free text, in the prompt and in find_offers' description alike.
+    expect(prompt.split("Never put a name, street or full postcode in product or must_haves.").length - 1).toBe(2);
     expect(prompt).not.toMatch(/say its one line, and offer to make a new approval link/);
     const gateway = read("src/gateway/gateway.ts");
     for (const words of ['"The buyer rejected this purchase."', '"This approval expired. Create a new cart to try again."']) expect(gateway).toContain(words);

@@ -142,7 +142,8 @@ describe("intent log --verbose and --json (golden)", () => {
     await store.append("receipt", { disclosure_seq: 0, status: 200, verified: true });
     await store.close();
     const result = await s.run(["log"]);
-    expect(result.out).toContain("✗ Buyer identity in what was sent: entry #0 (email); run intent verify\n");
+    // intent verify does not scan what was sent for buyer identity, so the line sends no one there to find it.
+    expect(result.out).toContain("✗ Buyer identity in what was sent: entry #0 (email).\n");
     expect(result.out).not.toContain("No buyer name, address or card field was sent");
   });
 
@@ -167,7 +168,7 @@ describe("intent log --verbose and --json (golden)", () => {
     await store.append("receipt", { disclosure_seq: 0, status: 200, verified: true });
     await store.close();
     const result = await s.run(["log"]);
-    expect(result.out).toContain("✗ Buyer identity in what was sent: entry #0 (postcode); run intent verify\n");
+    expect(result.out).toContain("✗ Buyer identity in what was sent: entry #0 (postcode).\n");
     expect(result.out).not.toContain("No buyer name, address or card field was sent");
   });
 
