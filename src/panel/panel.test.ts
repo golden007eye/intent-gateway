@@ -437,13 +437,16 @@ describe("the live regions", () => {
   const version = (html: string): string | undefined => /data-live="pause" data-v="([^"]+)"/.exec(html)?.[1];
 
   /** The pause region's content: everything between its opening tag and the nav, less the region's closing tag. The
-   * region is itself the status region, so a screen reader announces what app.js swaps into it. */
+   * region is itself the status region, so a screen reader announces what app.js swaps into it; it can take focus
+   * (tabindex -1) when app.js swaps out the Pause button. The refusal count's own region inside it is left out. */
   function pauseRegion(html: string): string {
-    const start = /<div class="live" data-live="pause" data-v="[^"]+" role="status" aria-live="polite">/.exec(html);
+    const start = /<div class="live" data-live="pause" data-v="[^"]+" role="status" aria-live="polite" tabindex="-1">/.exec(html);
     if (start === null) throw new Error("no pause region");
     const from = start.index + start[0].length;
-    return html.slice(from, html.lastIndexOf("</div>", html.indexOf('<nav class="nav"', from)));
+    return html.slice(from, html.lastIndexOf("</div>", html.indexOf('<nav class="nav"', from))).replace(REFUSALS, "");
   }
+  const REFUSALS = /<div class="live" data-live="pause-refusals" data-v="[^"]+" aria-live="off">(.*?)<\/div>/;
+  const refusals = (html: string): string | undefined => REFUSALS.exec(html)?.[1];
 
   for (const [run, pause] of [
     ["without a pause token", undefined],
@@ -473,4 +476,33 @@ describe("the live regions", () => {
       expect(version(resumed)).toBe(version(before));
     });
   }
+
+  it("a refusal while paused changes only the refusal count's own region, which is not live: the banner is not re-read", async () => {
+    panel = await startPanel(dir, { port: 0 });
+    const store = await openStore(dir, { fs: fast });
+    await store.append("pause", { from: "cli" });
+    const paused = (await call(panel.url, "/")).body;
+    await store.append("refused", { step: "create_cart", reason: "paused", source: "gateway" });
+    await store.append("refused", { step: "create_cart", reason: "paused", source: "gateway" });
+    await store.close();
+    const refused = (await call(panel.url, "/")).body;
+    expect(refusals(paused)).toBe("");
+    expect(refusals(refused)).toBe("<p>2 steps refused since the pause.</p>");
+    // The status region's version stays, so app.js does not swap it and a screen reader does not announce it again.
+    expect(version(refused)).toBe(version(paused));
+    expect(pauseRegion(refused)).toBe(pauseRegion(paused));
+    const inner = /data-live="pause-refusals" data-v="([^"]+)"/;
+    expect(inner.exec(refused)?.[1]).not.toBe(inner.exec(paused)?.[1]);
+  });
+
+  it("the stale notice is text in a status element, not CSS content a screen reader skips", async () => {
+    panel = await startPanel(dir, { port: 0 });
+    const page = (await call(panel.url, "/")).body;
+    expect(page).toContain('<p class="stale-note" id="stale-note" role="status" aria-live="polite"></p>');
+    const css = (await call(panel.url, "/app.css")).body;
+    expect(css).not.toMatch(/::?after\{content:"[^"]/);
+    const js = (await call(panel.url, "/app.js")).body;
+    expect(js).toContain('"Not refreshing: the panel is not answering."');
+    expect(js).toContain('getElementById("stale-note")');
+  });
 });

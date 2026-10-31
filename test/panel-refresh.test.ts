@@ -47,6 +47,7 @@ interface Node {
 class Region {
   readonly attrs: Map<string, string>;
   childNodes: Node[];
+  focused = 0;
   constructor(id: string, v: string, html: string) {
     this.attrs = new Map([["data-live", id], ["data-v", v]]);
     this.childNodes = [{ html }];
@@ -57,8 +58,15 @@ class Region {
   setAttribute(name: string, value: string): void {
     this.attrs.set(name, value);
   }
-  contains(): boolean {
-    return false;
+  /** Only its own current children: a node swapped out is no longer inside, as in a real DOM. */
+  contains(node: unknown): boolean {
+    return this.childNodes.includes(node as Node);
+  }
+  hasAttribute(name: string): boolean {
+    return this.attrs.has(name);
+  }
+  focus(): void {
+    this.focused += 1;
   }
   querySelectorAll(): Region[] {
     return [];
@@ -89,10 +97,11 @@ function load(page: string) {
   const classes = new Set<string>();
   let reply: { ok: boolean; status: number; body: string } = { ok: true, status: 200, body: page };
   const hooks: { refresh?: () => void; ready?: () => void } = {};
+  const note = { textContent: "" };
   const document = {
     hidden: false,
     title: "panel",
-    activeElement: null,
+    activeElement: null as unknown,
     body: {
       classList: {
         add: (c: string) => classes.add(c),
@@ -102,7 +111,7 @@ function load(page: string) {
       },
     },
     ...lookup(onPage),
-    getElementById: () => null,
+    getElementById: (id: string) => (id === "stale-note" ? note : null),
     importNode: (n: Node) => ({ ...n }),
     addEventListener: (type: string, fn: () => void) => {
       if (type === "DOMContentLoaded") hooks.ready = fn;
@@ -128,6 +137,11 @@ function load(page: string) {
   return {
     regions: onPage,
     stale: () => classes.has("stale"),
+    /** The stale notice's text, the words a screen reader reads (not CSS content). */
+    note: () => note.textContent,
+    focusOn: (node: unknown) => {
+      document.activeElement = node;
+    },
     tick: async (next: typeof reply) => {
       reply = next;
       hooks.refresh?.();
@@ -156,9 +170,11 @@ describe("the live refresh", () => {
       await app.tick({ ok: true, status: 200, body });
       expect(app.regions.map((r) => [r.html, r.getAttribute("data-v")])).toEqual(before);
       expect(app.stale()).toBe(true);
+      expect(app.note()).toBe("Not refreshing: the panel is not answering.");
     }
     await app.tick({ ok: true, status: 200, body: PAGE.replace('data-v="m1">updated 10:00', 'data-v="m2">updated 10:01') });
     expect(app.stale()).toBe(false);
+    expect(app.note()).toBe("");
     expect(app.regions[0]?.html).toBe("updated 10:01");
     expect(app.regions[1]?.html).toBe("Paused since 09:58");
   });
@@ -168,5 +184,33 @@ describe("the live refresh", () => {
     await app.tick({ ok: false, status: 500, body: "" });
     expect(app.regions[1]?.html).toBe("Paused since 09:58");
     expect(app.stale()).toBe(true);
+    expect(app.note()).toBe("Not refreshing: the panel is not answering.");
+  });
+
+  it("focus inside a swapped region moves to the region when that region can take it, and only then", async () => {
+    const page = PAGE.replace('data-v="p1">Paused since 09:58', 'data-v="p0">Pause purchases');
+    const swapped = { ok: true, status: 200, body: PAGE.replace('data-v="m1">updated 10:00', 'data-v="m2">updated 10:01') };
+    // The Pause button had focus; the refresh swaps it for the banner.
+    const app = load(page);
+    const pause = app.regions[1];
+    pause?.setAttribute("tabindex", "-1");
+    const button = { html: "Pause purchases", getAttribute: () => null, id: "" };
+    pause?.replaceChildren(button);
+    app.focusOn(button);
+    await app.tick(swapped);
+    expect([pause?.html, pause?.focused]).toEqual(["Paused since 09:58", 1]);
+    // Focus elsewhere (a nav link): a pause made at the CLI does not take it.
+    const other = load(page);
+    other.regions[1]?.setAttribute("tabindex", "-1");
+    other.focusOn({ getAttribute: () => null });
+    await other.tick(swapped);
+    expect(other.regions[1]?.focused).toBe(0);
+    // A region that cannot take focus is never focused (meta changed while focus sat in it).
+    const meta = load(page);
+    const time = { html: "updated 10:00", getAttribute: () => null, id: "" };
+    meta.regions[0]?.replaceChildren(time);
+    meta.focusOn(time);
+    await meta.tick(swapped);
+    expect(meta.regions[0]?.focused).toBe(0);
   });
 });

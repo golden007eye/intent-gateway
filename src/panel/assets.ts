@@ -11,8 +11,9 @@ import { UI_CSS } from "../ui/index.ts";
  *   when you navigate, Escape closes a drawer, back and forward work because every view is a URL;
  * - the server log filter (kind and free text), kept in the address;
  * - live refresh: every 4 s (not while the tab is hidden) it re-reads the page and replaces only the regions whose
- *   version changed (their content, the region element stays), keeping focus, open entries and the filter; a
- *   reply that lacks a region the page has changes nothing and marks the page stale.
+ *   version changed (their content, the region element stays), keeping focus, open entries and the filter; when the
+ *   focused element is gone (the Pause button, swapped for the banner) focus moves to its region if it can take it; a
+ *   reply that lacks a region the page has changes nothing and marks the page stale, in words a screen reader reads.
  */
 export const APP_JS = `"use strict";
 (function () {
@@ -21,6 +22,16 @@ export const APP_JS = `"use strict";
   var BASE = document.title;
   var current = null;
   var opener = null;
+  // The Pause button was pressed: it may have lost focus when it was disabled, and the refresh swaps it for the banner.
+  var pausing = false;
+  var STALE = "Not refreshing: the panel is not answering.";
+
+  function stale(on) {
+    document.body.classList.toggle("stale", on);
+    var note = document.getElementById("stale-note");
+    var text = on ? STALE : "";
+    if (note && note.textContent !== text) note.textContent = text;
+  }
 
   function route() {
     var h = location.hash.slice(1);
@@ -94,13 +105,19 @@ export const APP_JS = `"use strict";
   function pausePurchases(button) {
     var meta = document.querySelector('meta[name="intent-panel-token"]');
     if (!meta) return;
+    pausing = true;
     button.disabled = true;
     fetch("/pause", { method: "POST", cache: "no-store", headers: { "x-intent-panel-token": meta.getAttribute("content") } })
       .then(function (res) {
         if (!res.ok) throw new Error("HTTP " + res.status);
         refresh();
       })
-      .catch(function () { button.disabled = false; document.body.classList.add("stale"); });
+      .catch(function () {
+        pausing = false;
+        button.disabled = false;
+        button.focus();
+        stale(true);
+      });
   }
 
   function refresh() {
@@ -123,6 +140,7 @@ export const APP_JS = `"use strict";
           var old = document.querySelector('[data-live="' + fresh.getAttribute("data-live") + '"]');
           if (!old || old.getAttribute("data-v") === fresh.getAttribute("data-v")) return;
           var active = document.activeElement;
+          var inside = (active && old.contains(active)) || (pausing && old.getAttribute("data-live") === "pause");
           var keep = active && old.contains(active) ? active.getAttribute("href") || active.id : null;
           var opened = [];
           old.querySelectorAll("details[open]").forEach(function (d) { opened.push(d.parentNode.textContent.slice(0, 40)); });
@@ -137,11 +155,13 @@ export const APP_JS = `"use strict";
             var again = node.querySelector('[href="' + keep + '"]') || document.getElementById(keep);
             if (again) again.focus({ preventScroll: true });
           }
+          if (node.getAttribute("data-live") === "pause") pausing = false;
+          if (inside && !node.contains(document.activeElement) && node.hasAttribute("tabindex")) node.focus({ preventScroll: true });
         });
-        document.body.classList.remove("stale");
+        stale(false);
         apply(false);
       })
-      .catch(function () { document.body.classList.add("stale"); });
+      .catch(function () { stale(true); });
   }
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -193,7 +213,7 @@ a:focus-visible,summary:focus-visible,select:focus-visible,input:focus-visible,b
 .pause-bar p,.pause-banner p{margin:0}
 .pause-banner{display:block;background:var(--warn-bg);color:var(--warn-text);border:1px solid var(--demo-bg);border-left:8px solid var(--demo-bg)}
 .pause-banner strong{display:block;font-size:17px;font-weight:700;margin-bottom:2px}
-.pause-banner p+p,.pause-banner ul+p{margin-top:4px}
+.pause-banner p+p,.pause-banner ul+p,.pause-banner .live+p,.pause-banner .live>p{margin-top:4px}
 .pause-banner code{font-weight:600}
 .pause-banner .tone-ok{color:var(--deep-sage)}.pause-banner .tone-bad{color:var(--danger);font-weight:600}
 .pause-banner ul{margin:4px 0;padding-left:20px}
@@ -202,7 +222,7 @@ a:focus-visible,summary:focus-visible,select:focus-visible,input:focus-visible,b
 .pill-real{background:transparent;color:var(--sage);border:1px solid var(--sage)}
 .bar .live{margin-left:auto}
 .meta{font-size:12px;color:var(--on-card-muted)}
-.stale .meta::after{content:" · not refreshing: the panel is not answering";color:var(--danger-on-ground)}
+.stale-note{margin:0;font-size:12px;color:var(--danger-on-ground)}.stale-note:empty{display:none}
 .nav{padding:18px 14px;border-right:1px solid var(--card-line);display:flex;flex-direction:column;gap:12px}
 .nav ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;position:sticky;top:16px}
 .nav a{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;border-radius:8px;color:var(--on-ground);text-decoration:none;font-size:15px}
