@@ -1,8 +1,8 @@
 // The `intent` executable as a real process (G18, ADR-0005, R3-6): `serve` (and no command) over stdio answers
 // `initialize` and lists the three tools, with the bundled zip-only policy when no policy file exists;
-// `approver accept` refuses when its stdin and stdout are pipes; --version and an unknown command.
+// when it cannot start, it still lists the tools and each call says why; `approver accept` refuses when its stdin and stdout are pipes; --version and an unknown command.
 import { spawn } from "node:child_process";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -68,38 +68,57 @@ describe("intent as a process", () => {
     }
   });
 
-  /** Starts the gateway as an MCP client would and returns the initialize failure and stderr. */
-  async function failedStart(args: string[], extra: Record<string, string>): Promise<{ message: string; stderr: string }> {
+  /**
+   * Starts the gateway as an MCP client would when it cannot start, lists the tools, calls find_offers `calls` times,
+   * and returns each result's text, stderr and the data dir.
+   */
+  async function refusedStart(args: string[], extra: Record<string, string>, calls = 1): Promise<{ tools: string[]; texts: string[]; errors: boolean[]; stderr: string; dataDir: string }> {
     const dataDir = join(mkdtempSync(join(tmpdir(), "cli-nostart-")), "data");
     const transport = new StdioClientTransport({ command: process.execPath, args: [MAIN, ...args], env: env({ INTENT_DATA_DIR: dataDir, ...extra }), stderr: "pipe" });
     let stderr = "";
     transport.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
     const client = new Client({ name: "cli-test", version: "0" });
-    const failure = await client.connect(transport).then(
-      () => null,
-      (error: unknown) => error,
-    );
-    await client.close();
-    expect(failure).toBeInstanceOf(Error);
-    return { message: (failure as Error).message, stderr };
+    await client.connect(transport);
+    try {
+      const { tools } = await client.listTools();
+      const texts: string[] = [];
+      const errors: boolean[] = [];
+      for (let i = 0; i < calls; i++) {
+        const result = await client.callTool({ name: "find_offers", arguments: { category: "t-shirt", budget_max: 20, ship_to: { country: "US", postal_code: "10001" } } });
+        texts.push((result.content as { type: string; text: string }[]).map((c) => c.text).join("\n"));
+        errors.push(result.isError === true);
+      }
+      return { tools: tools.map((t) => t.name).sort(), texts, errors, stderr, dataDir };
+    } finally {
+      await client.close();
+    }
   }
 
-  it("with an Intent Cloud host that refuses, an MCP client's initialize fails with the reason and the next steps", { timeout: 30_000 }, async () => {
+  it("with an Intent Cloud host that cannot be reached, the server still lists its tools and each call says why (attack: nothing searched)", { timeout: 30_000 }, async () => {
     // A loopback port with nothing listening: the real process, and no network beyond this machine.
-    const { message, stderr } = await failedStart(["--trust-keys", keys], { INTENT_CLOUD_URL: "http://127.0.0.1:9" });
+    const { tools, texts, errors, stderr, dataDir } = await refusedStart(["--trust-keys", keys], { INTENT_CLOUD_URL: "http://127.0.0.1:9" }, 2);
+    expect(tools).toEqual(["create_cart", "find_offers", "get_approval_status"]);
     // Run as `node src/main.ts`, the next step names that invocation, not a bare `intent` that is not on PATH.
     const reason =
       "Intent Cloud at 127.0.0.1:9 cannot be reached (connection refused); nothing was sent. " +
       `Check your connection and INTENT_CLOUD_URL, or try everything locally with node ${realpathSync(MAIN)} demo`;
-    expect(message).toContain(`intent could not start: ${reason}`);
+    for (const text of texts) expect(text).toBe(`The gateway could not run this tool: ${reason}. Run \`node ${realpathSync(MAIN)} doctor\` to see each check.`);
+    expect(errors).toEqual([true, true]);
     expect(stderr).toContain(`intent: ${reason}\n`);
+    expect(stderr).toContain("intent: the MCP server runs anyway: each tool call tries the start again");
     expect(stderr).not.toMatch(/ECONNREFUSED|\bat .+:\d+:\d+/);
+    // Each call tried the start again (one meta request per try, start + 2 calls), and no search was ever logged.
+    const chain = readFileSync(join(dataDir, "audit.jsonl"), "utf8");
+    expect(chain.match(/"getMeta"/g)?.length).toBe(3);
+    expect(chain).not.toContain("searchCatalog");
   });
 
-  it("with an unpinned host and no --trust-keys, initialize fails naming --trust-keys and the demo", { timeout: 30_000 }, async () => {
-    const { message } = await failedStart([], { INTENT_CLOUD_URL: "https://cloud.example" });
-    expect(message).toContain(
-      `intent could not start: configuration: cloud.example is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key; or run node ${realpathSync(MAIN)} demo to try the gateway with no setup`,
+  it("with an unpinned host and no --trust-keys, the tools are listed and each call names --trust-keys and the demo", { timeout: 30_000 }, async () => {
+    const { tools, texts, errors } = await refusedStart([], { INTENT_CLOUD_URL: "https://cloud.example" });
+    expect(tools).toEqual(["create_cart", "find_offers", "get_approval_status"]);
+    expect(errors).toEqual([true]);
+    expect(texts[0]).toBe(
+      `The gateway could not run this tool: intent could not start: configuration: cloud.example is not a pinned Intent Cloud host; pass --trust-keys <path> to trust its root key; or run node ${realpathSync(MAIN)} demo to try the gateway with no setup`,
     );
   });
 
