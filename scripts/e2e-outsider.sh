@@ -27,7 +27,7 @@
 #       snapshot, completer key), still pending, the refusals, no evidence before an approval, verify ok. It creates
 #       a cart that expires unapproved; it buys nothing.
 #   su  unattended, outside the US: doctor (contract 1.7.1), and with no Shop wallet linked a UK search refused with
-#       the wallet line, a partial UK postcode asked again, Japan refused; nothing disclosed, no full postcode logged.
+#       the wallet line, a partial UK postcode given the wallet line too, Japan refused; nothing disclosed, no full postcode logged.
 #   j   MANUAL (AC-J1), runs only with E2E_STAGING=1: as s, with Claude making the cart; then a person approves it
 #       with their Intent Cloud passkey (invite-only during preview) and pays the test order on the merchant
 #       checkout; the script polls until the verified outcome says ordered, then verify, evidence and
@@ -1122,9 +1122,9 @@ scenario_s() {
   # The refusals: each is refused in the gateway, and nothing more is disclosed.
   n0="$(sg_disclosures s-before)" || { WHY="could not copy the chain out before the refusals"; return 1; }
   sg_call find_offers "{\"category\":\"alcohol\",\"product\":\"red wine\",\"budget\":40,\"country\":\"US\",\"postcode\":\"$STAGING_ZIP\"}" >"$LOGS/s-alcohol.txt" 2>&1 || true
-  must_match "$LOGS/s-alcohol.txt" 'Sent: nothing / Blocked: categories\.block' "an alcohol search is blocked by the policy" || return 1
+  must_match "$LOGS/s-alcohol.txt" 'Sent: nothing / Blocked: a blocked category \(alcohol' "an alcohol search is blocked by the policy" || return 1
   sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget\":$STAGING_BUDGET,\"country\":\"US\",\"postcode\":\"$STAGING_ZIP\",\"email\":\"buyer@example.com\"}" >"$LOGS/s-identity.txt" 2>&1 || true
-  must_match "$LOGS/s-identity.txt" 'Sent: nothing / Blocked: .*\$\.email' "a search carrying an email is blocked (invariant 3)" || return 1
+  must_match "$LOGS/s-identity.txt" 'Sent: nothing / Blocked: an identity field \(in email\)' "a search carrying an email is blocked (invariant 3)" || return 1
   sg_call create_cart '{"offer_handle":"of_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}' >"$LOGS/s-foreign-offer.txt" 2>&1 || true
   must_match "$LOGS/s-foreign-offer.txt" 'this gateway has no such offer' "a cart for an offer this gateway never saw is refused" || return 1
   sg_call get_approval_status '{"approval_handle":"ap_AAAAAAAAAAAAAAAAAAAAAA"}' >"$LOGS/s-foreign-approval.txt" 2>&1 || true
@@ -1145,7 +1145,7 @@ scenario_s() {
 
 # su: buyers outside the US against staging, unattended. Outside the US a search needs a linked Shop wallet, which
 # needs a person, so with none every non-US search is refused in the gateway: the UK with the wallet line, a partial
-# UK postcode asked again, Japan with the countries staging's currency table lists. Nothing is disclosed for any of
+# UK postcode given the wallet line too, Japan with the countries staging's currency table lists. Nothing is disclosed for any of
 # them, and the full postcode reaches neither the log nor the chain.
 scenario_su() {
   local f n0 n1
@@ -1160,7 +1160,7 @@ scenario_su() {
   must_match "$f" '^Sent: nothing' "nothing sent for the UK search" || return 1
   f="$LOGS/su-partial.txt"
   sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget\":$STAGING_BUDGET,\"country\":\"GB\",\"postcode\":\"SW1A\"}" >"$f" 2>&1 || true
-  must_match "$f" 'give a full postcode such as SW1A 1AA' "a partial UK postcode is asked again" || return 1
+  must_match "$f" '^Not sent: searching for the UK needs a linked Shop wallet' "a partial UK postcode with no wallet gets the wallet line first" || return 1
   f="$LOGS/su-japan.txt"
   sg_call find_offers "{\"product\":\"$STAGING_PRODUCT\",\"category\":\"$STAGING_CATEGORY\",\"budget\":$STAGING_BUDGET,\"country\":\"JP\",\"postcode\":\"100-0001\"}" >"$f" 2>&1 || true
   must_match "$f" '^Not sent: intent ships to .*the UK.* for now\.' "Japan gets the line naming the countries staging serves" || return 1
@@ -1176,7 +1176,7 @@ scenario_su() {
   sg_verify >"$f" 2>&1 || { WHY="verify exited non-zero; see $f"; return 1; }
   must_match "$f" '^verify: ok' "verify after the non-US searches" || return 1
   stop_staging
-  WHY="doctor: contract $(grep -Eo 'serves 1\.[0-9]+\.[0-9]+' "$LOGS/su-doctor.txt" | cut -d' ' -f2); UK: $(grep -m1 '^Not sent' "$LOGS/su-uk.txt" | cut -c1-70)…; SW1A asked again; Japan: $(grep -m1 '^Not sent' "$LOGS/su-japan.txt" | cut -c1-90)…; no disclosure, no full postcode in log or chain; verify: ok"
+  WHY="doctor: contract $(grep -Eo 'serves 1\.[0-9]+\.[0-9]+' "$LOGS/su-doctor.txt" | cut -d' ' -f2); UK: $(grep -m1 '^Not sent' "$LOGS/su-uk.txt" | cut -c1-70)…; SW1A gets the wallet line; Japan: $(grep -m1 '^Not sent' "$LOGS/su-japan.txt" | cut -c1-90)…; no disclosure, no full postcode in log or chain; verify: ok"
 }
 
 # ask the person: printed to the terminal, whatever the output is redirected to.
@@ -1337,7 +1337,7 @@ scenario_j2() {
 }
 run_staging_scenarios() {
   if wants s; then run_scenario s "staging, unattended: doctor, search, hand-off cart (v2 snapshot, completer key), refusals, verify" scenario_s; fi
-  if wants su; then run_scenario su "staging, unattended, outside the US: doctor 1.7.1, UK needs a Shop wallet, SW1A asked again, Japan refused, nothing disclosed" scenario_su; fi
+  if wants su; then run_scenario su "staging, unattended, outside the US: doctor 1.7.1, UK needs a Shop wallet, SW1A gets the wallet line, Japan refused, nothing disclosed" scenario_su; fi
   if wants j; then run_scenario j "staging hand-off (AC-J1, MANUAL): cart by Claude, passkey, test payment, verified ordered, verify, evidence" scenario_j; fi
   if wants j2; then run_scenario j2 "staging one tap (AC-J2, MANUAL skeleton): Shop linked, one approval, ordered read from Shop" scenario_j2; fi
   return 0
