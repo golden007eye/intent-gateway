@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluate, loadPolicy, type Offer, type Outbound, type Purchase } from "./index.ts";
+import { BENIGN_COMPOUNDS, evaluate, loadPolicy, type Offer, type Outbound, type Purchase } from "./index.ts";
 
 const NOW = Date.parse("2026-10-15T12:00:00Z");
 const DAY = 86_400_000;
@@ -161,7 +161,7 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
 
   it("refuses the category QA saw leave the machine: \"single malt whisky\" under categories.block [alcohol]", () => {
     expect(evaluate(ALCOHOL, search({ category: "single malt whisky" }), [], NOW).blocked).toEqual([
-      { path: "category", rule: "categories.block", reason: "the category names alcohol, a blocked category" },
+      { path: "category", rule: "categories.block", reason: "the category names alcohol, a blocked category", named: "alcohol" },
     ]);
     // The Cloud baseline excludes alcohol whatever the policy names.
     expect(rules(policy(""), search({ category: "single malt whisky" }))).toEqual(["categories.block"]);
@@ -199,8 +199,8 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
   it("names the field and the group, never the free text", () => {
     const d = evaluate(ALCOHOL, search({ category: "gifts", product: "Lagavulin single malt whisky", must_haves: ["peaty", "bourbon"] }), [], NOW);
     expect(d.blocked).toEqual([
-      { path: "product", rule: "categories.block", reason: "the product names alcohol, a blocked category" },
-      { path: "must_haves[1]", rule: "categories.block", reason: "the must-have names alcohol, a blocked category" },
+      { path: "product", rule: "categories.block", reason: "the product names alcohol, a blocked category", named: "alcohol" },
+      { path: "must_haves[1]", rule: "categories.block", reason: "the must-have names alcohol, a blocked category", named: "alcohol" },
     ]);
     expect(JSON.stringify(d)).not.toMatch(/Lagavulin|peaty/);
   });
@@ -250,6 +250,28 @@ describe("evaluate: a search that names a blocked category in words (invariant 1
       { category: "grocery", must_haves: ["bourbon-free", "beer free shipping"] },
     ];
     for (const fields of benign) expect(rules(ALCOHOL, search(fields)), JSON.stringify(fields)).toEqual([]);
+  });
+
+  it("sends a benign compound whose last word is a keyword, as a product, a must-have or a category", () => {
+    const compounds = [
+      "root beer", "ginger beer", "birch beer", "butterbeer", "Root Beer 12 pack", "rubbing alcohol", "isopropyl alcohol 70%",
+      "candy cigarettes", "chocolate cigars", "bubble gum cigars", "bubblegum cigar", "wine gums", "red wine vinegar", "A&W Root Beer 12 pack", "rubbing alcohol 70%", "root beer and ginger ale",
+      ...BENIGN_COMPOUNDS,
+    ];
+    for (const product of compounds) {
+      expect(rules(ALCOHOL, search({ category: "grocery", product })), product).toEqual([]);
+      expect(rules(ALCOHOL, search({ category: "grocery", must_haves: [product] })), product).toEqual([]);
+    }
+    expect(rules(ALCOHOL, search({ category: "beverages/root-beer" }))).toEqual([]);
+  });
+
+  it("attack: a compound never unblocks its keyword, an alcoholic qualifier, or a keyword elsewhere", () => {
+    const attempts = ["root beer vodka", "vodka and root beer", "hard root beer", "alcoholic ginger beer", "spiked root beer", "non-alcoholic beer", "beer", "alcohol", "cigars", "candy cigarettes and nicotine",
+      "Not Your Father's Root Beer 5.9% ABV", "Crabbie's Ginger Beer 4% ABV", "Root Beer Moonshine", "Root beer schnapps", "ginger beer rum kit", "Everclear Rubbing Alcohol",
+    ];
+    for (const product of attempts) expect(rules(ALCOHOL, search({ category: "grocery", product })), product).toContain("categories.block");
+    // The developer's own narrowing still applies to a compound.
+    expect(rules(policy("categories: {block: [soda, root-beer]}\n"), search({ category: "grocery", product: "root beer" }))).toEqual(["categories.block"]);
   });
 });
 

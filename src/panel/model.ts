@@ -9,6 +9,7 @@ import {
   type Activity,
   type ActivityRequest,
   type BlockKind,
+  blockedWords,
   blockKind,
   buildActivity,
   buildPurchases,
@@ -719,7 +720,7 @@ function entrySummary(kind: string, b: Record<string, unknown>): string {
     case "block": {
       // Only a policy block keeps values; an identity block or a logging refusal holds none, and none is shown.
       const held = blockKind(b) === "policy" ? Object.entries(record(b.held)).map(([k, v]) => `${k} ${JSON.stringify(v)} kept here only`) : [];
-      return join([`refused before sending${to} ${text(b.endpoint)}`, strings(b.blocked).join("; "), ...held]);
+      return join([`refused before sending${to} ${text(b.endpoint)}`, strings(b.blocked).map((item) => blockedWords(item, record(b.named))).join("; "), ...held]);
     }
     case "wallet":
       if (b.action === "checked") {

@@ -63,6 +63,11 @@ export interface Blocked {
   readonly path: string;
   readonly rule: string;
   readonly reason: string;
+  /**
+   * A search's `categories.block` only: the excluded group (`alcohol`) or the policy's own blocked category that the
+   * field names. Always a word from the keyword lists or the policy, never the request's own text.
+   */
+  readonly named?: string;
 }
 
 export interface Decision {
@@ -205,10 +210,12 @@ function namedCategory(category: string, blocked: readonly string[]): string | n
  */
 function checkSearch(p: Policy, s: SearchRequest, out: Blocked[]): void {
   if (s.category !== undefined && categoryBlocked(s.category, p.categories.block)) {
-    out.push({ path: "category", rule: "categories.block", reason: `category "${s.category}" is blocked` });
+    const category = s.category;
+    const named = p.categories.block.find((c) => categoryBlocked(category, [c]));
+    out.push({ path: "category", rule: "categories.block", reason: `category "${s.category}" is blocked`, ...(named === undefined ? {} : { named }) });
   } else if (s.category !== undefined) {
     const named = namedCategory(s.category, p.categories.block);
-    if (named !== null) out.push({ path: "category", rule: "categories.block", reason: `the category names ${named}, a blocked category` });
+    if (named !== null) out.push({ path: "category", rule: "categories.block", reason: `the category names ${named}, a blocked category`, named });
   }
   const free: [string, string][] = [
     ...(s.product === undefined ? [] : [["product", s.product] as [string, string]]),
@@ -216,7 +223,7 @@ function checkSearch(p: Policy, s: SearchRequest, out: Blocked[]): void {
   ];
   for (const [path, text] of free) {
     const named = headCategory(text, p.categories.block);
-    if (named !== null) out.push({ path, rule: "categories.block", reason: `the ${path.startsWith("must") ? "must-have" : "product"} names ${named}, a blocked category` });
+    if (named !== null) out.push({ path, rule: "categories.block", reason: `the ${path.startsWith("must") ? "must-have" : "product"} names ${named}, a blocked category`, named });
   }
   if (s.ship_to_zip !== undefined) {
     const country = s.ship_to_country ?? "US";

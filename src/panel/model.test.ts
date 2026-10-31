@@ -327,8 +327,24 @@ describe("buildModel: wallet destinations, refusals and wallet entries (ADR-0014
     const summaries = m.log.map((r) => [r.kind, r.tone, r.summary]);
     expect(summaries).toContainEqual(["response", "ok", "answer to #4 · status 200 · 31 bytes · no signed receipt"]);
     expect(summaries).toContainEqual(["disclosure", "plain", "logged to Shop get_checkout  id, jsonrpc, method, params.arguments.checkout_id, params.name"]);
-    expect(summaries).toContainEqual(["block", "bad", "refused before sending to Shop search · email at $.params.arguments.note"]);
+    expect(summaries).toContainEqual(["block", "bad", "refused before sending to Shop search · an email address (in note)"]);
     expect(summaries).toContainEqual(["wallet", "plain", "Shop wallet unlinked · token revoked"]);
+  });
+
+  it("the server log words a refused search's blocks as the Blocked line does, never a rule or a JSON path", () => {
+    const refused = buildModel(
+      input({
+        items: chain([
+          ["block", { endpoint: "searchCatalog", fields: ["must_haves"], blocked: ["street_address at $.must_haves[0]"] }, at("10:20")],
+          ["block", { endpoint: "searchCatalog", fields: ["category"], blocked: ["categories.block at category"], held: { category: "single malt whisky" }, named: { category: "alcohol" } }, at("10:21")],
+        ]),
+        now: Date.parse(at("10:30")),
+      }),
+    );
+    const blocks = refused.log.filter((r) => r.kind === "block").map((r) => r.summary);
+    expect(blocks).toContain("refused before sending searchCatalog · a street address (in must-haves)");
+    expect(blocks.some((b) => b.startsWith("refused before sending searchCatalog · a blocked category (alcohol, in the category)"))).toBe(true);
+    expect(blocks.join(" ")).not.toMatch(/categories\.block|street_address|\$\./);
   });
 
   it("attack: the panel shows no buyer identity, even one a hand-edited identity block holds", () => {

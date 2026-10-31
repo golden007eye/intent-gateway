@@ -1,6 +1,6 @@
 // What the gateway reads back from its own chain: the spend history for the policy's daily and weekly caps, and
 // the "Sent: … / Blocked: …" summary of one tool call. Pure; the chain is passed in.
-import { destinationLabel, MCP_CLIENT_META, MCP_ENVELOPE } from "../activity/index.ts";
+import { blockedWords, destinationLabel, MCP_CLIENT_META, MCP_ENVELOPE } from "../activity/index.ts";
 import { chargedNothing } from "../outcome/index.ts";
 import type { Purchase } from "../policy/index.ts";
 import { type Entry, neverLeft } from "../store/index.ts";
@@ -63,7 +63,7 @@ export interface Disclosed {
    * sent, with no answer recorded). A destination other than Intent Cloud signs no receipt: a `response` answers it.
    */
   readonly sends: readonly { destination: string | null; endpoint: string; fields: readonly string[]; acknowledged: boolean; answered: boolean }[];
-  /** What was held back: `block` entries' items, then any the caller adds. */
+  /** What was held back: `block` entries' items in words (activity's blockedWords), then any the caller adds. */
   readonly blocked: readonly string[];
 }
 
@@ -98,7 +98,7 @@ export function disclosedSince(chain: readonly Entry[], fromSeq: number, own: Re
       const send = bySeq.get(body.disclosure_seq);
       if (send !== undefined) sends.splice(sends.indexOf(send), 1);
     } else if (entry.kind === "block") {
-      blocked.push(...strings(body.blocked));
+      blocked.push(...strings(body.blocked).map((item) => blockedWords(item, asBody(body.named))));
     }
   }
   return { sends, blocked };
@@ -118,7 +118,7 @@ export function summaryLine(disclosed: Disclosed, extraBlocked: readonly string[
     s.destination !== null ? "; answered, no signed receipt" : s.acknowledged ? "; receipt verified" : "; no verified receipt";
   const sent = disclosed.sends.filter((s) => s.answered).map((s) => `${nameOf(s)} (${fieldsOf(s)}${answer(s)})`);
   const unanswered = disclosed.sends.filter((s) => !s.answered).map((s) => `${nameOf(s)} (${fieldsOf(s)})`);
-  const blocked = [...disclosed.blocked, ...extraBlocked].map(blockedWords);
+  const blocked = [...disclosed.blocked, ...extraBlocked.map((item) => blockedWords(item))];
   return [
     `Sent: ${sent.length === 0 ? "nothing" : sent.join("; ")}`,
     ...(unanswered.length === 0 ? [] : [`Logged, maybe sent; no answer recorded: ${unanswered.join("; ")}`]),
@@ -141,33 +141,6 @@ function mcpFields(fields: readonly string[]): string[] {
     else other.push(field);
   }
   return [...args, ...other, ...(protocol === 0 ? [] : [`${String(protocol)} MCP protocol field${protocol === 1 ? "" : "s"}`])];
-}
-
-const IDENTITY_WORDS: Readonly<Record<string, string>> = {
-  card: "a card number",
-  email: "an email address",
-  phone: "a phone number",
-  street_address: "a street address",
-  postcode: "a full postcode",
-  banned_key: "an identity field",
-  too_deep: "a value nested too deep to check",
-};
-/** Field names whose words differ from the name with `_` read as a space. */
-const FIELD_WORDS: Readonly<Record<string, string>> = { must_haves: "must-haves", postal_code: "postcode" };
-
-/**
- * An identity block in the words the panel and `intent log` use: `postcode at $.must_haves[0]` → `a full postcode
- * (in must-haves)`, `email in a field name` → `an email address (in a field name)`. The exact JSON path stays in the
- * block entry, which `intent log -v` shows. Any other block (a policy rule at a field) is kept as it is.
- */
-export function blockedWords(item: string): string {
-  const at = /^([a-z_]+) at (\$.*)$/.exec(item);
-  const inName = /^([a-z_]+) in a field name$/.exec(item);
-  const words = IDENTITY_WORDS[(at ?? inName)?.[1] ?? ""];
-  if (words === undefined) return item;
-  if (inName !== null) return `${words} (in a field name)`;
-  const last = (at?.[2] ?? "").replace(/\["((?:[^"\\]|\\.)*)"\]/g, ".$1").replace(/\[\d+\]/g, "").split(".").filter((part) => part !== "" && part !== "$").at(-1);
-  return `${words} (in ${last === undefined ? "the request" : (FIELD_WORDS[last] ?? last.replaceAll("_", " "))})`;
 }
 
 function strings(value: unknown): string[] {
